@@ -34,6 +34,7 @@ export class ProfileService {
       ...profile,
       email: user?.email,
       phone: user?.phone,
+      emailVerified: user?.emailVerified ?? false,
       kycStatus: kyc?.status || "UNVERIFIED",
       createdAt: user?.createdAt,
     };
