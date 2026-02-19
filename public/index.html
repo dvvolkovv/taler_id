@@ -75,8 +75,8 @@
       <label>Password</label>
       <input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password">
     </div>
-    <button class="btn" id="login-btn" onclick="doLogin()">Sign In</button>
-    <div class="link">Don't have an account? <a onclick="showPage('register')">Create one</a></div>
+    <button class="btn" id="login-btn">Sign In</button>
+    <div class="link">Don't have an account? <a id="go-register">Create one</a></div>
   </div>
 
   <!-- Register Page -->
@@ -103,8 +103,8 @@
       <label>Last Name (optional)</label>
       <input type="text" id="reg-lastname" placeholder="Doe">
     </div>
-    <button class="btn" id="register-btn" onclick="doRegister()">Create Account</button>
-    <div class="link">Already have an account? <a onclick="showPage('login')">Sign in</a></div>
+    <button class="btn" id="register-btn">Create Account</button>
+    <div class="link">Already have an account? <a id="go-login">Sign in</a></div>
   </div>
 
   <!-- 2FA Page -->
@@ -118,8 +118,8 @@
       <label>Authentication Code</label>
       <input type="text" id="twofa-code" class="otp-input" placeholder="000000" maxlength="6" autocomplete="one-time-code">
     </div>
-    <button class="btn" id="twofa-btn" onclick="do2FA()">Verify</button>
-    <div class="link"><a onclick="showPage('login')">Back to login</a></div>
+    <button class="btn" id="twofa-btn">Verify</button>
+    <div class="link"><a id="go-login-from-2fa">Back to login</a></div>
   </div>
 
   <!-- Dashboard Page -->
@@ -132,10 +132,10 @@
       </div>
     </div>
     <div class="nav">
-      <button class="active" onclick="switchTab('overview')">Overview</button>
-      <button onclick="switchTab('profile-edit')">Edit Profile</button>
-      <button onclick="switchTab('kyc-tab')">KYC</button>
-      <button onclick="switchTab('sessions-tab')">Sessions</button>
+      <button class="active" data-tab="overview">Overview</button>
+      <button data-tab="profile-edit">Edit Profile</button>
+      <button data-tab="kyc-tab">KYC</button>
+      <button data-tab="sessions-tab">Sessions</button>
     </div>
 
     <!-- Overview Tab -->
@@ -159,7 +159,7 @@
           <span class="info-value" id="dash-wallet-val" style="font-size:12px;word-break:break-all;">Not linked</span>
         </div>
       </div>
-      <button class="btn btn-secondary" onclick="doLogout()">Sign Out</button>
+      <button class="btn btn-secondary" id="logout-btn">Sign Out</button>
     </div>
 
     <!-- Edit Profile Tab -->
@@ -186,7 +186,7 @@
         <label>Wallet Address (EVM)</label>
         <input type="text" id="edit-wallet" placeholder="0x...">
       </div>
-      <button class="btn" onclick="doUpdateProfile()">Save Changes</button>
+      <button class="btn" id="save-profile-btn">Save Changes</button>
     </div>
 
     <!-- KYC Tab -->
@@ -199,7 +199,7 @@
         </div>
       </div>
       <p style="font-size:14px;color:#86868b;margin-bottom:16px">Complete identity verification to unlock financial features. You will need a valid government-issued ID and a camera.</p>
-      <button class="btn" id="kyc-start-btn" onclick="startKYC()">Start Verification</button>
+      <button class="btn" id="kyc-start-btn">Start Verification</button>
       <div id="sumsub-container" style="margin-top:16px;display:none"></div>
     </div>
 
@@ -209,7 +209,7 @@
         <h3>Active Sessions</h3>
         <div id="sessions-list"></div>
       </div>
-      <button class="btn btn-danger" onclick="revokeAllSessions()" style="margin-top:8px">Sign Out All Devices</button>
+      <button class="btn btn-danger" id="revoke-all-btn" style="margin-top:8px">Sign Out All Devices</button>
     </div>
   </div>
 </div>
@@ -298,7 +298,7 @@ function showPage(name) {
 
 function switchTab(tab) {
   document.querySelectorAll('.nav button').forEach(b => {
-    b.classList.toggle('active', b.getAttribute('onclick').includes("'" + tab + "'"));
+    b.classList.toggle('active', b.dataset.tab === tab);
   });
   ['overview', 'profile-edit', 'kyc-tab', 'sessions-tab'].forEach(t => {
     const el = document.getElementById('tab-' + t);
@@ -405,7 +405,6 @@ async function loadProfile() {
     kycEl.textContent = kycStatus;
     kycEl.className = 'badge badge-' + kycStatus.toLowerCase().replace('_', '-');
 
-    // Pre-fill edit form
     document.getElementById('edit-firstname').value = data.firstName || '';
     document.getElementById('edit-lastname').value = data.lastName || '';
     document.getElementById('edit-dob').value = data.dateOfBirth ? data.dateOfBirth.split('T')[0] : '';
@@ -458,16 +457,37 @@ async function loadSessions() {
     if (!res.ok) return;
     const data = await res.json();
     const sessions = data.sessions || (Array.isArray(data) ? data : []);
-    if (!sessions.length) { container.innerHTML = '<div style="color:#86868b;font-size:14px">No active sessions</div>'; return; }
-    container.innerHTML = sessions.map(s => `
-      <div class="session-item">
-        <div class="session-info">
-          <div class="device">${s.deviceInfo || 'Unknown device'}</div>
-          <div class="date">${s.ipAddress || ''} · ${new Date(s.createdAt).toLocaleDateString()}</div>
-        </div>
-        ${!s.isCurrent ? '<button class="session-revoke" onclick="revokeSession(\'' + s.id + '\')">Revoke</button>' : '<span style="font-size:12px;color:#0071e3">Current</span>'}
-      </div>
-    `).join('');
+    if (!sessions.length) {
+      container.innerHTML = '<div style="color:#86868b;font-size:14px">No active sessions</div>';
+      return;
+    }
+    container.innerHTML = '';
+    sessions.forEach(s => {
+      const item = document.createElement('div');
+      item.className = 'session-item';
+
+      const info = document.createElement('div');
+      info.className = 'session-info';
+      info.innerHTML = '<div class="device">' + (s.deviceInfo || 'Unknown device') + '</div>' +
+        '<div class="date">' + (s.ipAddress || '') + ' · ' + new Date(s.createdAt).toLocaleDateString() + '</div>';
+
+      item.appendChild(info);
+
+      if (!s.isCurrent) {
+        const btn = document.createElement('button');
+        btn.className = 'session-revoke';
+        btn.textContent = 'Revoke';
+        btn.dataset.sessionId = s.id;
+        item.appendChild(btn);
+      } else {
+        const span = document.createElement('span');
+        span.style.cssText = 'font-size:12px;color:#0071e3';
+        span.textContent = 'Current';
+        item.appendChild(span);
+      }
+
+      container.appendChild(item);
+    });
   } catch(e) {
     container.innerHTML = '<div style="color:#ff3b30;font-size:14px">Failed to load sessions</div>';
   }
@@ -496,8 +516,9 @@ async function loadKycStatus() {
     el.className = 'badge badge-' + status.toLowerCase().replace('_', '-');
 
     if (status === 'VERIFIED') {
-      document.getElementById('kyc-start-btn').textContent = 'Verification Complete';
-      document.getElementById('kyc-start-btn').disabled = true;
+      const btn = document.getElementById('kyc-start-btn');
+      btn.textContent = 'Verification Complete';
+      btn.disabled = true;
     }
   } catch(e) {}
 }
@@ -508,15 +529,16 @@ async function startKYC() {
     const res = await apiFetch('/kyc/start', { method: 'POST', body: JSON.stringify({}) });
     const data = await res.json();
     if (!res.ok) { alert(data.message || 'KYC start failed'); return; }
-    document.getElementById('sumsub-container').style.display = 'block';
-    document.getElementById('sumsub-container').innerHTML = `
-      <div style="background:#f5f5f7;border-radius:12px;padding:24px;text-align:center">
-        <div style="font-size:32px;margin-bottom:12px">&#10003;</div>
-        <p style="font-weight:600;margin-bottom:8px">KYC Session Started</p>
-        <p style="font-size:13px;color:#86868b">SDK Token received. In production, the Sumsub WebSDK will open here.</p>
-        <p style="font-size:12px;color:#86868b;margin-top:8px;word-break:break-all">Token: ${data.token || data.sdkToken || 'received'}</p>
-      </div>
-    `;
+    const container = document.getElementById('sumsub-container');
+    container.style.display = 'block';
+    const inner = document.createElement('div');
+    inner.style.cssText = 'background:#f5f5f7;border-radius:12px;padding:24px;text-align:center';
+    inner.innerHTML = '<div style="font-size:32px;margin-bottom:12px">&#10003;</div>' +
+      '<p style="font-weight:600;margin-bottom:8px">KYC Session Started</p>' +
+      '<p style="font-size:13px;color:#86868b">SDK Token received. In production, the Sumsub WebSDK will open here.</p>' +
+      '<p style="font-size:12px;color:#86868b;margin-top:8px;word-break:break-all">Token: ' + (data.token || data.sdkToken || 'received') + '</p>';
+    container.innerHTML = '';
+    container.appendChild(inner);
   } catch(e) {
     alert('KYC start failed');
   } finally {
@@ -524,7 +546,32 @@ async function startKYC() {
   }
 }
 
-// Enter key handlers
+// ── Event listeners (no inline handlers) ──────────────────────────
+document.getElementById('login-btn').addEventListener('click', doLogin);
+document.getElementById('register-btn').addEventListener('click', doRegister);
+document.getElementById('twofa-btn').addEventListener('click', do2FA);
+document.getElementById('logout-btn').addEventListener('click', doLogout);
+document.getElementById('save-profile-btn').addEventListener('click', doUpdateProfile);
+document.getElementById('kyc-start-btn').addEventListener('click', startKYC);
+document.getElementById('revoke-all-btn').addEventListener('click', revokeAllSessions);
+
+document.getElementById('go-register').addEventListener('click', () => showPage('register'));
+document.getElementById('go-login').addEventListener('click', () => showPage('login'));
+document.getElementById('go-login-from-2fa').addEventListener('click', () => showPage('login'));
+
+// Nav tabs (event delegation)
+document.querySelector('.nav').addEventListener('click', e => {
+  const btn = e.target.closest('button[data-tab]');
+  if (btn) switchTab(btn.dataset.tab);
+});
+
+// Sessions revoke (event delegation)
+document.getElementById('sessions-list').addEventListener('click', e => {
+  const btn = e.target.closest('button.session-revoke');
+  if (btn) revokeSession(btn.dataset.sessionId);
+});
+
+// Enter key shortcuts
 document.addEventListener('keypress', (e) => {
   if (e.key !== 'Enter') return;
   const activePage = document.querySelector('.page.active');
