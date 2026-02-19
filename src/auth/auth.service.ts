@@ -16,6 +16,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import * as fs from 'fs';
+import { EmailService } from '../email/email.service';
 
 @Injectable()
 export class AuthService {
@@ -27,6 +28,7 @@ export class AuthService {
     private jwtService: JwtService,
     private configService: ConfigService,
     private redis: RedisService,
+    private emailService: EmailService,
   ) {
     const privatePath = this.configService.get<string>('jwt.privateKeyPath') ?? '';
     const publicPath = this.configService.get<string>('jwt.publicKeyPath') ?? '';
@@ -293,6 +295,30 @@ export class AuthService {
       await this.redis.setEx(lockoutKey, lockoutMinutes * 60, '1');
       await this.redis.del(failedKey);
     }
+  }
+
+  async sendEmailVerification(userId: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user?.email) throw new BadRequestException('No email address on this account');
+    if ((user as any).emailVerified) return { sent: false, alreadyVerified: true };
+
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    await this.redis.setEx(`email_verify:${userId}`, 600, code);
+    await this.emailService.sendOtp(user.email, code, 'Email verification');
+    return { sent: true };
+  }
+
+  async verifyEmail(userId: string, code: string) {
+    const stored = await this.redis.get(`email_verify:${userId}`);
+    if (!stored || stored !== code) throw new BadRequestException('Invalid or expired code');
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { emailVerified: true } as any,
+    });
+    await this.redis.del(`email_verify:${userId}`);
+    await this.auditLog(userId, 'EMAIL_VERIFIED', '', '');
+    return { verified: true };
   }
 
   async auditLog(userId: string | null, action: string, ip: string, userAgent: string, meta?: any) {

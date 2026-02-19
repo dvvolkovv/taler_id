@@ -79,6 +79,11 @@ export class TenantController {
     return this.tenantService.changeRole(tenantId, user.sub, targetUserId, dto);
   }
 
+  @Delete(':id')
+  deleteTenant(@Param('id') tenantId: string, @CurrentUser() user: any) {
+    return this.tenantService.deleteTenant(tenantId, user.sub);
+  }
+
   @Delete(':id/members/:userId')
   removeMember(
     @Param('id') tenantId: string,

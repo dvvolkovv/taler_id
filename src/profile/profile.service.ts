@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ConflictException,
 } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { S3Service } from "./s3.service";
@@ -26,7 +27,7 @@ export class ProfileService {
     const kyc = await this.prisma.kycRecord.findUnique({ where: { userId } });
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { email: true, phone: true, createdAt: true },
+      select: { email: true, phone: true, emailVerified: true, createdAt: true },
     });
 
     return {
@@ -63,6 +64,20 @@ export class ProfileService {
         language: dto.language,
       },
     });
+  }
+
+  async updatePhone(userId: string, phone: string | undefined) {
+    if (phone) {
+      const existing = await this.prisma.user.findFirst({
+        where: { phone, NOT: { id: userId } },
+      });
+      if (existing) throw new ConflictException('Phone number already in use');
+    }
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { phone: phone || null },
+    });
+    return { success: true };
   }
 
   async linkWallet(userId: string, dto: LinkWalletDto) {
@@ -160,7 +175,7 @@ export class ProfileService {
   async exportData(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { email: true, phone: true, createdAt: true },
+      select: { email: true, phone: true, emailVerified: true, createdAt: true },
     });
     const profile = await this.prisma.profile.findUnique({
       where: { userId },

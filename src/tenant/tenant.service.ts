@@ -183,6 +183,16 @@ export class TenantService {
     return { processed: true, tenantId: tenant.id, status };
   }
 
+  async deleteTenant(tenantId: string, userId: string) {
+    await this.assertRole(tenantId, userId, [TenantRole.OWNER]);
+    await this.prisma.$transaction([
+      this.prisma.pendingInvite.deleteMany({ where: { tenantId } }),
+      this.prisma.tenantMember.deleteMany({ where: { tenantId } }),
+      this.prisma.tenant.delete({ where: { id: tenantId } }),
+    ]);
+    return { success: true };
+  }
+
   async inviteMember(tenantId: string, userId: string, dto: InviteMemberDto) {
     await this.assertRole(tenantId, userId, [TenantRole.OWNER, TenantRole.ADMIN]);
 

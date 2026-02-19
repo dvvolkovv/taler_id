@@ -23,6 +23,11 @@ export class ProfileController {
     return this.profileService.updateProfile(user.sub, dto);
   }
 
+  @Put("phone")
+  updatePhone(@Body() body: { phone?: string }, @CurrentUser() user: any) {
+    return this.profileService.updatePhone(user.sub, body.phone);
+  }
+
   @Put("wallet")
   linkWallet(@Body() dto: LinkWalletDto, @CurrentUser() user: any) {
     return this.profileService.linkWallet(user.sub, dto);

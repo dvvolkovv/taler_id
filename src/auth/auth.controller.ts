@@ -77,4 +77,18 @@ export class AuthController {
   async revokeAllSessions(@CurrentUser() user: any, @Req() req: Request) {
     return this.authService.revokeAllSessions(user.sub, user.session_id, req.ip ?? '', req.headers['user-agent'] ?? '');
   }
+
+  @Post('email/verify/send')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  async sendEmailVerification(@CurrentUser() user: any) {
+    return this.authService.sendEmailVerification(user.sub);
+  }
+
+  @Post('email/verify/confirm')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  async verifyEmail(@Body() body: { code: string }, @CurrentUser() user: any) {
+    return this.authService.verifyEmail(user.sub, body.code);
+  }
 }
