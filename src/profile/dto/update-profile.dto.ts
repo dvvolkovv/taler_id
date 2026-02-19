@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsDateString, IsIn } from 'class-validator';
+import { IsString, IsOptional, IsDateString, IsIn, Matches } from 'class-validator';
 
 export class UpdateProfileDto {
   @IsString()
@@ -35,6 +35,8 @@ export class UpdateProfileDto {
 }
 
 export class LinkWalletDto {
+  // Substrate SS58 address (e.g. 5HueCGU8rMtraL...) — 47-48 base58 chars
   @IsString()
+  @Matches(/^[1-9A-HJ-NP-Za-km-z]{46,50}$/, { message: 'Invalid Substrate address (SS58 format required, e.g. 5HueCGU...)' })
   walletAddress: string;
 }

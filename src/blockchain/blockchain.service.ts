@@ -197,9 +197,23 @@ export class BlockchainService implements OnModuleInit, OnModuleDestroy {
       );
 
       if (result.isOk && output) {
+        // Return type: Result<Option<(u8, u64, u8, bool)>>
+        // Polkadot.js JSON: {"ok": [kycStatus, kycTimestamp, kybStatus, isActive]} or {"ok": null}
         const raw = output.toJSON() as any;
-        if (!raw || !Array.isArray(raw)) return null;
-        const [kycStatus, kycTimestamp, kybStatus, isActive] = raw;
+        // Unwrap outer Result<...>
+        const inner = (raw && typeof raw === 'object' && !Array.isArray(raw) && 'ok' in raw) ? raw.ok : raw;
+        if (inner === null || inner === undefined) return null;
+        // inner may be array directly (Polkadot.js auto-unwraps Option) or {some: [...]}
+        let tuple: any[];
+        if (Array.isArray(inner)) {
+          tuple = inner;
+        } else if (inner && typeof inner === 'object' && Array.isArray(inner.some)) {
+          tuple = inner.some;
+        } else {
+          return null;
+        }
+        if (tuple.length < 4) return null;
+        const [kycStatus, kycTimestamp, kybStatus, isActive] = tuple;
         return { kycStatus, kycTimestamp, kybStatus, isActive };
       }
       return null;
