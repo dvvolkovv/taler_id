@@ -26,4 +26,12 @@ export default () => ({
       pass: process.env.SMTP_PASS || '',
     },
   },
+  sumsub: {
+    appToken: process.env.SUMSUB_APP_TOKEN || '',
+    secretKey: process.env.SUMSUB_SECRET_KEY || '',
+    baseUrl: process.env.SUMSUB_BASE_URL || 'https://api.sumsub.com',
+    levelName: process.env.SUMSUB_LEVEL_NAME || 'basic-kyc-level',
+    kybLevelName: process.env.SUMSUB_KYB_LEVEL_NAME || 'basic-kyb-level',
+    webhookSecret: process.env.SUMSUB_WEBHOOK_SECRET || '',
+  },
 });

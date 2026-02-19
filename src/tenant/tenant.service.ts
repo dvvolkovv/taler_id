@@ -104,74 +104,66 @@ export class TenantService {
     let sdkToken: string;
 
     if (isMock) {
-      applicantId = `mock_company_${tenantId}`;
-      sdkToken = `mock_kyb_sdk_token_${Date.now()}`;
+      // Mock mode: return null token so frontend shows status update, not Sumsub SDK
+      await this.prisma.tenant.update({
+        where: { id: tenantId },
+        data: { kybStatus: KycStatus.PENDING },
+      });
+      return { sdkToken: null };
     } else {
-      // Real Sumsub KYB applicant creation
-      const ts = Math.floor(Date.now() / 1000);
+      // Get SDK token directly — Sumsub creates company applicant automatically via SDK.
+      // basic-kyb-level is read-only (can't pre-create applicants via API).
+      // userId=tenantId becomes externalUserId in Sumsub for webhook matching.
       const secretKey = this.config.get<string>('sumsub.secretKey') ?? '';
       const baseUrl = this.config.get<string>('sumsub.baseUrl') ?? 'https://api.sumsub.com';
+      const kybLevel = this.config.get<string>('sumsub.kybLevelName') ?? 'basic-kyb-level';
 
-      const method = 'POST';
-      const path = `/resources/applicants?levelName=basic-kyb-level`;
-      const body = JSON.stringify({
-        externalUserId: tenantId,
-        type: 'company',
-        info: { companyName: tenant.name },
-      });
-
-      const sigData = `${ts}${method}${path}${body}`;
-      const sig = crypto.createHmac('sha256', secretKey).update(sigData).digest('hex');
-
-      const headers = {
-        'X-App-Token': appToken!,
-        'X-App-Access-Sig': sig,
-        'X-App-Access-Ts': ts.toString(),
-        'Content-Type': 'application/json',
-      };
-
-      const resp = await fetch(`${baseUrl}${path}`, { method, headers, body });
-      if (!resp.ok) {
-        throw new BadRequestException('Failed to create Sumsub KYB applicant');
-      }
-      const data = await resp.json() as any;
-      applicantId = data.id;
-
-      // Get SDK token
-      const tokenPath = `/resources/accessTokens?userId=${tenantId}&levelName=basic-kyb-level`;
+      const ts = Math.floor(Date.now() / 1000).toString();
+      // IMPORTANT: no body in request, no body in signature — Sumsub requires exact match
+      const tokenPath = `/resources/accessTokens?userId=${tenantId}&levelName=${kybLevel}&ttlInSecs=3600`;
       const tokenSig = crypto.createHmac('sha256', secretKey)
-        .update(`${ts}POST${tokenPath}`)
+        .update(ts + 'POST' + tokenPath)
         .digest('hex');
       const tokenResp = await fetch(`${baseUrl}${tokenPath}`, {
         method: 'POST',
         headers: {
           'X-App-Token': appToken!,
           'X-App-Access-Sig': tokenSig,
-          'X-App-Access-Ts': ts.toString(),
+          'X-App-Access-Ts': ts,
         },
+        // No body — including a body breaks signature verification
       });
+      if (!tokenResp.ok) {
+        const err = await tokenResp.json() as any;
+        throw new BadRequestException('Failed to get KYB token: ' + (err.description || JSON.stringify(err)));
+      }
       const tokenData = await tokenResp.json() as any;
       sdkToken = tokenData.token;
+      applicantId = '';  // will be set when webhook arrives with externalUserId=tenantId
     }
 
     await this.prisma.tenant.update({
       where: { id: tenantId },
       data: {
-        sumsubApplicantId: applicantId,
+        ...(applicantId ? { sumsubApplicantId: applicantId } : {}),
         kybStatus: KycStatus.PENDING,
       },
     });
 
-    return { applicantId, sdkToken };
+    return { sdkToken };
   }
 
   async handleKybWebhook(payload: any) {
-    const { applicantId, reviewResult, type } = payload;
+    const { applicantId, externalUserId, reviewResult, type } = payload;
     if (type !== 'applicantReviewed') return { processed: false };
 
-    const tenant = await this.prisma.tenant.findFirst({
+    // Match by sumsubApplicantId (old flow) or externalUserId=tenantId (new SDK flow)
+    let tenant = await this.prisma.tenant.findFirst({
       where: { sumsubApplicantId: applicantId },
     });
+    if (!tenant && externalUserId) {
+      tenant = await this.prisma.tenant.findUnique({ where: { id: externalUserId } });
+    }
     if (!tenant) return { processed: false };
 
     const status =
@@ -181,7 +173,11 @@ export class TenantService {
 
     await this.prisma.tenant.update({
       where: { id: tenant.id },
-      data: { kybStatus: status },
+      data: {
+        kybStatus: status,
+        // Store applicantId if not already known (set via SDK flow)
+        ...(applicantId && !tenant.sumsubApplicantId ? { sumsubApplicantId: applicantId } : {}),
+      },
     });
 
     return { processed: true, tenantId: tenant.id, status };
