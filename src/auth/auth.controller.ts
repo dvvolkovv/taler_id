@@ -63,7 +63,7 @@ export class AuthController {
   @Get('sessions')
   @UseGuards(JwtAuthGuard)
   async getSessions(@CurrentUser() user: any) {
-    return this.authService.getSessions(user.sub);
+    return this.authService.getSessions(user.sub, user.session_id);
   }
 
   @Delete('sessions/:id')

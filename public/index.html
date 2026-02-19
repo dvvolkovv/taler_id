@@ -3,7 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Taler ID — Identity Provider for the Taler ecosystem. Secure authentication, KYC verification, and OAuth 2.0 access management.">
 <title>Taler ID</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%230071e3'/><text x='50%25' y='50%25' dominant-baseline='central' text-anchor='middle' fill='white' font-size='20' font-weight='700' font-family='sans-serif'>T</text></svg>">
 <script src="https://static.sumsub.com/idensic/static/sns-websdk-builder.js"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -14,7 +16,7 @@
   .logo h1 { font-size: 28px; font-weight: 700; color: #0071e3; }
   .logo p { font-size: 14px; color: #86868b; margin-top: 4px; }
   .form-group { margin-bottom: 16px; }
-  label { display: block; font-size: 13px; font-weight: 500; color: #1d1d1f; margin-bottom: 6px; }
+  label { display: block; font-size: 13px; font-weight: 500; color: #1d1d1f; margin-bottom: 6px; cursor: text; }
   input { width: 100%; padding: 12px 16px; border: 1px solid #d2d2d7; border-radius: 10px; font-size: 15px; outline: none; transition: border-color 0.2s; }
   input:focus { border-color: #0071e3; box-shadow: 0 0 0 3px rgba(0,113,227,0.1); }
   .btn { width: 100%; padding: 13px; background: #0071e3; color: white; border: none; border-radius: 10px; font-size: 15px; font-weight: 600; cursor: pointer; transition: background 0.2s; margin-top: 8px; }
@@ -35,19 +37,20 @@
   .badge-rejected { background: #ffebee; color: #b71c1c; }
   .profile-header { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; }
   .avatar { width: 60px; height: 60px; border-radius: 50%; background: #0071e3; color: white; display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: 700; flex-shrink: 0; }
-  .profile-info h2 { font-size: 20px; font-weight: 600; }
-  .profile-info p { font-size: 14px; color: #86868b; margin-top: 4px; }
+  .profile-info { min-width: 0; }
+  .profile-info h2 { font-size: 20px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .profile-info p { font-size: 14px; color: #86868b; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .section { margin-bottom: 24px; }
   .section h3 { font-size: 13px; font-weight: 600; color: #86868b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
-  .info-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #f2f2f7; }
+  .info-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #f2f2f7; gap: 8px; }
   .info-row:last-child { border-bottom: none; }
-  .info-label { font-size: 14px; color: #86868b; }
-  .info-value { font-size: 14px; font-weight: 500; }
+  .info-label { font-size: 14px; color: #86868b; flex-shrink: 0; }
+  .info-value { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
   .session-item { background: #f5f5f7; border-radius: 10px; padding: 12px 16px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
-  .session-info { font-size: 13px; }
-  .session-info .device { font-weight: 500; }
+  .session-info { font-size: 13px; min-width: 0; flex: 1; }
+  .session-info .device { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .session-info .date { color: #86868b; margin-top: 2px; }
-  .session-revoke { background: none; border: none; color: #ff3b30; font-size: 13px; cursor: pointer; font-weight: 500; }
+  .session-revoke { background: none; border: none; color: #ff3b30; font-size: 13px; cursor: pointer; font-weight: 500; flex-shrink: 0; margin-left: 8px; }
   .nav { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 24px; }
   .nav button { flex: 1; padding: 8px; background: #f5f5f7; border: none; border-radius: 8px; font-size: 13px; cursor: pointer; color: #1d1d1f; }
   .nav button.active { background: #0071e3; color: white; }
@@ -57,6 +60,11 @@
   .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.4); border-top-color: white; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-right: 6px; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .full-width { max-width: 600px; }
+  .kyc-desc { font-size: 14px; color: #86868b; margin-bottom: 16px; }
+  @media (max-width: 480px) {
+    .card { padding: 28px 20px; }
+    .info-value { max-width: 140px; }
+  }
 </style>
 </head>
 <body>
@@ -69,12 +77,12 @@
     </div>
     <div class="error" id="login-error"></div>
     <div class="form-group">
-      <label>Email</label>
-      <input type="email" id="login-email" placeholder="you@example.com" autocomplete="email">
+      <label for="login-email">Email</label>
+      <input type="email" id="login-email" placeholder="you@example.com" autocomplete="email" required maxlength="254">
     </div>
     <div class="form-group">
-      <label>Password</label>
-      <input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password">
+      <label for="login-password">Password</label>
+      <input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password" required maxlength="128">
     </div>
     <button class="btn" id="login-btn">Sign In</button>
     <div class="link">Don't have an account? <a id="go-register">Create one</a></div>
@@ -89,20 +97,20 @@
     <div class="error" id="register-error"></div>
     <div class="success" id="register-success"></div>
     <div class="form-group">
-      <label>Email</label>
-      <input type="email" id="reg-email" placeholder="you@example.com">
+      <label for="reg-email">Email</label>
+      <input type="email" id="reg-email" placeholder="you@example.com" autocomplete="email" required maxlength="254">
     </div>
     <div class="form-group">
-      <label>Password <span style="color:#86868b;font-weight:400">(min 8 chars)</span></label>
-      <input type="password" id="reg-password" placeholder="••••••••">
+      <label for="reg-password">Password <span style="color:#86868b;font-weight:400">(min 8 chars)</span></label>
+      <input type="password" id="reg-password" placeholder="••••••••" autocomplete="new-password" required maxlength="128">
     </div>
     <div class="form-group">
-      <label>First Name (optional)</label>
-      <input type="text" id="reg-firstname" placeholder="John">
+      <label for="reg-firstname">First Name (optional)</label>
+      <input type="text" id="reg-firstname" placeholder="John" autocomplete="given-name" maxlength="100">
     </div>
     <div class="form-group">
-      <label>Last Name (optional)</label>
-      <input type="text" id="reg-lastname" placeholder="Doe">
+      <label for="reg-lastname">Last Name (optional)</label>
+      <input type="text" id="reg-lastname" placeholder="Doe" autocomplete="family-name" maxlength="100">
     </div>
     <button class="btn" id="register-btn">Create Account</button>
     <div class="link">Already have an account? <a id="go-login">Sign in</a></div>
@@ -116,7 +124,7 @@
     </div>
     <div class="error" id="twofa-error"></div>
     <div class="form-group">
-      <label>Authentication Code</label>
+      <label for="twofa-code">Authentication Code</label>
       <input type="text" id="twofa-code" class="otp-input" placeholder="000000" maxlength="6" autocomplete="one-time-code">
     </div>
     <button class="btn" id="twofa-btn">Verify</button>
@@ -157,7 +165,7 @@
         </div>
         <div class="info-row">
           <span class="info-label">Wallet</span>
-          <span class="info-value" id="dash-wallet-val" style="font-size:12px;word-break:break-all;">Not linked</span>
+          <span class="info-value" id="dash-wallet-val" style="font-size:12px;">Not linked</span>
         </div>
       </div>
       <button class="btn btn-secondary" id="logout-btn">Sign Out</button>
@@ -168,24 +176,24 @@
       <div class="success" id="profile-success"></div>
       <div class="error" id="profile-error"></div>
       <div class="form-group">
-        <label>First Name</label>
-        <input type="text" id="edit-firstname">
+        <label for="edit-firstname">First Name</label>
+        <input type="text" id="edit-firstname" autocomplete="off" maxlength="100">
       </div>
       <div class="form-group">
-        <label>Last Name</label>
-        <input type="text" id="edit-lastname">
+        <label for="edit-lastname">Last Name</label>
+        <input type="text" id="edit-lastname" autocomplete="off" maxlength="100">
       </div>
       <div class="form-group">
-        <label>Date of Birth</label>
+        <label for="edit-dob">Date of Birth</label>
         <input type="date" id="edit-dob">
       </div>
       <div class="form-group">
-        <label>Country</label>
-        <input type="text" id="edit-country" placeholder="AT, DE, US...">
+        <label for="edit-country">Country</label>
+        <input type="text" id="edit-country" placeholder="AT, DE, US..." autocomplete="off" maxlength="2">
       </div>
       <div class="form-group">
-        <label>Wallet Address (EVM)</label>
-        <input type="text" id="edit-wallet" placeholder="0x...">
+        <label for="edit-wallet">Wallet Address (EVM)</label>
+        <input type="text" id="edit-wallet" placeholder="0x..." autocomplete="off" maxlength="42">
       </div>
       <button class="btn" id="save-profile-btn">Save Changes</button>
     </div>
@@ -199,7 +207,7 @@
           <span id="kyc-status-badge" class="badge badge-unverified">Unverified</span>
         </div>
       </div>
-      <p style="font-size:14px;color:#86868b;margin-bottom:16px">Complete identity verification to unlock financial features. You will need a valid government-issued ID and a camera.</p>
+      <p class="kyc-desc" id="kyc-desc">Complete identity verification to unlock financial features. You will need a valid government-issued ID and a camera.</p>
       <button class="btn" id="kyc-start-btn">Start Verification</button>
       <div id="sumsub-container" style="margin-top:16px;display:none"></div>
     </div>
@@ -246,7 +254,35 @@ function hideError(id) {
 }
 function showSuccess(id, msg) {
   const el = document.getElementById(id);
-  if (el) { el.textContent = msg; el.style.display = 'block'; setTimeout(() => el.style.display='none', 3000); }
+  if (el) { el.textContent = msg; el.style.display = 'block'; setTimeout(() => el.style.display='none', 5000); }
+}
+function clearAllAlerts() {
+  document.querySelectorAll('.error, .success').forEach(el => el.style.display = 'none');
+}
+
+// BUG-004: Parse User-Agent to readable device name
+function parseUA(ua) {
+  if (!ua) return 'Unknown device';
+  if (/iPhone/.test(ua)) return 'iPhone';
+  if (/iPad/.test(ua)) return 'iPad';
+  if (/Android.*Mobile/.test(ua)) return 'Android Phone';
+  if (/Android/.test(ua)) return 'Android Tablet';
+  const browser = /Edg\//.test(ua) ? 'Edge' :
+                  /Chrome\//.test(ua) ? 'Chrome' :
+                  /Firefox\//.test(ua) ? 'Firefox' :
+                  /Safari\//.test(ua) ? 'Safari' : 'Browser';
+  const os = /Windows NT/.test(ua) ? 'Windows' :
+             /Mac OS X/.test(ua) ? 'macOS' :
+             /Linux/.test(ua) ? 'Linux' : '';
+  return os ? browser + ' on ' + os : browser;
+}
+
+// BUG-016: Handle array or string messages from NestJS validation
+function extractMessage(data, fallback) {
+  if (!data) return fallback;
+  const msg = data.message;
+  if (Array.isArray(msg)) return msg.join(', ');
+  return msg || fallback;
 }
 
 function setLoading(btnId, loading) {
@@ -284,6 +320,7 @@ async function apiFetch(path, options = {}) {
 }
 
 function showPage(name) {
+  clearAllAlerts(); // BUG-006: clear errors on page navigation
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   const page = document.getElementById('page-' + name);
   if (page) page.classList.add('active');
@@ -298,6 +335,7 @@ function showPage(name) {
 }
 
 function switchTab(tab) {
+  clearAllAlerts(); // BUG-006: clear errors on tab switch
   document.querySelectorAll('.nav button').forEach(b => {
     b.classList.toggle('active', b.dataset.tab === tab);
   });
@@ -322,7 +360,7 @@ async function doLogin() {
       body: JSON.stringify({ email, password }),
     });
     const data = await res.json();
-    if (!res.ok) { showError('login-error', data.message || 'Login failed'); return; }
+    if (!res.ok) { showError('login-error', extractMessage(data, 'Login failed')); return; }
     if (data.next === '2fa') {
       challengeToken = data.challengeToken;
       showPage('2fa');
@@ -354,7 +392,7 @@ async function doRegister() {
       body: JSON.stringify(body),
     });
     const data = await res.json();
-    if (!res.ok) { showError('register-error', data.message || 'Registration failed'); return; }
+    if (!res.ok) { showError('register-error', extractMessage(data, 'Registration failed')); return; }
     saveTokens(data.accessToken, data.refreshToken);
     showPage('dashboard');
   } catch (e) {
@@ -375,7 +413,7 @@ async function do2FA() {
       body: JSON.stringify({ challengeToken, code }),
     });
     const data = await res.json();
-    if (!res.ok) { showError('twofa-error', data.message || 'Invalid code'); return; }
+    if (!res.ok) { showError('twofa-error', extractMessage(data, 'Invalid code')); return; }
     saveTokens(data.accessToken, data.refreshToken);
     showPage('dashboard');
   } catch (e) {
@@ -416,37 +454,68 @@ async function loadProfile() {
   }
 }
 
+// BUG-001: Wallet handled via separate /profile/wallet endpoint
 async function doUpdateProfile() {
-  const body = {};
-  const fn = document.getElementById('edit-firstname').value;
-  const ln = document.getElementById('edit-lastname').value;
-  const dob = document.getElementById('edit-dob').value;
-  const country = document.getElementById('edit-country').value;
-  const wallet = document.getElementById('edit-wallet').value;
-  if (fn) body.firstName = fn;
-  if (ln) body.lastName = ln;
-  if (dob) body.dateOfBirth = dob;
-  if (country) body.country = country;
-  if (wallet) body.walletAddress = wallet;
+  hideError('profile-error');
+  setLoading('save-profile-btn', true);
 
-  const res = await apiFetch('/profile', {
-    method: 'PUT',
-    body: JSON.stringify(body),
-  });
-  if (res.ok) {
-    showSuccess('profile-success', 'Profile updated successfully!');
-    loadProfile();
-  } else {
-    const data = await res.json();
-    showError('profile-error', data.message || 'Update failed');
+  const fn = document.getElementById('edit-firstname').value.trim();
+  const ln = document.getElementById('edit-lastname').value.trim();
+  const dob = document.getElementById('edit-dob').value;
+  const country = document.getElementById('edit-country').value.trim();
+  const wallet = document.getElementById('edit-wallet').value.trim();
+
+  const profileBody = {};
+  if (fn) profileBody.firstName = fn;
+  if (ln) profileBody.lastName = ln;
+  if (dob) profileBody.dateOfBirth = dob;
+  if (country) profileBody.country = country;
+
+  try {
+    const errors = [];
+
+    const profileRes = await apiFetch('/profile', {
+      method: 'PUT',
+      body: JSON.stringify(profileBody),
+    });
+    if (!profileRes.ok) {
+      const d = await profileRes.json();
+      errors.push(extractMessage(d, 'Profile update failed'));
+    }
+
+    // Handle wallet separately
+    const walletRes = await apiFetch(
+      '/profile/wallet',
+      wallet
+        ? { method: 'PUT', body: JSON.stringify({ walletAddress: wallet }) }
+        : { method: 'DELETE' }
+    );
+    if (!walletRes.ok && walletRes.status !== 404) {
+      const d = await walletRes.json();
+      errors.push(extractMessage(d, 'Wallet update failed'));
+    }
+
+    if (errors.length) {
+      showError('profile-error', errors.join('; '));
+    } else {
+      showSuccess('profile-success', '✓ Profile saved successfully');
+      loadProfile();
+    }
+  } catch(e) {
+    showError('profile-error', 'Network error. Please try again.');
+  } finally {
+    setLoading('save-profile-btn', false);
   }
 }
 
+// BUG-007: Clear form fields after logout
 async function doLogout() {
   try {
     await apiFetch('/auth/logout', { method: 'POST', body: JSON.stringify({ refreshToken }) });
   } catch(e) {}
   clearTokens();
+  document.getElementById('login-email').value = '';
+  document.getElementById('login-password').value = '';
   showPage('login');
 }
 
@@ -469,11 +538,14 @@ async function loadSessions() {
 
       const info = document.createElement('div');
       info.className = 'session-info';
-      info.innerHTML = '<div class="device">' + (s.deviceInfo || 'Unknown device') + '</div>' +
+      // BUG-004: parse UA to readable name
+      const deviceName = parseUA(s.deviceInfo);
+      info.innerHTML = '<div class="device">' + deviceName + (s.isCurrent ? ' <span style="font-size:11px;color:#0071e3;font-weight:400">(this device)</span>' : '') + '</div>' +
         '<div class="date">' + (s.ipAddress || '') + ' · ' + new Date(s.createdAt).toLocaleDateString() + '</div>';
 
       item.appendChild(info);
 
+      // BUG-005: show Current label instead of Revoke for current session
       if (!s.isCurrent) {
         const btn = document.createElement('button');
         btn.className = 'session-revoke';
@@ -482,7 +554,7 @@ async function loadSessions() {
         item.appendChild(btn);
       } else {
         const span = document.createElement('span');
-        span.style.cssText = 'font-size:12px;color:#0071e3';
+        span.style.cssText = 'font-size:12px;color:#0071e3;flex-shrink:0;margin-left:8px';
         span.textContent = 'Current';
         item.appendChild(span);
       }
@@ -499,8 +571,8 @@ async function revokeSession(id) {
   loadSessions();
 }
 
+// BUG-010: removed confirm() — consistent with doLogout (no confirmation)
 async function revokeAllSessions() {
-  if (!confirm('Sign out from all devices?')) return;
   await apiFetch('/auth/sessions', { method: 'DELETE' });
   clearTokens();
   showPage('login');
@@ -516,10 +588,19 @@ async function loadKycStatus() {
     el.textContent = status;
     el.className = 'badge badge-' + status.toLowerCase().replace('_', '-');
 
+    // BUG-009: update instruction text based on status
+    const desc = document.getElementById('kyc-desc');
+    const btn = document.getElementById('kyc-start-btn');
     if (status === 'VERIFIED') {
-      const btn = document.getElementById('kyc-start-btn');
+      desc.textContent = 'Your identity has been successfully verified.';
       btn.textContent = 'Verification Complete';
       btn.disabled = true;
+    } else if (status === 'PENDING') {
+      desc.textContent = 'Your documents are being reviewed. This usually takes a few minutes.';
+    } else if (status === 'REJECTED') {
+      desc.textContent = 'Your verification was not approved. Please try again with valid documents.';
+    } else {
+      desc.textContent = 'Complete identity verification to unlock financial features. You will need a valid government-issued ID and a camera.';
     }
   } catch(e) {}
 }
@@ -529,7 +610,7 @@ async function startKYC() {
   try {
     const res = await apiFetch('/kyc/start', { method: 'POST', body: JSON.stringify({}) });
     const data = await res.json();
-    if (!res.ok) { alert(data.message || 'KYC start failed'); return; }
+    if (!res.ok) { alert(extractMessage(data, 'KYC start failed')); return; }
 
     const sdkToken = data.sdkToken || data.token;
     if (!sdkToken) { alert('No SDK token received'); return; }
@@ -538,11 +619,9 @@ async function startKYC() {
     container.style.display = 'block';
     container.innerHTML = '';
 
-    // Launch Sumsub WebSDK
     const snsWebSdkInstance = snsWebSdk
       .init(
         sdkToken,
-        // Token refresh callback — get a new token if expired
         async () => {
           const r = await apiFetch('/kyc/start', { method: 'POST', body: JSON.stringify({}) });
           const d = await r.json();
@@ -572,7 +651,7 @@ async function startKYC() {
   }
 }
 
-// ── Event listeners (no inline handlers) ──────────────────────────
+// ── Event listeners ──────────────────────────────────────────────
 document.getElementById('login-btn').addEventListener('click', doLogin);
 document.getElementById('register-btn').addEventListener('click', doRegister);
 document.getElementById('twofa-btn').addEventListener('click', do2FA);
@@ -585,19 +664,16 @@ document.getElementById('go-register').addEventListener('click', () => showPage(
 document.getElementById('go-login').addEventListener('click', () => showPage('login'));
 document.getElementById('go-login-from-2fa').addEventListener('click', () => showPage('login'));
 
-// Nav tabs (event delegation)
 document.querySelector('.nav').addEventListener('click', e => {
   const btn = e.target.closest('button[data-tab]');
   if (btn) switchTab(btn.dataset.tab);
 });
 
-// Sessions revoke (event delegation)
 document.getElementById('sessions-list').addEventListener('click', e => {
   const btn = e.target.closest('button.session-revoke');
   if (btn) revokeSession(btn.dataset.sessionId);
 });
 
-// Enter key shortcuts
 document.addEventListener('keypress', (e) => {
   if (e.key !== 'Enter') return;
   const activePage = document.querySelector('.page.active');

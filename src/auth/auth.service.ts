@@ -214,12 +214,13 @@ export class AuthService {
     return { success: true };
   }
 
-  async getSessions(userId: string) {
-    return this.prisma.session.findMany({
+  async getSessions(userId: string, currentSessionId?: string) {
+    const sessions = await this.prisma.session.findMany({
       where: { userId, isRevoked: false, expiresAt: { gt: new Date() } },
       select: { id: true, deviceInfo: true, ipAddress: true, location: true, createdAt: true, lastSeenAt: true },
       orderBy: { lastSeenAt: 'desc' },
     });
+    return sessions.map(s => ({ ...s, isCurrent: s.id === currentSessionId }));
   }
 
   async revokeSession(userId: string, sessionId: string, ip: string, userAgent: string) {
