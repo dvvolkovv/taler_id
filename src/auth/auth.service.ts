@@ -57,7 +57,7 @@ export class AuthService {
         email: dto.email,
         phone: dto.phone,
         passwordHash,
-        profile: { create: {} },
+        profile: { create: { firstName: dto.firstName, lastName: dto.lastName } },
         kycRecord: { create: {} },
       },
     });
