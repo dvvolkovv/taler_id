@@ -539,7 +539,7 @@ async function startKYC() {
     container.innerHTML = '';
 
     // Launch Sumsub WebSDK
-    const snsWebSdkInstance = SumsubWebSdk
+    const snsWebSdkInstance = snsWebSdk
       .init(
         sdkToken,
         // Token refresh callback — get a new token if expired
