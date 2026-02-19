@@ -46,15 +46,16 @@ export class KycService {
   }
 
   async handleWebhook(body: Buffer, signature: string) {
-    // Verify Sumsub webhook signature
-    const secretKey = this.configService.get<string>("SUMSUB_SECRET_KEY") || process.env.SUMSUB_SECRET_KEY || "";
-    const expectedSignature = crypto
-      .createHmac("sha256", secretKey)
-      .update(body)
-      .digest("hex");
-
-    if (signature !== expectedSignature) {
-      throw new BadRequestException("Invalid webhook signature");
+    // Verify Sumsub webhook signature only if SUMSUB_WEBHOOK_SECRET is configured
+    const webhookSecret = process.env.SUMSUB_WEBHOOK_SECRET || "";
+    if (webhookSecret) {
+      const expectedSignature = crypto
+        .createHmac("sha256", webhookSecret)
+        .update(body)
+        .digest("hex");
+      if (signature !== expectedSignature) {
+        throw new BadRequestException("Invalid webhook signature");
+      }
     }
 
     const payload = JSON.parse(body.toString());
