@@ -26,6 +26,10 @@
   .btn-secondary:hover { background: rgba(0,113,227,0.05); }
   .btn-danger { background: #ff3b30; }
   .btn-danger:hover { background: #ff453a; }
+  .btn-sm { padding: 6px 14px; font-size: 13px; font-weight: 500; border-radius: 8px; border: none; cursor: pointer; margin-top: 0; width: auto; display: inline-block; }
+  .btn-sm-primary { background: #0071e3; color: white; }
+  .btn-sm-primary:hover { background: #0077ed; }
+  .btn-sm-danger { background: none; border: none; color: #ff3b30; font-size: 13px; cursor: pointer; font-weight: 500; }
   .error { background: #fff0f0; border: 1px solid #ffcdd2; color: #c62828; padding: 12px 16px; border-radius: 10px; font-size: 14px; margin-bottom: 16px; display: none; }
   .success { background: #f0fff4; border: 1px solid #c8e6c9; color: #1b5e20; padding: 12px 16px; border-radius: 10px; font-size: 14px; margin-bottom: 16px; display: none; }
   .link { text-align: center; font-size: 14px; margin-top: 16px; color: #86868b; }
@@ -61,6 +65,34 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   .full-width { max-width: 600px; }
   .kyc-desc { font-size: 14px; color: #86868b; margin-bottom: 16px; }
+
+  /* Tenant / Organization styles */
+  .tenant-card { background: #f5f5f7; border-radius: 12px; padding: 14px 16px; margin-bottom: 10px; cursor: pointer; transition: background 0.15s; display: flex; justify-content: space-between; align-items: center; }
+  .tenant-card:hover { background: #ebebed; }
+  .tenant-card-info { min-width: 0; }
+  .tenant-card-name { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tenant-card-role { font-size: 12px; color: #86868b; margin-top: 2px; }
+  .tenant-detail { display: none; }
+  .tenant-detail.active { display: block; }
+  .back-btn { display: inline-flex; align-items: center; gap: 6px; background: none; border: none; color: #0071e3; font-size: 14px; font-weight: 500; cursor: pointer; margin-bottom: 16px; padding: 0; }
+  .back-btn:hover { text-decoration: underline; }
+  .member-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #f2f2f7; gap: 8px; }
+  .member-item:last-child { border-bottom: none; }
+  .member-info { min-width: 0; flex: 1; }
+  .member-email { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .member-role { font-size: 12px; color: #86868b; margin-top: 1px; }
+  .member-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+  .create-form { background: #f5f5f7; border-radius: 12px; padding: 16px; margin-bottom: 16px; display: none; }
+  .create-form.open { display: block; }
+  .create-form input { background: white; margin-bottom: 0; }
+  .role-select { width: 100%; padding: 10px 14px; border: 1px solid #d2d2d7; border-radius: 10px; font-size: 14px; outline: none; background: white; transition: border-color 0.2s; }
+  .role-select:focus { border-color: #0071e3; box-shadow: 0 0 0 3px rgba(0,113,227,0.1); }
+  .org-header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+  .org-avatar { width: 44px; height: 44px; border-radius: 10px; background: #1d1d1f; color: white; display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 700; flex-shrink: 0; }
+  .org-name { font-size: 18px; font-weight: 700; }
+  .org-role-badge { font-size: 12px; color: #86868b; margin-top: 2px; }
+  .kyb-container { margin-top: 16px; }
+
   @media (max-width: 480px) {
     .card { padding: 28px 20px; }
     .info-value { max-width: 140px; }
@@ -144,6 +176,7 @@
       <button class="active" data-tab="overview">Overview</button>
       <button data-tab="profile-edit">Edit Profile</button>
       <button data-tab="kyc-tab">KYC</button>
+      <button data-tab="org-tab">Organization</button>
       <button data-tab="sessions-tab">Sessions</button>
     </div>
 
@@ -212,6 +245,97 @@
       <div id="sumsub-container" style="margin-top:16px;display:none"></div>
     </div>
 
+    <!-- Organization Tab -->
+    <div id="tab-org-tab" style="display:none">
+      <!-- Org list view -->
+      <div id="org-list-view">
+        <div class="error" id="org-error"></div>
+        <div class="success" id="org-success"></div>
+
+        <div class="section">
+          <h3>My Organizations</h3>
+          <div id="tenant-list"><div style="color:#86868b;font-size:14px">Loading...</div></div>
+        </div>
+
+        <!-- Create org toggle -->
+        <button class="btn btn-secondary" id="toggle-create-org-btn" style="margin-bottom:8px">+ Create Organization</button>
+        <div class="create-form" id="create-org-form">
+          <div class="form-group" style="margin-top:0">
+            <label for="new-org-name">Organization Name *</label>
+            <input type="text" id="new-org-name" placeholder="Acme Corp" maxlength="200" required>
+          </div>
+          <div class="form-group">
+            <label for="new-org-email">Contact Email</label>
+            <input type="email" id="new-org-email" placeholder="contact@example.com" maxlength="254">
+          </div>
+          <div class="form-group">
+            <label for="new-org-website">Website</label>
+            <input type="url" id="new-org-website" placeholder="https://example.com" maxlength="255">
+          </div>
+          <div class="form-group">
+            <label for="new-org-address">Legal Address</label>
+            <input type="text" id="new-org-address" placeholder="Musterstraße 1, 1010 Vienna" maxlength="500">
+          </div>
+          <button class="btn btn-sm btn-sm-primary" id="create-org-btn" style="width:100%;padding:10px;font-size:14px;margin-top:4px">Create</button>
+        </div>
+      </div>
+
+      <!-- Org detail view -->
+      <div id="org-detail-view" class="tenant-detail">
+        <button class="back-btn" id="back-to-orgs-btn">← Back to Organizations</button>
+
+        <div class="org-header">
+          <div class="org-avatar" id="org-detail-avatar">?</div>
+          <div>
+            <div class="org-name" id="org-detail-name">-</div>
+            <div class="org-role-badge" id="org-detail-role"></div>
+          </div>
+        </div>
+
+        <!-- KYB Section -->
+        <div class="section">
+          <h3>Business Verification (KYB)</h3>
+          <div class="info-row">
+            <span class="info-label">Status</span>
+            <span id="kyb-status-badge" class="badge badge-unverified">Unverified</span>
+          </div>
+        </div>
+        <p class="kyc-desc" id="kyb-desc">Verify your organization to unlock business features in the Taler ecosystem.</p>
+        <button class="btn" id="kyb-start-btn" style="margin-bottom:16px">Start Business Verification</button>
+        <div id="kyb-sumsub-container" style="display:none;margin-bottom:16px"></div>
+
+        <!-- Members Section -->
+        <div class="section">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+            <h3 style="margin-bottom:0">Members</h3>
+          </div>
+          <div id="members-list"></div>
+        </div>
+
+        <!-- Invite Section (shown only for OWNER/ADMIN) -->
+        <div id="invite-section" style="display:none">
+          <div class="section" style="margin-bottom:8px">
+            <h3>Invite Member</h3>
+          </div>
+          <div class="error" id="invite-error"></div>
+          <div class="success" id="invite-success"></div>
+          <div class="form-group">
+            <label for="invite-email">Email Address</label>
+            <input type="email" id="invite-email" placeholder="colleague@example.com" maxlength="254">
+          </div>
+          <div class="form-group">
+            <label for="invite-role">Role</label>
+            <select id="invite-role" class="role-select">
+              <option value="admin">Admin</option>
+              <option value="operator">Operator</option>
+              <option value="viewer">Viewer</option>
+            </select>
+          </div>
+          <button class="btn" id="invite-btn" style="margin-top:0">Send Invite</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Sessions Tab -->
     <div id="tab-sessions-tab" style="display:none">
       <div class="section">
@@ -229,6 +353,8 @@ let accessToken = localStorage.getItem('accessToken') || '';
 let refreshToken = localStorage.getItem('refreshToken') || '';
 let challengeToken = '';
 let currentTab = 'overview';
+let currentTenantId = null;
+let currentTenantRole = null;
 
 function saveTokens(at, rt) {
   accessToken = at;
@@ -260,7 +386,6 @@ function clearAllAlerts() {
   document.querySelectorAll('.error, .success').forEach(el => el.style.display = 'none');
 }
 
-// BUG-004: Parse User-Agent to readable device name
 function parseUA(ua) {
   if (!ua) return 'Unknown device';
   if (/iPhone/.test(ua)) return 'iPhone';
@@ -277,7 +402,6 @@ function parseUA(ua) {
   return os ? browser + ' on ' + os : browser;
 }
 
-// BUG-016: Handle array or string messages from NestJS validation
 function extractMessage(data, fallback) {
   if (!data) return fallback;
   const msg = data.message;
@@ -320,7 +444,7 @@ async function apiFetch(path, options = {}) {
 }
 
 function showPage(name) {
-  clearAllAlerts(); // BUG-006: clear errors on page navigation
+  clearAllAlerts();
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   const page = document.getElementById('page-' + name);
   if (page) page.classList.add('active');
@@ -335,19 +459,21 @@ function showPage(name) {
 }
 
 function switchTab(tab) {
-  clearAllAlerts(); // BUG-006: clear errors on tab switch
+  clearAllAlerts();
   document.querySelectorAll('.nav button').forEach(b => {
     b.classList.toggle('active', b.dataset.tab === tab);
   });
-  ['overview', 'profile-edit', 'kyc-tab', 'sessions-tab'].forEach(t => {
+  ['overview', 'profile-edit', 'kyc-tab', 'org-tab', 'sessions-tab'].forEach(t => {
     const el = document.getElementById('tab-' + t);
     if (el) el.style.display = t === tab ? 'block' : 'none';
   });
   currentTab = tab;
   if (tab === 'sessions-tab') loadSessions();
   if (tab === 'kyc-tab') loadKycStatus();
+  if (tab === 'org-tab') loadTenants();
 }
 
+// ── Auth ──────────────────────────────────────────────────────────
 async function doLogin() {
   hideError('login-error');
   setLoading('login-btn', true);
@@ -423,6 +549,7 @@ async function do2FA() {
   }
 }
 
+// ── Profile ───────────────────────────────────────────────────────
 async function loadProfile() {
   try {
     const res = await apiFetch('/profile');
@@ -454,7 +581,6 @@ async function loadProfile() {
   }
 }
 
-// BUG-001: Wallet handled via separate /profile/wallet endpoint
 async function doUpdateProfile() {
   hideError('profile-error');
   setLoading('save-profile-btn', true);
@@ -483,7 +609,6 @@ async function doUpdateProfile() {
       errors.push(extractMessage(d, 'Profile update failed'));
     }
 
-    // Handle wallet separately
     const walletRes = await apiFetch(
       '/profile/wallet',
       wallet
@@ -508,7 +633,6 @@ async function doUpdateProfile() {
   }
 }
 
-// BUG-007: Clear form fields after logout
 async function doLogout() {
   try {
     await apiFetch('/auth/logout', { method: 'POST', body: JSON.stringify({ refreshToken }) });
@@ -519,6 +643,7 @@ async function doLogout() {
   showPage('login');
 }
 
+// ── Sessions ──────────────────────────────────────────────────────
 async function loadSessions() {
   const container = document.getElementById('sessions-list');
   container.innerHTML = '<div style="color:#86868b;font-size:14px">Loading sessions...</div>';
@@ -538,14 +663,12 @@ async function loadSessions() {
 
       const info = document.createElement('div');
       info.className = 'session-info';
-      // BUG-004: parse UA to readable name
       const deviceName = parseUA(s.deviceInfo);
       info.innerHTML = '<div class="device">' + deviceName + (s.isCurrent ? ' <span style="font-size:11px;color:#0071e3;font-weight:400">(this device)</span>' : '') + '</div>' +
         '<div class="date">' + (s.ipAddress || '') + ' · ' + new Date(s.createdAt).toLocaleDateString() + '</div>';
 
       item.appendChild(info);
 
-      // BUG-005: show Current label instead of Revoke for current session
       if (!s.isCurrent) {
         const btn = document.createElement('button');
         btn.className = 'session-revoke';
@@ -571,13 +694,13 @@ async function revokeSession(id) {
   loadSessions();
 }
 
-// BUG-010: removed confirm() — consistent with doLogout (no confirmation)
 async function revokeAllSessions() {
   await apiFetch('/auth/sessions', { method: 'DELETE' });
   clearTokens();
   showPage('login');
 }
 
+// ── KYC ───────────────────────────────────────────────────────────
 async function loadKycStatus() {
   try {
     const res = await apiFetch('/kyc/status');
@@ -588,7 +711,6 @@ async function loadKycStatus() {
     el.textContent = status;
     el.className = 'badge badge-' + status.toLowerCase().replace('_', '-');
 
-    // BUG-009: update instruction text based on status
     const desc = document.getElementById('kyc-desc');
     const btn = document.getElementById('kyc-start-btn');
     if (status === 'VERIFIED') {
@@ -620,27 +742,18 @@ async function startKYC() {
     container.innerHTML = '';
 
     const snsWebSdkInstance = snsWebSdk
-      .init(
-        sdkToken,
-        async () => {
-          const r = await apiFetch('/kyc/start', { method: 'POST', body: JSON.stringify({}) });
-          const d = await r.json();
-          return d.sdkToken || d.token || '';
-        }
-      )
+      .init(sdkToken, async () => {
+        const r = await apiFetch('/kyc/start', { method: 'POST', body: JSON.stringify({}) });
+        const d = await r.json();
+        return d.sdkToken || d.token || '';
+      })
       .withConf({ lang: 'en' })
       .withOptions({ addViewportTag: false, adaptIframeHeight: true })
-      .on('idCheck.onReady', () => {
-        setLoading('kyc-start-btn', false);
-      })
+      .on('idCheck.onReady', () => { setLoading('kyc-start-btn', false); })
       .on('idCheck.applicantStatus', (payload) => {
-        if (payload.reviewResult && payload.reviewResult.reviewAnswer === 'GREEN') {
-          loadKycStatus();
-        }
+        if (payload.reviewResult && payload.reviewResult.reviewAnswer === 'GREEN') loadKycStatus();
       })
-      .on('idCheck.onError', (err) => {
-        console.error('Sumsub error:', err);
-      })
+      .on('idCheck.onError', (err) => { console.error('Sumsub error:', err); })
       .build();
 
     snsWebSdkInstance.launch('#sumsub-container');
@@ -651,7 +764,283 @@ async function startKYC() {
   }
 }
 
-// ── Event listeners ──────────────────────────────────────────────
+// ── Organization / Tenant ─────────────────────────────────────────
+async function loadTenants() {
+  const list = document.getElementById('tenant-list');
+  list.innerHTML = '<div style="color:#86868b;font-size:14px">Loading...</div>';
+  // Make sure list view is visible
+  document.getElementById('org-list-view').style.display = 'block';
+  document.getElementById('org-detail-view').classList.remove('active');
+  try {
+    const res = await apiFetch('/tenant');
+    if (!res.ok) { list.innerHTML = '<div style="color:#ff3b30;font-size:14px">Failed to load</div>'; return; }
+    const tenants = await res.json();
+    if (!tenants.length) {
+      list.innerHTML = '<div style="color:#86868b;font-size:14px;padding:8px 0">No organizations yet. Create one below.</div>';
+      return;
+    }
+    list.innerHTML = '';
+    tenants.forEach(t => {
+      const card = document.createElement('div');
+      card.className = 'tenant-card';
+      const kybStatus = (t.kybStatus || 'UNVERIFIED').toUpperCase();
+      card.innerHTML = `
+        <div class="tenant-card-info">
+          <div class="tenant-card-name">${escapeHtml(t.name)}</div>
+          <div class="tenant-card-role">Role: ${t.role || '-'}</div>
+        </div>
+        <span class="badge badge-${kybStatus.toLowerCase().replace('_','-')}">${kybStatus}</span>
+      `;
+      card.addEventListener('click', () => openTenant(t.id, t.role));
+      list.appendChild(card);
+    });
+  } catch(e) {
+    list.innerHTML = '<div style="color:#ff3b30;font-size:14px">Network error</div>';
+  }
+}
+
+async function openTenant(tenantId, role) {
+  currentTenantId = tenantId;
+  currentTenantRole = role;
+
+  document.getElementById('org-list-view').style.display = 'none';
+  document.getElementById('org-detail-view').classList.add('active');
+
+  // Reset KYB area
+  document.getElementById('kyb-sumsub-container').style.display = 'none';
+  document.getElementById('kyb-sumsub-container').innerHTML = '';
+  document.getElementById('kyb-start-btn').disabled = false;
+  document.getElementById('kyb-start-btn').textContent = 'Start Business Verification';
+
+  // Show/hide invite section based on role
+  const canManage = role === 'OWNER' || role === 'ADMIN';
+  document.getElementById('invite-section').style.display = canManage ? 'block' : 'none';
+
+  // Show/hide KYB button (only owner can start)
+  document.getElementById('kyb-start-btn').style.display = role === 'OWNER' ? 'block' : 'none';
+
+  // Load details
+  try {
+    const res = await apiFetch('/tenant/' + tenantId);
+    if (!res.ok) return;
+    const data = await res.json();
+
+    const initials = data.name ? data.name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0,2) : '?';
+    document.getElementById('org-detail-avatar').textContent = initials;
+    document.getElementById('org-detail-name').textContent = data.name;
+    document.getElementById('org-detail-role').textContent = 'Your role: ' + role;
+
+    // Members
+    renderMembers(data.members || [], tenantId, role);
+  } catch(e) {
+    console.error('openTenant error:', e);
+  }
+
+  // Load KYB status
+  loadKybStatus(tenantId);
+}
+
+async function loadKybStatus(tenantId) {
+  try {
+    const res = await apiFetch('/tenant/' + tenantId + '/kyb/status');
+    if (!res.ok) return;
+    const data = await res.json();
+    const status = (data.status || 'UNVERIFIED').toUpperCase();
+    const el = document.getElementById('kyb-status-badge');
+    el.textContent = status;
+    el.className = 'badge badge-' + status.toLowerCase().replace('_', '-');
+
+    const desc = document.getElementById('kyb-desc');
+    const btn = document.getElementById('kyb-start-btn');
+    if (status === 'VERIFIED') {
+      desc.textContent = 'Your organization has been successfully verified.';
+      btn.textContent = 'Verification Complete';
+      btn.disabled = true;
+    } else if (status === 'PENDING') {
+      desc.textContent = 'Business documents are being reviewed. This usually takes 1-3 business days.';
+    } else if (status === 'REJECTED') {
+      desc.textContent = 'Business verification was not approved. Please try again with valid documents.';
+    } else {
+      desc.textContent = 'Verify your organization to unlock business features in the Taler ecosystem.';
+    }
+  } catch(e) {}
+}
+
+function renderMembers(members, tenantId, myRole) {
+  const container = document.getElementById('members-list');
+  container.innerHTML = '';
+  if (!members.length) {
+    container.innerHTML = '<div style="color:#86868b;font-size:14px">No members</div>';
+    return;
+  }
+  const canManage = myRole === 'OWNER' || myRole === 'ADMIN';
+  members.forEach(m => {
+    const userId = m.userId || (m.user && m.user.id);
+    const email = (m.user && m.user.email) || userId || '-';
+    const role = m.role || '-';
+    const isOwner = role === 'OWNER';
+
+    const item = document.createElement('div');
+    item.className = 'member-item';
+    item.innerHTML = `
+      <div class="member-info">
+        <div class="member-email">${escapeHtml(email)}</div>
+        <div class="member-role">${role}</div>
+      </div>
+    `;
+
+    if (canManage && !isOwner) {
+      const actions = document.createElement('div');
+      actions.className = 'member-actions';
+
+      // Role change select
+      const sel = document.createElement('select');
+      sel.className = 'role-select';
+      sel.style.cssText = 'width:auto;padding:4px 8px;font-size:12px;';
+      ['ADMIN','OPERATOR','VIEWER'].forEach(r => {
+        const opt = document.createElement('option');
+        opt.value = r.toLowerCase();
+        opt.textContent = r;
+        if (r === role) opt.selected = true;
+        sel.appendChild(opt);
+      });
+      sel.addEventListener('change', async () => {
+        const res = await apiFetch('/tenant/' + tenantId + '/members/' + userId + '/role', {
+          method: 'PUT',
+          body: JSON.stringify({ role: sel.value }),
+        });
+        if (!res.ok) { sel.value = role.toLowerCase(); alert('Failed to change role'); }
+      });
+
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'btn-sm-danger';
+      removeBtn.textContent = 'Remove';
+      removeBtn.addEventListener('click', async () => {
+        const res = await apiFetch('/tenant/' + tenantId + '/members/' + userId, { method: 'DELETE' });
+        if (res.ok) openTenant(tenantId, myRole);
+      });
+
+      actions.appendChild(sel);
+      actions.appendChild(removeBtn);
+      item.appendChild(actions);
+    }
+
+    container.appendChild(item);
+  });
+}
+
+async function doCreateTenant() {
+  const name = document.getElementById('new-org-name').value.trim();
+  if (!name) { showError('org-error', 'Organization name is required'); return; }
+
+  setLoading('create-org-btn', true);
+  const body = { name };
+  const email = document.getElementById('new-org-email').value.trim();
+  const website = document.getElementById('new-org-website').value.trim();
+  const address = document.getElementById('new-org-address').value.trim();
+  if (email) body.email = email;
+  if (website) body.website = website;
+  if (address) body.legalAddress = address;
+
+  try {
+    const res = await apiFetch('/tenant', { method: 'POST', body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!res.ok) { showError('org-error', extractMessage(data, 'Create failed')); return; }
+
+    // Reset form
+    ['new-org-name','new-org-email','new-org-website','new-org-address'].forEach(id => {
+      document.getElementById(id).value = '';
+    });
+    document.getElementById('create-org-form').classList.remove('open');
+    showSuccess('org-success', '✓ Organization created');
+    loadTenants();
+  } catch(e) {
+    showError('org-error', 'Network error. Please try again.');
+  } finally {
+    setLoading('create-org-btn', false);
+  }
+}
+
+async function doInviteMember() {
+  hideError('invite-error');
+  const email = document.getElementById('invite-email').value.trim();
+  const role = document.getElementById('invite-role').value;
+  if (!email) { showError('invite-error', 'Email is required'); return; }
+
+  setLoading('invite-btn', true);
+  try {
+    const res = await apiFetch('/tenant/' + currentTenantId + '/members/invite', {
+      method: 'POST',
+      body: JSON.stringify({ email, role }),
+    });
+    const data = await res.json();
+    if (!res.ok) { showError('invite-error', extractMessage(data, 'Invite failed')); return; }
+
+    document.getElementById('invite-email').value = '';
+    const msg = data.type === 'added' ? '✓ Member added' : '✓ Invite sent to ' + email;
+    showSuccess('invite-success', msg);
+    openTenant(currentTenantId, currentTenantRole);
+  } catch(e) {
+    showError('invite-error', 'Network error. Please try again.');
+  } finally {
+    setLoading('invite-btn', false);
+  }
+}
+
+async function startKYB() {
+  if (!currentTenantId) return;
+  setLoading('kyb-start-btn', true);
+  try {
+    const res = await apiFetch('/tenant/' + currentTenantId + '/kyb/start', { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) {
+      alert(extractMessage(data, 'KYB start failed'));
+      setLoading('kyb-start-btn', false);
+      return;
+    }
+
+    const sdkToken = data.sdkToken || data.token;
+    if (!sdkToken) {
+      // Mock mode — just reload status
+      loadKybStatus(currentTenantId);
+      setLoading('kyb-start-btn', false);
+      return;
+    }
+
+    const container = document.getElementById('kyb-sumsub-container');
+    container.style.display = 'block';
+    container.innerHTML = '';
+
+    const snsWebSdkInstance = snsWebSdk
+      .init(sdkToken, async () => {
+        const r = await apiFetch('/tenant/' + currentTenantId + '/kyb/start', { method: 'POST' });
+        const d = await r.json();
+        return d.sdkToken || d.token || '';
+      })
+      .withConf({ lang: 'en' })
+      .withOptions({ addViewportTag: false, adaptIframeHeight: true })
+      .on('idCheck.onReady', () => { setLoading('kyb-start-btn', false); })
+      .on('idCheck.applicantStatus', (payload) => {
+        if (payload.reviewResult && payload.reviewResult.reviewAnswer === 'GREEN') {
+          loadKybStatus(currentTenantId);
+        }
+      })
+      .on('idCheck.onError', (err) => { console.error('Sumsub KYB error:', err); })
+      .build();
+
+    snsWebSdkInstance.launch('#kyb-sumsub-container');
+  } catch(e) {
+    console.error('KYB start failed:', e);
+    alert('KYB start failed');
+    setLoading('kyb-start-btn', false);
+  }
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Event listeners ───────────────────────────────────────────────
 document.getElementById('login-btn').addEventListener('click', doLogin);
 document.getElementById('register-btn').addEventListener('click', doRegister);
 document.getElementById('twofa-btn').addEventListener('click', do2FA);
@@ -659,6 +1048,21 @@ document.getElementById('logout-btn').addEventListener('click', doLogout);
 document.getElementById('save-profile-btn').addEventListener('click', doUpdateProfile);
 document.getElementById('kyc-start-btn').addEventListener('click', startKYC);
 document.getElementById('revoke-all-btn').addEventListener('click', revokeAllSessions);
+document.getElementById('kyb-start-btn').addEventListener('click', startKYB);
+document.getElementById('invite-btn').addEventListener('click', doInviteMember);
+document.getElementById('create-org-btn').addEventListener('click', doCreateTenant);
+
+document.getElementById('toggle-create-org-btn').addEventListener('click', () => {
+  document.getElementById('create-org-form').classList.toggle('open');
+});
+
+document.getElementById('back-to-orgs-btn').addEventListener('click', () => {
+  currentTenantId = null;
+  currentTenantRole = null;
+  document.getElementById('org-detail-view').classList.remove('active');
+  document.getElementById('org-list-view').style.display = 'block';
+  loadTenants();
+});
 
 document.getElementById('go-register').addEventListener('click', () => showPage('register'));
 document.getElementById('go-login').addEventListener('click', () => showPage('login'));
