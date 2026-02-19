@@ -18,10 +18,13 @@ async function bootstrap() {
         directives: {
           defaultSrc: ["'self'"],
           scriptSrc: ["'self'", "'unsafe-inline'", 'https://static.sumsub.com'],
+          scriptSrcAttr: ["'unsafe-inline'"],
           styleSrc: ["'self'", "'unsafe-inline'"],
-          imgSrc: ["'self'", 'data:', 'https:'],
-          connectSrc: ["'self'"],
-          frameSrc: ["'self'", 'https://api.sumsub.com'],
+          imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
+          connectSrc: ["'self'", 'https://api.sumsub.com', 'wss://api.sumsub.com'],
+          frameSrc: ["'self'", 'https://api.sumsub.com', 'https://*.sumsub.com'],
+          mediaSrc: ["'self'", 'blob:', 'https://*.sumsub.com'],
+          workerSrc: ["'self'", 'blob:'],
         },
       },
       hsts: {
