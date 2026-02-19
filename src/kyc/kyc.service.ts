@@ -29,8 +29,8 @@ export class KycService {
       update: { sumsubApplicantId: applicantId, status: "PENDING" },
     });
 
-    // Get SDK token for frontend
-    const sdkToken = await this.getSumsubSdkToken(applicantId);
+    // Get SDK token for frontend (pass our externalUserId, not Sumsub applicantId)
+    const sdkToken = await this.getSumsubSdkToken(userId);
 
     return { sumsubApplicantId: applicantId, sdkToken, status: "PENDING" };
   }
@@ -142,23 +142,56 @@ export class KycService {
     });
 
     const data: any = await response.json();
-    if (!response.ok) throw new BadRequestException("Sumsub error: " + data.description);
+    if (!response.ok) {
+      // If applicant already exists, fetch their Sumsub ID
+      if (data.description && data.description.includes("already exists")) {
+        return this.getSumsubApplicantByExternalId(userId, appToken, secretKey, baseUrl);
+      }
+      throw new BadRequestException("Sumsub error: " + data.description);
+    }
     return data.id;
   }
 
-  private async getSumsubSdkToken(applicantId: string): Promise<string> {
+  private async getSumsubApplicantByExternalId(
+    externalUserId: string,
+    appToken: string,
+    secretKey: string,
+    baseUrl: string,
+  ): Promise<string> {
+    const ts = Math.floor(Date.now() / 1000).toString();
+    const urlPath = `/resources/applicants/-;externalUserId=${externalUserId}/one`;
+    const signature = crypto
+      .createHmac("sha256", secretKey)
+      .update(ts + "GET" + urlPath)
+      .digest("hex");
+
+    const response = await fetch(baseUrl + urlPath, {
+      method: "GET",
+      headers: {
+        "X-App-Token": appToken,
+        "X-App-Access-Sig": signature,
+        "X-App-Access-Ts": ts,
+      },
+    });
+    const data: any = await response.json();
+    if (!response.ok) throw new BadRequestException("Sumsub fetch error: " + data.description);
+    return data.id;
+  }
+
+  private async getSumsubSdkToken(externalUserId: string): Promise<string> {
     const appToken = process.env.SUMSUB_APP_TOKEN || "";
     const secretKey = process.env.SUMSUB_SECRET_KEY || "";
     const baseUrl = process.env.SUMSUB_BASE_URL || "https://api.sumsub.com";
 
     // In test/dev mode, return a mock SDK token
     if (appToken === "test_token" || !appToken) {
-      return "mock_sdk_token_" + applicantId;
+      return "mock_sdk_token_" + externalUserId;
     }
 
+    const levelName = process.env.SUMSUB_LEVEL_NAME || "basic-kyc-level";
     const ts = Math.floor(Date.now() / 1000).toString();
     const method = "POST";
-    const urlPath = "/resources/accessTokens?userId=" + applicantId + "&ttlInSecs=600";
+    const urlPath = "/resources/accessTokens?userId=" + externalUserId + "&ttlInSecs=600&levelName=" + levelName;
 
     const signature = crypto
       .createHmac("sha256", secretKey)
