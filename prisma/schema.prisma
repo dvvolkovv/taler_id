@@ -1,0 +1,187 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String   @id @default(uuid())
+  email         String?  @unique
+  phone         String?  @unique
+  passwordHash  String?
+  deletedAt     DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  profile       Profile?
+  sessions      Session[]
+  kycRecord     KycRecord?
+  tenantMembers TenantMember[]
+  auditLogs     AuditLog[]
+  totpSecret    TotpSecret?
+}
+
+model Profile {
+  id               String    @id @default(uuid())
+  userId           String    @unique
+  firstName        String?
+  lastName         String?
+  middleName       String?
+  dateOfBirth      DateTime?
+  country          String?
+  postalCode       String?
+  walletAddress    String?
+  avatarUrl        String?
+  preferredCurrency String?
+  language         String   @default("en")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  user             User     @relation(fields: [userId], references: [id])
+  documents        Document[]
+}
+
+model Document {
+  id          String       @id @default(uuid())
+  profileId   String
+  type        DocumentType
+  s3Key       String
+  originalName String?
+  mimeType    String?
+  status      String       @default("uploaded")
+  uploadedAt  DateTime     @default(now())
+
+  profile     Profile      @relation(fields: [profileId], references: [id])
+}
+
+enum DocumentType {
+  PASSPORT
+  NATIONAL_ID
+  DRIVERS_LICENSE
+  DIPLOMA
+  CERTIFICATE
+}
+
+model KycRecord {
+  id                  String    @id @default(uuid())
+  userId              String    @unique
+  sumsubApplicantId   String?   @unique
+  status              KycStatus @default(UNVERIFIED)
+  kycType             KycType   @default(INDIVIDUAL)
+  rejectionReason     String?
+  verifiedAt          DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  user                User      @relation(fields: [userId], references: [id])
+}
+
+enum KycStatus {
+  UNVERIFIED
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum KycType {
+  INDIVIDUAL
+  SELF_EMPLOYED
+  BUSINESS
+}
+
+model Session {
+  id          String   @id @default(uuid())
+  userId      String
+  deviceInfo  String?
+  ipAddress   String?
+  location    String?
+  createdAt   DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+  expiresAt   DateTime
+  isRevoked   Boolean  @default(false)
+
+  user        User     @relation(fields: [userId], references: [id])
+}
+
+model TotpSecret {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  secret    String
+  verified  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  action    String
+  ipAddress String?
+  userAgent String?
+  meta      Json?
+  createdAt DateTime @default(now())
+
+  user      User?    @relation(fields: [userId], references: [id])
+}
+
+model OAuthClient {
+  id            String   @id @default(uuid())
+  clientId      String   @unique
+  clientSecret  String
+  name          String
+  redirectUris  String[]
+  allowedScopes String[]
+  logoUri       String?
+  createdAt     DateTime @default(now())
+}
+
+model Tenant {
+  id                String    @id @default(uuid())
+  name              String
+  description       String?
+  logoUrl           String?
+  legalAddress      String?
+  website           String?
+  contactEmail      String?
+  contactPhone      String?
+  kybStatus         KycStatus @default(UNVERIFIED)
+  sumsubApplicantId String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  members           TenantMember[]
+}
+
+model TenantMember {
+  id        String     @id @default(uuid())
+  tenantId  String
+  userId    String
+  role      TenantRole @default(VIEWER)
+  invitedAt DateTime   @default(now())
+
+  tenant    Tenant     @relation(fields: [tenantId], references: [id])
+  user      User       @relation(fields: [userId], references: [id])
+
+  @@unique([tenantId, userId])
+}
+
+enum TenantRole {
+  OWNER
+  ADMIN
+  OPERATOR
+  VIEWER
+}
+
+model PendingInvite {
+  id        String   @id @default(uuid())
+  tenantId  String
+  email     String
+  role      TenantRole @default(VIEWER)
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}

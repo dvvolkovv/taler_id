@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Taler ID</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f7; color: #1d1d1f; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+  .container { width: 100%; max-width: 400px; padding: 16px; }
+  .card { background: white; border-radius: 18px; padding: 40px 32px; box-shadow: 0 4px 24px rgba(0,0,0,0.08); }
+  .logo { text-align: center; margin-bottom: 32px; }
+  .logo h1 { font-size: 28px; font-weight: 700; color: #0071e3; }
+  .logo p { font-size: 14px; color: #86868b; margin-top: 4px; }
+  .form-group { margin-bottom: 16px; }
+  label { display: block; font-size: 13px; font-weight: 500; color: #1d1d1f; margin-bottom: 6px; }
+  input { width: 100%; padding: 12px 16px; border: 1px solid #d2d2d7; border-radius: 10px; font-size: 15px; outline: none; transition: border-color 0.2s; }
+  input:focus { border-color: #0071e3; box-shadow: 0 0 0 3px rgba(0,113,227,0.1); }
+  .btn { width: 100%; padding: 13px; background: #0071e3; color: white; border: none; border-radius: 10px; font-size: 15px; font-weight: 600; cursor: pointer; transition: background 0.2s; margin-top: 8px; }
+  .btn:hover { background: #0077ed; }
+  .btn:disabled { background: #d2d2d7; cursor: not-allowed; }
+  .btn-secondary { background: transparent; color: #0071e3; border: 1px solid #0071e3; margin-top: 12px; }
+  .btn-secondary:hover { background: rgba(0,113,227,0.05); }
+  .btn-danger { background: #ff3b30; }
+  .btn-danger:hover { background: #ff453a; }
+  .error { background: #fff0f0; border: 1px solid #ffcdd2; color: #c62828; padding: 12px 16px; border-radius: 10px; font-size: 14px; margin-bottom: 16px; display: none; }
+  .success { background: #f0fff4; border: 1px solid #c8e6c9; color: #1b5e20; padding: 12px 16px; border-radius: 10px; font-size: 14px; margin-bottom: 16px; display: none; }
+  .link { text-align: center; font-size: 14px; margin-top: 16px; color: #86868b; }
+  .link a { color: #0071e3; text-decoration: none; font-weight: 500; cursor: pointer; }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+  .badge-verified { background: #e8f5e9; color: #2e7d32; }
+  .badge-unverified { background: #fff3e0; color: #e65100; }
+  .badge-pending { background: #e3f2fd; color: #1565c0; }
+  .badge-rejected { background: #ffebee; color: #b71c1c; }
+  .profile-header { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; }
+  .avatar { width: 60px; height: 60px; border-radius: 50%; background: #0071e3; color: white; display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: 700; flex-shrink: 0; }
+  .profile-info h2 { font-size: 20px; font-weight: 600; }
+  .profile-info p { font-size: 14px; color: #86868b; margin-top: 4px; }
+  .section { margin-bottom: 24px; }
+  .section h3 { font-size: 13px; font-weight: 600; color: #86868b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
+  .info-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #f2f2f7; }
+  .info-row:last-child { border-bottom: none; }
+  .info-label { font-size: 14px; color: #86868b; }
+  .info-value { font-size: 14px; font-weight: 500; }
+  .session-item { background: #f5f5f7; border-radius: 10px; padding: 12px 16px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+  .session-info { font-size: 13px; }
+  .session-info .device { font-weight: 500; }
+  .session-info .date { color: #86868b; margin-top: 2px; }
+  .session-revoke { background: none; border: none; color: #ff3b30; font-size: 13px; cursor: pointer; font-weight: 500; }
+  .nav { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 24px; }
+  .nav button { flex: 1; padding: 8px; background: #f5f5f7; border: none; border-radius: 8px; font-size: 13px; cursor: pointer; color: #1d1d1f; }
+  .nav button.active { background: #0071e3; color: white; }
+  .page { display: none; }
+  .page.active { display: block; }
+  .otp-input { letter-spacing: 8px; font-size: 24px; text-align: center; font-family: monospace; }
+  .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.4); border-top-color: white; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-right: 6px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .full-width { max-width: 600px; }
+</style>
+</head>
+<body>
+<div class="container" id="app">
+  <!-- Login Page -->
+  <div class="card page" id="page-login">
+    <div class="logo">
+      <h1>Taler ID</h1>
+      <p>Sign in to your account</p>
+    </div>
+    <div class="error" id="login-error"></div>
+    <div class="form-group">
+      <label>Email</label>
+      <input type="email" id="login-email" placeholder="you@example.com" autocomplete="email">
+    </div>
+    <div class="form-group">
+      <label>Password</label>
+      <input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password">
+    </div>
+    <button class="btn" id="login-btn" onclick="doLogin()">Sign In</button>
+    <div class="link">Don't have an account? <a onclick="showPage('register')">Create one</a></div>
+  </div>
+
+  <!-- Register Page -->
+  <div class="card page" id="page-register">
+    <div class="logo">
+      <h1>Taler ID</h1>
+      <p>Create your identity</p>
+    </div>
+    <div class="error" id="register-error"></div>
+    <div class="success" id="register-success"></div>
+    <div class="form-group">
+      <label>Email</label>
+      <input type="email" id="reg-email" placeholder="you@example.com">
+    </div>
+    <div class="form-group">
+      <label>Password <span style="color:#86868b;font-weight:400">(min 8 chars)</span></label>
+      <input type="password" id="reg-password" placeholder="••••••••">
+    </div>
+    <div class="form-group">
+      <label>First Name (optional)</label>
+      <input type="text" id="reg-firstname" placeholder="John">
+    </div>
+    <div class="form-group">
+      <label>Last Name (optional)</label>
+      <input type="text" id="reg-lastname" placeholder="Doe">
+    </div>
+    <button class="btn" id="register-btn" onclick="doRegister()">Create Account</button>
+    <div class="link">Already have an account? <a onclick="showPage('login')">Sign in</a></div>
+  </div>
+
+  <!-- 2FA Page -->
+  <div class="card page" id="page-2fa">
+    <div class="logo">
+      <h1>Two-Factor Auth</h1>
+      <p>Enter the code from your authenticator app</p>
+    </div>
+    <div class="error" id="twofa-error"></div>
+    <div class="form-group">
+      <label>Authentication Code</label>
+      <input type="text" id="twofa-code" class="otp-input" placeholder="000000" maxlength="6" autocomplete="one-time-code">
+    </div>
+    <button class="btn" id="twofa-btn" onclick="do2FA()">Verify</button>
+    <div class="link"><a onclick="showPage('login')">Back to login</a></div>
+  </div>
+
+  <!-- Dashboard Page -->
+  <div class="card page full-width" id="page-dashboard">
+    <div id="profile-header-section" class="profile-header">
+      <div class="avatar" id="dash-avatar">?</div>
+      <div class="profile-info">
+        <h2 id="dash-name">Loading...</h2>
+        <p id="dash-email"></p>
+      </div>
+    </div>
+    <div class="nav">
+      <button class="active" onclick="switchTab('overview')">Overview</button>
+      <button onclick="switchTab('profile-edit')">Edit Profile</button>
+      <button onclick="switchTab('kyc-tab')">KYC</button>
+      <button onclick="switchTab('sessions-tab')">Sessions</button>
+    </div>
+
+    <!-- Overview Tab -->
+    <div id="tab-overview">
+      <div class="section">
+        <h3>Identity Status</h3>
+        <div class="info-row">
+          <span class="info-label">KYC Status</span>
+          <span id="dash-kyc" class="badge badge-unverified">Unverified</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Email</span>
+          <span class="info-value" id="dash-email-val"></span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Phone</span>
+          <span class="info-value" id="dash-phone-val">-</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Wallet</span>
+          <span class="info-value" id="dash-wallet-val" style="font-size:12px;word-break:break-all;">Not linked</span>
+        </div>
+      </div>
+      <button class="btn btn-secondary" onclick="doLogout()">Sign Out</button>
+    </div>
+
+    <!-- Edit Profile Tab -->
+    <div id="tab-profile-edit" style="display:none">
+      <div class="success" id="profile-success"></div>
+      <div class="error" id="profile-error"></div>
+      <div class="form-group">
+        <label>First Name</label>
+        <input type="text" id="edit-firstname">
+      </div>
+      <div class="form-group">
+        <label>Last Name</label>
+        <input type="text" id="edit-lastname">
+      </div>
+      <div class="form-group">
+        <label>Date of Birth</label>
+        <input type="date" id="edit-dob">
+      </div>
+      <div class="form-group">
+        <label>Country</label>
+        <input type="text" id="edit-country" placeholder="AT, DE, US...">
+      </div>
+      <div class="form-group">
+        <label>Wallet Address (EVM)</label>
+        <input type="text" id="edit-wallet" placeholder="0x...">
+      </div>
+      <button class="btn" onclick="doUpdateProfile()">Save Changes</button>
+    </div>
+
+    <!-- KYC Tab -->
+    <div id="tab-kyc-tab" style="display:none">
+      <div class="section">
+        <h3>Identity Verification</h3>
+        <div class="info-row">
+          <span class="info-label">Status</span>
+          <span id="kyc-status-badge" class="badge badge-unverified">Unverified</span>
+        </div>
+      </div>
+      <p style="font-size:14px;color:#86868b;margin-bottom:16px">Complete identity verification to unlock financial features. You will need a valid government-issued ID and a camera.</p>
+      <button class="btn" id="kyc-start-btn" onclick="startKYC()">Start Verification</button>
+      <div id="sumsub-container" style="margin-top:16px;display:none"></div>
+    </div>
+
+    <!-- Sessions Tab -->
+    <div id="tab-sessions-tab" style="display:none">
+      <div class="section">
+        <h3>Active Sessions</h3>
+        <div id="sessions-list"></div>
+      </div>
+      <button class="btn btn-danger" onclick="revokeAllSessions()" style="margin-top:8px">Sign Out All Devices</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '';
+let accessToken = localStorage.getItem('accessToken') || '';
+let refreshToken = localStorage.getItem('refreshToken') || '';
+let challengeToken = '';
+let currentTab = 'overview';
+
+function saveTokens(at, rt) {
+  accessToken = at;
+  refreshToken = rt;
+  localStorage.setItem('accessToken', at);
+  localStorage.setItem('refreshToken', rt);
+}
+
+function clearTokens() {
+  accessToken = '';
+  refreshToken = '';
+  localStorage.removeItem('accessToken');
+  localStorage.removeItem('refreshToken');
+}
+
+function showError(id, msg) {
+  const el = document.getElementById(id);
+  if (el) { el.textContent = msg; el.style.display = 'block'; }
+}
+function hideError(id) {
+  const el = document.getElementById(id);
+  if (el) el.style.display = 'none';
+}
+function showSuccess(id, msg) {
+  const el = document.getElementById(id);
+  if (el) { el.textContent = msg; el.style.display = 'block'; setTimeout(() => el.style.display='none', 3000); }
+}
+
+function setLoading(btnId, loading) {
+  const btn = document.getElementById(btnId);
+  if (!btn) return;
+  if (loading && !btn.dataset.label) btn.dataset.label = btn.textContent.trim();
+  btn.disabled = loading;
+  btn.innerHTML = loading ? '<span class="spinner"></span>Loading...' : btn.dataset.label;
+}
+
+async function apiFetch(path, options = {}) {
+  const headers = { 'Content-Type': 'application/json', ...options.headers };
+  if (accessToken) headers['Authorization'] = 'Bearer ' + accessToken;
+
+  let res = await fetch(API + path, { ...options, headers });
+
+  if (res.status === 401 && refreshToken) {
+    const refreshRes = await fetch(API + '/auth/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken }),
+    });
+    if (refreshRes.ok) {
+      const data = await refreshRes.json();
+      saveTokens(data.accessToken, data.refreshToken);
+      headers['Authorization'] = 'Bearer ' + accessToken;
+      res = await fetch(API + path, { ...options, headers });
+    } else {
+      clearTokens();
+      showPage('login');
+      throw new Error('Session expired');
+    }
+  }
+  return res;
+}
+
+function showPage(name) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  const page = document.getElementById('page-' + name);
+  if (page) page.classList.add('active');
+
+  if (name === 'dashboard') {
+    loadProfile();
+    switchTab('overview');
+    document.querySelector('.container').style.maxWidth = '600px';
+  } else {
+    document.querySelector('.container').style.maxWidth = '400px';
+  }
+}
+
+function switchTab(tab) {
+  document.querySelectorAll('.nav button').forEach(b => {
+    b.classList.toggle('active', b.getAttribute('onclick').includes("'" + tab + "'"));
+  });
+  ['overview', 'profile-edit', 'kyc-tab', 'sessions-tab'].forEach(t => {
+    const el = document.getElementById('tab-' + t);
+    if (el) el.style.display = t === tab ? 'block' : 'none';
+  });
+  currentTab = tab;
+  if (tab === 'sessions-tab') loadSessions();
+  if (tab === 'kyc-tab') loadKycStatus();
+}
+
+async function doLogin() {
+  hideError('login-error');
+  setLoading('login-btn', true);
+  const email = document.getElementById('login-email').value.trim();
+  const password = document.getElementById('login-password').value;
+  try {
+    const res = await fetch(API + '/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) { showError('login-error', data.message || 'Login failed'); return; }
+    if (data.next === '2fa') {
+      challengeToken = data.challengeToken;
+      showPage('2fa');
+    } else {
+      saveTokens(data.accessToken, data.refreshToken);
+      showPage('dashboard');
+    }
+  } catch (e) {
+    showError('login-error', 'Network error. Please try again.');
+  } finally {
+    setLoading('login-btn', false);
+  }
+}
+
+async function doRegister() {
+  hideError('register-error');
+  setLoading('register-btn', true);
+  const email = document.getElementById('reg-email').value.trim();
+  const password = document.getElementById('reg-password').value;
+  const firstName = document.getElementById('reg-firstname').value.trim();
+  const lastName = document.getElementById('reg-lastname').value.trim();
+  try {
+    const body = { email, password };
+    if (firstName) body.firstName = firstName;
+    if (lastName) body.lastName = lastName;
+    const res = await fetch(API + '/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) { showError('register-error', data.message || 'Registration failed'); return; }
+    saveTokens(data.accessToken, data.refreshToken);
+    showPage('dashboard');
+  } catch (e) {
+    showError('register-error', 'Network error. Please try again.');
+  } finally {
+    setLoading('register-btn', false);
+  }
+}
+
+async function do2FA() {
+  hideError('twofa-error');
+  setLoading('twofa-btn', true);
+  const code = document.getElementById('twofa-code').value.trim();
+  try {
+    const res = await fetch(API + '/auth/login/2fa', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ challengeToken, code }),
+    });
+    const data = await res.json();
+    if (!res.ok) { showError('twofa-error', data.message || 'Invalid code'); return; }
+    saveTokens(data.accessToken, data.refreshToken);
+    showPage('dashboard');
+  } catch (e) {
+    showError('twofa-error', 'Network error. Please try again.');
+  } finally {
+    setLoading('twofa-btn', false);
+  }
+}
+
+async function loadProfile() {
+  try {
+    const res = await apiFetch('/profile');
+    if (!res.ok) { if (res.status === 401) { clearTokens(); showPage('login'); } return; }
+    const data = await res.json();
+
+    const name = [data.firstName, data.lastName].filter(Boolean).join(' ') || data.email || 'User';
+    const initials = name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) || '?';
+
+    document.getElementById('dash-avatar').textContent = initials;
+    document.getElementById('dash-name').textContent = name;
+    document.getElementById('dash-email').textContent = data.email || '';
+    document.getElementById('dash-email-val').textContent = data.email || '-';
+    document.getElementById('dash-phone-val').textContent = data.phone || '-';
+    document.getElementById('dash-wallet-val').textContent = data.walletAddress || 'Not linked';
+
+    const kycStatus = (data.kycStatus || 'UNVERIFIED').toUpperCase();
+    const kycEl = document.getElementById('dash-kyc');
+    kycEl.textContent = kycStatus;
+    kycEl.className = 'badge badge-' + kycStatus.toLowerCase().replace('_', '-');
+
+    // Pre-fill edit form
+    document.getElementById('edit-firstname').value = data.firstName || '';
+    document.getElementById('edit-lastname').value = data.lastName || '';
+    document.getElementById('edit-dob').value = data.dateOfBirth ? data.dateOfBirth.split('T')[0] : '';
+    document.getElementById('edit-country').value = data.country || '';
+    document.getElementById('edit-wallet').value = data.walletAddress || '';
+  } catch(e) {
+    console.error('loadProfile error:', e);
+  }
+}
+
+async function doUpdateProfile() {
+  const body = {};
+  const fn = document.getElementById('edit-firstname').value;
+  const ln = document.getElementById('edit-lastname').value;
+  const dob = document.getElementById('edit-dob').value;
+  const country = document.getElementById('edit-country').value;
+  const wallet = document.getElementById('edit-wallet').value;
+  if (fn) body.firstName = fn;
+  if (ln) body.lastName = ln;
+  if (dob) body.dateOfBirth = dob;
+  if (country) body.country = country;
+  if (wallet) body.walletAddress = wallet;
+
+  const res = await apiFetch('/profile', {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+  if (res.ok) {
+    showSuccess('profile-success', 'Profile updated successfully!');
+    loadProfile();
+  } else {
+    const data = await res.json();
+    showError('profile-error', data.message || 'Update failed');
+  }
+}
+
+async function doLogout() {
+  try {
+    await apiFetch('/auth/logout', { method: 'POST', body: JSON.stringify({ refreshToken }) });
+  } catch(e) {}
+  clearTokens();
+  showPage('login');
+}
+
+async function loadSessions() {
+  const container = document.getElementById('sessions-list');
+  container.innerHTML = '<div style="color:#86868b;font-size:14px">Loading sessions...</div>';
+  try {
+    const res = await apiFetch('/auth/sessions');
+    if (!res.ok) return;
+    const data = await res.json();
+    const sessions = data.sessions || (Array.isArray(data) ? data : []);
+    if (!sessions.length) { container.innerHTML = '<div style="color:#86868b;font-size:14px">No active sessions</div>'; return; }
+    container.innerHTML = sessions.map(s => `
+      <div class="session-item">
+        <div class="session-info">
+          <div class="device">${s.deviceInfo || 'Unknown device'}</div>
+          <div class="date">${s.ipAddress || ''} · ${new Date(s.createdAt).toLocaleDateString()}</div>
+        </div>
+        ${!s.isCurrent ? '<button class="session-revoke" onclick="revokeSession(\'' + s.id + '\')">Revoke</button>' : '<span style="font-size:12px;color:#0071e3">Current</span>'}
+      </div>
+    `).join('');
+  } catch(e) {
+    container.innerHTML = '<div style="color:#ff3b30;font-size:14px">Failed to load sessions</div>';
+  }
+}
+
+async function revokeSession(id) {
+  await apiFetch('/auth/sessions/' + id, { method: 'DELETE' });
+  loadSessions();
+}
+
+async function revokeAllSessions() {
+  if (!confirm('Sign out from all devices?')) return;
+  await apiFetch('/auth/sessions', { method: 'DELETE' });
+  clearTokens();
+  showPage('login');
+}
+
+async function loadKycStatus() {
+  try {
+    const res = await apiFetch('/kyc/status');
+    if (!res.ok) return;
+    const data = await res.json();
+    const status = (data.status || 'UNVERIFIED').toUpperCase();
+    const el = document.getElementById('kyc-status-badge');
+    el.textContent = status;
+    el.className = 'badge badge-' + status.toLowerCase().replace('_', '-');
+
+    if (status === 'VERIFIED') {
+      document.getElementById('kyc-start-btn').textContent = 'Verification Complete';
+      document.getElementById('kyc-start-btn').disabled = true;
+    }
+  } catch(e) {}
+}
+
+async function startKYC() {
+  setLoading('kyc-start-btn', true);
+  try {
+    const res = await apiFetch('/kyc/start', { method: 'POST', body: JSON.stringify({}) });
+    const data = await res.json();
+    if (!res.ok) { alert(data.message || 'KYC start failed'); return; }
+    document.getElementById('sumsub-container').style.display = 'block';
+    document.getElementById('sumsub-container').innerHTML = `
+      <div style="background:#f5f5f7;border-radius:12px;padding:24px;text-align:center">
+        <div style="font-size:32px;margin-bottom:12px">&#10003;</div>
+        <p style="font-weight:600;margin-bottom:8px">KYC Session Started</p>
+        <p style="font-size:13px;color:#86868b">SDK Token received. In production, the Sumsub WebSDK will open here.</p>
+        <p style="font-size:12px;color:#86868b;margin-top:8px;word-break:break-all">Token: ${data.token || data.sdkToken || 'received'}</p>
+      </div>
+    `;
+  } catch(e) {
+    alert('KYC start failed');
+  } finally {
+    setLoading('kyc-start-btn', false);
+  }
+}
+
+// Enter key handlers
+document.addEventListener('keypress', (e) => {
+  if (e.key !== 'Enter') return;
+  const activePage = document.querySelector('.page.active');
+  if (!activePage) return;
+  if (activePage.id === 'page-login') doLogin();
+  if (activePage.id === 'page-register') doRegister();
+  if (activePage.id === 'page-2fa') do2FA();
+});
+
+// Init
+if (accessToken) {
+  showPage('dashboard');
+} else {
+  showPage('login');
+}
+</script>
+</body>
+</html>
