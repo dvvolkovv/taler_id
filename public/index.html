@@ -417,6 +417,25 @@ function setLoading(btnId, loading) {
   btn.innerHTML = loading ? '<span class="spinner"></span>Loading...' : btn.dataset.label;
 }
 
+// Mutex: prevents parallel refresh attempts (race condition with token rotation)
+let refreshPromise = null;
+
+async function doRefreshToken() {
+  const refreshRes = await fetch(API + '/auth/refresh', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refreshToken }),
+  });
+  if (refreshRes.ok) {
+    const data = await refreshRes.json();
+    saveTokens(data.accessToken, data.refreshToken);
+  } else {
+    clearTokens();
+    showPage('login');
+    throw new Error('Session expired');
+  }
+}
+
 async function apiFetch(path, options = {}) {
   const headers = { 'Content-Type': 'application/json', ...options.headers };
   if (accessToken) headers['Authorization'] = 'Bearer ' + accessToken;
@@ -424,21 +443,13 @@ async function apiFetch(path, options = {}) {
   let res = await fetch(API + path, { ...options, headers });
 
   if (res.status === 401 && refreshToken) {
-    const refreshRes = await fetch(API + '/auth/refresh', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refreshToken }),
-    });
-    if (refreshRes.ok) {
-      const data = await refreshRes.json();
-      saveTokens(data.accessToken, data.refreshToken);
-      headers['Authorization'] = 'Bearer ' + accessToken;
-      res = await fetch(API + path, { ...options, headers });
-    } else {
-      clearTokens();
-      showPage('login');
-      throw new Error('Session expired');
+    // Single shared promise prevents double-refresh (token rotation race condition)
+    if (!refreshPromise) {
+      refreshPromise = doRefreshToken().finally(() => { refreshPromise = null; });
     }
+    await refreshPromise;
+    headers['Authorization'] = 'Bearer ' + accessToken;
+    res = await fetch(API + path, { ...options, headers });
   }
   return res;
 }

@@ -13,6 +13,7 @@ export class EmailService {
       port: this.config.get<number>('email.smtp.port'),
       secure: false,
       requireTLS: true,
+      tls: { rejectUnauthorized: false }, // mail.taler.tirol cert may be self-signed or expired
       auth: {
         user: this.config.get<string>('email.smtp.user'),
         pass: this.config.get<string>('email.smtp.pass'),
