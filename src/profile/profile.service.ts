@@ -42,6 +42,14 @@ export class ProfileService {
     const profile = await this.prisma.profile.findUnique({ where: { userId } });
     if (!profile) throw new NotFoundException("Profile not found");
 
+    // Update phone on User model if provided
+    if (dto.phone !== undefined) {
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: { phone: dto.phone || null },
+      });
+    }
+
     return this.prisma.profile.update({
       where: { userId },
       data: {

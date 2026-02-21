@@ -29,6 +29,10 @@ export class UpdateProfileDto {
   @IsOptional()
   preferredCurrency?: string;
 
+  @IsString()
+  @IsOptional()
+  phone?: string;
+
   @IsIn(['en', 'ru', 'de'])
   @IsOptional()
   language?: string;
