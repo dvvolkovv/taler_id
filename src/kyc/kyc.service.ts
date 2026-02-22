@@ -110,6 +110,115 @@ export class KycService {
     return { received: true };
   }
 
+  async getApplicantData(userId: string) {
+    const kyc = await this.prisma.kycRecord.findUnique({ where: { userId } });
+    if (!kyc || !kyc.sumsubApplicantId) {
+      throw new NotFoundException("KYC record not found");
+    }
+
+    const appToken = process.env.SUMSUB_APP_TOKEN || "";
+    const secretKey = process.env.SUMSUB_SECRET_KEY || "";
+    const baseUrl = process.env.SUMSUB_BASE_URL || "https://api.sumsub.com";
+
+    // In test/dev mode, return mock data
+    if (appToken === "test_token" || !appToken) {
+      return {
+        applicantId: kyc.sumsubApplicantId,
+        createdAt: kyc.createdAt.toISOString(),
+        reviewStatus: kyc.status === "VERIFIED" ? "completed" : "pending",
+        reviewResult: { reviewAnswer: kyc.status === "VERIFIED" ? "GREEN" : null, rejectLabels: [] },
+        info: { firstName: null, lastName: null, middleName: null, dob: null, placeOfBirth: null, country: null, nationality: null, gender: null },
+        addresses: [],
+        idDocs: [],
+      };
+    }
+
+    // Fetch applicant info from Sumsub
+    const applicantData = await this.sumsubApiGet(
+      `/resources/applicants/${kyc.sumsubApplicantId}/one`,
+      appToken, secretKey, baseUrl,
+    );
+
+    // Fetch document check status
+    let docStatus: any = {};
+    try {
+      docStatus = await this.sumsubApiGet(
+        `/resources/applicants/${kyc.sumsubApplicantId}/requiredIdDocsStatus`,
+        appToken, secretKey, baseUrl,
+      );
+    } catch (e) {
+      this.logger.warn(`Failed to fetch doc status for ${kyc.sumsubApplicantId}: ${e}`);
+    }
+
+    const info = applicantData.fixedInfo || applicantData.info || {};
+    const idDocs = (info.idDocs || []).map((doc: any) => ({
+      idDocType: doc.idDocType,
+      number: doc.number,
+      firstName: doc.firstName,
+      lastName: doc.lastName,
+      issuedDate: doc.issuedDate,
+      validUntil: doc.validUntil,
+      issuedBy: doc.issuedBy,
+      country: doc.country,
+    }));
+
+    const addresses = (info.addresses || applicantData.addresses || []).map((addr: any) => ({
+      street: addr.street,
+      buildingNumber: addr.buildingNumber,
+      flatNumber: addr.flatNumber,
+      town: addr.town,
+      state: addr.state,
+      postCode: addr.postCode,
+      country: addr.country,
+    }));
+
+    return {
+      applicantId: kyc.sumsubApplicantId,
+      createdAt: applicantData.createdAt,
+      reviewStatus: applicantData.review?.reviewStatus || null,
+      reviewResult: {
+        reviewAnswer: applicantData.review?.reviewResult?.reviewAnswer || null,
+        rejectLabels: applicantData.review?.reviewResult?.rejectLabels || [],
+      },
+      info: {
+        firstName: info.firstName || info.firstNameEn || null,
+        lastName: info.lastName || info.lastNameEn || null,
+        middleName: info.middleName || info.middleNameEn || null,
+        dob: info.dob || null,
+        placeOfBirth: info.placeOfBirth || info.placeOfBirthEn || null,
+        country: info.country || null,
+        nationality: info.nationality || null,
+        gender: info.gender || null,
+      },
+      addresses,
+      idDocs,
+      documentStatus: docStatus,
+    };
+  }
+
+  private async sumsubApiGet(urlPath: string, appToken: string, secretKey: string, baseUrl: string): Promise<any> {
+    const ts = Math.floor(Date.now() / 1000).toString();
+    const signature = crypto
+      .createHmac("sha256", secretKey)
+      .update(ts + "GET" + urlPath)
+      .digest("hex");
+
+    const response = await fetch(baseUrl + urlPath, {
+      method: "GET",
+      headers: {
+        "X-App-Token": appToken,
+        "X-App-Access-Sig": signature,
+        "X-App-Access-Ts": ts,
+      },
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new BadRequestException("Sumsub API error: " + (data as any).description);
+    }
+    return data;
+  }
+
   private async createSumsubApplicant(userId: string, email: string): Promise<string> {
     const appToken = process.env.SUMSUB_APP_TOKEN || "";
     const secretKey = process.env.SUMSUB_SECRET_KEY || "";

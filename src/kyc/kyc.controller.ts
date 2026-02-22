@@ -25,6 +25,12 @@ export class KycController {
     return this.kycService.getKycStatus(user.sub);
   }
 
+  @Get("applicant-data")
+  @UseGuards(JwtAuthGuard)
+  getApplicantData(@CurrentUser() user: any) {
+    return this.kycService.getApplicantData(user.sub);
+  }
+
   @SkipThrottle()
   @Post("webhook")
   async webhook(@Req() req: RawBodyRequest) {
