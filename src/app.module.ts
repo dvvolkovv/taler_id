@@ -12,6 +12,8 @@ import { ProfileModule } from './profile/profile.module';
 import { TenantModule } from "./tenant/tenant.module";
 import { BlockchainModule } from "./blockchain/blockchain.module";
 import { EmailModule } from "./email/email.module";
+import { AdminModule } from "./admin/admin.module";
+import { OidcModule } from "./oidc/oidc.module";
 import configuration from './config/configuration';
 
 @Module({
@@ -25,10 +27,24 @@ import configuration from './config/configuration';
       { name: 'medium', ttl: 60000, limit: 100 },
       { name: 'long', ttl: 3600000, limit: 1000 },
     ]),
+    // Flutter Web mobile app
+    ServeStaticModule.forRoot({
+      rootPath: '/home/dvolkov/taler-id/public/mobile',
+      serveRoot: '/ui/mobile',
+      exclude: ['/api{/*path}', '/auth{/*path}', '/kyc{/*path}', '/profile{/*path}', '/tenant{/*path}', '/admin{/*path}', '/sessions{/*path}', '/ui/admin{/*path}'],
+    }),
+    // Main UI (admin panel, invite pages, etc.)
     ServeStaticModule.forRoot({
       rootPath: '/home/dvolkov/taler-id/public',
       serveRoot: '/ui',
       serveStaticOptions: { index: false },
+      exclude: ['/api{/*path}', '/auth{/*path}', '/kyc{/*path}', '/profile{/*path}', '/tenant{/*path}', '/admin{/*path}', '/sessions{/*path}', '/ui/mobile{/*path}'],
+    }),
+    // Root path (/) - main landing page
+    ServeStaticModule.forRoot({
+      rootPath: '/home/dvolkov/taler-id/public',
+      serveRoot: '/',
+      exclude: ['/api{/*path}', '/auth{/*path}', '/kyc{/*path}', '/profile{/*path}', '/tenant{/*path}', '/admin{/*path}', '/sessions{/*path}', '/oauth{/*path}', '/ui{/*path}'],
     }),
     PrismaModule,
     RedisModule,
@@ -38,6 +54,8 @@ import configuration from './config/configuration';
     TenantModule,
     BlockchainModule,
     EmailModule,
+    AdminModule,
+    OidcModule,
   ],
   controllers: [AppController],
   providers: [

@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Taler ID — Authorization</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+      background: radial-gradient(ellipse at 50% 30%, rgba(22,163,74,0.08) 0%, transparent 60%), #0d1117;
+      color: #e0e0e0; min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .card {
+      background: #161b22; border: 1px solid #22C55E33; border-radius: 16px;
+      padding: 40px; width: 400px; box-shadow: 0 8px 32px rgba(34,197,94,0.10);
+    }
+    h2 {
+      background: linear-gradient(135deg, #4ade80, #22d3ee);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+      margin-bottom: 8px; text-align: center; font-size: 1.4rem;
+    }
+    .subtitle { text-align: center; color: #8b949e; font-size: 0.875rem; margin-bottom: 24px; }
+    .client-info {
+      display: flex; align-items: center; gap: 12px;
+      background: #0d1117; border-radius: 10px; padding: 14px; margin-bottom: 20px;
+    }
+    .client-logo {
+      width: 48px; height: 48px; border-radius: 10px; background: #22C55E22;
+      display: flex; align-items: center; justify-content: center; font-size: 1.4rem;
+    }
+    .client-name { font-weight: 600; font-size: 1rem; }
+    .client-desc { color: #8b949e; font-size: 0.8rem; }
+    .scopes { margin-bottom: 24px; }
+    .scopes h3 { font-size: 0.875rem; color: #8b949e; margin-bottom: 10px; }
+    .scope-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 12px; background: #0d1117; border-radius: 8px; margin-bottom: 6px;
+    }
+    .scope-icon { color: #4ade80; font-size: 1rem; }
+    .scope-name { font-weight: 500; font-size: 0.9rem; }
+    .scope-desc { color: #8b949e; font-size: 0.75rem; }
+    .actions { display: flex; gap: 10px; margin-top: 24px; }
+    .btn {
+      flex: 1; padding: 12px; border: none; border-radius: 10px; font-weight: 600;
+      font-size: 0.95rem; cursor: pointer; transition: all 0.2s;
+    }
+    .btn-deny { background: #21262d; color: #f87171; border: 1px solid #f8717133; }
+    .btn-deny:hover { background: #f8717122; }
+    .btn-allow { background: linear-gradient(135deg, #22c55e, #16a34a); color: #fff; }
+    .btn-allow:hover { opacity: 0.9; }
+    /* Login form */
+    .form-group { margin-bottom: 16px; }
+    .form-group label { display: block; font-size: 0.8rem; color: #8b949e; margin-bottom: 6px; }
+    .form-group input {
+      width: 100%; padding: 10px 14px; background: #0d1117; border: 1px solid #30363d;
+      border-radius: 8px; color: #e0e0e0; font-size: 0.95rem; outline: none;
+    }
+    .form-group input:focus { border-color: #22C55E; }
+    .error { color: #f87171; font-size: 0.8rem; text-align: center; margin-top: 10px; }
+    .loading { text-align: center; color: #8b949e; padding: 40px 0; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div id="loading" class="loading">Loading...</div>
+
+    <!-- LOGIN SCREEN -->
+    <div id="login-screen" class="hidden">
+      <h2>Taler ID</h2>
+      <p class="subtitle">Sign in to continue</p>
+      <div class="form-group">
+        <label>Email</label>
+        <input type="email" id="login-email" placeholder="you@example.com" />
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input type="password" id="login-password" placeholder="&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;" />
+      </div>
+      <div id="login-error" class="error"></div>
+      <div class="actions">
+        <button class="btn btn-deny" onclick="abort()">Cancel</button>
+        <button class="btn btn-allow" onclick="doLogin()">Sign In</button>
+      </div>
+    </div>
+
+    <!-- CONSENT SCREEN -->
+    <div id="consent-screen" class="hidden">
+      <h2>Taler ID</h2>
+      <p class="subtitle">Authorize application access</p>
+      <div class="client-info">
+        <div class="client-logo" id="client-logo">W</div>
+        <div>
+          <div class="client-name" id="client-name">Application</div>
+          <div class="client-desc">wants access to your account</div>
+        </div>
+      </div>
+      <div class="scopes">
+        <h3>Permissions requested:</h3>
+        <div id="scope-list"></div>
+      </div>
+      <div class="actions">
+        <button class="btn btn-deny" onclick="abort()">Deny</button>
+        <button class="btn btn-allow" onclick="doConsent()">Allow</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const uid = window.location.pathname.split('/').pop();
+    let interactionData = null;
+
+    const SCOPE_LABELS = {
+      openid: { icon: '🔑', name: 'OpenID', desc: 'Verify your identity' },
+      profile: { icon: '👤', name: 'Profile', desc: 'Name, date of birth' },
+      email: { icon: '📧', name: 'Email', desc: 'Email address' },
+      phone: { icon: '📱', name: 'Phone', desc: 'Phone number' },
+      kyc: { icon: '✅', name: 'KYC Status', desc: 'Identity verification status' },
+      wallet: { icon: '💼', name: 'Wallet', desc: 'Wallet address' },
+      offline_access: { icon: '🔄', name: 'Offline Access', desc: 'Stay connected' },
+    };
+
+    async function loadInteraction() {
+      try {
+        const res = await fetch(`/oauth/interaction/${uid}`, { credentials: 'include' });
+        interactionData = await res.json();
+
+        document.getElementById('loading').classList.add('hidden');
+
+        if (interactionData.interaction === 'login') {
+          document.getElementById('login-screen').classList.remove('hidden');
+        } else if (interactionData.interaction === 'consent') {
+          showConsent(interactionData);
+        }
+      } catch (e) {
+        document.getElementById('loading').textContent = 'Error loading authorization details';
+      }
+    }
+
+    function showConsent(data) {
+      document.getElementById('consent-screen').classList.remove('hidden');
+      if (data.client?.name) {
+        document.getElementById('client-name').textContent = data.client.name;
+        document.getElementById('client-logo').textContent = data.client.name[0].toUpperCase();
+      }
+      const list = document.getElementById('scope-list');
+      list.innerHTML = '';
+      (data.scopes || []).forEach(s => {
+        const info = SCOPE_LABELS[s] || { icon: '📋', name: s, desc: '' };
+        list.innerHTML += `
+          <div class="scope-item">
+            <span class="scope-icon">${info.icon}</span>
+            <div>
+              <div class="scope-name">${info.name}</div>
+              <div class="scope-desc">${info.desc}</div>
+            </div>
+          </div>`;
+      });
+    }
+
+    async function doLogin() {
+      const email = document.getElementById('login-email').value.trim();
+      const password = document.getElementById('login-password').value;
+      document.getElementById('login-error').textContent = '';
+
+      try {
+        const res = await fetch(`/oauth/interaction/${uid}/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ email, password }),
+        });
+        if (res.redirected) {
+          window.location.href = res.url;
+          return;
+        }
+        const data = await res.json();
+        if (res.ok) {
+          // Follow redirect from oidc-provider
+          if (data.redirectTo) window.location.href = data.redirectTo;
+          else window.location.reload();
+        } else {
+          document.getElementById('login-error').textContent = data.message || 'Login failed';
+        }
+      } catch (e) {
+        document.getElementById('login-error').textContent = 'Network error';
+      }
+    }
+
+    async function doConsent() {
+      try {
+        const res = await fetch(`/oauth/interaction/${uid}/consent`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({}),
+        });
+        if (res.redirected) {
+          window.location.href = res.url;
+          return;
+        }
+        const data = await res.json();
+        if (data.redirectTo) window.location.href = data.redirectTo;
+        else window.location.reload();
+      } catch (e) {
+        console.error('Consent error:', e);
+      }
+    }
+
+    async function abort() {
+      window.location.href = `/oauth/interaction/${uid}/abort`;
+    }
+
+    // Handle Enter key in login form
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !document.getElementById('login-screen').classList.contains('hidden')) {
+        doLogin();
+      }
+    });
+
+    loadInteraction();
+  </script>
+</body>
+</html>

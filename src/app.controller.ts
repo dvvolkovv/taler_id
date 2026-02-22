@@ -10,4 +10,8 @@ export class AppController {
   health() {
     return { status: 'ok', timestamp: new Date().toISOString() };
   }
+
+  @Get('.well-known/openid-configuration')
+  @Redirect('/oauth/.well-known/openid-configuration')
+  openidConfiguration() {}
 }

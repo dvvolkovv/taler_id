@@ -6,16 +6,22 @@ import Redis from 'ioredis';
 export class RedisService implements OnModuleInit, OnModuleDestroy {
   private client: Redis;
 
-  constructor(private configService: ConfigService) {}
-
-  onModuleInit() {
+  constructor(private configService: ConfigService) {
     const redisUrl = this.configService.get<string>('redis.url') ?? 'redis://localhost:6379';
     this.client = new Redis(redisUrl);
     this.client.on('error', (err) => console.error('Redis error:', err));
   }
 
+  onModuleInit() {
+    // Redis client initialized in constructor so it's available for factory providers
+  }
+
   async onModuleDestroy() {
     await this.client.quit();
+  }
+
+  getClient(): Redis {
+    return this.client;
   }
 
   async get(key: string): Promise<string | null> {

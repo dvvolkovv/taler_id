@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Принять приглашение — Taler ID</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0a0f0d;
+      --surface: #111a14;
+      --surface2: #172019;
+      --border: #1e2e22;
+      --green: #00c853;
+      --green-d: #00a844;
+      --text: #e8f5e9;
+      --text2: #7ca888;
+      --error: #ff5252;
+      --success: #69f0ae;
+      --radius: 14px;
+    }
+    body { background: var(--bg); color: var(--text); font-family: 'Inter', sans-serif; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 40px; width: 100%; max-width: 420px; }
+    .logo { display: flex; align-items: center; gap: 10px; margin-bottom: 28px; }
+    .logo-icon { width: 36px; height: 36px; background: linear-gradient(135deg, var(--green), #00897b); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 18px; }
+    .logo-text { font-size: 20px; font-weight: 700; color: var(--text); }
+    .logo-text span { color: var(--green); }
+    .invite-banner { background: linear-gradient(135deg, #001a08, #00200e); border: 1px solid #004d1a; border-radius: 10px; padding: 16px; margin-bottom: 24px; }
+    .invite-banner .invite-label { font-size: 11px; font-weight: 600; color: var(--green); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+    .invite-banner .invite-text { font-size: 14px; color: var(--text2); }
+    h2 { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
+    .subtitle { font-size: 13px; color: var(--text2); margin-bottom: 24px; }
+    .tabs { display: flex; gap: 0; margin-bottom: 24px; border-bottom: 1px solid var(--border); }
+    .tab { padding: 10px 20px; font-size: 14px; font-weight: 500; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; color: var(--text2); transition: all 0.2s; background: none; border-top: none; border-left: none; border-right: none; }
+    .tab.active { color: var(--green); border-bottom-color: var(--green); }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    .form-group { margin-bottom: 16px; }
+    label { display: block; font-size: 13px; color: var(--text2); margin-bottom: 6px; font-weight: 500; }
+    input { width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 11px 14px; color: var(--text); font-size: 14px; font-family: inherit; outline: none; transition: border-color 0.2s; }
+    input:focus { border-color: var(--green); }
+    input::placeholder { color: var(--text2); opacity: 0.6; }
+    .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .btn { width: 100%; padding: 12px; background: var(--green); border: none; border-radius: 8px; color: #000; font-size: 15px; font-weight: 600; cursor: pointer; transition: background 0.2s; margin-top: 8px; font-family: inherit; }
+    .btn:hover { background: var(--green-d); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .error { background: rgba(255,82,82,0.1); border: 1px solid rgba(255,82,82,0.3); border-radius: 8px; padding: 10px 14px; font-size: 13px; color: var(--error); margin-bottom: 16px; display: none; }
+    .success-state { text-align: center; padding: 20px 0; }
+    .success-icon { font-size: 48px; margin-bottom: 16px; }
+    .success-title { font-size: 20px; font-weight: 700; color: var(--success); margin-bottom: 8px; }
+    .success-msg { font-size: 14px; color: var(--text2); margin-bottom: 24px; }
+    .link-btn { background: none; border: none; color: var(--green); font-size: 13px; cursor: pointer; text-decoration: underline; font-family: inherit; }
+    #page-error { text-align: center; padding: 20px 0; }
+    #page-error .err-icon { font-size: 48px; margin-bottom: 16px; }
+    #page-error h2 { color: var(--error); }
+    #page-error p { color: var(--text2); font-size: 14px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">
+    <div class="logo-icon">T</div>
+    <div class="logo-text">Taler <span>ID</span></div>
+  </div>
+
+  <!-- Error page (no token) -->
+  <div id="page-error" style="display:none">
+    <div class="err-icon">🔗</div>
+    <h2>Ссылка недействительна</h2>
+    <p>Токен приглашения не найден. Проверьте ссылку в письме.</p>
+    <br>
+    <a href="/ui/" style="color:var(--green);font-size:14px;">← На главную</a>
+  </div>
+
+  <!-- Auth page (login/register) -->
+  <div id="page-auth" style="display:none">
+    <div class="invite-banner">
+      <div class="invite-label">Приглашение в организацию</div>
+      <div class="invite-text">Войдите или создайте аккаунт, чтобы принять приглашение</div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab active" id="tab-login" onclick="switchTab('login')">Войти</button>
+      <button class="tab" id="tab-register" onclick="switchTab('register')">Регистрация</button>
+    </div>
+
+    <!-- Login -->
+    <div id="content-login" class="tab-content active">
+      <div class="error" id="login-error"></div>
+      <div class="form-group">
+        <label>Email</label>
+        <input type="email" id="login-email" placeholder="you@example.com" autocomplete="email">
+      </div>
+      <div class="form-group">
+        <label>Пароль</label>
+        <input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password">
+      </div>
+      <button class="btn" id="login-btn" onclick="doLogin()">Войти</button>
+    </div>
+
+    <!-- Register -->
+    <div id="content-register" class="tab-content">
+      <div class="error" id="register-error"></div>
+      <div class="row2">
+        <div class="form-group">
+          <label>Имя</label>
+          <input type="text" id="reg-firstname" placeholder="Иван">
+        </div>
+        <div class="form-group">
+          <label>Фамилия</label>
+          <input type="text" id="reg-lastname" placeholder="Иванов">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Email</label>
+        <input type="email" id="reg-email" placeholder="you@example.com" autocomplete="email">
+      </div>
+      <div class="form-group">
+        <label>Пароль</label>
+        <input type="password" id="reg-password" placeholder="Минимум 8 символов" autocomplete="new-password">
+      </div>
+      <button class="btn" id="register-btn" onclick="doRegister()">Создать аккаунт</button>
+    </div>
+
+    <!-- 2FA page -->
+    <div id="content-2fa" class="tab-content">
+      <div class="error" id="twofa-error"></div>
+      <p style="font-size:14px;color:var(--text2);margin-bottom:16px">Введите код из приложения аутентификатора</p>
+      <div class="form-group">
+        <label>Код 2FA</label>
+        <input type="text" id="twofa-code" placeholder="000000" maxlength="6" autocomplete="one-time-code">
+      </div>
+      <button class="btn" id="twofa-btn" onclick="do2FA()">Подтвердить</button>
+    </div>
+  </div>
+
+  <!-- Already logged in — accepting -->
+  <div id="page-accepting" style="display:none;text-align:center;padding:20px 0">
+    <div style="font-size:36px;margin-bottom:16px">⏳</div>
+    <p style="color:var(--text2);font-size:14px">Принимаем приглашение...</p>
+  </div>
+
+  <!-- Success -->
+  <div id="page-success" style="display:none">
+    <div class="success-state">
+      <div class="success-icon">🎉</div>
+      <div class="success-title">Приглашение принято!</div>
+      <div class="success-msg">Вы добавлены в организацию. Переходим в личный кабинет...</div>
+      <a href="/ui/" class="btn" style="text-decoration:none;display:inline-block;width:auto;padding:12px 32px">Перейти в кабинет</a>
+    </div>
+  </div>
+
+  <!-- Error result -->
+  <div id="page-fail" style="display:none">
+    <div style="text-align:center;padding:10px 0">
+      <div style="font-size:48px;margin-bottom:16px">❌</div>
+      <h2 style="color:var(--error);margin-bottom:8px">Не удалось принять</h2>
+      <p id="fail-msg" style="color:var(--text2);font-size:14px;margin-bottom:20px"></p>
+      <a href="/ui/" style="color:var(--green);font-size:14px">← На главную</a>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '';
+let inviteToken = '';
+let challengeToken = '';
+let accessToken = localStorage.getItem('accessToken') || '';
+let refreshToken = localStorage.getItem('refreshToken') || '';
+
+function showPage(id) {
+  ['page-error','page-auth','page-accepting','page-success','page-fail'].forEach(p => {
+    document.getElementById(p).style.display = p === id ? 'block' : 'none';
+  });
+}
+
+function showError(id, msg) {
+  const el = document.getElementById(id);
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
+function hideError(id) {
+  const el = document.getElementById(id);
+  if (el) { el.textContent = ''; el.style.display = 'none'; }
+}
+
+function setLoading(id, on) {
+  const el = document.getElementById(id);
+  if (el) el.disabled = on;
+}
+
+function saveTokens(at, rt) {
+  accessToken = at;
+  refreshToken = rt;
+  localStorage.setItem('accessToken', at);
+  localStorage.setItem('refreshToken', rt);
+}
+
+function switchTab(tab) {
+  ['login','register'].forEach(t => {
+    document.getElementById('tab-' + t).classList.toggle('active', t === tab);
+    document.getElementById('content-' + t).classList.toggle('active', t === tab);
+  });
+  document.getElementById('content-2fa').classList.remove('active');
+}
+
+async function acceptInvite() {
+  showPage('page-accepting');
+  try {
+    const res = await fetch(API + '/tenant/invites/' + inviteToken + '/accept', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
+    });
+    if (res.ok) {
+      showPage('page-success');
+      setTimeout(() => { window.location.href = '/ui/'; }, 3000);
+    } else {
+      const data = await res.json().catch(() => ({}));
+      const msg = data.message || 'Приглашение недействительно или истекло';
+      document.getElementById('fail-msg').textContent = msg;
+      showPage('page-fail');
+    }
+  } catch (e) {
+    document.getElementById('fail-msg').textContent = 'Ошибка сети. Попробуйте снова.';
+    showPage('page-fail');
+  }
+}
+
+async function doLogin() {
+  hideError('login-error');
+  setLoading('login-btn', true);
+  const email = document.getElementById('login-email').value.trim();
+  const password = document.getElementById('login-password').value;
+  try {
+    const res = await fetch(API + '/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) { showError('login-error', data.message || 'Неверный email или пароль'); return; }
+    if (data.next === '2fa') {
+      challengeToken = data.challengeToken;
+      ['login','register'].forEach(t => document.getElementById('content-' + t).classList.remove('active'));
+      document.getElementById('content-2fa').classList.add('active');
+    } else {
+      saveTokens(data.accessToken, data.refreshToken);
+      await acceptInvite();
+    }
+  } catch (e) {
+    showError('login-error', 'Ошибка сети. Попробуйте снова.');
+  } finally {
+    setLoading('login-btn', false);
+  }
+}
+
+async function doRegister() {
+  hideError('register-error');
+  setLoading('register-btn', true);
+  const email = document.getElementById('reg-email').value.trim();
+  const password = document.getElementById('reg-password').value;
+  const firstName = document.getElementById('reg-firstname').value.trim();
+  const lastName = document.getElementById('reg-lastname').value.trim();
+  try {
+    const body = { email, password };
+    if (firstName) body.firstName = firstName;
+    if (lastName) body.lastName = lastName;
+    const res = await fetch(API + '/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) { showError('register-error', data.message || 'Ошибка регистрации'); return; }
+    saveTokens(data.accessToken, data.refreshToken);
+    await acceptInvite();
+  } catch (e) {
+    showError('register-error', 'Ошибка сети. Попробуйте снова.');
+  } finally {
+    setLoading('register-btn', false);
+  }
+}
+
+async function do2FA() {
+  hideError('twofa-error');
+  setLoading('twofa-btn', true);
+  const code = document.getElementById('twofa-code').value.trim();
+  try {
+    const res = await fetch(API + '/auth/login/2fa', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ challengeToken, code }),
+    });
+    const data = await res.json();
+    if (!res.ok) { showError('twofa-error', data.message || 'Неверный код'); return; }
+    saveTokens(data.accessToken, data.refreshToken);
+    await acceptInvite();
+  } catch (e) {
+    showError('twofa-error', 'Ошибка сети. Попробуйте снова.');
+  } finally {
+    setLoading('twofa-btn', false);
+  }
+}
+
+// Init
+(async function init() {
+  const params = new URLSearchParams(window.location.search);
+  inviteToken = params.get('token') || '';
+  if (!inviteToken) { showPage('page-error'); return; }
+
+  // If already logged in — accept immediately
+  if (accessToken) {
+    // Verify token is still valid
+    try {
+      const r = await fetch(API + '/profile', { headers: { 'Authorization': 'Bearer ' + accessToken } });
+      if (r.ok) { await acceptInvite(); return; }
+    } catch (e) {}
+    // Token invalid — clear and show auth
+    localStorage.removeItem('accessToken');
+    localStorage.removeItem('refreshToken');
+    accessToken = '';
+    refreshToken = '';
+  }
+
+  showPage('page-auth');
+})();
+
+// Enter key support
+document.addEventListener('keydown', function(e) {
+  if (e.key !== 'Enter') return;
+  if (document.getElementById('content-login').classList.contains('active')) doLogin();
+  else if (document.getElementById('content-register').classList.contains('active')) doRegister();
+  else if (document.getElementById('content-2fa').classList.contains('active')) do2FA();
+});
+</script>
+</body>
+</html>

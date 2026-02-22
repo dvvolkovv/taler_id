@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Taler ID — OAuth 2.0 / OIDC Integration Guide</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: #0d1117; color: #c9d1d9;
+      line-height: 1.7; padding: 0;
+    }
+    .header {
+      background: linear-gradient(135deg, #161b22 0%, #0d1117 100%);
+      border-bottom: 1px solid #22C55E33;
+      padding: 40px 0;
+      text-align: center;
+    }
+    .header h1 {
+      background: linear-gradient(135deg, #4ade80, #22d3ee);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+      font-size: 2rem; margin-bottom: 8px;
+    }
+    .header p { color: #8b949e; font-size: 1rem; }
+    .container { max-width: 900px; margin: 0 auto; padding: 40px 24px; }
+    .nav {
+      position: sticky; top: 0; background: #161b22ee; backdrop-filter: blur(8px);
+      border-bottom: 1px solid #30363d; padding: 12px 0; z-index: 10;
+      margin-bottom: 32px;
+    }
+    .nav-inner {
+      max-width: 900px; margin: 0 auto; padding: 0 24px;
+      display: flex; gap: 20px; flex-wrap: wrap; font-size: 0.85rem;
+    }
+    .nav a { color: #58a6ff; text-decoration: none; }
+    .nav a:hover { text-decoration: underline; }
+    h2 {
+      color: #e6edf3; font-size: 1.5rem; margin: 48px 0 16px;
+      padding-bottom: 8px; border-bottom: 1px solid #21262d;
+    }
+    h3 { color: #e6edf3; font-size: 1.15rem; margin: 32px 0 12px; }
+    p { margin-bottom: 12px; }
+    a { color: #58a6ff; }
+    code {
+      font-family: 'JetBrains Mono', monospace;
+      background: #161b22; padding: 2px 6px; border-radius: 4px; font-size: 0.88em;
+      border: 1px solid #30363d;
+    }
+    pre {
+      background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+      padding: 16px 20px; overflow-x: auto; margin: 12px 0 20px;
+      font-family: 'JetBrains Mono', monospace; font-size: 0.85rem;
+      line-height: 1.6;
+    }
+    pre code { background: none; border: none; padding: 0; }
+    .comment { color: #8b949e; }
+    .keyword { color: #ff7b72; }
+    .string { color: #a5d6ff; }
+    .number { color: #79c0ff; }
+    .func { color: #d2a8ff; }
+    table {
+      width: 100%; border-collapse: collapse; margin: 12px 0 20px;
+      font-size: 0.9rem;
+    }
+    th, td {
+      text-align: left; padding: 10px 14px;
+      border: 1px solid #21262d;
+    }
+    th { background: #161b22; color: #e6edf3; font-weight: 600; }
+    tr:nth-child(even) { background: #161b2288; }
+    .badge {
+      display: inline-block; padding: 2px 8px; border-radius: 4px;
+      font-size: 0.75rem; font-weight: 600; text-transform: uppercase;
+    }
+    .get { background: #238636; color: #fff; }
+    .post { background: #1f6feb; color: #fff; }
+    .step {
+      display: flex; gap: 16px; margin: 20px 0;
+      padding: 16px; background: #161b22; border-radius: 10px; border: 1px solid #30363d;
+    }
+    .step-num {
+      min-width: 36px; height: 36px; border-radius: 50%;
+      background: linear-gradient(135deg, #22c55e, #16a34a);
+      color: #fff; display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 0.9rem;
+    }
+    .step-content { flex: 1; }
+    .step-content h4 { color: #e6edf3; margin-bottom: 6px; }
+    .note {
+      background: #1c2128; border-left: 3px solid #f0883e; padding: 12px 16px;
+      border-radius: 0 6px 6px 0; margin: 16px 0; font-size: 0.9rem;
+    }
+    .note strong { color: #f0883e; }
+    .success-note {
+      background: #1c2128; border-left: 3px solid #22c55e; padding: 12px 16px;
+      border-radius: 0 6px 6px 0; margin: 16px 0; font-size: 0.9rem;
+    }
+    .success-note strong { color: #22c55e; }
+    .flow-diagram {
+      background: #161b22; border: 1px solid #30363d; border-radius: 10px;
+      padding: 24px; margin: 16px 0; font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem; line-height: 1.8; overflow-x: auto; white-space: pre;
+    }
+    .links { display: flex; gap: 12px; flex-wrap: wrap; margin: 16px 0; }
+    .link-card {
+      flex: 1; min-width: 200px; padding: 16px; background: #161b22;
+      border: 1px solid #30363d; border-radius: 8px; text-decoration: none;
+      transition: border-color 0.2s;
+    }
+    .link-card:hover { border-color: #22C55E; }
+    .link-card h4 { color: #e6edf3; margin-bottom: 4px; font-size: 0.9rem; }
+    .link-card p { color: #8b949e; font-size: 0.8rem; margin: 0; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Taler ID — OAuth 2.0 / OIDC</h1>
+    <p>Integration Guide for External Applications</p>
+  </div>
+
+  <div class="nav">
+    <div class="nav-inner">
+      <a href="#overview">Overview</a>
+      <a href="#quickstart">Quick Start</a>
+      <a href="#registration">Registration</a>
+      <a href="#flow">Auth Flow</a>
+      <a href="#endpoints">Endpoints</a>
+      <a href="#scopes">Scopes & Claims</a>
+      <a href="#examples">Code Examples</a>
+      <a href="#errors">Error Handling</a>
+      <a href="#security">Security</a>
+    </div>
+  </div>
+
+  <div class="container">
+
+    <!-- OVERVIEW -->
+    <h2 id="overview">Overview</h2>
+    <p>Taler ID is an OpenID Connect (OIDC) provider that allows external applications to authenticate users and access their identity data (profile, email, KYC status, wallet address) using the standard <strong>Authorization Code + PKCE</strong> flow.</p>
+
+    <div class="links">
+      <a class="link-card" href="https://id.taler.tirol/docs" target="_blank">
+        <h4>Swagger UI</h4>
+        <p>Interactive API documentation</p>
+      </a>
+      <a class="link-card" href="https://id.taler.tirol/oauth/.well-known/openid-configuration" target="_blank">
+        <h4>OIDC Discovery</h4>
+        <p>Provider configuration</p>
+      </a>
+      <a class="link-card" href="https://id.taler.tirol/oauth/jwks" target="_blank">
+        <h4>JWKS</h4>
+        <p>Public keys for JWT verification</p>
+      </a>
+    </div>
+
+    <table>
+      <tr><th>Parameter</th><th>Value</th></tr>
+      <tr><td>Issuer</td><td><code>https://id.taler.tirol/oauth</code></td></tr>
+      <tr><td>Protocol</td><td>OpenID Connect 1.0 over OAuth 2.0</td></tr>
+      <tr><td>Grant type</td><td>Authorization Code + PKCE (S256)</td></tr>
+      <tr><td>Token format</td><td>JWT (RS256, kid: <code>taler-id-rsa</code>)</td></tr>
+      <tr><td>Client auth</td><td><code>client_secret_basic</code> (HTTP Basic)</td></tr>
+    </table>
+
+    <!-- QUICK START -->
+    <h2 id="quickstart">Quick Start (5 steps)</h2>
+
+    <div class="step">
+      <div class="step-num">1</div>
+      <div class="step-content">
+        <h4>Register your application</h4>
+        <p>Contact Taler team to get <code>client_id</code>, <code>client_secret</code>, and register your <code>redirect_uri</code>.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div class="step-content">
+        <h4>Redirect user to authorize</h4>
+        <p>Generate PKCE <code>code_verifier</code> + <code>code_challenge</code>, then redirect to <code>/oauth/auth</code>.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div class="step-content">
+        <h4>User logs in and approves</h4>
+        <p>Taler ID shows login form, then consent screen. User approves the requested scopes.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div class="step-content">
+        <h4>Exchange code for tokens</h4>
+        <p>Your server receives <code>code</code> on the callback URL. Exchange it at <code>POST /oauth/token</code>.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">5</div>
+      <div class="step-content">
+        <h4>Use access token</h4>
+        <p>Call <code>GET /oauth/me</code> with <code>Bearer</code> token to get user claims, or decode the <code>id_token</code> JWT.</p>
+      </div>
+    </div>
+
+    <!-- REGISTRATION -->
+    <h2 id="registration">Client Registration</h2>
+    <p>Each application needs a registered OAuth client in Taler ID. Contact the Taler team to register your client with:</p>
+    <table>
+      <tr><th>Field</th><th>Description</th><th>Example</th></tr>
+      <tr><td><code>client_id</code></td><td>Unique application identifier</td><td><code>my-app</code></td></tr>
+      <tr><td><code>client_secret</code></td><td>Secret for token exchange (keep secure!)</td><td><code>s3cr3t...</code></td></tr>
+      <tr><td><code>redirect_uris</code></td><td>Allowed callback URLs (exact match)</td><td><code>https://myapp.com/callback</code></td></tr>
+      <tr><td><code>name</code></td><td>Display name shown on consent screen</td><td><code>My Application</code></td></tr>
+      <tr><td><code>allowed_scopes</code></td><td>Scopes this client can request</td><td><code>openid profile email kyc</code></td></tr>
+      <tr><td><code>logo_uri</code></td><td>Logo URL for consent screen (optional)</td><td><code>https://myapp.com/logo.png</code></td></tr>
+    </table>
+
+    <!-- FLOW -->
+    <h2 id="flow">Authorization Flow</h2>
+    <div class="flow-diagram">Your App                         Taler ID                          User
+────────                         ────────                          ────
+   │                                │                                │
+   │  1. Generate PKCE               │                                │
+   │     code_verifier (random)      │                                │
+   │     code_challenge (SHA256)     │                                │
+   │                                │                                │
+   │  2. Redirect ──────────────────►│                                │
+   │     GET /oauth/auth?            │                                │
+   │       client_id=...             │                                │
+   │       response_type=code        │                                │
+   │       scope=openid profile      │                                │
+   │       redirect_uri=...          │                                │
+   │       code_challenge=...        │                                │
+   │       code_challenge_method=S256│                                │
+   │       state=...                 │                                │
+   │                                │                                │
+   │                                │  3. Show login ────────────────►│
+   │                                │     /oauth/interaction/:uid     │
+   │                                │                                │
+   │                                │  4. User logs in ◄─────────────│
+   │                                │     POST .../login              │
+   │                                │                                │
+   │                                │  5. Show consent ──────────────►│
+   │                                │     scopes: profile, email...  │
+   │                                │                                │
+   │                                │  6. User approves ◄────────────│
+   │                                │     POST .../consent            │
+   │                                │                                │
+   │  7. Callback ◄─────────────────│                                │
+   │     GET redirect_uri?           │                                │
+   │       code=AUTH_CODE            │                                │
+   │       state=...                 │                                │
+   │       iss=https://id.taler...   │                                │
+   │                                │                                │
+   │  8. Token exchange ────────────►│                                │
+   │     POST /oauth/token           │                                │
+   │       grant_type=               │                                │
+   │         authorization_code      │                                │
+   │       code=AUTH_CODE            │                                │
+   │       redirect_uri=...          │                                │
+   │       code_verifier=...         │                                │
+   │     Authorization: Basic ...    │                                │
+   │                                │                                │
+   │  9. Tokens ◄───────────────────│                                │
+   │     { access_token,             │                                │
+   │       id_token,                 │                                │
+   │       refresh_token }           │                                │
+   │                                │                                │
+   │  10. UserInfo ─────────────────►│                                │
+   │      GET /oauth/me              │                                │
+   │      Authorization: Bearer ...  │                                │
+   │                                │                                │
+   │  11. Claims ◄──────────────────│                                │
+   │      { sub, email, name,        │                                │
+   │        kyc_status, wallet... }  │                                │
+   └────────────────────────────────┘                                │</div>
+
+    <!-- ENDPOINTS -->
+    <h2 id="endpoints">Endpoints</h2>
+
+    <h3>Core OAuth 2.0 / OIDC</h3>
+    <table>
+      <tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
+      <tr>
+        <td><span class="badge get">GET</span></td>
+        <td><code>/oauth/auth</code></td>
+        <td>Authorization endpoint — start the login/consent flow</td>
+      </tr>
+      <tr>
+        <td><span class="badge post">POST</span></td>
+        <td><code>/oauth/token</code></td>
+        <td>Token endpoint — exchange code for tokens, or refresh</td>
+      </tr>
+      <tr>
+        <td><span class="badge get">GET</span></td>
+        <td><code>/oauth/me</code></td>
+        <td>UserInfo endpoint — get user claims with access token</td>
+      </tr>
+      <tr>
+        <td><span class="badge post">POST</span></td>
+        <td><code>/oauth/token/revocation</code></td>
+        <td>Revoke access or refresh token</td>
+      </tr>
+      <tr>
+        <td><span class="badge get">GET</span></td>
+        <td><code>/oauth/session/end</code></td>
+        <td>End session (OIDC logout)</td>
+      </tr>
+      <tr>
+        <td><span class="badge get">GET</span></td>
+        <td><code>/oauth/jwks</code></td>
+        <td>JSON Web Key Set (public keys for JWT verification)</td>
+      </tr>
+      <tr>
+        <td><span class="badge get">GET</span></td>
+        <td><code>/oauth/.well-known/openid-configuration</code></td>
+        <td>OIDC Discovery document</td>
+      </tr>
+    </table>
+
+    <h3>Authorization Request Parameters</h3>
+    <table>
+      <tr><th>Parameter</th><th>Required</th><th>Description</th></tr>
+      <tr><td><code>client_id</code></td><td>Yes</td><td>Your registered client ID</td></tr>
+      <tr><td><code>response_type</code></td><td>Yes</td><td>Must be <code>code</code></td></tr>
+      <tr><td><code>scope</code></td><td>Yes</td><td>Space-separated list (must include <code>openid</code>)</td></tr>
+      <tr><td><code>redirect_uri</code></td><td>Yes</td><td>Must exactly match a registered redirect URI</td></tr>
+      <tr><td><code>code_challenge</code></td><td>Yes</td><td><code>BASE64URL(SHA256(code_verifier))</code></td></tr>
+      <tr><td><code>code_challenge_method</code></td><td>Yes</td><td>Must be <code>S256</code></td></tr>
+      <tr><td><code>state</code></td><td>Recommended</td><td>Random string for CSRF protection</td></tr>
+      <tr><td><code>nonce</code></td><td>Recommended</td><td>Random string included in id_token</td></tr>
+    </table>
+
+    <h3>Token Request Parameters</h3>
+    <table>
+      <tr><th>Parameter</th><th>Description</th></tr>
+      <tr><td><code>grant_type</code></td><td><code>authorization_code</code> or <code>refresh_token</code></td></tr>
+      <tr><td><code>code</code></td><td>Authorization code from callback (for authorization_code grant)</td></tr>
+      <tr><td><code>redirect_uri</code></td><td>Same redirect_uri used in /oauth/auth</td></tr>
+      <tr><td><code>code_verifier</code></td><td>Original PKCE code_verifier (43-128 characters)</td></tr>
+      <tr><td><code>refresh_token</code></td><td>Refresh token (for refresh_token grant)</td></tr>
+    </table>
+    <div class="note">
+      <strong>Authentication:</strong> Use HTTP Basic auth: <code>Authorization: Basic base64(client_id:client_secret)</code>
+    </div>
+
+    <h3>Token Lifetimes</h3>
+    <table>
+      <tr><th>Token</th><th>TTL</th><th>Notes</th></tr>
+      <tr><td>Access Token</td><td>15 minutes</td><td>Use refresh token to get new one</td></tr>
+      <tr><td>ID Token</td><td>1 hour</td><td>JWT with user claims</td></tr>
+      <tr><td>Authorization Code</td><td>1 minute</td><td>Single-use, exchange immediately</td></tr>
+      <tr><td>Refresh Token</td><td>30 days</td><td>Rotated on each use</td></tr>
+      <tr><td>Session</td><td>14 days</td><td>OIDC provider session</td></tr>
+    </table>
+
+    <!-- SCOPES -->
+    <h2 id="scopes">Scopes & Claims</h2>
+    <table>
+      <tr><th>Scope</th><th>Claims</th><th>Description</th></tr>
+      <tr>
+        <td><code>openid</code></td>
+        <td><code>sub</code></td>
+        <td>Required. Returns unique user ID.</td>
+      </tr>
+      <tr>
+        <td><code>profile</code></td>
+        <td><code>name</code>, <code>given_name</code>, <code>family_name</code>, <code>middle_name</code>, <code>locale</code>, <code>updated_at</code></td>
+        <td>Basic profile information</td>
+      </tr>
+      <tr>
+        <td><code>email</code></td>
+        <td><code>email</code>, <code>email_verified</code></td>
+        <td>Email address and verification status</td>
+      </tr>
+      <tr>
+        <td><code>phone</code></td>
+        <td><code>phone_number</code>, <code>phone_number_verified</code></td>
+        <td>Phone number and verification status</td>
+      </tr>
+      <tr>
+        <td><code>kyc</code></td>
+        <td><code>kyc_status</code>, <code>kyc_type</code>, <code>kyc_verified_at</code></td>
+        <td>KYC verification status (NONE / PENDING / APPROVED / REJECTED)</td>
+      </tr>
+      <tr>
+        <td><code>wallet</code></td>
+        <td><code>wallet_address</code></td>
+        <td>Blockchain wallet address (Taler network)</td>
+      </tr>
+      <tr>
+        <td><code>offline_access</code></td>
+        <td><em>(refresh token)</em></td>
+        <td>Request a refresh token for long-lived access</td>
+      </tr>
+    </table>
+
+    <h3>Example UserInfo Response</h3>
+    <pre><code>{
+  <span class="string">"sub"</span>: <span class="string">"a1b2c3d4-e5f6-7890-abcd-ef1234567890"</span>,
+  <span class="string">"name"</span>: <span class="string">"Ivan Petrov"</span>,
+  <span class="string">"given_name"</span>: <span class="string">"Ivan"</span>,
+  <span class="string">"family_name"</span>: <span class="string">"Petrov"</span>,
+  <span class="string">"email"</span>: <span class="string">"ivan@example.com"</span>,
+  <span class="string">"email_verified"</span>: <span class="keyword">true</span>,
+  <span class="string">"phone_number"</span>: <span class="string">"+79001234567"</span>,
+  <span class="string">"phone_number_verified"</span>: <span class="keyword">true</span>,
+  <span class="string">"kyc_status"</span>: <span class="string">"APPROVED"</span>,
+  <span class="string">"kyc_type"</span>: <span class="string">"BASIC"</span>,
+  <span class="string">"kyc_verified_at"</span>: <span class="string">"2026-01-15T10:30:00.000Z"</span>,
+  <span class="string">"wallet_address"</span>: <span class="string">"5EZS5Lp5bdPdvcNfzaiFNjsTbtK78qWjCZVwACZFCEWVwRRp"</span>
+}</code></pre>
+
+    <!-- CODE EXAMPLES -->
+    <h2 id="examples">Code Examples</h2>
+
+    <h3>Node.js / TypeScript (with openid-client)</h3>
+    <pre><code><span class="keyword">import</span> { Issuer, generators } <span class="keyword">from</span> <span class="string">'openid-client'</span>;
+
+<span class="comment">// 1. Discover provider configuration</span>
+<span class="keyword">const</span> issuer = <span class="keyword">await</span> Issuer.<span class="func">discover</span>(<span class="string">'https://id.taler.tirol/oauth'</span>);
+
+<span class="comment">// 2. Create client</span>
+<span class="keyword">const</span> client = <span class="keyword">new</span> issuer.<span class="func">Client</span>({
+  client_id: <span class="string">'your-client-id'</span>,
+  client_secret: <span class="string">'your-client-secret'</span>,
+  redirect_uris: [<span class="string">'https://yourapp.com/callback'</span>],
+  response_types: [<span class="string">'code'</span>],
+  token_endpoint_auth_method: <span class="string">'client_secret_basic'</span>,
+});
+
+<span class="comment">// 3. Generate PKCE</span>
+<span class="keyword">const</span> code_verifier = generators.<span class="func">codeVerifier</span>();
+<span class="keyword">const</span> code_challenge = generators.<span class="func">codeChallenge</span>(code_verifier);
+<span class="keyword">const</span> state = generators.<span class="func">state</span>();
+<span class="keyword">const</span> nonce = generators.<span class="func">nonce</span>();
+
+<span class="comment">// 4. Build authorization URL</span>
+<span class="keyword">const</span> authUrl = client.<span class="func">authorizationUrl</span>({
+  scope: <span class="string">'openid profile email kyc wallet'</span>,
+  code_challenge,
+  code_challenge_method: <span class="string">'S256'</span>,
+  state,
+  nonce,
+});
+<span class="comment">// Redirect user to authUrl</span>
+
+<span class="comment">// 5. Handle callback (on your /callback route)</span>
+<span class="keyword">const</span> params = client.<span class="func">callbackParams</span>(req);
+<span class="keyword">const</span> tokenSet = <span class="keyword">await</span> client.<span class="func">callback</span>(
+  <span class="string">'https://yourapp.com/callback'</span>,
+  params,
+  { code_verifier, state, nonce }
+);
+
+console.<span class="func">log</span>(tokenSet.access_token);
+console.<span class="func">log</span>(tokenSet.id_token);
+console.<span class="func">log</span>(tokenSet.claims());  <span class="comment">// decoded id_token claims</span>
+
+<span class="comment">// 6. Get user info</span>
+<span class="keyword">const</span> userinfo = <span class="keyword">await</span> client.<span class="func">userinfo</span>(tokenSet.access_token);
+console.<span class="func">log</span>(userinfo);
+<span class="comment">// { sub, name, email, kyc_status, wallet_address, ... }</span>
+
+<span class="comment">// 7. Refresh token</span>
+<span class="keyword">const</span> refreshed = <span class="keyword">await</span> client.<span class="func">refresh</span>(tokenSet.refresh_token);
+console.<span class="func">log</span>(refreshed.access_token);</code></pre>
+
+    <h3>Python (with authlib)</h3>
+    <pre><code><span class="keyword">from</span> authlib.integrations.requests_client <span class="keyword">import</span> OAuth2Session
+
+client_id = <span class="string">'your-client-id'</span>
+client_secret = <span class="string">'your-client-secret'</span>
+redirect_uri = <span class="string">'https://yourapp.com/callback'</span>
+
+<span class="comment"># 1. Create session with PKCE</span>
+session = <span class="func">OAuth2Session</span>(
+    client_id, client_secret,
+    redirect_uri=redirect_uri,
+    code_challenge_method=<span class="string">'S256'</span>,
+)
+
+<span class="comment"># 2. Build authorization URL</span>
+auth_url, state = session.<span class="func">create_authorization_url</span>(
+    <span class="string">'https://id.taler.tirol/oauth/auth'</span>,
+    scope=<span class="string">'openid profile email kyc wallet'</span>,
+)
+<span class="comment"># Redirect user to auth_url</span>
+
+<span class="comment"># 3. Handle callback</span>
+token = session.<span class="func">fetch_token</span>(
+    <span class="string">'https://id.taler.tirol/oauth/token'</span>,
+    authorization_response=callback_url,
+)
+
+<span class="comment"># 4. Get user info</span>
+resp = session.<span class="func">get</span>(<span class="string">'https://id.taler.tirol/oauth/me'</span>)
+userinfo = resp.<span class="func">json</span>()
+<span class="func">print</span>(userinfo)
+<span class="comment"># {'sub': '...', 'email': '...', 'kyc_status': 'APPROVED', ...}</span></code></pre>
+
+    <h3>Flutter / Dart (with flutter_appauth)</h3>
+    <pre><code><span class="keyword">import</span> <span class="string">'package:flutter_appauth/flutter_appauth.dart'</span>;
+
+<span class="keyword">final</span> appAuth = <span class="func">FlutterAppAuth</span>();
+
+<span class="comment">// Authorize + get tokens in one step</span>
+<span class="keyword">final</span> result = <span class="keyword">await</span> appAuth.<span class="func">authorizeAndExchangeCode</span>(
+  <span class="func">AuthorizationTokenRequest</span>(
+    <span class="string">'your-client-id'</span>,
+    <span class="string">'com.yourapp://callback'</span>,  <span class="comment">// custom scheme redirect</span>
+    issuer: <span class="string">'https://id.taler.tirol/oauth'</span>,
+    scopes: [<span class="string">'openid'</span>, <span class="string">'profile'</span>, <span class="string">'email'</span>, <span class="string">'kyc'</span>, <span class="string">'wallet'</span>],
+  ),
+);
+
+<span class="func">print</span>(result?.accessToken);
+<span class="func">print</span>(result?.idToken);
+<span class="func">print</span>(result?.refreshToken);
+
+<span class="comment">// Get user info</span>
+<span class="keyword">final</span> response = <span class="keyword">await</span> http.<span class="func">get</span>(
+  <span class="func">Uri.parse</span>(<span class="string">'https://id.taler.tirol/oauth/me'</span>),
+  headers: {<span class="string">'Authorization'</span>: <span class="string">'Bearer ${result?.accessToken}'</span>},
+);</code></pre>
+
+    <h3>cURL (manual testing)</h3>
+    <pre><code><span class="comment"># 1. Generate PKCE code_verifier and code_challenge</span>
+CODE_VERIFIER=$(openssl rand -base64 32 | tr -d '=+/' | head -c 43)
+CODE_CHALLENGE=$(echo -n "$CODE_VERIFIER" | \
+  openssl dgst -sha256 -binary | \
+  openssl base64 | tr '+/' '-_' | tr -d '=')
+
+<span class="comment"># 2. Open this URL in browser (user logs in + consents)</span>
+echo "https://id.taler.tirol/oauth/auth?\
+client_id=walletx&amp;\
+response_type=code&amp;\
+scope=openid%20profile%20email%20kyc%20wallet&amp;\
+redirect_uri=http://localhost:3001/auth/callback&amp;\
+code_challenge=$CODE_CHALLENGE&amp;\
+code_challenge_method=S256&amp;\
+state=test123"
+
+<span class="comment"># 3. After login, copy the "code" from redirect URL and exchange:</span>
+curl -X POST https://id.taler.tirol/oauth/token \
+  -u "walletx:your_client_secret" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=authorization_code&amp;\
+code=PASTE_CODE_HERE&amp;\
+redirect_uri=http://localhost:3001/auth/callback&amp;\
+code_verifier=$CODE_VERIFIER"
+
+<span class="comment"># 4. Use access_token to get user info</span>
+curl -H "Authorization: Bearer ACCESS_TOKEN_HERE" \
+  https://id.taler.tirol/oauth/me
+
+<span class="comment"># 5. Refresh token</span>
+curl -X POST https://id.taler.tirol/oauth/token \
+  -u "walletx:your_client_secret" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=refresh_token&amp;refresh_token=REFRESH_TOKEN_HERE"
+
+<span class="comment"># 6. Revoke token</span>
+curl -X POST https://id.taler.tirol/oauth/token/revocation \
+  -u "walletx:your_client_secret" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "token=ACCESS_OR_REFRESH_TOKEN"</code></pre>
+
+    <!-- ERRORS -->
+    <h2 id="errors">Error Handling</h2>
+    <h3>Authorization Errors (redirect back to client)</h3>
+    <table>
+      <tr><th>Error</th><th>Description</th></tr>
+      <tr><td><code>invalid_request</code></td><td>Missing required parameter or malformed request</td></tr>
+      <tr><td><code>invalid_client</code></td><td>Unknown client_id</td></tr>
+      <tr><td><code>invalid_redirect_uri</code></td><td>redirect_uri not registered for this client</td></tr>
+      <tr><td><code>invalid_scope</code></td><td>Requested scope not allowed for this client</td></tr>
+      <tr><td><code>access_denied</code></td><td>User denied consent or aborted flow</td></tr>
+      <tr><td><code>server_error</code></td><td>Internal server error</td></tr>
+    </table>
+
+    <h3>Token Endpoint Errors (HTTP 400/401)</h3>
+    <table>
+      <tr><th>Error</th><th>Description</th></tr>
+      <tr><td><code>invalid_grant</code></td><td>Code expired, already used, or invalid code_verifier</td></tr>
+      <tr><td><code>invalid_client</code></td><td>Wrong client_secret or missing Basic auth</td></tr>
+      <tr><td><code>unsupported_grant_type</code></td><td>Only authorization_code and refresh_token are supported</td></tr>
+    </table>
+
+    <h3>Interaction Errors (HTTP 401/403)</h3>
+    <table>
+      <tr><th>HTTP</th><th>Error</th><th>Description</th></tr>
+      <tr><td>401</td><td>Unauthorized</td><td>Invalid email/password during login</td></tr>
+      <tr><td>403</td><td>Forbidden</td><td>Account locked after 5 failed login attempts (15 min cooldown)</td></tr>
+    </table>
+
+    <!-- SECURITY -->
+    <h2 id="security">Security Requirements</h2>
+
+    <div class="note">
+      <strong>PKCE is mandatory.</strong> All authorization requests must include <code>code_challenge</code> and <code>code_challenge_method=S256</code>. Plain code challenges are not accepted.
+    </div>
+
+    <h3>Checklist</h3>
+    <table>
+      <tr><th>Requirement</th><th>Details</th></tr>
+      <tr><td>PKCE (S256)</td><td>Generate cryptographically random <code>code_verifier</code> (43-128 chars), compute SHA256 challenge</td></tr>
+      <tr><td>State parameter</td><td>Use <code>state</code> to prevent CSRF. Verify it matches on callback.</td></tr>
+      <tr><td>Nonce</td><td>Include <code>nonce</code> in auth request, verify it in <code>id_token</code></td></tr>
+      <tr><td>HTTPS only</td><td>All requests must use HTTPS in production</td></tr>
+      <tr><td>Redirect URI exact match</td><td>The <code>redirect_uri</code> must exactly match a registered URI</td></tr>
+      <tr><td>Client secret protection</td><td>Never expose <code>client_secret</code> in client-side code. Use it only on the server.</td></tr>
+      <tr><td>Token storage</td><td>Store tokens securely (httpOnly cookies or encrypted storage). Never in localStorage.</td></tr>
+      <tr><td>ID Token verification</td><td>Verify JWT signature against JWKS, check <code>iss</code>, <code>aud</code>, <code>exp</code>, <code>nonce</code></td></tr>
+      <tr><td>Refresh token rotation</td><td>Refresh tokens are rotated on each use. Always store the latest token.</td></tr>
+    </table>
+
+    <div class="success-note">
+      <strong>Questions?</strong> Full API docs at <a href="https://id.taler.tirol/docs">id.taler.tirol/docs</a>. Contact the Taler team for client registration and support.
+    </div>
+
+  </div>
+</body>
+</html>

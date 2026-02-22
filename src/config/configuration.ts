@@ -7,6 +7,10 @@ export default () => ({
     accessExpiry: process.env.JWT_ACCESS_EXPIRY || '15m',
     refreshExpiry: process.env.JWT_REFRESH_EXPIRY || '30d',
   },
+  oidc: {
+    issuer: process.env.OIDC_ISSUER || `${process.env.BASE_URL || 'http://localhost:3000'}/oauth`,
+    cookieKeys: process.env.OIDC_COOKIE_KEYS || 'taler-oidc-default-key',
+  },
   database: {
     url: process.env.DATABASE_URL,
   },

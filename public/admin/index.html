@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Taler ID — Admin Panel</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Inter', 'Segoe UI', system-ui, sans-serif; background: #0d1117; color: #e0e0e0; min-height: 100vh; }
+
+    /* LOGIN */
+    #login-screen {
+      display: flex; align-items: center; justify-content: center; min-height: 100vh;
+      background: radial-gradient(ellipse at 50% 30%, rgba(22,163,74,0.08) 0%, transparent 60%), #0d1117;
+    }
+    .login-box {
+      background: #161b22; border: 1px solid #22C55E33; border-radius: 16px;
+      padding: 40px; width: 360px; box-shadow: 0 8px 32px rgba(34,197,94,0.10);
+    }
+    .login-box h2 { 
+      background: linear-gradient(135deg, #4ade80, #22d3ee); 
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+      margin-bottom: 24px; text-align: center; font-size: 1.4rem; 
+    }
+
+    /* MAIN LAYOUT */
+    #app { display: none; flex-direction: column; height: 100vh; overflow: hidden; }
+    header {
+      background: #161b22; border-bottom: 1px solid #22C55E22;
+      padding: 0 24px; height: 56px; display: flex; align-items: center; justify-content: space-between;
+    }
+    header h1 { 
+      background: linear-gradient(135deg, #4ade80, #22d3ee);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+      font-size: 1.1rem; font-weight: 600; 
+    }
+    .header-right { display: flex; align-items: center; gap: 16px; }
+
+    /* TABS */
+    .tabs { display: flex; gap: 0; border-bottom: 1px solid #21262d; background: #0d1117; }
+    .tab-btn {
+      padding: 12px 24px; background: none; border: none; color: #6B7280; cursor: pointer;
+      font-size: 0.9rem; border-bottom: 2px solid transparent; transition: all 0.2s;
+    }
+    .tab-btn.active { color: #4ade80; border-bottom-color: #22C55E; }
+    .tab-btn:hover { color: #86efac; }
+
+    /* CONTENT */
+    .content { flex: 1; display: flex; gap: 0; overflow: hidden; height: 0; }
+    .list-panel { flex: 1; overflow-y: auto; padding: 20px; min-width: 0; height: 100%; }
+    .detail-panel {
+      width: 420px; min-width: 420px; background: #161b22; border-left: 1px solid #21262d;
+      overflow-y: auto; padding: 20px; display: none;
+    }
+    .detail-panel.open { display: block; height: 100%; }
+
+    /* SEARCH */
+    .search-bar { display: flex; gap: 10px; margin-bottom: 20px; }
+    .search-bar input { flex: 1; }
+
+    /* TABLE */
+    table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+    th { text-align: left; padding: 10px 12px; color: #6B7280; border-bottom: 1px solid #21262d; font-weight: 500; white-space: nowrap; }
+    td { padding: 10px 12px; border-bottom: 1px solid #161b22; vertical-align: middle; }
+    tr:hover td { background: #161b22; cursor: pointer; }
+    tr.selected td { background: #162032; }
+
+    /* BADGES */
+    .badge {
+      display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: 600;
+    }
+    .badge-verified { background: #14532d; color: #4ade80; }
+    .badge-rejected { background: #450a0a; color: #f87171; }
+    .badge-pending  { background: #1e3a5f; color: #60a5fa; }
+    .badge-unverified { background: #1f2937; color: #9ca3af; }
+    .badge-admin { background: #14532d; color: #4ade80; }
+
+    /* FORMS */
+    input, select, textarea {
+      background: #0d1117; border: 1px solid #30363d; color: #e0e0e0;
+      padding: 9px 12px; border-radius: 8px; width: 100%; font-size: 0.9rem;
+      outline: none; transition: border-color 0.2s;
+    }
+    input:focus, select:focus { border-color: #22C55E; box-shadow: 0 0 0 2px rgba(34,197,94,0.15); }
+
+    /* BUTTONS */
+    button { cursor: pointer; border: none; border-radius: 8px; font-size: 0.875rem; transition: all 0.2s; font-family: inherit; }
+    .btn-primary { background: linear-gradient(135deg, #16A34A, #0891B2); color: white; padding: 9px 18px; }
+    .btn-primary:hover { opacity: 0.9; transform: translateY(-1px); }
+    .btn-secondary { background: #161b22; color: #e0e0e0; padding: 7px 14px; border: 1px solid #30363d; }
+    .btn-secondary:hover { background: #1f2937; border-color: #22C55E44; }
+    .btn-danger { background: #7f1d1d; color: #fca5a5; padding: 7px 14px; }
+    .btn-danger:hover { background: #991b1b; }
+    .btn-success { background: linear-gradient(135deg, #16A34A, #0891B2); color: white; padding: 7px 14px; }
+    .btn-success:hover { opacity: 0.9; }
+    .btn-warning { background: #422006; color: #fdba74; padding: 7px 14px; }
+    .btn-warning:hover { background: #7c2d12; }
+    .btn-sm { padding: 5px 10px; font-size: 0.8rem; }
+
+    /* DETAIL PANEL ELEMENTS */
+    .detail-section { margin-bottom: 20px; }
+    .detail-section h3 { 
+      color: #4ade80; font-size: 0.8rem; text-transform: uppercase; 
+      letter-spacing: 0.05em; margin-bottom: 10px; font-weight: 600;
+    }
+    .detail-row { display: flex; justify-content: space-between; padding: 5px 0; font-size: 0.875rem; border-bottom: 1px solid #21262d; }
+    .detail-row:last-child { border-bottom: none; }
+    .detail-label { color: #6B7280; }
+    .detail-value { color: #e0e0e0; text-align: right; max-width: 60%; word-break: break-all; }
+
+    .action-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+
+    /* PAGINATION */
+    .pagination { display: flex; gap: 8px; align-items: center; margin-top: 16px; justify-content: center; }
+    .pagination button { padding: 6px 14px; }
+    .page-info { color: #6B7280; font-size: 0.875rem; }
+
+    /* MESSAGES */
+    .msg { padding: 10px 14px; border-radius: 8px; margin-bottom: 12px; font-size: 0.875rem; }
+    .msg-error { background: #450a0a; color: #f87171; border: 1px solid #7f1d1d; }
+    .msg-success { background: #14532d; color: #4ade80; border: 1px solid #166534; }
+
+    .empty { text-align: center; color: #4B5563; padding: 40px; }
+    .loading { text-align: center; color: #6B7280; padding: 40px; }
+
+    /* ONCHAIN */
+    .onchain-box {
+      background: #0d1117; border: 1px solid #22C55E22; border-radius: 8px; padding: 12px;
+      font-size: 0.8rem; font-family: monospace; color: #9ca3af;
+    }
+
+    /* SELECT GROUP */
+    .select-group { display: flex; gap: 8px; align-items: center; }
+    .select-group select { flex: 1; }
+
+    /* Tenants list in user detail */
+    .tenant-item {
+      background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+      padding: 8px 12px; margin-bottom: 6px; font-size: 0.8rem;
+    }
+    .tenant-item-name { color: #e0e0e0; font-weight: 500; }
+    .tenant-item-role { color: #6B7280; }
+
+    #login-error { color: #f87171; font-size: 0.875rem; margin-top: 10px; text-align: center; }
+    #detail-msg { margin-bottom: 10px; }
+
+    .close-btn {
+      background: none; border: none; color: #6B7280; font-size: 1.2rem; cursor: pointer;
+      padding: 4px 8px; border-radius: 4px;
+    }
+    .close-btn:hover { color: #e0e0e0; background: #1f2937; }
+    .detail-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+    .detail-header h2 { font-size: 1rem; color: #e0e0e0; }
+</style>
+</head>
+<body>
+
+<!-- LOGIN SCREEN -->
+<div id="login-screen">
+  <div class="login-box">
+    <h2>&#x1F6E1;&#xFE0F; Admin Panel</h2>
+    <div style="margin-bottom:14px">
+      <label style="color:#888;font-size:0.8rem;display:block;margin-bottom:5px">Email</label>
+      <input type="email" id="login-email" placeholder="admin@taler.id" />
+    </div>
+    <div style="margin-bottom:20px">
+      <label style="color:#888;font-size:0.8rem;display:block;margin-bottom:5px">Password</label>
+      <input type="password" id="login-password" placeholder="&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;" />
+    </div>
+    <button class="btn-primary" style="width:100%;padding:12px" onclick="doLogin()">&#x0412;&#x043E;&#x0439;&#x0442;&#x0438;</button>
+    <div id="login-error"></div>
+  </div>
+</div>
+
+<!-- MAIN APP -->
+<div id="app">
+  <header>
+    <h1>&#x1F6E1;&#xFE0F; Taler ID &#x2014; Admin Panel</h1>
+    <div class="header-right">
+      <span id="admin-email-display" style="color:#888;font-size:0.875rem"></span>
+      <button class="btn-secondary btn-sm" onclick="doLogout()">&#x0412;&#x044B;&#x0439;&#x0442;&#x0438;</button>
+    </div>
+  </header>
+
+  <div class="tabs">
+    <button class="tab-btn active" id="tab-users-btn" onclick="switchTab('users')">&#x1F464; &#x041F;&#x043E;&#x043B;&#x044C;&#x0437;&#x043E;&#x0432;&#x0430;&#x0442;&#x0435;&#x043B;&#x0438;</button>
+    <button class="tab-btn" id="tab-tenants-btn" onclick="switchTab('tenants')">&#x1F3E2; &#x041E;&#x0440;&#x0433;&#x0430;&#x043D;&#x0438;&#x0437;&#x0430;&#x0446;&#x0438;&#x0438;</button>
+  </div>
+
+  <div class="content">
+    <!-- LIST PANEL -->
+    <div class="list-panel">
+      <!-- Users Tab -->
+      <div id="tab-users">
+        <div class="search-bar">
+          <input type="text" id="users-search" placeholder="&#x041F;&#x043E;&#x0438;&#x0441;&#x043A; &#x043F;&#x043E; email &#x0438;&#x043B;&#x0438; &#x0442;&#x0435;&#x043B;&#x0435;&#x0444;&#x043E;&#x043D;&#x0443;..." onkeydown="if(event.key==='Enter')loadUsers()" />
+          <button class="btn-primary" onclick="loadUsers()">&#x041D;&#x0430;&#x0439;&#x0442;&#x0438;</button>
+          <button class="btn-secondary" onclick="document.getElementById('users-search').value='';loadUsers()">&#x2715;</button>
+        </div>
+        <div id="users-table-container"><div class="loading">&#x0417;&#x0430;&#x0433;&#x0440;&#x0443;&#x0437;&#x043A;&#x0430;...</div></div>
+        <div class="pagination" id="users-pagination"></div>
+      </div>
+
+      <!-- Tenants Tab -->
+      <div id="tab-tenants" style="display:none">
+        <div class="search-bar">
+          <input type="text" id="tenants-search" placeholder="&#x041F;&#x043E;&#x0438;&#x0441;&#x043A; &#x043F;&#x043E; &#x043D;&#x0430;&#x0437;&#x0432;&#x0430;&#x043D;&#x0438;&#x044E;..." onkeydown="if(event.key==='Enter')loadTenants()" />
+          <button class="btn-primary" onclick="loadTenants()">&#x041D;&#x0430;&#x0439;&#x0442;&#x0438;</button>
+          <button class="btn-secondary" onclick="document.getElementById('tenants-search').value='';loadTenants()">&#x2715;</button>
+        </div>
+        <div id="tenants-table-container"><div class="loading">&#x0417;&#x0430;&#x0433;&#x0440;&#x0443;&#x0437;&#x043A;&#x0430;...</div></div>
+        <div class="pagination" id="tenants-pagination"></div>
+      </div>
+    </div>
+
+    <!-- DETAIL PANEL -->
+    <div class="detail-panel" id="detail-panel">
+      <div id="detail-msg"></div>
+      <div id="detail-content"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '';
+let adminToken = localStorage.getItem('admin_token');
+let currentTab = 'users';
+let usersPage = 1;
+let tenantsPage = 1;
+let selectedUserId = null;
+let selectedTenantId = null;
+
+// ─── AUTH ───────────────────────────────────────────────────────────────────
+
+async function adminFetch(path, opts = {}) {
+  const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+  if (adminToken) headers['Authorization'] = 'Bearer ' + adminToken;
+  const res = await fetch(API + path, { ...opts, headers });
+  if (res.status === 401) { doLogout(); throw new Error('Unauthorized'); }
+  return res;
+}
+
+async function doLogin() {
+  const email = document.getElementById('login-email').value.trim();
+  const password = document.getElementById('login-password').value;
+  document.getElementById('login-error').textContent = '';
+  try {
+    const res = await fetch(API + '/admin/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || 'Login failed');
+    adminToken = data.token;
+    localStorage.setItem('admin_token', adminToken);
+    // Decode email from JWT
+    try {
+      const payload = JSON.parse(atob(adminToken.split('.')[1]));
+      document.getElementById('admin-email-display').textContent = payload.email || '';
+    } catch {}
+    showApp();
+  } catch (e) {
+    document.getElementById('login-error').textContent = e.message;
+  }
+}
+
+function doLogout() {
+  adminToken = null;
+  localStorage.removeItem('admin_token');
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('login-screen').style.display = 'flex';
+  document.getElementById('login-password').value = '';
+}
+
+function showApp() {
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('app').style.display = 'flex';
+  loadUsers();
+}
+
+// ─── TABS ────────────────────────────────────────────────────────────────────
+
+function switchTab(tab) {
+  currentTab = tab;
+  document.getElementById('tab-users').style.display = tab === 'users' ? 'block' : 'none';
+  document.getElementById('tab-tenants').style.display = tab === 'tenants' ? 'block' : 'none';
+  document.getElementById('tab-users-btn').classList.toggle('active', tab === 'users');
+  document.getElementById('tab-tenants-btn').classList.toggle('active', tab === 'tenants');
+  closeDetail();
+  if (tab === 'users') loadUsers();
+  if (tab === 'tenants') loadTenants();
+}
+
+function closeDetail() {
+  document.getElementById('detail-panel').classList.remove('open');
+  selectedUserId = null;
+  selectedTenantId = null;
+  document.querySelectorAll('tr.selected').forEach(r => r.classList.remove('selected'));
+}
+
+// ─── USERS ───────────────────────────────────────────────────────────────────
+
+async function loadUsers(page) {
+  if (page) usersPage = page;
+  const search = document.getElementById('users-search').value.trim();
+  const container = document.getElementById('users-table-container');
+  container.innerHTML = '<div class="loading">&#x0417;&#x0430;&#x0433;&#x0440;&#x0443;&#x0437;&#x043A;&#x0430;...</div>';
+  try {
+    const res = await adminFetch(`/admin/users?search=${encodeURIComponent(search)}&page=${usersPage}&limit=25`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message);
+    renderUsersTable(data);
+  } catch (e) {
+    container.innerHTML = `<div class="msg msg-error">${e.message}</div>`;
+  }
+}
+
+function kycBadge(status) {
+  const map = { VERIFIED: 'verified', REJECTED: 'rejected', PENDING: 'pending', UNVERIFIED: 'unverified' };
+  return `<span class="badge badge-${map[status] || 'unverified'}">${status || 'UNVERIFIED'}</span>`;
+}
+
+function renderUsersTable(data) {
+  const { users, data: rows, total, page, limit } = data;
+  const items = rows || users || [];
+  if (!items.length) {
+    document.getElementById('users-table-container').innerHTML = '<div class="empty">&#x041F;&#x043E;&#x043B;&#x044C;&#x0437;&#x043E;&#x0432;&#x0430;&#x0442;&#x0435;&#x043B;&#x0438; &#x043D;&#x0435; &#x043D;&#x0430;&#x0439;&#x0434;&#x0435;&#x043D;&#x044B;</div>';
+    document.getElementById('users-pagination').innerHTML = '';
+    return;
+  }
+  let html = `<table>
+    <thead><tr>
+      <th>Email</th><th>KYC</th><th>Email &#x2713;</th><th>&#x0420;&#x043E;&#x043B;&#x044C;</th><th>&#x0421;&#x043E;&#x0437;&#x0434;&#x0430;&#x043D;</th><th>&#x0421;&#x0442;&#x0430;&#x0442;&#x0443;&#x0441;</th>
+    </tr></thead><tbody>`;
+  for (const u of items) {
+    const created = new Date(u.createdAt).toLocaleDateString('ru');
+    const deleted = u.deletedAt ? '<span style="color:#f87171">&#x0423;&#x0434;&#x0430;&#x043B;&#x0451;&#x043D;</span>' : '<span style="color:#4ade80">&#x0410;&#x043A;&#x0442;&#x0438;&#x0432;&#x0435;&#x043D;</span>';
+    const adminBadge = u.isAdmin ? '<span class="badge badge-admin" style="margin-left:4px">admin</span>' : '';
+    html += `<tr onclick="openUserDetail('${u.id}')" id="user-row-${u.id}">
+      <td>${u.email || '&#x2014;'}${adminBadge}</td>
+      <td>${kycBadge(u.kycStatus)}</td>
+      <td>${u.emailVerified ? '&#x2705;' : '&#x274C;'}</td>
+      <td>${u.isAdmin ? '&#x1F451;' : '&#x1F464;'}</td>
+      <td>${created}</td>
+      <td>${deleted}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  document.getElementById('users-table-container').innerHTML = html;
+  renderPagination('users-pagination', page, Math.ceil(total / (limit || 25)), loadUsers);
+}
+
+async function openUserDetail(userId) {
+  selectedUserId = userId;
+  document.querySelectorAll('tr.selected').forEach(r => r.classList.remove('selected'));
+  const row = document.getElementById('user-row-' + userId);
+  if (row) row.classList.add('selected');
+
+  const panel = document.getElementById('detail-panel');
+  panel.classList.add('open');
+  document.getElementById('detail-msg').innerHTML = '';
+  document.getElementById('detail-content').innerHTML = '<div class="loading">&#x0417;&#x0430;&#x0433;&#x0440;&#x0443;&#x0437;&#x043A;&#x0430;...</div>';
+
+  try {
+    const res = await adminFetch('/admin/users/' + userId);
+    const u = await res.json();
+    if (!res.ok) throw new Error(u.message);
+
+    const onChain = u.onChain;
+    const onChainHtml = onChain
+      ? `<div class="onchain-box">kycStatus: ${onChain.kycStatus} | kybStatus: ${onChain.kybStatus} | isActive: ${onChain.isActive} | ts: ${onChain.kycTimestamp ? new Date(onChain.kycTimestamp * 1000).toLocaleString('ru') : '&#x2014;'}</div>`
+      : '<div style="color:#666;font-size:0.8rem">&#x041D;&#x0435;&#x0442; &#x0434;&#x0430;&#x043D;&#x043D;&#x044B;&#x0445; &#x0432; &#x0431;&#x043B;&#x043E;&#x043A;&#x0447;&#x0435;&#x0439;&#x043D;&#x0435;</div>';
+
+    const tenantsHtml = u.tenants && u.tenants.length
+      ? u.tenants.map(t => `<div class="tenant-item"><div class="tenant-item-name">${t.name}</div><div class="tenant-item-role">${t.role} | KYB: ${t.kybStatus || 'N/A'}</div></div>`).join('')
+      : '<div style="color:#666;font-size:0.8rem">&#x041D;&#x0435;&#x0442; &#x043E;&#x0440;&#x0433;&#x0430;&#x043D;&#x0438;&#x0437;&#x0430;&#x0446;&#x0438;&#x0439;</div>';
+
+    document.getElementById('detail-content').innerHTML = `
+      <div class="detail-header">
+        <h2>&#x1F464; &#x041F;&#x043E;&#x043B;&#x044C;&#x0437;&#x043E;&#x0432;&#x0430;&#x0442;&#x0435;&#x043B;&#x044C;</h2>
+        <button class="close-btn" onclick="closeDetail()">&#x2715;</button>
+      </div>
+
+      <div class="detail-section">
+        <h3>&#x041E;&#x0441;&#x043D;&#x043E;&#x0432;&#x043D;&#x044B;&#x0435; &#x0434;&#x0430;&#x043D;&#x043D;&#x044B;&#x0435;</h3>
+        <div class="detail-row"><span class="detail-label">ID</span><span class="detail-value" style="font-size:0.75rem">${u.id}</span></div>
+        <div class="detail-row"><span class="detail-label">Email</span><span class="detail-value">${u.email || '&#x2014;'}</span></div>
+        <div class="detail-row"><span class="detail-label">Email &#x0432;&#x0435;&#x0440;&#x0438;&#x0444;&#x0438;&#x0446;&#x0438;&#x0440;&#x043E;&#x0432;&#x0430;&#x043D;</span><span class="detail-value">${u.emailVerified ? '&#x2705; &#x0414;&#x0430;' : '&#x274C; &#x041D;&#x0435;&#x0442;'}</span></div>
+        <div class="detail-row"><span class="detail-label">&#x0422;&#x0435;&#x043B;&#x0435;&#x0444;&#x043E;&#x043D;</span><span class="detail-value">${u.phone || '&#x2014;'}</span></div>
+        <div class="detail-row"><span class="detail-label">&#x0421;&#x043E;&#x0437;&#x0434;&#x0430;&#x043D;</span><span class="detail-value">${new Date(u.createdAt).toLocaleString('ru')}</span></div>
+        <div class="detail-row"><span class="detail-label">&#x0421;&#x0442;&#x0430;&#x0442;&#x0443;&#x0441; &#x0430;&#x043A;&#x043A;&#x0430;&#x0443;&#x043D;&#x0442;&#x0430;</span><span class="detail-value">${u.deletedAt ? '&#x1F6AB; &#x0423;&#x0434;&#x0430;&#x043B;&#x0451;&#x043D;' : '&#x2705; &#x0410;&#x043A;&#x0442;&#x0438;&#x0432;&#x0435;&#x043D;'}</span></div>
+        <div class="detail-row"><span class="detail-label">Admin</span><span class="detail-value">${u.isAdmin ? '&#x2705; &#x0414;&#x0430;' : '&#x041D;&#x0435;&#x0442;'}</span></div>
+      </div>
+
+      <div class="detail-section">
+        <h3>KYC &#x0441;&#x0442;&#x0430;&#x0442;&#x0443;&#x0441;</h3>
+        <div style="margin-bottom:8px">${kycBadge(u.kycStatus)}</div>
+        <div class="select-group">
+          <select id="kyc-select">
+            <option ${u.kycStatus==='UNVERIFIED'?'selected':''}>UNVERIFIED</option>
+            <option ${u.kycStatus==='PENDING'?'selected':''}>PENDING</option>
+            <option ${u.kycStatus==='VERIFIED'?'selected':''}>VERIFIED</option>
+            <option ${u.kycStatus==='REJECTED'?'selected':''}>REJECTED</option>
+          </select>
+          <button class="btn-secondary btn-sm" onclick="doUpdateKyc('${u.id}')">&#x0421;&#x043E;&#x0445;&#x0440;&#x0430;&#x043D;&#x0438;&#x0442;&#x044C;</button>
+        </div>
+      </div>
+
+      <div class="detail-section">
+        <h3>&#x0411;&#x043B;&#x043E;&#x043A;&#x0447;&#x0435;&#x0439;&#x043D;</h3>
+        ${onChainHtml}
+        <div class="action-row" style="margin-top:10px">
+          <button class="btn-success btn-sm" onclick="doAttest('${u.id}', 2)">&#x2705; &#x0417;&#x0430;&#x043F;&#x0438;&#x0441;&#x0430;&#x0442;&#x044C; VERIFIED</button>
+          <button class="btn-warning btn-sm" onclick="doAttest('${u.id}', 3)">&#x274C; &#x0417;&#x0430;&#x043F;&#x0438;&#x0441;&#x0430;&#x0442;&#x044C; REJECTED</button>
+          <button class="btn-danger btn-sm" onclick="doRevoke('${u.id}')">&#x1F5D1; &#x041E;&#x0442;&#x043E;&#x0437;&#x0432;&#x0430;&#x0442;&#x044C;</button>
+        </div>
+      </div>
+
+      <div class="detail-section">
+        <h3>&#x041E;&#x0440;&#x0433;&#x0430;&#x043D;&#x0438;&#x0437;&#x0430;&#x0446;&#x0438;&#x0438; (${u.tenants ? u.tenants.length : 0})</h3>
+        ${tenantsHtml}
+      </div>
+
+      <div class="detail-section">
+        <h3>&#x0414;&#x0435;&#x0439;&#x0441;&#x0442;&#x0432;&#x0438;&#x044F; &#x0441; &#x0430;&#x043A;&#x043A;&#x0430;&#x0443;&#x043D;&#x0442;&#x043E;&#x043C;</h3>
+        <div class="action-row">
+          ${u.deletedAt
+            ? `<button class="btn-success btn-sm" onclick="doUnblock('${u.id}')">&#x267B;&#xFE0F; &#x0420;&#x0430;&#x0437;&#x0431;&#x043B;&#x043E;&#x043A;&#x0438;&#x0440;&#x043E;&#x0432;&#x0430;&#x0442;&#x044C;</button>`
+            : `<button class="btn-danger btn-sm" onclick="doDeleteUser('${u.id}')">&#x1F5D1; &#x0423;&#x0434;&#x0430;&#x043B;&#x0438;&#x0442;&#x044C; &#x0430;&#x043A;&#x043A;&#x0430;&#x0443;&#x043D;&#x0442;</button>`
+          }
+        </div>
+      </div>
+    `;
+  } catch (e) {
+    document.getElementById('detail-content').innerHTML = `<div class="msg msg-error">${e.message}</div>`;
+  }
+}
+
+async function doUpdateKyc(userId) {
+  const status = document.getElementById('kyc-select').value;
+  try {
+    const res = await adminFetch(`/admin/users/${userId}/kyc-status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message);
+    showDetailMsg('KYC &#x0441;&#x0442;&#x0430;&#x0442;&#x0443;&#x0441; &#x043E;&#x0431;&#x043D;&#x043E;&#x0432;&#x043B;&#x0451;&#x043D;: ' + status, 'success');
+    loadUsers();
+    openUserDetail(userId);
+  } catch (e) {
+    showDetailMsg(e.message, 'error');
+  }
+}
+
+async function doAttest(userId, kycStatus) {
+  if (!confirm(`Записать в блокчейн kycStatus=${kycStatus}?`)) return;
+  try {
+    const res = await adminFetch(`/admin/users/${userId}/blockchain/attest`, {
+      method: 'POST',
+      body: JSON.stringify({ kycStatus }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message);
+    showDetailMsg('&#x0417;&#x0430;&#x043F;&#x0438;&#x0441;&#x0430;&#x043D;&#x043E; &#x0432; &#x0431;&#x043B;&#x043E;&#x043A;&#x0447;&#x0435;&#x0439;&#x043D; &#x2713;', 'success');
+    setTimeout(() => openUserDetail(userId), 2000);
+  } catch (e) {
+    showDetailMsg('&#x041E;&#x0448;&#x0438;&#x0431;&#x043A;&#x0430;: ' + e.message, 'error');
+  }
+}
+
+async function doRevoke(userId) {
+  if (!confirm('Отозвать блокчейн запись?')) return;
+  try {
+    const res = await adminFetch(`/admin/users/${userId}/blockchain/revoke`, { method: 'POST', body: '{}' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message);
+    showDetailMsg('&#x0417;&#x0430;&#x043F;&#x0438;&#x0441;&#x044C; &#x043E;&#x0442;&#x043E;&#x0437;&#x0432;&#x0430;&#x043D;&#x0430; &#x2713;', 'success');
+    setTimeout(() => openUserDetail(userId), 2000);
+  } catch (e) {
+    showDetailMsg('&#x041E;&#x0448;&#x0438;&#x0431;&#x043A;&#x0430;: ' + e.message, 'error');
+  }
+}
+
+async function doDeleteUser(userId) {
+  if (!confirm('Удалить аккаунт пользователя? (мягкое удаление)')) return;
+  try {
+    const res = await adminFetch(`/admin/users/${userId}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message);
+    showDetailMsg('&#x0410;&#x043A;&#x043A;&#x0430;&#x0443;&#x043D;&#x0442; &#x0443;&#x0434;&#x0430;&#x043B;&#x0451;&#x043D;', 'success');
+    loadUsers();
+    setTimeout(() => openUserDetail(userId), 1000);
+  } catch (e) {
+    showDetailMsg('&#x041E;&#x0448;&#x0438;&#x0431;&#x043A;&#x0430;: ' + e.message, 'error');
+  }
+}
+
+async function doUnblock(userId) {
+  try {
+    const res = await adminFetch(`/admin/users/${userId}/unblock`, { method: 'POST', body: '{}' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message);
+    showDetailMsg('&#x0410;&#x043A;&#x043A;&#x0430;&#x0443;&#x043D;&#x0442; &#x0432;&#x043E;&#x0441;&#x0441;&#x0442;&#x0430;&#x043D;&#x043E;&#x0432;&#x043B;&#x0435;&#x043D; &#x2713;', 'success');
+    loadUsers();
+    setTimeout(() => openUserDetail(userId), 1000);
+  } catch (e) {
+    showDetailMsg('&#x041E;&#x0448;&#x0438;&#x0431;&#x043A;&#x0430;: ' + e.message, 'error');
+  }
+}
+
+// ─── TENANTS ─────────────────────────────────────────────────────────────────
+
+async function loadTenants(page) {
+  if (page) tenantsPage = page;
+  const search = document.getElementById('tenants-search').value.trim();
+  const container = document.getElementById('tenants-table-container');
+  container.innerHTML = '<div class="loading">&#x0417;&#x0430;&#x0433;&#x0440;&#x0443;&#x0437;&#x043A;&#x0430;...</div>';
+  try {
+    const res = await adminFetch(`/admin/tenants?search=${encodeURIComponent(search)}&page=${tenantsPage}&limit=25`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message);
+    renderTenantsTable(data);
+  } catch (e) {
+    container.innerHTML = `<div class="msg msg-error">${e.message}</div>`;
+  }
+}
+
+function renderTenantsTable(data) {
+  const items = data.data || [];
+  if (!items.length) {
+    document.getElementById('tenants-table-container').innerHTML = '<div class="empty">&#x041E;&#x0440;&#x0433;&#x0430;&#x043D;&#x0438;&#x0437;&#x0430;&#x0446;&#x0438;&#x0438; &#x043D;&#x0435; &#x043D;&#x0430;&#x0439;&#x0434;&#x0435;&#x043D;&#x044B;</div>';
+    document.getElementById('tenants-pagination').innerHTML = '';
+    return;
+  }
+  let html = `<table>
+    <thead><tr>
+      <th>&#x041D;&#x0430;&#x0437;&#x0432;&#x0430;&#x043D;&#x0438;&#x0435;</th><th>KYB</th><th>&#x0412;&#x043B;&#x0430;&#x0434;&#x0435;&#x043B;&#x0435;&#x0446;</th><th>&#x0423;&#x0447;&#x0430;&#x0441;&#x0442;&#x043D;&#x0438;&#x043A;&#x043E;&#x0432;</th><th>&#x0421;&#x043E;&#x0437;&#x0434;&#x0430;&#x043D;&#x0430;</th>
+    </tr></thead><tbody>`;
+  for (const t of items) {
+    const created = new Date(t.createdAt).toLocaleDateString('ru');
+    html += `<tr onclick="openTenantDetail('${t.id}')" id="tenant-row-${t.id}">
+      <td>${t.name}</td>
+      <td>${kycBadge(t.kybStatus)}</td>
+      <td style="font-size:0.8rem;color:#aaa">${t.owner ? t.owner.email : '&#x2014;'}</td>
+      <td>${t.memberCount}</td>
+      <td>${created}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  document.getElementById('tenants-table-container').innerHTML = html;
+  renderPagination('tenants-pagination', data.page, Math.ceil(data.total / 25), loadTenants);
+}
+
+async function openTenantDetail(tenantId) {
+  selectedTenantId = tenantId;
+  document.querySelectorAll('tr.selected').forEach(r => r.classList.remove('selected'));
+  const row = document.getElementById('tenant-row-' + tenantId);
+  if (row) row.classList.add('selected');
+
+  const panel = document.getElementById('detail-panel');
+  panel.classList.add('open');
+  document.getElementById('detail-msg').innerHTML = '';
+  document.getElementById('detail-content').innerHTML = '<div class="loading">&#x0417;&#x0430;&#x0433;&#x0440;&#x0443;&#x0437;&#x043A;&#x0430;...</div>';
+
+  try {
+    const res = await adminFetch('/admin/tenants/' + tenantId);
+    const t = await res.json();
+    if (!res.ok) throw new Error(t.message);
+
+    const onChain = t.ownerOnChain;
+    const onChainHtml = onChain
+      ? `<div class="onchain-box">kybStatus: ${onChain.kybStatus} | kycStatus: ${onChain.kycStatus} | isActive: ${onChain.isActive}</div>`
+      : '<div style="color:#666;font-size:0.8rem">&#x041D;&#x0435;&#x0442; &#x0434;&#x0430;&#x043D;&#x043D;&#x044B;&#x0445; &#x0432; &#x0431;&#x043B;&#x043E;&#x043A;&#x0447;&#x0435;&#x0439;&#x043D;&#x0435;</div>';
+
+    const membersHtml = (t.members || []).map(m =>
+      `<div class="tenant-item"><div class="tenant-item-name">${m.user ? m.user.email : m.userId}</div><div class="tenant-item-role">${m.role}</div></div>`
+    ).join('');
+
+    document.getElementById('detail-content').innerHTML = `
+      <div class="detail-header">
+        <h2>&#x1F3E2; &#x041E;&#x0440;&#x0433;&#x0430;&#x043D;&#x0438;&#x0437;&#x0430;&#x0446;&#x0438;&#x044F;</h2>
+        <button class="close-btn" onclick="closeDetail()">&#x2715;</button>
+      </div>
+
+      <div class="detail-section">
+        <h3>&#x041E;&#x0441;&#x043D;&#x043E;&#x0432;&#x043D;&#x044B;&#x0435; &#x0434;&#x0430;&#x043D;&#x043D;&#x044B;&#x0435;</h3>
+        <div class="detail-row"><span class="detail-label">ID</span><span class="detail-value" style="font-size:0.75rem">${t.id}</span></div>
+        <div class="detail-row"><span class="detail-label">&#x041D;&#x0430;&#x0437;&#x0432;&#x0430;&#x043D;&#x0438;&#x0435;</span><span class="detail-value">${t.name}</span></div>
+        <div class="detail-row"><span class="detail-label">&#x0421;&#x043E;&#x0437;&#x0434;&#x0430;&#x043D;&#x0430;</span><span class="detail-value">${new Date(t.createdAt).toLocaleString('ru')}</span></div>
+      </div>
+
+      <div class="detail-section">
+        <h3>KYB &#x0441;&#x0442;&#x0430;&#x0442;&#x0443;&#x0441;</h3>
+        <div style="margin-bottom:8px">${kycBadge(t.kybStatus)}</div>
+        <div class="select-group">
+          <select id="kyb-select">
+            <option ${t.kybStatus==='UNVERIFIED'?'selected':''}>UNVERIFIED</option>
+            <option ${t.kybStatus==='PENDING'?'selected':''}>PENDING</option>
+            <option ${t.kybStatus==='VERIFIED'?'selected':''}>VERIFIED</option>
+            <option ${t.kybStatus==='REJECTED'?'selected':''}>REJECTED</option>
+          </select>
+          <button class="btn-secondary btn-sm" onclick="doUpdateKyb('${t.id}')">&#x0421;&#x043E;&#x0445;&#x0440;&#x0430;&#x043D;&#x0438;&#x0442;&#x044C;</button>
+        </div>
+      </div>
+
+      <div class="detail-section">
+        <h3>&#x0411;&#x043B;&#x043E;&#x043A;&#x0447;&#x0435;&#x0439;&#x043D; (&#x0432;&#x043B;&#x0430;&#x0434;&#x0435;&#x043B;&#x0435;&#x0446;)</h3>
+        ${onChainHtml}
+        <div class="action-row" style="margin-top:10px">
+          <button class="btn-success btn-sm" onclick="doAttestTenant('${t.id}')">&#x2705; Attestировать KYB</button>
+        </div>
+      </div>
+
+      <div class="detail-section">
+        <h3>&#x0423;&#x0447;&#x0430;&#x0441;&#x0442;&#x043D;&#x0438;&#x043A;&#x0438; (${t.members ? t.members.length : 0})</h3>
+        ${membersHtml || '<div style="color:#666;font-size:0.8rem">&#x041D;&#x0435;&#x0442; &#x0443;&#x0447;&#x0430;&#x0441;&#x0442;&#x043D;&#x0438;&#x043A;&#x043E;&#x0432;</div>'}
+      </div>
+
+      <div class="detail-section">
+        <h3>&#x0414;&#x0435;&#x0439;&#x0441;&#x0442;&#x0432;&#x0438;&#x044F;</h3>
+        <div class="action-row">
+          <button class="btn-danger btn-sm" onclick="doDeleteTenant('${t.id}')">&#x1F5D1; &#x0423;&#x0434;&#x0430;&#x043B;&#x0438;&#x0442;&#x044C; &#x043E;&#x0440;&#x0433;&#x0430;&#x043D;&#x0438;&#x0437;&#x0430;&#x0446;&#x0438;&#x044E;</button>
+        </div>
+      </div>
+    `;
+  } catch (e) {
+    document.getElementById('detail-content').innerHTML = `<div class="msg msg-error">${e.message}</div>`;
+  }
+}
+
+async function doUpdateKyb(tenantId) {
+  const status = document.getElementById('kyb-select').value;
+  try {
+    const res = await adminFetch(`/admin/tenants/${tenantId}/kyb-status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message);
+    showDetailMsg('KYB &#x0441;&#x0442;&#x0430;&#x0442;&#x0443;&#x0441; &#x043E;&#x0431;&#x043D;&#x043E;&#x0432;&#x043B;&#x0451;&#x043D;: ' + status, 'success');
+    loadTenants();
+    openTenantDetail(tenantId);
+  } catch (e) {
+    showDetailMsg(e.message, 'error');
+  }
+}
+
+async function doAttestTenant(tenantId) {
+  if (!confirm('Записать KYB в блокчейн?')) return;
+  try {
+    const res = await adminFetch(`/admin/tenants/${tenantId}/blockchain/attest`, { method: 'POST', body: '{}' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message);
+    showDetailMsg('KYB &#x0437;&#x0430;&#x043F;&#x0438;&#x0441;&#x0430;&#x043D; &#x0432; &#x0431;&#x043B;&#x043E;&#x043A;&#x0447;&#x0435;&#x0439;&#x043D; &#x2713;', 'success');
+    setTimeout(() => openTenantDetail(tenantId), 2000);
+  } catch (e) {
+    showDetailMsg('&#x041E;&#x0448;&#x0438;&#x0431;&#x043A;&#x0430;: ' + e.message, 'error');
+  }
+}
+
+async function doDeleteTenant(tenantId) {
+  if (!confirm('Удалить организацию? Это действие необратимо!')) return;
+  try {
+    const res = await adminFetch(`/admin/tenants/${tenantId}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message);
+    showDetailMsg('&#x041E;&#x0440;&#x0433;&#x0430;&#x043D;&#x0438;&#x0437;&#x0430;&#x0446;&#x0438;&#x044F; &#x0443;&#x0434;&#x0430;&#x043B;&#x0435;&#x043D;&#x0430;', 'success');
+    loadTenants();
+    closeDetail();
+  } catch (e) {
+    showDetailMsg('&#x041E;&#x0448;&#x0438;&#x0431;&#x043A;&#x0430;: ' + e.message, 'error');
+  }
+}
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+
+function showDetailMsg(text, type) {
+  document.getElementById('detail-msg').innerHTML =
+    `<div class="msg msg-${type === 'success' ? 'success' : 'error'}">${text}</div>`;
+  setTimeout(() => { document.getElementById('detail-msg').innerHTML = ''; }, 4000);
+}
+
+function renderPagination(containerId, currentPage, totalPages, loadFn) {
+  const container = document.getElementById(containerId);
+  if (totalPages <= 1) { container.innerHTML = ''; return; }
+  let html = '';
+  if (currentPage > 1) html += `<button class="btn-secondary btn-sm" onclick="${loadFn.name}(${currentPage - 1})">&#x2190; &#x041D;&#x0430;&#x0437;&#x0430;&#x0434;</button>`;
+  html += `<span class="page-info">&#x0421;&#x0442;&#x0440;&#x0430;&#x043D;&#x0438;&#x0446;&#x0430; ${currentPage} &#x0438;&#x0437; ${totalPages}</span>`;
+  if (currentPage < totalPages) html += `<button class="btn-secondary btn-sm" onclick="${loadFn.name}(${currentPage + 1})">&#x0412;&#x043F;&#x0435;&#x0440;&#x0451;&#x0434; &#x2192;</button>`;
+  container.innerHTML = html;
+}
+
+// ─── INIT ─────────────────────────────────────────────────────────────────────
+
+if (adminToken) {
+  try {
+    const payload = JSON.parse(atob(adminToken.split('.')[1]));
+    if (payload.isAdmin && payload.exp > Date.now() / 1000) {
+      document.getElementById('admin-email-display').textContent = payload.email || '';
+      showApp();
+    } else {
+      doLogout();
+    }
+  } catch {
+    doLogout();
+  }
+}
+</script>
+</body>
+</html>

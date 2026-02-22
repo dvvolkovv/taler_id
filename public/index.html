@@ -2,1278 +2,1351 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="description" content="Taler ID — Identity Provider for the Taler ecosystem. Secure authentication, KYC verification, and OAuth 2.0 access management.">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="description" content="Taler ID — Identity Provider for the Taler ecosystem.">
+<meta name="theme-color" content="#0F0F1A">
 <title>Taler ID</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%230071e3'/><text x='50%25' y='50%25' dominant-baseline='central' text-anchor='middle' fill='white' font-size='20' font-weight='700' font-family='sans-serif'>T</text></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%2322C55E'/><text x='50%25' y='50%25' dominant-baseline='central' text-anchor='middle' fill='%23000' font-size='18' font-weight='700' font-family='sans-serif'>T</text></svg>">
 <script src="https://static.sumsub.com/idensic/static/sns-websdk-builder.js"></script>
 <style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f7; color: #1d1d1f; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
-  .container { width: 100%; max-width: 400px; padding: 16px; }
-  .card { background: white; border-radius: 18px; padding: 40px 32px; box-shadow: 0 4px 24px rgba(0,0,0,0.08); }
-  .logo { text-align: center; margin-bottom: 32px; }
-  .logo h1 { font-size: 28px; font-weight: 700; color: #0071e3; }
-  .logo p { font-size: 14px; color: #86868b; margin-top: 4px; }
-  .form-group { margin-bottom: 16px; }
-  label { display: block; font-size: 13px; font-weight: 500; color: #1d1d1f; margin-bottom: 6px; cursor: text; }
-  input { width: 100%; padding: 12px 16px; border: 1px solid #d2d2d7; border-radius: 10px; font-size: 15px; outline: none; transition: border-color 0.2s; }
-  input:focus { border-color: #0071e3; box-shadow: 0 0 0 3px rgba(0,113,227,0.1); }
-  .btn { width: 100%; padding: 13px; background: #0071e3; color: white; border: none; border-radius: 10px; font-size: 15px; font-weight: 600; cursor: pointer; transition: background 0.2s; margin-top: 8px; }
-  .btn:hover { background: #0077ed; }
-  .btn:disabled { background: #d2d2d7; cursor: not-allowed; }
-  .btn-secondary { background: transparent; color: #0071e3; border: 1px solid #0071e3; margin-top: 12px; }
-  .btn-secondary:hover { background: rgba(0,113,227,0.05); }
-  .btn-danger { background: #ff3b30; }
-  .btn-danger:hover { background: #ff453a; }
-  .btn-sm { padding: 6px 14px; font-size: 13px; font-weight: 500; border-radius: 8px; border: none; cursor: pointer; margin-top: 0; width: auto; display: inline-block; }
-  .btn-sm-primary { background: #0071e3; color: white; }
-  .btn-sm-primary:hover { background: #0077ed; }
-  .btn-sm-danger { background: none; border: none; color: #ff3b30; font-size: 13px; cursor: pointer; font-weight: 500; }
-  .error { background: #fff0f0; border: 1px solid #ffcdd2; color: #c62828; padding: 12px 16px; border-radius: 10px; font-size: 14px; margin-bottom: 16px; display: none; }
-  .success { background: #f0fff4; border: 1px solid #c8e6c9; color: #1b5e20; padding: 12px 16px; border-radius: 10px; font-size: 14px; margin-bottom: 16px; display: none; }
-  .link { text-align: center; font-size: 14px; margin-top: 16px; color: #86868b; }
-  .link a { color: #0071e3; text-decoration: none; font-weight: 500; cursor: pointer; }
-  .badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
-  .badge-verified { background: #e8f5e9; color: #2e7d32; }
-  .badge-unverified { background: #fff3e0; color: #e65100; }
-  .badge-pending { background: #e3f2fd; color: #1565c0; }
-  .badge-rejected { background: #ffebee; color: #b71c1c; }
-  .profile-header { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; }
-  .avatar { width: 60px; height: 60px; border-radius: 50%; background: #0071e3; color: white; display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: 700; flex-shrink: 0; }
-  .profile-info { min-width: 0; }
-  .profile-info h2 { font-size: 20px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .profile-info p { font-size: 14px; color: #86868b; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .section { margin-bottom: 24px; }
-  .section h3 { font-size: 13px; font-weight: 600; color: #86868b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
-  .info-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #f2f2f7; gap: 8px; }
-  .info-row:last-child { border-bottom: none; }
-  .info-label { font-size: 14px; color: #86868b; flex-shrink: 0; }
-  .info-value { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
-  .session-item { background: #f5f5f7; border-radius: 10px; padding: 12px 16px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
-  .session-info { font-size: 13px; min-width: 0; flex: 1; }
-  .session-info .device { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .session-info .date { color: #86868b; margin-top: 2px; }
-  .session-revoke { background: none; border: none; color: #ff3b30; font-size: 13px; cursor: pointer; font-weight: 500; flex-shrink: 0; margin-left: 8px; }
-  .nav { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 24px; }
-  .nav button { flex: 1; padding: 8px; background: #f5f5f7; border: none; border-radius: 8px; font-size: 13px; cursor: pointer; color: #1d1d1f; }
-  .nav button.active { background: #0071e3; color: white; }
-  .page { display: none; }
-  .page.active { display: block; }
-  .otp-input { letter-spacing: 8px; font-size: 24px; text-align: center; font-family: monospace; }
-  .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.4); border-top-color: white; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-right: 6px; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .full-width { max-width: 600px; }
-  .kyc-desc { font-size: 14px; color: #86868b; margin-bottom: 16px; }
+:root {
+  --primary: #22C55E;
+  --primary-dark: #16A34A;
+  --primary-15: rgba(34,197,94,0.15);
+  --primary-40: rgba(34,197,94,0.4);
+  --secondary: #0891B2;
+  --surface: #1E1E2E;
+  --background: #0F0F1A;
+  --card: #252538;
+  --text-primary: #E2E8F0;
+  --text-secondary: #94A3B8;
+  --error: #EF4444;
+  --error-15: rgba(239,68,68,0.15);
+  --warning: #F59E0B;
+  --warning-15: rgba(245,158,11,0.15);
+  --border: #334155;
+  --border-50: rgba(51,65,85,0.5);
+  --border-30: rgba(51,65,85,0.3);
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--background);color:var(--text-primary);-webkit-font-smoothing:antialiased}
+input,button,select,textarea{font-family:inherit}
+a{color:var(--primary);text-decoration:none}
 
-  /* Tenant / Organization styles */
-  .tenant-card { background: #f5f5f7; border-radius: 12px; padding: 14px 16px; margin-bottom: 10px; cursor: pointer; transition: background 0.15s; display: flex; justify-content: space-between; align-items: center; }
-  .tenant-card:hover { background: #ebebed; }
-  .tenant-card-info { min-width: 0; }
-  .tenant-card-name { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .tenant-card-role { font-size: 12px; color: #86868b; margin-top: 2px; }
-  .tenant-detail { display: none; }
-  .tenant-detail.active { display: block; }
-  .back-btn { display: inline-flex; align-items: center; gap: 6px; background: none; border: none; color: #0071e3; font-size: 14px; font-weight: 500; cursor: pointer; margin-bottom: 16px; padding: 0; }
-  .back-btn:hover { text-decoration: underline; }
-  .member-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #f2f2f7; gap: 8px; }
-  .member-item:last-child { border-bottom: none; }
-  .member-info { min-width: 0; flex: 1; }
-  .member-email { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .member-role { font-size: 12px; color: #86868b; margin-top: 1px; }
-  .member-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
-  .create-form { background: #f5f5f7; border-radius: 12px; padding: 16px; margin-bottom: 16px; display: none; }
-  .create-form.open { display: block; }
-  .create-form input { background: white; margin-bottom: 0; }
-  .role-select { width: 100%; padding: 10px 14px; border: 1px solid #d2d2d7; border-radius: 10px; font-size: 14px; outline: none; background: white; transition: border-color 0.2s; }
-  .role-select:focus { border-color: #0071e3; box-shadow: 0 0 0 3px rgba(0,113,227,0.1); }
-  .org-header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
-  .org-avatar { width: 44px; height: 44px; border-radius: 10px; background: #1d1d1f; color: white; display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 700; flex-shrink: 0; }
-  .org-name { font-size: 18px; font-weight: 700; }
-  .org-role-badge { font-size: 12px; color: #86868b; margin-top: 2px; }
-  .kyb-container { margin-top: 16px; }
+/* ── App Shell ── */
+#app{width:100%;height:100%;max-width:480px;margin:0 auto;position:relative;display:flex;flex-direction:column;background:var(--background)}
+@media(min-width:481px){
+  body{display:flex;align-items:center;justify-content:center}
+  #app{height:100vh;max-height:900px;border-left:1px solid var(--border-50);border-right:1px solid var(--border-50)}
+}
 
-  @media (max-width: 480px) {
-    .card { padding: 28px 20px; }
-    .info-value { max-width: 140px; }
-  }
+/* ── Pages ── */
+.page{display:none;flex-direction:column;height:100%;overflow:hidden}
+.page.active{display:flex}
+.auth-page{justify-content:center;align-items:center;padding:24px}
+.auth-card{width:100%;max-width:380px;background:var(--card);border-radius:16px;padding:40px 28px;border:1px solid var(--border-50)}
+
+/* ── App Bar ── */
+.app-bar{height:56px;min-height:56px;background:var(--surface);display:flex;align-items:center;padding:0 16px;gap:12px;z-index:5}
+.app-bar-title{font-size:20px;font-weight:600;color:var(--text-primary);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.app-bar-btn{width:40px;height:40px;border:none;background:none;color:var(--text-secondary);cursor:pointer;border-radius:8px;display:flex;align-items:center;justify-content:center}
+.app-bar-btn:hover{background:var(--border-30)}
+.app-bar-btn svg{width:22px;height:22px}
+
+/* ── Screen Content ── */
+.screen-scroll{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:16px 16px 24px}
+
+/* ── Bottom Nav ── */
+.bottom-nav{height:60px;min-height:60px;background:var(--surface);display:flex;z-index:10;border-top:1px solid var(--border-50)}
+.nav-item{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;border:none;background:none;color:var(--text-secondary);cursor:pointer;font-size:11px;font-weight:500;padding:4px 0;transition:color .15s}
+.nav-item.active{color:var(--primary)}
+.nav-item svg{width:24px;height:24px}
+
+/* ── Typography ── */
+.h1{font-size:28px;font-weight:700;color:var(--text-primary)}
+.h2{font-size:22px;font-weight:600;color:var(--text-primary)}
+.h3{font-size:16px;font-weight:600;color:var(--text-primary)}
+.subtitle{font-size:14px;color:var(--text-secondary);margin-top:4px}
+.section-header{font-size:12px;font-weight:500;color:var(--text-secondary);letter-spacing:0.5px;margin:0 0 8px 4px}
+
+/* ── Buttons ── */
+.btn{width:100%;height:52px;border:none;border-radius:12px;font-size:16px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:opacity .15s}
+.btn:disabled{opacity:0.5;cursor:not-allowed}
+.btn-primary{background:var(--primary);color:#000}
+.btn-primary:hover:not(:disabled){background:var(--primary-dark)}
+.btn-outline{background:transparent;border:2px solid var(--border);color:var(--text-primary)}
+.btn-outline:hover:not(:disabled){border-color:var(--text-secondary)}
+.btn-danger-outline{background:transparent;border:2px solid var(--error);color:var(--error)}
+.btn-danger-outline:hover:not(:disabled){background:var(--error-15)}
+.btn-sm{width:auto;height:36px;padding:0 16px;font-size:13px;font-weight:500;border-radius:8px}
+.btn-text{background:none;border:none;color:var(--primary);font-size:14px;font-weight:500;cursor:pointer;padding:8px}
+.btn svg{width:18px;height:18px;flex-shrink:0}
+
+/* ── Cards ── */
+.app-card{background:var(--card);border-radius:16px;padding:16px;border:1px solid var(--border-50);margin-bottom:12px}
+
+/* ── Badges ── */
+.badge{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:20px;font-size:12px;font-weight:600;white-space:nowrap}
+.badge-green{background:var(--primary-15);color:var(--primary);border:1px solid var(--primary-40)}
+.badge-red{background:var(--error-15);color:var(--error);border:1px solid rgba(239,68,68,0.4)}
+.badge-yellow{background:var(--warning-15);color:var(--warning);border:1px solid rgba(245,158,11,0.4)}
+.badge-gray{background:var(--border-30);color:var(--text-secondary);border:1px solid var(--border-50)}
+.badge-blue{background:rgba(8,145,178,0.15);color:var(--secondary);border:1px solid rgba(8,145,178,0.4)}
+
+/* ── Form ── */
+.form-group{margin-bottom:16px}
+.form-label{display:block;font-size:13px;font-weight:500;color:var(--text-secondary);margin-bottom:6px}
+.form-input{width:100%;padding:12px 16px;background:var(--surface);border:1px solid var(--border);border-radius:10px;font-size:15px;color:var(--text-primary);outline:none;transition:border-color .2s}
+.form-input:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(34,197,94,0.1)}
+.form-input::placeholder{color:var(--text-secondary);opacity:0.6}
+select.form-input{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394A3B8' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 14px center;padding-right:36px}
+input[type="date"]{color-scheme:dark}
+.otp-input{letter-spacing:8px;font-size:24px;text-align:center;font-family:monospace}
+
+/* ── Info Row ── */
+.info-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border-30);gap:8px}
+.info-row:last-child{border-bottom:none}
+.info-label{font-size:14px;color:var(--text-secondary);flex-shrink:0}
+.info-value{font-size:14px;font-weight:500;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px;text-align:right}
+
+/* ── Icon Box ── */
+.icon-box{width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.icon-box svg{width:18px;height:18px}
+
+/* ── Nav Tile ── */
+.nav-tile{display:flex;align-items:center;gap:12px;padding:14px 0;cursor:pointer;border:none;background:none;width:100%;text-align:left}
+.nav-tile:hover .icon-box{opacity:0.8}
+.nav-tile-text{flex:1;font-size:14px;color:var(--text-primary)}
+.nav-tile-trailing{font-size:13px;color:var(--text-secondary);margin-right:4px}
+.nav-tile-chevron{color:var(--text-secondary)}
+.nav-tile-chevron svg{width:18px;height:18px}
+
+/* ── Switch Tile ── */
+.switch-tile{display:flex;align-items:center;gap:12px;padding:8px 0}
+.switch-tile-text{flex:1}
+.switch-tile-title{font-size:14px;color:var(--text-primary)}
+.switch-tile-sub{font-size:12px;color:var(--text-secondary)}
+.toggle{position:relative;width:44px;height:24px;border-radius:12px;background:var(--border);border:none;cursor:pointer;transition:background .2s;flex-shrink:0}
+.toggle.on{background:var(--primary)}
+.toggle::after{content:'';position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#fff;transition:transform .2s}
+.toggle.on::after{transform:translateX(20px)}
+
+/* ── Avatar ── */
+.avatar{border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0}
+.avatar-lg{width:64px;height:64px;font-size:24px}
+.avatar-md{width:44px;height:44px;font-size:16px}
+.avatar-sm{width:32px;height:32px;font-size:13px}
+
+/* ── Profile Header ── */
+.profile-header{display:flex;align-items:center;gap:16px;margin-bottom:20px}
+.profile-header-info{min-width:0;flex:1}
+.profile-header-name{font-size:20px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.profile-header-email{font-size:14px;color:var(--text-secondary);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ── KYC Status Circle ── */
+.kyc-circle{width:80px;height:80px;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 16px}
+.kyc-circle svg{width:40px;height:40px}
+
+/* ── Session Card ── */
+.session-card{display:flex;align-items:center;gap:12px;padding:12px;background:var(--card);border-radius:12px;border:1px solid var(--border-50);margin-bottom:8px}
+.session-card-info{flex:1;min-width:0}
+.session-card-device{font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.session-card-meta{font-size:12px;color:var(--text-secondary);margin-top:2px}
+.session-card-close{width:32px;height:32px;border:none;background:var(--error-15);color:var(--error);border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.session-card-close svg{width:16px;height:16px}
+
+/* ── Tenant Card ── */
+.tenant-card{display:flex;align-items:center;gap:12px;padding:14px;background:var(--card);border-radius:12px;border:1px solid var(--border-50);margin-bottom:8px;cursor:pointer;transition:border-color .15s}
+.tenant-card:hover{border-color:var(--text-secondary)}
+.tenant-card-info{flex:1;min-width:0}
+.tenant-card-name{font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tenant-card-role{font-size:12px;color:var(--text-secondary);margin-top:2px}
+
+/* ── Member Item ── */
+.member-item{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border-30)}
+.member-item:last-child{border-bottom:none}
+.member-info{flex:1;min-width:0}
+.member-email{font-size:14px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.member-role{font-size:12px;color:var(--text-secondary);margin-top:1px}
+.member-actions{display:flex;gap:6px;align-items:center;flex-shrink:0}
+.member-actions select{background:var(--surface);color:var(--text-primary);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px;outline:none}
+
+/* ── Chat ── */
+.chat-fab{position:absolute;z-index:20;right:16px;bottom:76px;width:56px;height:56px;border-radius:50%;background:var(--primary);color:#000;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 16px rgba(34,197,94,0.3);transition:transform .15s}
+.chat-fab:hover{transform:scale(1.05)}
+.chat-fab svg{width:28px;height:28px}
+.chat-panel{position:absolute;inset:0;z-index:30;background:var(--background);display:none;flex-direction:column}
+.chat-panel.open{display:flex}
+.chat-messages{flex:1;overflow-y:auto;padding:16px}
+.chat-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:16px;color:var(--text-secondary)}
+.chat-empty svg{width:64px;height:64px;opacity:0.3;color:var(--primary)}
+.chat-bubble{max-width:85%;padding:12px 16px;border-radius:16px;margin-bottom:8px;font-size:14px;line-height:1.5;word-wrap:break-word}
+.chat-bubble-user{background:var(--primary-15);color:var(--text-primary);margin-left:auto;border-bottom-right-radius:4px}
+.chat-bubble-ai{background:var(--card);color:var(--text-primary);margin-right:auto;border-bottom-left-radius:4px;border:1px solid var(--border-50)}
+.chat-bubble-ai code{background:var(--surface);padding:2px 6px;border-radius:4px;font-size:13px}
+.chat-bubble-ai pre{background:var(--surface);padding:12px;border-radius:8px;overflow-x:auto;margin:8px 0;font-size:13px}
+.chat-bubble-ai pre code{background:none;padding:0}
+.chat-input-area{padding:8px 12px;background:var(--surface);border-top:1px solid var(--border-50);display:flex;gap:8px;align-items:end}
+.chat-input{flex:1;background:var(--card);border:1px solid var(--border);border-radius:20px;padding:10px 16px;color:var(--text-primary);font-size:14px;outline:none;resize:none;max-height:120px;line-height:1.4}
+.chat-input:focus{border-color:var(--primary)}
+.chat-input::placeholder{color:var(--text-secondary);opacity:0.6}
+.chat-send{width:40px;height:40px;border-radius:50%;background:var(--primary);color:#000;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-bottom:2px}
+.chat-send:disabled{opacity:0.4;cursor:not-allowed}
+.chat-send svg{width:20px;height:20px}
+.typing-dots{display:inline-flex;gap:4px;padding:4px 0}
+.typing-dots span{width:6px;height:6px;border-radius:50%;background:var(--text-secondary);animation:dot-bounce .6s ease-in-out infinite}
+.typing-dots span:nth-child(2){animation-delay:.15s}
+.typing-dots span:nth-child(3){animation-delay:.3s}
+@keyframes dot-bounce{0%,80%,100%{opacity:.3}40%{opacity:1}}
+
+/* ── Modal ── */
+.modal-overlay{position:fixed;inset:0;z-index:50;display:none;align-items:center;justify-content:center;padding:24px}
+.modal-overlay.open{display:flex}
+.modal-backdrop{position:absolute;inset:0;background:rgba(0,0,0,0.6)}
+.modal-box{position:relative;background:var(--card);border-radius:16px;padding:24px;width:100%;max-width:340px;border:1px solid var(--border-50)}
+.modal-title{font-size:18px;font-weight:600;margin-bottom:8px}
+.modal-body{font-size:14px;color:var(--text-secondary);margin-bottom:20px;line-height:1.5}
+.modal-actions{display:flex;gap:8px;justify-content:flex-end}
+.modal-actions .btn{width:auto;height:40px;padding:0 20px;font-size:14px}
+
+/* ── Bottom Sheet ── */
+.sheet-overlay{position:fixed;inset:0;z-index:40;display:none}
+.sheet-overlay.open{display:block}
+.sheet-backdrop{position:absolute;inset:0;background:rgba(0,0,0,0.5)}
+.sheet-content{position:absolute;bottom:0;left:0;right:0;background:var(--card);border-radius:20px 20px 0 0;padding:24px;max-height:80vh;overflow-y:auto;transform:translateY(100%);transition:transform .25s ease-out}
+.sheet-overlay.open .sheet-content{transform:translateY(0)}
+.sheet-handle{width:36px;height:4px;background:var(--border);border-radius:2px;margin:0 auto 16px}
+.sheet-title{font-size:18px;font-weight:600;margin-bottom:16px}
+
+/* ── Toast ── */
+#toast-container{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);z-index:60;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none;max-width:480px;width:100%;padding:0 16px}
+.toast{background:var(--card);border:1px solid var(--border-50);border-radius:12px;padding:12px 20px;font-size:14px;color:var(--text-primary);pointer-events:auto;animation:toast-in .25s ease-out;box-shadow:0 4px 16px rgba(0,0,0,0.3)}
+.toast-error{border-left:3px solid var(--error)}
+.toast-success{border-left:3px solid var(--primary)}
+.toast-warning{border-left:3px solid var(--warning)}
+@keyframes toast-in{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes toast-out{from{opacity:1}to{opacity:0;transform:translateY(-10px)}}
+
+/* ── Spinner ── */
+.spinner{display:inline-block;width:20px;height:20px;border:2px solid rgba(0,0,0,0.2);border-top-color:#000;border-radius:50%;animation:spin .6s linear infinite}
+.spinner-light{border-color:var(--border-50);border-top-color:var(--text-primary)}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── Verified Row ── */
+.verified-row{display:flex;align-items:center;gap:8px;padding:8px 0}
+.verified-row-icon{color:var(--primary);flex-shrink:0}
+.verified-row-icon svg{width:16px;height:16px}
+.verified-row-label{font-size:13px;color:var(--text-secondary);min-width:80px}
+.verified-row-value{font-size:14px;font-weight:500;color:var(--text-primary);flex:1}
+
+/* ── Misc ── */
+.text-center{text-align:center}
+.mb-4{margin-bottom:4px}
+.mb-8{margin-bottom:8px}
+.mb-12{margin-bottom:12px}
+.mb-16{margin-bottom:16px}
+.mb-20{margin-bottom:20px}
+.mb-24{margin-bottom:24px}
+.mt-8{margin-top:8px}
+.mt-12{margin-top:12px}
+.mt-16{margin-top:16px}
+.gap-8{gap:8px}
+.flex-center{display:flex;align-items:center;justify-content:center}
+.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 16px;gap:12px}
+.empty-state svg{width:48px;height:48px;color:var(--text-secondary);opacity:0.4}
+.empty-state-text{font-size:14px;color:var(--text-secondary);text-align:center}
+.skeleton{background:var(--border-30);border-radius:8px;animation:pulse 1.5s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+.country-list{max-height:300px;overflow-y:auto;margin-top:8px}
+.country-item{padding:10px 12px;cursor:pointer;border-radius:8px;font-size:14px;color:var(--text-primary)}
+.country-item:hover{background:var(--border-30)}
+.country-item.selected{background:var(--primary-15);color:var(--primary)}
 </style>
 </head>
 <body>
-<div class="container" id="app">
-  <!-- Login Page -->
-  <div class="card page" id="page-login">
-    <div class="logo">
-      <h1>Taler ID</h1>
-      <p>Sign in to your account</p>
-    </div>
-    <div class="error" id="login-error"></div>
-    <div class="form-group">
-      <label for="login-email">Email</label>
-      <input type="email" id="login-email" placeholder="you@example.com" autocomplete="email" required maxlength="254">
-    </div>
-    <div class="form-group">
-      <label for="login-password">Password</label>
-      <input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password" required maxlength="128">
-    </div>
-    <button class="btn" id="login-btn">Sign In</button>
-    <div class="link">Don't have an account? <a id="go-register">Create one</a></div>
+<div id="app">
+  <!-- Auth: Login -->
+  <div class="page auth-page" id="page-login"></div>
+  <!-- Auth: Register -->
+  <div class="page auth-page" id="page-register"></div>
+  <!-- Auth: 2FA -->
+  <div class="page auth-page" id="page-2fa"></div>
+  <!-- Dashboard -->
+  <div class="page" id="page-dashboard" style="position:relative">
+    <div class="app-bar" id="app-bar"></div>
+    <div class="screen-scroll" id="screen-content"></div>
+    <div id="chat-fab-el" class="chat-fab" style="display:none"></div>
+    <div class="bottom-nav" id="bottom-nav"></div>
   </div>
-
-  <!-- Register Page -->
-  <div class="card page" id="page-register">
-    <div class="logo">
-      <h1>Taler ID</h1>
-      <p>Create your identity</p>
-    </div>
-    <div class="error" id="register-error"></div>
-    <div class="success" id="register-success"></div>
-    <div class="form-group">
-      <label for="reg-email">Email</label>
-      <input type="email" id="reg-email" placeholder="you@example.com" autocomplete="email" required maxlength="254">
-    </div>
-    <div class="form-group">
-      <label for="reg-password">Password <span style="color:#86868b;font-weight:400">(min 8 chars)</span></label>
-      <input type="password" id="reg-password" placeholder="••••••••" autocomplete="new-password" required maxlength="128">
-    </div>
-    <div class="form-group">
-      <label for="reg-firstname">First Name (optional)</label>
-      <input type="text" id="reg-firstname" placeholder="John" autocomplete="given-name" maxlength="100">
-    </div>
-    <div class="form-group">
-      <label for="reg-lastname">Last Name (optional)</label>
-      <input type="text" id="reg-lastname" placeholder="Doe" autocomplete="family-name" maxlength="100">
-    </div>
-    <button class="btn" id="register-btn">Create Account</button>
-    <div class="link">Already have an account? <a id="go-login">Sign in</a></div>
-  </div>
-
-  <!-- 2FA Page -->
-  <div class="card page" id="page-2fa">
-    <div class="logo">
-      <h1>Two-Factor Auth</h1>
-      <p>Enter the code from your authenticator app</p>
-    </div>
-    <div class="error" id="twofa-error"></div>
-    <div class="form-group">
-      <label for="twofa-code">Authentication Code</label>
-      <input type="text" id="twofa-code" class="otp-input" placeholder="000000" maxlength="6" autocomplete="one-time-code">
-    </div>
-    <button class="btn" id="twofa-btn">Verify</button>
-    <div class="link"><a id="go-login-from-2fa">Back to login</a></div>
-  </div>
-
-  <!-- Dashboard Page -->
-  <div class="card page full-width" id="page-dashboard">
-    <div id="profile-header-section" class="profile-header">
-      <div class="avatar" id="dash-avatar">?</div>
-      <div class="profile-info">
-        <h2 id="dash-name">Loading...</h2>
-        <p id="dash-email"></p>
-      </div>
-    </div>
-    <div class="nav">
-      <button class="active" data-tab="overview">Overview</button>
-      <button data-tab="profile-edit">Edit Profile</button>
-      <button data-tab="kyc-tab">KYC</button>
-      <button data-tab="org-tab">Organization</button>
-      <button data-tab="sessions-tab">Sessions</button>
-    </div>
-
-    <!-- Overview Tab -->
-    <div id="tab-overview">
-      <div class="section">
-        <h3>Identity Status</h3>
-        <div class="info-row">
-          <span class="info-label">KYC Status</span>
-          <span id="dash-kyc" class="badge badge-unverified">Unverified</span>
-        </div>
-        <div class="info-row">
-          <span class="info-label">Email</span>
-          <span class="info-value" id="dash-email-val"></span>
-        </div>
-        <div class="info-row">
-          <span class="info-label">Phone</span>
-          <span class="info-value" id="dash-phone-val">-</span>
-        </div>
-        <div class="info-row">
-          <span class="info-label">Wallet</span>
-          <span class="info-value" id="dash-wallet-val" style="font-size:12px;">Not linked</span>
-        </div>
-      </div>
-      <button class="btn btn-secondary" id="logout-btn">Sign Out</button>
-    </div>
-
-    <!-- Edit Profile Tab -->
-    <div id="tab-profile-edit" style="display:none">
-      <div class="success" id="profile-success"></div>
-      <div class="error" id="profile-error"></div>
-      <div class="form-group">
-        <label for="edit-firstname">First Name</label>
-        <input type="text" id="edit-firstname" autocomplete="off" maxlength="100">
-      </div>
-      <div class="form-group">
-        <label for="edit-lastname">Last Name</label>
-        <input type="text" id="edit-lastname" autocomplete="off" maxlength="100">
-      </div>
-      <div class="form-group">
-        <label for="edit-dob">Date of Birth</label>
-        <input type="date" id="edit-dob">
-      </div>
-      <div class="form-group">
-        <label for="edit-country">Country</label>
-        <input type="text" id="edit-country" placeholder="AT, DE, US..." autocomplete="off" maxlength="2">
-      </div>
-      <div class="form-group">
-        <label for="edit-phone">Phone Number</label>
-        <input type="text" id="edit-phone" placeholder="+43 123 456 789" autocomplete="off" maxlength="30">
-      </div>
-      <div class="form-group">
-        <label for="edit-wallet">Wallet Address</label>
-        <input type="text" id="edit-wallet" placeholder="5HueCGU8rMtraL..." autocomplete="off" maxlength="50">
-      </div>
-      <button class="btn" id="save-profile-btn">Save Changes</button>
-
-      <!-- Email Verification -->
-      <div class="section" style="margin-top:24px">
-        <h3>Email Verification</h3>
-        <div class="success" id="email-verify-success"></div>
-        <div class="error" id="email-verify-error"></div>
-        <div id="email-verify-status" style="color:#86868b;font-size:14px;margin-bottom:8px">Loading...</div>
-        <div id="email-verify-form" style="display:none">
-          <div class="form-group">
-            <label for="email-verify-code">Enter code from email</label>
-            <input type="text" id="email-verify-code" placeholder="123456" maxlength="6" class="otp-input" autocomplete="off">
-          </div>
-          <button class="btn btn-sm btn-sm-primary" id="email-confirm-btn">Confirm Code</button>
-          <button class="btn btn-secondary" id="email-resend-btn" style="margin-top:8px">Resend Code</button>
-        </div>
-        <button class="btn btn-secondary" id="email-send-code-btn" style="display:none">Send Verification Code</button>
-      </div>
-
-      <!-- Delete Account -->
-      <div class="section" style="margin-top:24px;border-top:1px solid #ff3b3022;padding-top:16px">
-        <h3 style="color:#ff3b30">Danger Zone</h3>
-        <p style="font-size:14px;color:#86868b;margin-bottom:12px">Permanently delete your account and all associated data. This cannot be undone.</p>
-        <button class="btn btn-danger" id="delete-account-btn">Delete My Account</button>
-      </div>
-    </div>
-
-    <!-- KYC Tab -->
-    <div id="tab-kyc-tab" style="display:none">
-      <div class="section">
-        <h3>Identity Verification</h3>
-        <div class="info-row">
-          <span class="info-label">Status</span>
-          <span id="kyc-status-badge" class="badge badge-unverified">Unverified</span>
-        </div>
-      </div>
-      <p class="kyc-desc" id="kyc-desc">Complete identity verification to unlock financial features. You will need a valid government-issued ID and a camera.</p>
-      <button class="btn" id="kyc-start-btn">Start Verification</button>
-      <div id="sumsub-container" style="margin-top:16px;display:none"></div>
-    </div>
-
-    <!-- Organization Tab -->
-    <div id="tab-org-tab" style="display:none">
-      <!-- Org list view -->
-      <div id="org-list-view">
-        <div class="error" id="org-error"></div>
-        <div class="success" id="org-success"></div>
-
-        <div class="section">
-          <h3>My Organizations</h3>
-          <div id="tenant-list"><div style="color:#86868b;font-size:14px">Loading...</div></div>
-        </div>
-
-        <!-- Create org toggle -->
-        <button class="btn btn-secondary" id="toggle-create-org-btn" style="margin-bottom:8px">+ Create Organization</button>
-        <div class="create-form" id="create-org-form">
-          <div class="form-group" style="margin-top:0">
-            <label for="new-org-name">Organization Name *</label>
-            <input type="text" id="new-org-name" placeholder="Acme Corp" maxlength="200" required>
-          </div>
-          <div class="form-group">
-            <label for="new-org-email">Contact Email</label>
-            <input type="email" id="new-org-email" placeholder="contact@example.com" maxlength="254">
-          </div>
-          <div class="form-group">
-            <label for="new-org-website">Website</label>
-            <input type="url" id="new-org-website" placeholder="https://example.com" maxlength="255">
-          </div>
-          <div class="form-group">
-            <label for="new-org-address">Legal Address</label>
-            <input type="text" id="new-org-address" placeholder="Musterstraße 1, 1010 Vienna" maxlength="500">
-          </div>
-          <button class="btn btn-sm btn-sm-primary" id="create-org-btn" style="width:100%;padding:10px;font-size:14px;margin-top:4px">Create</button>
-        </div>
-      </div>
-
-      <!-- Org detail view -->
-      <div id="org-detail-view" class="tenant-detail">
-        <button class="back-btn" id="back-to-orgs-btn">← Back to Organizations</button>
-
-        <div class="org-header">
-          <div class="org-avatar" id="org-detail-avatar">?</div>
-          <div>
-            <div class="org-name" id="org-detail-name">-</div>
-            <div class="org-role-badge" id="org-detail-role"></div>
-          </div>
-        </div>
-
-        <!-- KYB Section -->
-        <div class="section">
-          <h3>Business Verification (KYB)</h3>
-          <div class="info-row">
-            <span class="info-label">Status</span>
-            <span id="kyb-status-badge" class="badge badge-unverified">Unverified</span>
-          </div>
-        </div>
-        <p class="kyc-desc" id="kyb-desc">Verify your organization to unlock business features in the Taler ecosystem.</p>
-        <button class="btn" id="kyb-start-btn" style="margin-bottom:16px">Start Business Verification</button>
-        <div id="kyb-sumsub-container" style="display:none;margin-bottom:16px"></div>
-
-        <!-- Members Section -->
-        <div class="section">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-            <h3 style="margin-bottom:0">Members</h3>
-          </div>
-          <div id="members-list"></div>
-        </div>
-
-        <!-- Delete Organization (OWNER only) -->
-        <div id="delete-org-section" style="display:none;border-top:1px solid #ff3b3022;padding-top:16px;margin-top:8px">
-          <p style="font-size:13px;color:#86868b;margin-bottom:8px">Permanently delete this organization and all its data.</p>
-          <button class="btn btn-danger btn-sm" id="delete-org-btn">Delete Organization</button>
-        </div>
-
-        <!-- Invite Section (shown only for OWNER/ADMIN) -->
-        <div id="invite-section" style="display:none">
-          <div class="section" style="margin-bottom:8px">
-            <h3>Invite Member</h3>
-          </div>
-          <div class="error" id="invite-error"></div>
-          <div class="success" id="invite-success"></div>
-          <div class="form-group">
-            <label for="invite-email">Email Address</label>
-            <input type="email" id="invite-email" placeholder="colleague@example.com" maxlength="254">
-          </div>
-          <div class="form-group">
-            <label for="invite-role">Role</label>
-            <select id="invite-role" class="role-select">
-              <option value="admin">Admin</option>
-              <option value="operator">Operator</option>
-              <option value="viewer">Viewer</option>
-            </select>
-          </div>
-          <button class="btn" id="invite-btn" style="margin-top:0">Send Invite</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Sessions Tab -->
-    <div id="tab-sessions-tab" style="display:none">
-      <div class="section">
-        <h3>Active Sessions</h3>
-        <div id="sessions-list"></div>
-      </div>
-      <button class="btn btn-danger" id="revoke-all-btn" style="margin-top:8px">Sign Out All Devices</button>
-    </div>
-  </div>
+  <!-- Chat Panel -->
+  <div id="chat-panel" class="chat-panel"></div>
+  <!-- Modal -->
+  <div id="modal-overlay" class="modal-overlay"><div class="modal-backdrop" id="modal-backdrop"></div><div class="modal-box" id="modal-box"></div></div>
+  <!-- Sheet -->
+  <div id="sheet-overlay" class="sheet-overlay"><div class="sheet-backdrop" id="sheet-backdrop"></div><div class="sheet-content" id="sheet-content"></div></div>
+  <!-- Toast -->
+  <div id="toast-container"></div>
 </div>
 
 <script>
-const API = '';
-let accessToken = localStorage.getItem('accessToken') || '';
-let refreshToken = localStorage.getItem('refreshToken') || '';
-let challengeToken = '';
-let currentTab = 'overview';
-let currentTenantId = null;
-let currentTenantRole = null;
+/* ══════════════════════════════════════════════════════════════════
+   ICONS (inline SVG)
+   ══════════════════════════════════════════════════════════════════ */
+const I = {
+  person: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
+  verified: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/><path d="m9 12 2 2 4-4"/></svg>',
+  shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>',
+  building: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22v-4h6v4"/><path d="M8 6h.01M16 6h.01M12 6h.01M8 10h.01M16 10h.01M12 10h.01M8 14h.01M16 14h.01M12 14h.01"/></svg>',
+  settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
+  chat: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a7 7 0 0 1 7 7c0 3.87-3.13 7-7 7a7.001 7.001 0 0 1-6.7-5H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h1.3A7.001 7.001 0 0 1 12 2z"/><circle cx="9" cy="9" r="1" fill="currentColor"/><circle cx="15" cy="9" r="1" fill="currentColor"/><path d="M9 13c.6.9 1.7 1.5 3 1.5s2.4-.6 3-1.5"/></svg>',
+  robot: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><circle cx="8" cy="16" r="1" fill="currentColor"/><circle cx="16" cy="16" r="1" fill="currentColor"/></svg>',
+  back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg>',
+  chevron: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>',
+  close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>',
+  edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>',
+  lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
+  key: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>',
+  devices: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>',
+  phone: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M12 18h.01"/></svg>',
+  globe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>',
+  download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+  logout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>',
+  send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>',
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
+  clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
+  alertCircle: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>',
+  plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
+  refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>',
+  mail: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>',
+  link: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
+  userPlus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>',
+  doc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>',
+  mapPin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>',
+};
+
+/* ══════════════════════════════════════════════════════════════════
+   STATE
+   ══════════════════════════════════════════════════════════════════ */
+const S = {
+  page: 'login', // login | register | 2fa | dashboard
+  tab: 'profile', // profile | kyc | orgs | settings
+  subScreen: null, // null | orgDetail | sessions
+  // Auth
+  accessToken: localStorage.getItem('accessToken') || '',
+  refreshToken: localStorage.getItem('refreshToken') || '',
+  challengeToken: '',
+  userId: localStorage.getItem('userId') || '',
+  // Data
+  profile: null,
+  kycStatus: null,
+  applicantData: null,
+  tenants: [],
+  sessions: [],
+  currentTenantId: null,
+  currentTenantRole: null,
+  currentTenantData: null,
+  // Chat
+  chatMessages: JSON.parse(localStorage.getItem('chatMessages') || '[]'),
+  chatStreaming: false,
+  chatOpen: false,
+  // Settings
+  lang: localStorage.getItem('lang') || 'en',
+};
 
 function saveTokens(at, rt) {
-  accessToken = at;
-  refreshToken = rt;
+  S.accessToken = at; S.refreshToken = rt;
   localStorage.setItem('accessToken', at);
   localStorage.setItem('refreshToken', rt);
+  // Decode user id from JWT
+  try { S.userId = JSON.parse(atob(at.split('.')[1])).sub; localStorage.setItem('userId', S.userId); } catch(e){}
 }
-
 function clearTokens() {
-  accessToken = '';
-  refreshToken = '';
-  localStorage.removeItem('accessToken');
-  localStorage.removeItem('refreshToken');
+  S.accessToken = ''; S.refreshToken = ''; S.userId = '';
+  localStorage.removeItem('accessToken'); localStorage.removeItem('refreshToken'); localStorage.removeItem('userId');
 }
 
-function showError(id, msg) {
-  const el = document.getElementById(id);
-  if (el) { el.textContent = msg; el.style.display = 'block'; }
-}
-function hideError(id) {
-  const el = document.getElementById(id);
-  if (el) el.style.display = 'none';
-}
-function showSuccess(id, msg) {
-  const el = document.getElementById(id);
-  if (el) { el.textContent = msg; el.style.display = 'block'; setTimeout(() => el.style.display='none', 5000); }
-}
-function clearAllAlerts() {
-  document.querySelectorAll('.error, .success').forEach(el => el.style.display = 'none');
-}
-
-function parseUA(ua) {
-  if (!ua) return 'Unknown device';
-  if (/iPhone/.test(ua)) return 'iPhone';
-  if (/iPad/.test(ua)) return 'iPad';
-  if (/Android.*Mobile/.test(ua)) return 'Android Phone';
-  if (/Android/.test(ua)) return 'Android Tablet';
-  const browser = /Edg\//.test(ua) ? 'Edge' :
-                  /Chrome\//.test(ua) ? 'Chrome' :
-                  /Firefox\//.test(ua) ? 'Firefox' :
-                  /Safari\//.test(ua) ? 'Safari' : 'Browser';
-  const os = /Windows NT/.test(ua) ? 'Windows' :
-             /Mac OS X/.test(ua) ? 'macOS' :
-             /Linux/.test(ua) ? 'Linux' : '';
-  return os ? browser + ' on ' + os : browser;
-}
-
-function extractMessage(data, fallback) {
-  if (!data) return fallback;
-  const msg = data.message;
-  if (Array.isArray(msg)) return msg.join(', ');
-  return msg || fallback;
-}
-
-function setLoading(btnId, loading) {
-  const btn = document.getElementById(btnId);
-  if (!btn) return;
-  if (loading && !btn.dataset.label) btn.dataset.label = btn.textContent.trim();
-  btn.disabled = loading;
-  btn.innerHTML = loading ? '<span class="spinner"></span>Loading...' : btn.dataset.label;
-}
-
-// Mutex: prevents parallel refresh attempts (race condition with token rotation)
+/* ══════════════════════════════════════════════════════════════════
+   API
+   ══════════════════════════════════════════════════════════════════ */
+const API = '';
 let refreshPromise = null;
 
 async function doRefreshToken() {
-  const refreshRes = await fetch(API + '/auth/refresh', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ refreshToken }),
-  });
-  if (refreshRes.ok) {
-    const data = await refreshRes.json();
-    saveTokens(data.accessToken, data.refreshToken);
-  } else {
-    clearTokens();
-    showPage('login');
-    throw new Error('Session expired');
-  }
+  const r = await fetch(API + '/auth/refresh', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({refreshToken: S.refreshToken}) });
+  if (r.ok) { const d = await r.json(); saveTokens(d.accessToken, d.refreshToken); }
+  else { clearTokens(); navigate('login'); throw new Error('Session expired'); }
 }
 
-async function apiFetch(path, options = {}) {
-  const headers = { 'Content-Type': 'application/json', ...options.headers };
-  if (accessToken) headers['Authorization'] = 'Bearer ' + accessToken;
-
-  let res = await fetch(API + path, { ...options, headers });
-
-  if (res.status === 401 && refreshToken) {
-    // Single shared promise prevents double-refresh (token rotation race condition)
-    if (!refreshPromise) {
-      refreshPromise = doRefreshToken().finally(() => { refreshPromise = null; });
-    }
+async function apiFetch(path, opts = {}) {
+  const h = {'Content-Type':'application/json', ...opts.headers};
+  if (S.accessToken) h['Authorization'] = 'Bearer ' + S.accessToken;
+  let r = await fetch(API + path, {...opts, headers: h});
+  if (r.status === 401 && S.refreshToken) {
+    if (!refreshPromise) refreshPromise = doRefreshToken().finally(() => { refreshPromise = null; });
     await refreshPromise;
-    headers['Authorization'] = 'Bearer ' + accessToken;
-    res = await fetch(API + path, { ...options, headers });
+    h['Authorization'] = 'Bearer ' + S.accessToken;
+    r = await fetch(API + path, {...opts, headers: h});
   }
-  return res;
+  return r;
 }
 
-function showPage(name) {
-  clearAllAlerts();
-  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  const page = document.getElementById('page-' + name);
-  if (page) page.classList.add('active');
+/* ══════════════════════════════════════════════════════════════════
+   UTILS
+   ══════════════════════════════════════════════════════════════════ */
+const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
-  if (name === 'dashboard') {
-    loadProfile();
-    switchTab('overview');
-    document.querySelector('.container').style.maxWidth = '600px';
-  } else {
-    document.querySelector('.container').style.maxWidth = '400px';
+function parseUA(ua) {
+  if (!ua) return {name:'Unknown', icon:'devices'};
+  const ic = /iPhone|Android.*Mobile/.test(ua) ? 'phone' : /iPad|Android/.test(ua) ? 'phone' : 'devices';
+  let name;
+  if (/iPhone/.test(ua)) name='iPhone';
+  else if (/iPad/.test(ua)) name='iPad';
+  else if (/Android.*Mobile/.test(ua)) name='Android Phone';
+  else if (/Android/.test(ua)) name='Android Tablet';
+  else {
+    const b=/Edg\//.test(ua)?'Edge':/Chrome\//.test(ua)?'Chrome':/Firefox\//.test(ua)?'Firefox':/Safari\//.test(ua)?'Safari':'Browser';
+    const o=/Windows NT/.test(ua)?'Windows':/Mac OS X/.test(ua)?'macOS':/Linux/.test(ua)?'Linux':'';
+    name = o ? b+' on '+o : b;
+  }
+  return {name, icon: ic};
+}
+
+function timeAgo(dateStr) {
+  const d = new Date(dateStr), now = new Date(), diff = Math.floor((now - d) / 1000);
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return Math.floor(diff/60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff/3600) + 'h ago';
+  return Math.floor(diff/86400) + 'd ago';
+}
+
+function formatDate(d) {
+  if (!d) return '—';
+  const dt = new Date(d);
+  if (isNaN(dt)) return d;
+  return dt.toLocaleDateString('en-GB', {day:'2-digit',month:'2-digit',year:'numeric'});
+}
+
+function extractMsg(data, fb) {
+  if (!data) return fb;
+  const m = data.message;
+  return Array.isArray(m) ? m.join(', ') : m || fb;
+}
+
+function initials(name) {
+  return (name||'?').split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2) || '?';
+}
+
+function statusBadge(status) {
+  const s = (status||'UNVERIFIED').toUpperCase();
+  const m = {VERIFIED:'badge-green',PENDING:'badge-yellow',REJECTED:'badge-red',UNVERIFIED:'badge-gray'};
+  return `<span class="badge ${m[s]||'badge-gray'}">${esc(s)}</span>`;
+}
+
+function roleBadge(role) {
+  const m = {OWNER:'badge-blue',ADMIN:'badge-green',OPERATOR:'badge-yellow',VIEWER:'badge-gray'};
+  return `<span class="badge ${m[(role||'').toUpperCase()]||'badge-gray'}">${esc(role||'—')}</span>`;
+}
+
+/* ── Simple Markdown ── */
+function md(text) {
+  if (!text) return '';
+  let s = esc(text);
+  // Code blocks
+  s = s.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+  s = s.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
+  // Inline code
+  s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Bold
+  s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  // Italic
+  s = s.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  // Links
+  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  // Headers
+  s = s.replace(/^### (.+)$/gm, '<strong>$1</strong>');
+  s = s.replace(/^## (.+)$/gm, '<strong style="font-size:15px">$1</strong>');
+  s = s.replace(/^# (.+)$/gm, '<strong style="font-size:16px">$1</strong>');
+  // Lists
+  s = s.replace(/^[-*] (.+)$/gm, '• $1');
+  // Newlines
+  s = s.replace(/\n/g, '<br>');
+  return s;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   UI COMPONENTS
+   ══════════════════════════════════════════════════════════════════ */
+function toast(msg, type='info') {
+  const c = document.getElementById('toast-container');
+  const el = document.createElement('div');
+  el.className = 'toast toast-' + (type==='error'?'error':type==='success'?'success':'warning');
+  el.textContent = msg;
+  c.appendChild(el);
+  setTimeout(() => { el.style.animation='toast-out .25s forwards'; setTimeout(()=>el.remove(),250); }, 3000);
+}
+
+function showModal(title, body, actions) {
+  const o = document.getElementById('modal-overlay');
+  const b = document.getElementById('modal-box');
+  b.innerHTML = `<div class="modal-title">${esc(title)}</div><div class="modal-body">${body}</div><div class="modal-actions" id="modal-actions"></div>`;
+  const ac = b.querySelector('#modal-actions');
+  actions.forEach(a => {
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-sm ' + (a.danger ? 'btn-danger-outline' : a.primary ? 'btn-primary' : 'btn-outline');
+    btn.textContent = a.label;
+    btn.onclick = () => { closeModal(); if(a.action) a.action(); };
+    ac.appendChild(btn);
+  });
+  o.classList.add('open');
+}
+function closeModal() { document.getElementById('modal-overlay').classList.remove('open'); }
+
+function showSheet(title, contentHtml) {
+  const o = document.getElementById('sheet-overlay');
+  const c = document.getElementById('sheet-content');
+  c.innerHTML = `<div class="sheet-handle"></div><div class="sheet-title">${esc(title)}</div><div id="sheet-body">${contentHtml}</div>`;
+  o.classList.add('open');
+}
+function closeSheet() { document.getElementById('sheet-overlay').classList.remove('open'); }
+
+/* ══════════════════════════════════════════════════════════════════
+   NAVIGATION
+   ══════════════════════════════════════════════════════════════════ */
+function navigate(page, opts) {
+  S.page = page;
+  S.subScreen = null;
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  const el = document.getElementById('page-' + page);
+  if (el) el.classList.add('active');
+  // Chat FAB visibility
+  document.getElementById('chat-fab-el').style.display = page === 'dashboard' ? 'flex' : 'none';
+  if (page === 'login') renderLogin();
+  else if (page === 'register') renderRegister();
+  else if (page === '2fa') render2FA();
+  else if (page === 'dashboard') {
+    renderBottomNav();
+    switchTab(opts?.tab || S.tab || 'profile');
   }
 }
 
 function switchTab(tab) {
-  clearAllAlerts();
-  document.querySelectorAll('.nav button').forEach(b => {
-    b.classList.toggle('active', b.dataset.tab === tab);
-  });
-  ['overview', 'profile-edit', 'kyc-tab', 'org-tab', 'sessions-tab'].forEach(t => {
-    const el = document.getElementById('tab-' + t);
-    if (el) el.style.display = t === tab ? 'block' : 'none';
-  });
-  currentTab = tab;
-  if (tab === 'sessions-tab') loadSessions();
-  if (tab === 'kyc-tab') loadKycStatus();
-  if (tab === 'org-tab') loadTenants();
+  S.tab = tab; S.subScreen = null;
+  renderBottomNav();
+  renderAppBar();
+  if (tab === 'profile') renderProfile();
+  else if (tab === 'kyc') renderKyc();
+  else if (tab === 'orgs') renderOrgs();
+  else if (tab === 'settings') renderSettings();
 }
 
-// ── Auth ──────────────────────────────────────────────────────────
-async function doLogin() {
-  hideError('login-error');
-  setLoading('login-btn', true);
-  const email = document.getElementById('login-email').value.trim();
-  const password = document.getElementById('login-password').value;
-  try {
-    const res = await fetch(API + '/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
-    });
-    const data = await res.json();
-    if (!res.ok) { showError('login-error', extractMessage(data, 'Login failed')); return; }
-    if (data.next === '2fa') {
-      challengeToken = data.challengeToken;
-      showPage('2fa');
-    } else {
-      saveTokens(data.accessToken, data.refreshToken);
-      showPage('dashboard');
-    }
-  } catch (e) {
-    showError('login-error', 'Network error. Please try again.');
-  } finally {
-    setLoading('login-btn', false);
+function pushSubScreen(name, data) {
+  S.subScreen = name;
+  if (data) Object.assign(S, data);
+  renderAppBar();
+  if (name === 'orgDetail') renderOrgDetail();
+  else if (name === 'sessions') renderSessions();
+}
+
+function popSubScreen() {
+  S.subScreen = null;
+  switchTab(S.tab);
+}
+
+function renderAppBar() {
+  const bar = document.getElementById('app-bar');
+  const sub = S.subScreen;
+  const titles = {profile:'Profile',kyc:'KYC Verification',orgs:'Organizations',settings:'Settings',orgDetail:S.currentTenantData?.name||'Organization',sessions:'Active Sessions'};
+  const title = titles[sub] || titles[S.tab] || 'Taler ID';
+  if (sub) {
+    bar.innerHTML = `<button class="app-bar-btn" id="bar-back">${I.back}</button><span class="app-bar-title">${esc(title)}</span>`;
+    bar.querySelector('#bar-back').onclick = popSubScreen;
+  } else {
+    bar.innerHTML = `<span class="app-bar-title">${esc(title)}</span>`;
   }
+}
+
+function renderBottomNav() {
+  const nav = document.getElementById('bottom-nav');
+  const tabs = [
+    {id:'profile',icon:I.person,label:'Profile'},
+    {id:'kyc',icon:I.shield,label:'KYC'},
+    {id:'orgs',icon:I.building,label:'Orgs'},
+    {id:'settings',icon:I.settings,label:'Settings'},
+  ];
+  nav.innerHTML = tabs.map(t => `<button class="nav-item${S.tab===t.id?' active':''}" data-tab="${t.id}">${t.icon}<span>${t.label}</span></button>`).join('');
+  nav.querySelectorAll('.nav-item').forEach(b => b.onclick = () => switchTab(b.dataset.tab));
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   AUTH SCREENS
+   ══════════════════════════════════════════════════════════════════ */
+function renderLogin() {
+  document.getElementById('page-login').innerHTML = `<div class="auth-card">
+    <div class="text-center mb-24"><div class="h1" style="color:var(--primary)">Taler ID</div><p class="subtitle">Sign in to your account</p></div>
+    <div id="login-error" style="display:none;background:var(--error-15);border:1px solid rgba(239,68,68,0.3);color:var(--error);padding:12px;border-radius:10px;font-size:14px;margin-bottom:16px"></div>
+    <div class="form-group"><label class="form-label">Email</label><input class="form-input" id="login-email" type="email" placeholder="you@example.com" autocomplete="email"></div>
+    <div class="form-group"><label class="form-label">Password</label><input class="form-input" id="login-password" type="password" placeholder="••••••••" autocomplete="current-password"></div>
+    <button class="btn btn-primary" id="login-btn">Sign In</button>
+    <p class="text-center mt-16 subtitle">Don't have an account? <a href="#" id="go-register">Create one</a></p>
+  </div>`;
+  const q = id => document.getElementById(id);
+  q('login-btn').onclick = doLogin;
+  q('go-register').onclick = e => { e.preventDefault(); navigate('register'); };
+  q('login-email').addEventListener('keydown', e => { if(e.key==='Enter') q('login-password').focus(); });
+  q('login-password').addEventListener('keydown', e => { if(e.key==='Enter') doLogin(); });
+}
+
+function renderRegister() {
+  document.getElementById('page-register').innerHTML = `<div class="auth-card">
+    <div class="text-center mb-24"><div class="h1" style="color:var(--primary)">Taler ID</div><p class="subtitle">Create your identity</p></div>
+    <div id="reg-error" style="display:none;background:var(--error-15);border:1px solid rgba(239,68,68,0.3);color:var(--error);padding:12px;border-radius:10px;font-size:14px;margin-bottom:16px"></div>
+    <div class="form-group"><label class="form-label">Email</label><input class="form-input" id="reg-email" type="email" placeholder="you@example.com" autocomplete="email"></div>
+    <div class="form-group"><label class="form-label">Password <span style="color:var(--text-secondary);font-weight:400">(min 8 chars)</span></label><input class="form-input" id="reg-password" type="password" placeholder="••••••••" autocomplete="new-password"></div>
+    <div class="form-group"><label class="form-label">First Name (optional)</label><input class="form-input" id="reg-fn" type="text" placeholder="John" autocomplete="given-name"></div>
+    <div class="form-group"><label class="form-label">Last Name (optional)</label><input class="form-input" id="reg-ln" type="text" placeholder="Doe" autocomplete="family-name"></div>
+    <button class="btn btn-primary" id="reg-btn">Create Account</button>
+    <p class="text-center mt-16 subtitle">Already have an account? <a href="#" id="go-login">Sign in</a></p>
+  </div>`;
+  document.getElementById('reg-btn').onclick = doRegister;
+  document.getElementById('go-login').onclick = e => { e.preventDefault(); navigate('login'); };
+  document.getElementById('reg-password').addEventListener('keydown', e => { if(e.key==='Enter') doRegister(); });
+}
+
+function render2FA() {
+  document.getElementById('page-2fa').innerHTML = `<div class="auth-card">
+    <div class="text-center mb-24"><div class="h1" style="color:var(--primary)">Two-Factor Auth</div><p class="subtitle">Enter the code from your authenticator app</p></div>
+    <div id="twofa-error" style="display:none;background:var(--error-15);border:1px solid rgba(239,68,68,0.3);color:var(--error);padding:12px;border-radius:10px;font-size:14px;margin-bottom:16px"></div>
+    <div class="form-group"><label class="form-label">Authentication Code</label><input class="form-input otp-input" id="twofa-code" type="text" placeholder="000000" maxlength="6" autocomplete="one-time-code"></div>
+    <button class="btn btn-primary" id="twofa-btn">Verify</button>
+    <p class="text-center mt-16 subtitle"><a href="#" id="go-login-2fa">Back to login</a></p>
+  </div>`;
+  document.getElementById('twofa-btn').onclick = do2FA;
+  document.getElementById('go-login-2fa').onclick = e => { e.preventDefault(); navigate('login'); };
+  document.getElementById('twofa-code').addEventListener('keydown', e => { if(e.key==='Enter') do2FA(); });
+}
+
+/* ── Auth Logic ── */
+async function doLogin() {
+  const err = document.getElementById('login-error');
+  err.style.display = 'none';
+  const btn = document.getElementById('login-btn');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+  try {
+    const r = await fetch(API+'/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:document.getElementById('login-email').value.trim(),password:document.getElementById('login-password').value})});
+    const d = await r.json();
+    if (!r.ok) { err.textContent = extractMsg(d,'Login failed'); err.style.display='block'; return; }
+    if (d.next === '2fa') { S.challengeToken = d.challengeToken; navigate('2fa'); }
+    else { saveTokens(d.accessToken, d.refreshToken); navigate('dashboard'); }
+  } catch(e) { err.textContent='Network error'; err.style.display='block'; }
+  finally { btn.disabled=false; btn.textContent='Sign In'; }
 }
 
 async function doRegister() {
-  hideError('register-error');
-  setLoading('register-btn', true);
-  const email = document.getElementById('reg-email').value.trim();
-  const password = document.getElementById('reg-password').value;
-  const firstName = document.getElementById('reg-firstname').value.trim();
-  const lastName = document.getElementById('reg-lastname').value.trim();
+  const err = document.getElementById('reg-error');
+  err.style.display = 'none';
+  const btn = document.getElementById('reg-btn');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
   try {
-    const body = { email, password };
-    if (firstName) body.firstName = firstName;
-    if (lastName) body.lastName = lastName;
-    const res = await fetch(API + '/auth/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json();
-    if (!res.ok) { showError('register-error', extractMessage(data, 'Registration failed')); return; }
-    saveTokens(data.accessToken, data.refreshToken);
-    showPage('dashboard');
-  } catch (e) {
-    showError('register-error', 'Network error. Please try again.');
-  } finally {
-    setLoading('register-btn', false);
-  }
+    const body = {email:document.getElementById('reg-email').value.trim(),password:document.getElementById('reg-password').value};
+    const fn=document.getElementById('reg-fn').value.trim(); if(fn) body.firstName=fn;
+    const ln=document.getElementById('reg-ln').value.trim(); if(ln) body.lastName=ln;
+    const r = await fetch(API+'/auth/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const d = await r.json();
+    if (!r.ok) { err.textContent=extractMsg(d,'Registration failed'); err.style.display='block'; return; }
+    saveTokens(d.accessToken, d.refreshToken);
+    navigate('dashboard');
+  } catch(e) { err.textContent='Network error'; err.style.display='block'; }
+  finally { btn.disabled=false; btn.textContent='Create Account'; }
 }
 
 async function do2FA() {
-  hideError('twofa-error');
-  setLoading('twofa-btn', true);
-  const code = document.getElementById('twofa-code').value.trim();
+  const err = document.getElementById('twofa-error');
+  err.style.display = 'none';
+  const btn = document.getElementById('twofa-btn');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
   try {
-    const res = await fetch(API + '/auth/login/2fa', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ challengeToken, code }),
-    });
-    const data = await res.json();
-    if (!res.ok) { showError('twofa-error', extractMessage(data, 'Invalid code')); return; }
-    saveTokens(data.accessToken, data.refreshToken);
-    showPage('dashboard');
-  } catch (e) {
-    showError('twofa-error', 'Network error. Please try again.');
-  } finally {
-    setLoading('twofa-btn', false);
-  }
+    const r = await fetch(API+'/auth/login/2fa',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({challengeToken:S.challengeToken,code:document.getElementById('twofa-code').value.trim()})});
+    const d = await r.json();
+    if (!r.ok) { err.textContent=extractMsg(d,'Invalid code'); err.style.display='block'; return; }
+    saveTokens(d.accessToken, d.refreshToken);
+    navigate('dashboard');
+  } catch(e) { err.textContent='Network error'; err.style.display='block'; }
+  finally { btn.disabled=false; btn.textContent='Verify'; }
 }
 
-// ── Profile ───────────────────────────────────────────────────────
-async function loadProfile() {
+/* ══════════════════════════════════════════════════════════════════
+   PROFILE SCREEN
+   ══════════════════════════════════════════════════════════════════ */
+async function renderProfile() {
+  const c = document.getElementById('screen-content');
+  c.innerHTML = '<div class="flex-center" style="padding:40px"><span class="spinner spinner-light"></span></div>';
   try {
-    const res = await apiFetch('/profile');
-    if (!res.ok) { if (res.status === 401) { clearTokens(); showPage('login'); } return; }
-    const data = await res.json();
+    const r = await apiFetch('/profile');
+    if (!r.ok) { if(r.status===401){clearTokens();navigate('login');} return; }
+    S.profile = await r.json();
+  } catch(e) { c.innerHTML = '<div class="empty-state"><div class="empty-state-text">Failed to load profile</div></div>'; return; }
 
-    const name = [data.firstName, data.lastName].filter(Boolean).join(' ') || data.email || 'User';
-    const initials = name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) || '?';
+  const p = S.profile;
+  const name = [p.firstName, p.lastName].filter(Boolean).join(' ') || p.email || 'User';
+  const kycStatus = (p.kycStatus || 'UNVERIFIED').toUpperCase();
 
-    document.getElementById('dash-avatar').textContent = initials;
-    document.getElementById('dash-name').textContent = name;
-    document.getElementById('dash-email').textContent = data.email || '';
-    document.getElementById('dash-email-val').textContent = data.email || '-';
-    document.getElementById('dash-phone-val').textContent = data.phone || '-';
-    document.getElementById('dash-wallet-val').textContent = data.walletAddress || 'Not linked';
-
-    const kycStatus = (data.kycStatus || 'UNVERIFIED').toUpperCase();
-    const kycEl = document.getElementById('dash-kyc');
-    kycEl.textContent = kycStatus;
-    kycEl.className = 'badge badge-' + kycStatus.toLowerCase().replace('_', '-');
-
-    document.getElementById('edit-firstname').value = data.firstName || '';
-    document.getElementById('edit-lastname').value = data.lastName || '';
-    document.getElementById('edit-dob').value = data.dateOfBirth ? data.dateOfBirth.split('T')[0] : '';
-    document.getElementById('edit-country').value = data.country || '';
-    document.getElementById('edit-phone').value = data.phone || '';
-    document.getElementById('edit-wallet').value = data.walletAddress || '';
-
-    // Email verification status
-    const isVerified = !!data.emailVerified;
-    const emailVerifyStatus = document.getElementById('email-verify-status');
-    const emailVerifyForm = document.getElementById('email-verify-form');
-    const emailSendBtn = document.getElementById('email-send-code-btn');
-    if (isVerified) {
-      emailVerifyStatus.innerHTML = '✓ <span style="color:#27ae60">Email verified</span>';
-      emailVerifyForm.style.display = 'none';
-      emailSendBtn.style.display = 'none';
-    } else if (data.email) {
-      emailVerifyStatus.innerHTML = '⚠ <span style="color:#f39c12">Email not verified</span>';
-      emailSendBtn.style.display = 'block';
-      emailVerifyForm.style.display = 'none';
-    } else {
-      emailVerifyStatus.innerHTML = '<span style="color:#86868b">No email address</span>';
-      emailSendBtn.style.display = 'none';
-    }
-  } catch(e) {
-    console.error('loadProfile error:', e);
-  }
+  c.innerHTML = `
+    <div class="app-card">
+      <div class="profile-header">
+        <div class="avatar avatar-lg" style="background:var(--primary-15);color:var(--primary)">${initials(name)}</div>
+        <div class="profile-header-info">
+          <div class="profile-header-name">${esc(name)}</div>
+          <div class="profile-header-email">${esc(p.email||'')}</div>
+        </div>
+        ${statusBadge(kycStatus)}
+      </div>
+    </div>
+    <div class="section-header mt-16">Personal Information</div>
+    <div class="app-card">
+      <div class="info-row"><span class="info-label">Phone</span><span class="info-value">${esc(p.phone||'—')}</span></div>
+      <div class="info-row"><span class="info-label">Country</span><span class="info-value">${esc(p.country||'—')}</span></div>
+      <div class="info-row"><span class="info-label">Date of Birth</span><span class="info-value">${formatDate(p.dateOfBirth)}</span></div>
+    </div>`;
 }
 
-async function doUpdateProfile() {
-  hideError('profile-error');
-  setLoading('save-profile-btn', true);
-
-  const fn = document.getElementById('edit-firstname').value.trim();
-  const ln = document.getElementById('edit-lastname').value.trim();
-  const dob = document.getElementById('edit-dob').value;
-  const country = document.getElementById('edit-country').value.trim();
-  const phone = document.getElementById('edit-phone').value.trim();
-  const wallet = document.getElementById('edit-wallet').value.trim();
-
-  const profileBody = {};
-  if (fn) profileBody.firstName = fn;
-  if (ln) profileBody.lastName = ln;
-  if (dob) profileBody.dateOfBirth = dob;
-  if (country) profileBody.country = country;
-
+/* ══════════════════════════════════════════════════════════════════
+   KYC SCREEN
+   ══════════════════════════════════════════════════════════════════ */
+async function renderKyc() {
+  const c = document.getElementById('screen-content');
+  c.innerHTML = '<div class="flex-center" style="padding:40px"><span class="spinner spinner-light"></span></div>';
   try {
-    const errors = [];
-
-    const profileRes = await apiFetch('/profile', {
-      method: 'PUT',
-      body: JSON.stringify(profileBody),
-    });
-    if (!profileRes.ok) {
-      const d = await profileRes.json();
-      errors.push(extractMessage(d, 'Profile update failed'));
-    }
-
-    const walletRes = await apiFetch(
-      '/profile/wallet',
-      wallet
-        ? { method: 'PUT', body: JSON.stringify({ walletAddress: wallet }) }
-        : { method: 'DELETE' }
-    );
-    if (!walletRes.ok && walletRes.status !== 404) {
-      const d = await walletRes.json();
-      errors.push(extractMessage(d, 'Wallet update failed'));
-    }
-
-    // Update phone
-    const phoneRes = await apiFetch('/profile/phone', {
-      method: 'PUT',
-      body: JSON.stringify({ phone: phone || undefined }),
-    });
-    if (!phoneRes.ok && phoneRes.status !== 404) {
-      const d = await phoneRes.json();
-      errors.push(extractMessage(d, 'Phone update failed'));
-    }
-
-    if (errors.length) {
-      showError('profile-error', errors.join('; '));
-    } else {
-      showSuccess('profile-success', '✓ Profile saved successfully');
-      loadProfile();
-    }
-  } catch(e) {
-    showError('profile-error', 'Network error. Please try again.');
-  } finally {
-    setLoading('save-profile-btn', false);
-  }
-}
-
-async function doLogout() {
-  try {
-    await apiFetch('/auth/logout', { method: 'POST', body: JSON.stringify({ refreshToken }) });
+    const r = await apiFetch('/kyc/status');
+    if (r.ok) S.kycStatus = await r.json();
   } catch(e) {}
-  clearTokens();
-  document.getElementById('login-email').value = '';
-  document.getElementById('login-password').value = '';
-  showPage('login');
-}
 
-// ── Sessions ──────────────────────────────────────────────────────
-async function loadSessions() {
-  const container = document.getElementById('sessions-list');
-  container.innerHTML = '<div style="color:#86868b;font-size:14px">Loading sessions...</div>';
-  try {
-    const res = await apiFetch('/auth/sessions');
-    if (!res.ok) return;
-    const data = await res.json();
-    const sessions = data.sessions || (Array.isArray(data) ? data : []);
-    if (!sessions.length) {
-      container.innerHTML = '<div style="color:#86868b;font-size:14px">No active sessions</div>';
-      return;
-    }
-    container.innerHTML = '';
-    sessions.forEach(s => {
-      const item = document.createElement('div');
-      item.className = 'session-item';
+  const ks = S.kycStatus || {};
+  const status = (ks.status||'UNVERIFIED').toUpperCase();
+  const cfg = {
+    VERIFIED: {color:'var(--primary)',icon:I.check,label:'Verified',desc:'Your identity has been successfully verified.'},
+    PENDING: {color:'var(--warning)',icon:I.clock,label:'Pending',desc:'Your documents are being reviewed.'},
+    REJECTED: {color:'var(--error)',icon:I.alertCircle,label:'Rejected',desc: ks.rejectionReason || 'Your verification was not approved. Please try again.'},
+    UNVERIFIED: {color:'var(--text-secondary)',icon:I.shield,label:'Unverified',desc:'Complete identity verification to unlock features. You will need a valid government-issued ID.'},
+  }[status] || {color:'var(--text-secondary)',icon:I.shield,label:status,desc:''};
 
-      const info = document.createElement('div');
-      info.className = 'session-info';
-      const deviceName = parseUA(s.deviceInfo);
-      info.innerHTML = '<div class="device">' + deviceName + (s.isCurrent ? ' <span style="font-size:11px;color:#0071e3;font-weight:400">(this device)</span>' : '') + '</div>' +
-        '<div class="date">' + (s.ipAddress || '') + ' · ' + new Date(s.createdAt).toLocaleDateString() + '</div>';
+  let html = `
+    <div class="text-center mb-20">
+      <div class="kyc-circle" style="background:${cfg.color}22">${cfg.icon.replace('currentColor',cfg.color)}</div>
+      ${statusBadge(status)}
+      <p class="subtitle mt-8" style="max-width:300px;margin-left:auto;margin-right:auto">${esc(cfg.desc)}</p>
+    </div>`;
 
-      item.appendChild(info);
+  if (status !== 'VERIFIED') {
+    html += `<button class="btn btn-primary mb-16" id="kyc-start">${status==='PENDING'?'Check Status':'Start Verification'}</button>`;
+  }
+  html += '<div id="sumsub-container" style="display:none"></div>';
 
-      if (!s.isCurrent) {
-        const btn = document.createElement('button');
-        btn.className = 'session-revoke';
-        btn.textContent = 'Revoke';
-        btn.dataset.sessionId = s.id;
-        item.appendChild(btn);
-      } else {
-        const span = document.createElement('span');
-        span.style.cssText = 'font-size:12px;color:#0071e3;flex-shrink:0;margin-left:8px';
-        span.textContent = 'Current';
-        item.appendChild(span);
-      }
+  if (status === 'VERIFIED') {
+    html += '<div id="applicant-data-area"><div class="flex-center" style="padding:20px"><span class="spinner spinner-light"></span></div></div>';
+    html += `<button class="btn btn-outline mt-8" id="kyc-refresh" style="height:40px;font-size:14px">${I.refresh} Refresh Data</button>`;
+  }
 
-      container.appendChild(item);
-    });
-  } catch(e) {
-    container.innerHTML = '<div style="color:#ff3b30;font-size:14px">Failed to load sessions</div>';
+  c.innerHTML = html;
+
+  if (status !== 'VERIFIED') {
+    const btn = document.getElementById('kyc-start');
+    if (btn) btn.onclick = startKYC;
+  }
+  if (status === 'VERIFIED') {
+    loadApplicantData();
+    const rb = document.getElementById('kyc-refresh');
+    if (rb) rb.onclick = () => loadApplicantData(true);
   }
 }
 
-async function revokeSession(id) {
-  await apiFetch('/auth/sessions/' + id, { method: 'DELETE' });
-  loadSessions();
-}
-
-async function revokeAllSessions() {
-  await apiFetch('/auth/sessions', { method: 'DELETE' });
-  clearTokens();
-  showPage('login');
-}
-
-// ── KYC ───────────────────────────────────────────────────────────
-async function loadKycStatus() {
+async function loadApplicantData(force) {
+  const area = document.getElementById('applicant-data-area');
+  if (!area) return;
+  area.innerHTML = '<div class="flex-center" style="padding:20px"><span class="spinner spinner-light"></span></div>';
   try {
-    const res = await apiFetch('/kyc/status');
-    if (!res.ok) return;
-    const data = await res.json();
-    const status = (data.status || 'UNVERIFIED').toUpperCase();
-    const el = document.getElementById('kyc-status-badge');
-    el.textContent = status;
-    el.className = 'badge badge-' + status.toLowerCase().replace('_', '-');
+    const r = await apiFetch('/kyc/applicant-data');
+    if (!r.ok) { area.innerHTML = '<div class="app-card"><p class="subtitle">Failed to load verification data</p></div>'; return; }
+    S.applicantData = await r.json();
+  } catch(e) { area.innerHTML = '<div class="app-card"><p class="subtitle">Network error</p></div>'; return; }
 
-    const desc = document.getElementById('kyc-desc');
-    const btn = document.getElementById('kyc-start-btn');
-    if (status === 'VERIFIED') {
-      desc.textContent = 'Your identity has been successfully verified.';
-      btn.textContent = 'Verification Complete';
-      btn.disabled = true;
-    } else if (status === 'PENDING') {
-      desc.textContent = 'Your documents are being reviewed. This usually takes a few minutes.';
-    } else if (status === 'REJECTED') {
-      desc.textContent = 'Your verification was not approved. Please try again with valid documents.';
-    } else {
-      desc.textContent = 'Complete identity verification to unlock financial features. You will need a valid government-issued ID and a camera.';
-    }
-  } catch(e) {}
+  const d = S.applicantData;
+  let html = '';
+
+  // Personal info
+  if (d.info) {
+    const i = d.info;
+    html += '<div class="section-header">Verified Personal Data</div><div class="app-card">';
+    const rows = [
+      ['First Name', i.firstName], ['Last Name', i.lastName], ['Middle Name', i.middleName],
+      ['Date of Birth', formatDate(i.dob)], ['Place of Birth', i.placeOfBirth],
+      ['Country', i.country], ['Nationality', i.nationality],
+      ['Gender', i.gender==='M'?'Male':i.gender==='F'?'Female':i.gender],
+    ].filter(r => r[1]);
+    rows.forEach(r => {
+      html += `<div class="verified-row"><div class="verified-row-icon">${I.check}</div><div class="verified-row-label">${esc(r[0])}</div><div class="verified-row-value">${esc(r[1])}</div></div>`;
+    });
+    html += '</div>';
+  }
+
+  // Documents
+  if (d.idDocs && d.idDocs.length) {
+    html += '<div class="section-header">Documents</div>';
+    d.idDocs.forEach(doc => {
+      const typeName = {PASSPORT:'Passport',ID_CARD:'ID Card',DRIVERS:'Driver License',DRIVING_LICENSE:'Driver License',RESIDENCE_PERMIT:'Residence Permit'}[doc.idDocType] || doc.idDocType;
+      html += '<div class="app-card">';
+      html += `<div style="font-size:15px;font-weight:600;margin-bottom:8px">${esc(typeName)}</div>`;
+      const rows = [['Number',doc.number],['Name',[(doc.firstName||''),(doc.lastName||'')].filter(Boolean).join(' ')],['Issued',formatDate(doc.issuedDate)],['Valid Until',formatDate(doc.validUntil)],['Issued By',doc.issuedBy],['Country',doc.country]].filter(r=>r[1]);
+      rows.forEach(r => { html += `<div class="info-row"><span class="info-label">${esc(r[0])}</span><span class="info-value">${esc(r[1])}</span></div>`; });
+      html += '</div>';
+    });
+  }
+
+  // Addresses
+  if (d.addresses && d.addresses.length) {
+    html += '<div class="section-header">Addresses</div>';
+    d.addresses.forEach(a => {
+      const parts = [a.street,a.buildingNumber?'bld.'+a.buildingNumber:'',a.flatNumber?'apt.'+a.flatNumber:'',a.town,a.postCode,a.country].filter(Boolean);
+      html += `<div class="app-card"><div style="display:flex;gap:8px;align-items:start"><div style="color:var(--text-secondary);flex-shrink:0;margin-top:2px">${I.mapPin}</div><div style="font-size:14px;line-height:1.5">${esc(parts.join(', '))}</div></div></div>`;
+    });
+  }
+
+  area.innerHTML = html || '<div class="app-card"><p class="subtitle">No detailed data available</p></div>';
 }
 
 async function startKYC() {
-  setLoading('kyc-start-btn', true);
+  const btn = document.getElementById('kyc-start');
+  if (!btn) return;
+  btn.disabled=true; btn.innerHTML='<span class="spinner"></span>';
   try {
-    const res = await apiFetch('/kyc/start', { method: 'POST', body: JSON.stringify({}) });
-    const data = await res.json();
-    if (!res.ok) { alert(extractMessage(data, 'KYC start failed')); return; }
-
-    const sdkToken = data.sdkToken || data.token;
-    if (!sdkToken) { alert('No SDK token received'); return; }
-
+    const r = await apiFetch('/kyc/start',{method:'POST',body:JSON.stringify({})});
+    const d = await r.json();
+    if (!r.ok) { toast(extractMsg(d,'KYC start failed'),'error'); btn.disabled=false; btn.textContent='Start Verification'; return; }
+    const sdkToken = d.sdkToken||d.token;
+    if (!sdkToken) { toast('No SDK token','error'); btn.disabled=false; btn.textContent='Start Verification'; return; }
     const container = document.getElementById('sumsub-container');
-    container.style.display = 'block';
-    container.innerHTML = '';
-
-    const snsWebSdkInstance = snsWebSdk
-      .init(sdkToken, async () => {
-        const r = await apiFetch('/kyc/start', { method: 'POST', body: JSON.stringify({}) });
-        const d = await r.json();
-        return d.sdkToken || d.token || '';
-      })
-      .withConf({ lang: 'en' })
-      .withOptions({ addViewportTag: false, adaptIframeHeight: true })
-      .on('idCheck.onReady', () => { setLoading('kyc-start-btn', false); })
-      .on('idCheck.applicantStatus', (payload) => {
-        if (payload.reviewResult && payload.reviewResult.reviewAnswer === 'GREEN') loadKycStatus();
-      })
-      .on('idCheck.onError', (err) => { console.error('Sumsub error:', err); })
+    container.style.display='block'; container.innerHTML='';
+    const inst = snsWebSdk
+      .init(sdkToken, async()=>{ const r2=await apiFetch('/kyc/start',{method:'POST',body:JSON.stringify({})}); const d2=await r2.json(); return d2.sdkToken||d2.token||''; })
+      .withConf({lang:S.lang||'en'})
+      .withOptions({addViewportTag:false,adaptIframeHeight:true})
+      .on('idCheck.onReady',()=>{btn.disabled=false;btn.textContent='Verification in progress';})
+      .on('idCheck.applicantStatus',(p)=>{if(p.reviewResult&&p.reviewResult.reviewAnswer==='GREEN'){setTimeout(()=>renderKyc(),1000);}})
+      .on('idCheck.onError',(e)=>{console.error('Sumsub:',e);})
       .build();
-
-    snsWebSdkInstance.launch('#sumsub-container');
-  } catch(e) {
-    console.error('KYC start failed:', e);
-    alert('KYC start failed');
-    setLoading('kyc-start-btn', false);
-  }
+    inst.launch('#sumsub-container');
+  } catch(e) { toast('KYC start failed','error'); btn.disabled=false; btn.textContent='Start Verification'; }
 }
 
-// ── Organization / Tenant ─────────────────────────────────────────
-async function loadTenants() {
-  const list = document.getElementById('tenant-list');
-  list.innerHTML = '<div style="color:#86868b;font-size:14px">Loading...</div>';
-  // Make sure list view is visible
-  document.getElementById('org-list-view').style.display = 'block';
-  document.getElementById('org-detail-view').classList.remove('active');
+/* ══════════════════════════════════════════════════════════════════
+   ORGANIZATIONS
+   ══════════════════════════════════════════════════════════════════ */
+async function renderOrgs() {
+  const c = document.getElementById('screen-content');
+  c.innerHTML = '<div class="flex-center" style="padding:40px"><span class="spinner spinner-light"></span></div>';
   try {
-    const res = await apiFetch('/tenant');
-    if (!res.ok) { list.innerHTML = '<div style="color:#ff3b30;font-size:14px">Failed to load</div>'; return; }
-    const tenants = await res.json();
-    if (!tenants.length) {
-      list.innerHTML = '<div style="color:#86868b;font-size:14px;padding:8px 0">No organizations yet. Create one below.</div>';
-      return;
-    }
-    list.innerHTML = '';
-    tenants.forEach(t => {
-      const card = document.createElement('div');
-      card.className = 'tenant-card';
-      const kybStatus = (t.kybStatus || 'UNVERIFIED').toUpperCase();
-      card.innerHTML = `
-        <div class="tenant-card-info">
-          <div class="tenant-card-name">${escapeHtml(t.name)}</div>
-          <div class="tenant-card-role">Role: ${t.role || '-'}</div>
-        </div>
-        <span class="badge badge-${kybStatus.toLowerCase().replace('_','-')}">${kybStatus}</span>
-      `;
-      card.addEventListener('click', () => openTenant(t.id, t.role));
-      list.appendChild(card);
-    });
-  } catch(e) {
-    list.innerHTML = '<div style="color:#ff3b30;font-size:14px">Network error</div>';
-  }
-}
-
-async function openTenant(tenantId, role) {
-  currentTenantId = tenantId;
-  currentTenantRole = role;
-
-  document.getElementById('org-list-view').style.display = 'none';
-  document.getElementById('org-detail-view').classList.add('active');
-
-  // Reset KYB area
-  document.getElementById('kyb-sumsub-container').style.display = 'none';
-  document.getElementById('kyb-sumsub-container').innerHTML = '';
-  document.getElementById('kyb-start-btn').disabled = false;
-  document.getElementById('kyb-start-btn').textContent = 'Start Business Verification';
-
-  // Show/hide invite section based on role
-  const canManage = role === 'OWNER' || role === 'ADMIN';
-  document.getElementById('invite-section').style.display = canManage ? 'block' : 'none';
-
-  // Show/hide KYB button (only owner can start)
-  document.getElementById('kyb-start-btn').style.display = role === 'OWNER' ? 'block' : 'none';
-
-  // Show/hide delete org (only owner)
-  document.getElementById('delete-org-section').style.display = role === 'OWNER' ? 'block' : 'none';
-
-  // Load details
-  try {
-    const res = await apiFetch('/tenant/' + tenantId);
-    if (!res.ok) return;
-    const data = await res.json();
-
-    const initials = data.name ? data.name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0,2) : '?';
-    document.getElementById('org-detail-avatar').textContent = initials;
-    document.getElementById('org-detail-name').textContent = data.name;
-    document.getElementById('org-detail-role').textContent = 'Your role: ' + role;
-
-    // Members
-    renderMembers(data.members || [], tenantId, role);
-  } catch(e) {
-    console.error('openTenant error:', e);
-  }
-
-  // Load KYB status
-  loadKybStatus(tenantId);
-}
-
-async function loadKybStatus(tenantId) {
-  try {
-    const res = await apiFetch('/tenant/' + tenantId + '/kyb/status');
-    if (!res.ok) return;
-    const data = await res.json();
-    const status = (data.status || 'UNVERIFIED').toUpperCase();
-    const el = document.getElementById('kyb-status-badge');
-    el.textContent = status;
-    el.className = 'badge badge-' + status.toLowerCase().replace('_', '-');
-
-    const desc = document.getElementById('kyb-desc');
-    const btn = document.getElementById('kyb-start-btn');
-    if (status === 'VERIFIED') {
-      desc.textContent = 'Your organization has been successfully verified.';
-      btn.textContent = 'Verification Complete';
-      btn.disabled = true;
-    } else if (status === 'PENDING') {
-      desc.textContent = 'Business documents are being reviewed. This usually takes 1-3 business days.';
-    } else if (status === 'REJECTED') {
-      desc.textContent = 'Business verification was not approved. Please try again with valid documents.';
-    } else {
-      desc.textContent = 'Verify your organization to unlock business features in the Taler ecosystem.';
-    }
+    const r = await apiFetch('/tenant');
+    if (r.ok) S.tenants = await r.json();
   } catch(e) {}
+
+  let html = '';
+  if (!S.tenants.length) {
+    html = '<div class="empty-state">' + I.building + '<div class="empty-state-text">No organizations yet</div></div>';
+  } else {
+    S.tenants.forEach(t => {
+      const kybStatus = (t.kybStatus||'UNVERIFIED').toUpperCase();
+      html += `<div class="tenant-card" data-tid="${t.id}" data-role="${t.role||''}">
+        <div class="avatar avatar-md" style="background:var(--primary-15);color:var(--primary);border-radius:10px">${initials(t.name)}</div>
+        <div class="tenant-card-info"><div class="tenant-card-name">${esc(t.name)}</div><div class="tenant-card-role">${roleBadge(t.role)}</div></div>
+        ${statusBadge(kybStatus)}
+      </div>`;
+    });
+  }
+  html += `<button class="btn btn-primary mt-16" id="create-org-btn">${I.plus} Create Organization</button>`;
+  c.innerHTML = html;
+
+  c.querySelectorAll('.tenant-card').forEach(el => el.onclick = () => {
+    S.currentTenantId = el.dataset.tid;
+    S.currentTenantRole = el.dataset.role;
+    pushSubScreen('orgDetail');
+  });
+  document.getElementById('create-org-btn').onclick = showCreateOrgSheet;
 }
 
-function renderMembers(members, tenantId, myRole) {
-  const container = document.getElementById('members-list');
-  container.innerHTML = '';
-  if (!members.length) {
-    container.innerHTML = '<div style="color:#86868b;font-size:14px">No members</div>';
+function showCreateOrgSheet() {
+  showSheet('Create Organization', `
+    <div class="form-group"><label class="form-label">Name *</label><input class="form-input" id="co-name" placeholder="Acme Corp"></div>
+    <div class="form-group"><label class="form-label">Email</label><input class="form-input" id="co-email" type="email" placeholder="contact@example.com"></div>
+    <div class="form-group"><label class="form-label">Website</label><input class="form-input" id="co-web" type="url" placeholder="https://example.com"></div>
+    <div class="form-group"><label class="form-label">Legal Address</label><input class="form-input" id="co-addr" placeholder="Street, City"></div>
+    <button class="btn btn-primary" id="co-submit">Create</button>
+  `);
+  document.getElementById('co-submit').onclick = async () => {
+    const name = document.getElementById('co-name').value.trim();
+    if (!name) { toast('Name is required','error'); return; }
+    const btn = document.getElementById('co-submit');
+    btn.disabled=true; btn.innerHTML='<span class="spinner"></span>';
+    const body = {name};
+    const e=document.getElementById('co-email').value.trim(); if(e)body.email=e;
+    const w=document.getElementById('co-web').value.trim(); if(w)body.website=w;
+    const a=document.getElementById('co-addr').value.trim(); if(a)body.legalAddress=a;
+    try {
+      const r = await apiFetch('/tenant',{method:'POST',body:JSON.stringify(body)});
+      if (!r.ok) { const d=await r.json(); toast(extractMsg(d,'Create failed'),'error'); return; }
+      closeSheet(); toast('Organization created','success'); renderOrgs();
+    } catch(e) { toast('Network error','error'); }
+    finally { btn.disabled=false; btn.textContent='Create'; }
+  };
+}
+
+async function renderOrgDetail() {
+  const c = document.getElementById('screen-content');
+  c.innerHTML = '<div class="flex-center" style="padding:40px"><span class="spinner spinner-light"></span></div>';
+  const tid = S.currentTenantId;
+  try {
+    const [tr, kr] = await Promise.all([apiFetch('/tenant/'+tid), apiFetch('/tenant/'+tid+'/kyb/status')]);
+    if (tr.ok) S.currentTenantData = await tr.json();
+    if (kr.ok) { const kd = await kr.json(); S.currentTenantData._kybStatus = kd.status; }
+  } catch(e) {}
+
+  const t = S.currentTenantData;
+  if (!t) { c.innerHTML='<div class="empty-state"><div class="empty-state-text">Failed to load</div></div>'; return; }
+  renderAppBar();
+  const role = S.currentTenantRole || '';
+  const kybStatus = (t._kybStatus||t.kybStatus||'UNVERIFIED').toUpperCase();
+  const canManage = role==='OWNER'||role==='ADMIN';
+
+  let html = `
+    <div class="app-card">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+        <div class="avatar avatar-md" style="background:var(--primary-15);color:var(--primary);border-radius:10px">${initials(t.name)}</div>
+        <div style="flex:1;min-width:0"><div style="font-size:18px;font-weight:700">${esc(t.name)}</div><div style="font-size:12px;color:var(--text-secondary);margin-top:2px">Your role: ${esc(role)}</div></div>
+      </div>
+    </div>
+
+    <div class="section-header">Business Verification (KYB)</div>
+    <div class="app-card">
+      <div class="info-row"><span class="info-label">Status</span>${statusBadge(kybStatus)}</div>`;
+
+  if (role==='OWNER' && kybStatus!=='VERIFIED') {
+    html += `<button class="btn btn-primary mt-12" id="kyb-start" style="height:40px;font-size:14px">Start Business Verification</button>`;
+  }
+  html += '</div><div id="kyb-sumsub-container" style="display:none"></div>';
+
+  // Contact info
+  if (t.contactEmail || t.contactPhone || t.website) {
+    html += '<div class="section-header">Contact Info</div><div class="app-card">';
+    if (t.contactEmail) html += `<div class="info-row"><span class="info-label">Email</span><span class="info-value">${esc(t.contactEmail)}</span></div>`;
+    if (t.contactPhone) html += `<div class="info-row"><span class="info-label">Phone</span><span class="info-value">${esc(t.contactPhone)}</span></div>`;
+    if (t.website) html += `<div class="info-row"><span class="info-label">Website</span><span class="info-value"><a href="${esc(t.website)}" target="_blank">${esc(t.website)}</a></span></div>`;
+    html += '</div>';
+  }
+
+  // Members
+  html += '<div class="section-header">Members</div><div class="app-card" id="members-area">';
+  const members = t.members || [];
+  if (!members.length) html += '<p class="subtitle">No members</p>';
+  else members.forEach(m => {
+    const mu = m.user || {};
+    const email = mu.email || m.userId || '—';
+    const mRole = m.role || '—';
+    const isOwner = mRole === 'OWNER';
+    html += `<div class="member-item"><div class="member-info"><div class="member-email">${esc(email)}</div><div class="member-role">${esc(mRole)}</div></div>`;
+    if (canManage && !isOwner) {
+      html += `<div class="member-actions">
+        <select class="form-input" style="width:auto;padding:4px 8px;font-size:12px;border-radius:6px" data-uid="${m.userId||mu.id}" data-orig="${mRole.toLowerCase()}">
+          ${['ADMIN','OPERATOR','VIEWER'].map(r=>`<option value="${r.toLowerCase()}"${r===mRole?' selected':''}>${r}</option>`).join('')}
+        </select>
+        <button class="btn btn-sm btn-danger-outline" data-remove="${m.userId||mu.id}" style="height:28px;padding:0 8px;font-size:12px;border-width:1px">${I.close}</button>
+      </div>`;
+    }
+    html += '</div>';
+  });
+  html += '</div>';
+
+  // Invite
+  if (canManage) {
+    html += `<button class="btn btn-outline mt-8" id="invite-btn" style="height:40px;font-size:14px">${I.userPlus} Invite Member</button>`;
+  }
+
+  c.innerHTML = html;
+
+  // KYB start
+  const kybBtn = document.getElementById('kyb-start');
+  if (kybBtn) kybBtn.onclick = () => startKYB(tid);
+
+  // Role change
+  c.querySelectorAll('select[data-uid]').forEach(sel => {
+    sel.onchange = async () => {
+      const r = await apiFetch('/tenant/'+tid+'/members/'+sel.dataset.uid+'/role',{method:'PUT',body:JSON.stringify({role:sel.value})});
+      if (!r.ok) { sel.value=sel.dataset.orig; toast('Failed to change role','error'); }
+      else toast('Role updated','success');
+    };
+  });
+
+  // Remove member
+  c.querySelectorAll('[data-remove]').forEach(btn => {
+    btn.onclick = () => showModal('Remove Member','Are you sure you want to remove this member?',[
+      {label:'Cancel'},{label:'Remove',danger:true,action:async()=>{
+        const r=await apiFetch('/tenant/'+tid+'/members/'+btn.dataset.remove,{method:'DELETE'});
+        if(r.ok){toast('Member removed','success');renderOrgDetail();}else toast('Failed','error');
+      }}
+    ]);
+  });
+
+  // Invite
+  const invBtn = document.getElementById('invite-btn');
+  if (invBtn) invBtn.onclick = () => showInviteSheet(tid);
+}
+
+function showInviteSheet(tid) {
+  showSheet('Invite Member', `
+    <div class="form-group"><label class="form-label">Email</label><input class="form-input" id="inv-email" type="email" placeholder="colleague@example.com"></div>
+    <div class="form-group"><label class="form-label">Role</label>
+      <select class="form-input" id="inv-role"><option value="admin">Admin</option><option value="operator">Operator</option><option value="viewer">Viewer</option></select>
+    </div>
+    <button class="btn btn-primary" id="inv-submit">Send Invite</button>
+  `);
+  document.getElementById('inv-submit').onclick = async () => {
+    const email=document.getElementById('inv-email').value.trim();
+    if(!email){toast('Email required','error');return;}
+    const btn=document.getElementById('inv-submit');
+    btn.disabled=true; btn.innerHTML='<span class="spinner"></span>';
+    try {
+      const r=await apiFetch('/tenant/'+tid+'/members/invite',{method:'POST',body:JSON.stringify({email,role:document.getElementById('inv-role').value})});
+      const d=await r.json();
+      if(!r.ok){toast(extractMsg(d,'Invite failed'),'error');return;}
+      closeSheet();toast(d.type==='added'?'Member added':'Invite sent','success');renderOrgDetail();
+    }catch(e){toast('Network error','error');}
+    finally{btn.disabled=false;btn.textContent='Send Invite';}
+  };
+}
+
+async function startKYB(tid) {
+  const btn=document.getElementById('kyb-start');
+  if(!btn)return;
+  btn.disabled=true;btn.innerHTML='<span class="spinner"></span>';
+  try{
+    const r=await apiFetch('/tenant/'+tid+'/kyb/start',{method:'POST'});
+    const d=await r.json();
+    if(!r.ok){toast(extractMsg(d,'KYB start failed'),'error');btn.disabled=false;btn.textContent='Start Business Verification';return;}
+    const sdkToken=d.sdkToken||d.token;
+    if(!sdkToken){toast('Mock mode - no token','warning');btn.disabled=false;btn.textContent='Start Business Verification';return;}
+    const container=document.getElementById('kyb-sumsub-container');
+    container.style.display='block';container.innerHTML='';
+    const inst=snsWebSdk
+      .init(sdkToken,async()=>{const r2=await apiFetch('/tenant/'+tid+'/kyb/start',{method:'POST'});const d2=await r2.json();return d2.sdkToken||d2.token||'';})
+      .withConf({lang:S.lang||'en'}).withOptions({addViewportTag:false,adaptIframeHeight:true})
+      .on('idCheck.onReady',()=>{btn.disabled=false;btn.textContent='Verification in progress';})
+      .on('idCheck.applicantStatus',(p)=>{if(p.reviewResult&&p.reviewResult.reviewAnswer==='GREEN')setTimeout(()=>renderOrgDetail(),1000);})
+      .on('idCheck.onError',(e)=>{console.error('KYB:',e);})
+      .build();
+    inst.launch('#kyb-sumsub-container');
+  }catch(e){toast('KYB start failed','error');btn.disabled=false;btn.textContent='Start Business Verification';}
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   SETTINGS
+   ══════════════════════════════════════════════════════════════════ */
+function renderSettings() {
+  const c = document.getElementById('screen-content');
+  c.innerHTML = `
+    <div class="section-header">Security</div>
+    <div class="app-card">
+      <div class="nav-tile" id="set-password">
+        <div class="icon-box" style="background:rgba(8,145,178,0.15);color:var(--secondary)">${I.key}</div>
+        <span class="nav-tile-text">Change Password</span>
+        <span class="nav-tile-chevron">${I.chevron}</span>
+      </div>
+      <div class="nav-tile" id="set-2fa">
+        <div class="icon-box" style="background:var(--primary-15);color:var(--primary)">${I.lock}</div>
+        <span class="nav-tile-text">Two-Factor Auth</span>
+        <span class="nav-tile-trailing">Coming soon</span>
+      </div>
+      <div class="nav-tile" id="set-sessions">
+        <div class="icon-box" style="background:rgba(245,158,11,0.15);color:var(--warning)">${I.devices}</div>
+        <span class="nav-tile-text">Active Sessions</span>
+        <span class="nav-tile-chevron">${I.chevron}</span>
+      </div>
+    </div>
+
+    <div class="section-header">Account</div>
+    <div class="app-card">
+      <div class="nav-tile" id="set-lang">
+        <div class="icon-box" style="background:rgba(8,145,178,0.15);color:var(--secondary)">${I.globe}</div>
+        <span class="nav-tile-text">Language</span>
+        <span class="nav-tile-trailing" id="set-lang-val">${S.lang==='ru'?'Russian':'English'}</span>
+        <span class="nav-tile-chevron">${I.chevron}</span>
+      </div>
+      <div class="nav-tile" id="set-export">
+        <div class="icon-box" style="background:var(--primary-15);color:var(--primary)">${I.download}</div>
+        <span class="nav-tile-text">Export Data</span>
+        <span class="nav-tile-chevron">${I.chevron}</span>
+      </div>
+      <div class="nav-tile" id="set-delete">
+        <div class="icon-box" style="background:var(--error-15);color:var(--error)">${I.trash}</div>
+        <span class="nav-tile-text" style="color:var(--error)">Delete Account</span>
+        <span class="nav-tile-chevron">${I.chevron}</span>
+      </div>
+    </div>
+
+    <button class="btn btn-danger-outline mt-16" id="set-logout">${I.logout} Sign Out</button>
+    <p class="text-center mt-16 subtitle" style="font-size:12px">Taler ID v1.0.0</p>`;
+
+  document.getElementById('set-password').onclick = showChangePasswordSheet;
+  document.getElementById('set-sessions').onclick = () => pushSubScreen('sessions');
+  document.getElementById('set-lang').onclick = showLangSheet;
+  document.getElementById('set-export').onclick = doExport;
+  document.getElementById('set-delete').onclick = () => showModal('Delete Account','This action is irreversible. All your data will be permanently deleted.',[
+    {label:'Cancel'},{label:'Delete',danger:true,action:doDeleteAccount}
+  ]);
+  document.getElementById('set-logout').onclick = () => showModal('Sign Out','Are you sure you want to sign out?',[
+    {label:'Cancel'},{label:'Sign Out',danger:true,action:doLogout}
+  ]);
+}
+
+function showChangePasswordSheet() {
+  showSheet('Change Password', `
+    <div class="form-group"><label class="form-label">Current Password</label><input class="form-input" id="cp-old" type="password" placeholder="••••••••"></div>
+    <div class="form-group"><label class="form-label">New Password</label><input class="form-input" id="cp-new" type="password" placeholder="••••••••"></div>
+    <div class="form-group"><label class="form-label">Confirm New Password</label><input class="form-input" id="cp-confirm" type="password" placeholder="••••••••"></div>
+    <button class="btn btn-primary" id="cp-submit">Change Password</button>
+  `);
+  document.getElementById('cp-submit').onclick = async () => {
+    const oldP=document.getElementById('cp-old').value, newP=document.getElementById('cp-new').value, conf=document.getElementById('cp-confirm').value;
+    if(newP!==conf){toast('Passwords do not match','error');return;}
+    if(newP.length<8){toast('Min 8 characters','error');return;}
+    const btn=document.getElementById('cp-submit');
+    btn.disabled=true;btn.innerHTML='<span class="spinner"></span>';
+    try{
+      const r=await apiFetch('/auth/change-password',{method:'POST',body:JSON.stringify({oldPassword:oldP,newPassword:newP})});
+      if(!r.ok){const d=await r.json();toast(extractMsg(d,'Failed'),'error');return;}
+      closeSheet();toast('Password changed','success');
+    }catch(e){toast('Network error','error');}
+    finally{btn.disabled=false;btn.textContent='Change Password';}
+  };
+}
+
+function showLangSheet() {
+  showSheet('Language', `
+    <div class="country-item${S.lang==='en'?' selected':''}" id="lang-en" style="padding:14px 12px;font-size:16px">English</div>
+    <div class="country-item${S.lang==='ru'?' selected':''}" id="lang-ru" style="padding:14px 12px;font-size:16px">Русский</div>
+  `);
+  document.getElementById('lang-en').onclick = () => { S.lang='en'; localStorage.setItem('lang','en'); closeSheet(); renderSettings(); };
+  document.getElementById('lang-ru').onclick = () => { S.lang='ru'; localStorage.setItem('lang','ru'); closeSheet(); renderSettings(); };
+}
+
+async function doExport() {
+  try {
+    const r = await apiFetch('/profile/export');
+    if (!r.ok) { toast('Export failed','error'); return; }
+    const d = await r.json();
+    const blob = new Blob([JSON.stringify(d,null,2)],{type:'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href=url; a.download='taler-id-export.json'; a.click();
+    URL.revokeObjectURL(url);
+    toast('Data exported','success');
+  } catch(e) { toast('Export failed','error'); }
+}
+
+async function doDeleteAccount() {
+  try {
+    const r = await apiFetch('/profile',{method:'DELETE'});
+    if (!r.ok) { toast('Delete failed','error'); return; }
+    clearTokens(); navigate('login'); toast('Account deleted','success');
+  } catch(e) { toast('Network error','error'); }
+}
+
+async function doLogout() {
+  try { await apiFetch('/auth/logout',{method:'POST',body:JSON.stringify({refreshToken:S.refreshToken})}); } catch(e) {}
+  clearTokens(); S.profile=null; S.chatMessages=[]; localStorage.removeItem('chatMessages');
+  navigate('login');
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   SESSIONS
+   ══════════════════════════════════════════════════════════════════ */
+async function renderSessions() {
+  const c = document.getElementById('screen-content');
+  c.innerHTML = '<div class="flex-center" style="padding:40px"><span class="spinner spinner-light"></span></div>';
+  try {
+    const r = await apiFetch('/auth/sessions');
+    if (r.ok) { const d = await r.json(); S.sessions = d.sessions || (Array.isArray(d)?d:[]); }
+  } catch(e) {}
+
+  if (!S.sessions.length) {
+    c.innerHTML = '<div class="empty-state">' + I.devices + '<div class="empty-state-text">No active sessions</div></div>';
     return;
   }
-  const canManage = myRole === 'OWNER' || myRole === 'ADMIN';
-  members.forEach(m => {
-    const userId = m.userId || (m.user && m.user.id);
-    const email = (m.user && m.user.email) || userId || '-';
-    const role = m.role || '-';
-    const isOwner = role === 'OWNER';
 
-    const item = document.createElement('div');
-    item.className = 'member-item';
-    item.innerHTML = `
-      <div class="member-info">
-        <div class="member-email">${escapeHtml(email)}</div>
-        <div class="member-role">${role}</div>
+  let html = '';
+  S.sessions.forEach(s => {
+    const ua = parseUA(s.deviceInfo);
+    html += `<div class="session-card">
+      <div class="icon-box" style="background:${s.isCurrent?'var(--primary-15)':'var(--border-30)'};color:${s.isCurrent?'var(--primary)':'var(--text-secondary)'}">${I[ua.icon]||I.devices}</div>
+      <div class="session-card-info">
+        <div class="session-card-device">${esc(ua.name)}${s.isCurrent?' <span class="badge badge-green" style="font-size:10px;padding:2px 6px">Current</span>':''}</div>
+        <div class="session-card-meta">${esc(s.ipAddress||'')} · ${timeAgo(s.createdAt)}</div>
       </div>
-    `;
-
-    if (canManage && !isOwner) {
-      const actions = document.createElement('div');
-      actions.className = 'member-actions';
-
-      // Role change select
-      const sel = document.createElement('select');
-      sel.className = 'role-select';
-      sel.style.cssText = 'width:auto;padding:4px 8px;font-size:12px;';
-      ['ADMIN','OPERATOR','VIEWER'].forEach(r => {
-        const opt = document.createElement('option');
-        opt.value = r.toLowerCase();
-        opt.textContent = r;
-        if (r === role) opt.selected = true;
-        sel.appendChild(opt);
-      });
-      sel.addEventListener('change', async () => {
-        const res = await apiFetch('/tenant/' + tenantId + '/members/' + userId + '/role', {
-          method: 'PUT',
-          body: JSON.stringify({ role: sel.value }),
-        });
-        if (!res.ok) { sel.value = role.toLowerCase(); alert('Failed to change role'); }
-      });
-
-      const removeBtn = document.createElement('button');
-      removeBtn.className = 'btn-sm-danger';
-      removeBtn.textContent = 'Remove';
-      removeBtn.addEventListener('click', async () => {
-        const res = await apiFetch('/tenant/' + tenantId + '/members/' + userId, { method: 'DELETE' });
-        if (res.ok) openTenant(tenantId, myRole);
-      });
-
-      actions.appendChild(sel);
-      actions.appendChild(removeBtn);
-      item.appendChild(actions);
-    }
-
-    container.appendChild(item);
+      ${s.isCurrent?'':`<button class="session-card-close" data-sid="${s.id}">${I.close}</button>`}
+    </div>`;
   });
+  html += `<button class="btn btn-danger-outline mt-16" id="revoke-all">Sign Out All Devices</button>`;
+  c.innerHTML = html;
+
+  c.querySelectorAll('.session-card-close').forEach(btn => {
+    btn.onclick = () => showModal('End Session','End this session? The device will need to sign in again.',[
+      {label:'Cancel'},{label:'End Session',danger:true,action:async()=>{
+        await apiFetch('/auth/sessions/'+btn.dataset.sid,{method:'DELETE'});
+        renderSessions();
+      }}
+    ]);
+  });
+  const ra = document.getElementById('revoke-all');
+  if (ra) ra.onclick = () => showModal('Sign Out All','End all sessions except the current one?',[
+    {label:'Cancel'},{label:'Sign Out All',danger:true,action:async()=>{
+      await apiFetch('/auth/sessions',{method:'DELETE'});
+      clearTokens(); navigate('login');
+    }}
+  ]);
 }
 
-async function doCreateTenant() {
-  const name = document.getElementById('new-org-name').value.trim();
-  if (!name) { showError('org-error', 'Organization name is required'); return; }
+/* ══════════════════════════════════════════════════════════════════
+   CHAT
+   ══════════════════════════════════════════════════════════════════ */
+function renderChatFab() {
+  const fab = document.getElementById('chat-fab-el');
+  fab.innerHTML = I.robot;
+  fab.onclick = openChat;
+}
 
-  setLoading('create-org-btn', true);
-  const body = { name };
-  const email = document.getElementById('new-org-email').value.trim();
-  const website = document.getElementById('new-org-website').value.trim();
-  const address = document.getElementById('new-org-address').value.trim();
-  if (email) body.email = email;
-  if (website) body.website = website;
-  if (address) body.legalAddress = address;
+function openChat() {
+  S.chatOpen = true;
+  const panel = document.getElementById('chat-panel');
+  panel.classList.add('open');
+  renderChatPanel();
+}
+
+function closeChat() {
+  S.chatOpen = false;
+  document.getElementById('chat-panel').classList.remove('open');
+}
+
+function renderChatPanel() {
+  const panel = document.getElementById('chat-panel');
+  panel.innerHTML = `
+    <div class="app-bar">
+      <span class="app-bar-title">AI Assistant</span>
+      <button class="app-bar-btn" id="chat-clear">${I.trash}</button>
+      <button class="app-bar-btn" id="chat-close">${I.close}</button>
+    </div>
+    <div class="chat-messages" id="chat-messages"></div>
+    <div class="chat-input-area">
+      <textarea class="chat-input" id="chat-input" rows="1" placeholder="Ask me anything..."></textarea>
+      <button class="chat-send" id="chat-send">${I.send}</button>
+    </div>`;
+  document.getElementById('chat-close').onclick = closeChat;
+  document.getElementById('chat-clear').onclick = () => { S.chatMessages=[]; localStorage.removeItem('chatMessages'); renderChatMessages(); };
+  document.getElementById('chat-send').onclick = sendChat;
+  const input = document.getElementById('chat-input');
+  input.addEventListener('keydown', e => { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendChat();} });
+  input.addEventListener('input', () => { input.style.height='auto'; input.style.height=Math.min(input.scrollHeight,120)+'px'; });
+  renderChatMessages();
+}
+
+function renderChatMessages() {
+  const c = document.getElementById('chat-messages');
+  if (!c) return;
+  if (!S.chatMessages.length) {
+    c.innerHTML = `<div class="chat-empty">${I.robot}<span>Ask me anything</span></div>`;
+    return;
+  }
+  c.innerHTML = S.chatMessages.map(m => {
+    if (m.role === 'user') return `<div class="chat-bubble chat-bubble-user">${esc(m.content)}</div>`;
+    const content = m.content ? md(m.content) : '<div class="typing-dots"><span></span><span></span><span></span></div>';
+    return `<div class="chat-bubble chat-bubble-ai">${content}</div>`;
+  }).join('');
+  c.scrollTop = c.scrollHeight;
+}
+
+async function sendChat() {
+  const input = document.getElementById('chat-input');
+  const text = (input.value||'').trim();
+  if (!text || S.chatStreaming) return;
+  input.value = ''; input.style.height = 'auto';
+
+  S.chatMessages.push({role:'user',content:text});
+  S.chatMessages.push({role:'assistant',content:'',streaming:true});
+  S.chatStreaming = true;
+  renderChatMessages();
+  document.getElementById('chat-send').disabled = true;
 
   try {
-    const res = await apiFetch('/tenant', { method: 'POST', body: JSON.stringify(body) });
-    const data = await res.json();
-    if (!res.ok) { showError('org-error', extractMessage(data, 'Create failed')); return; }
-
-    // Reset form
-    ['new-org-name','new-org-email','new-org-website','new-org-address'].forEach(id => {
-      document.getElementById(id).value = '';
+    const res = await fetch('https://travel-n8n.up.railway.app/webhook/talerid/chat', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({prompt:text, user_id: S.userId||'anonymous'})
     });
-    document.getElementById('create-org-form').classList.remove('open');
-    showSuccess('org-success', '✓ Organization created');
-    loadTenants();
-  } catch(e) {
-    showError('org-error', 'Network error. Please try again.');
-  } finally {
-    setLoading('create-org-btn', false);
-  }
-}
-
-async function doInviteMember() {
-  hideError('invite-error');
-  const email = document.getElementById('invite-email').value.trim();
-  const role = document.getElementById('invite-role').value;
-  if (!email) { showError('invite-error', 'Email is required'); return; }
-
-  setLoading('invite-btn', true);
-  try {
-    const res = await apiFetch('/tenant/' + currentTenantId + '/members/invite', {
-      method: 'POST',
-      body: JSON.stringify({ email, role }),
-    });
-    const data = await res.json();
-    if (!res.ok) { showError('invite-error', extractMessage(data, 'Invite failed')); return; }
-
-    document.getElementById('invite-email').value = '';
-    const msg = data.type === 'added' ? '✓ Member added' : '✓ Invite sent to ' + email;
-    showSuccess('invite-success', msg);
-    openTenant(currentTenantId, currentTenantRole);
-  } catch(e) {
-    showError('invite-error', 'Network error. Please try again.');
-  } finally {
-    setLoading('invite-btn', false);
-  }
-}
-
-async function startKYB() {
-  if (!currentTenantId) return;
-  setLoading('kyb-start-btn', true);
-  try {
-    const res = await apiFetch('/tenant/' + currentTenantId + '/kyb/start', { method: 'POST' });
-    const data = await res.json();
-    if (!res.ok) {
-      alert(extractMessage(data, 'KYB start failed'));
-      setLoading('kyb-start-btn', false);
-      return;
-    }
-
-    const sdkToken = data.sdkToken || data.token;
-    if (!sdkToken) {
-      // Mock mode — just reload status
-      loadKybStatus(currentTenantId);
-      setLoading('kyb-start-btn', false);
-      return;
-    }
-
-    const container = document.getElementById('kyb-sumsub-container');
-    container.style.display = 'block';
-    container.innerHTML = '';
-
-    const snsWebSdkInstance = snsWebSdk
-      .init(sdkToken, async () => {
-        const r = await apiFetch('/tenant/' + currentTenantId + '/kyb/start', { method: 'POST' });
-        const d = await r.json();
-        return d.sdkToken || d.token || '';
-      })
-      .withConf({ lang: 'en' })
-      .withOptions({ addViewportTag: false, adaptIframeHeight: true })
-      .on('idCheck.onReady', () => { setLoading('kyb-start-btn', false); })
-      .on('idCheck.applicantStatus', (payload) => {
-        if (payload.reviewResult && payload.reviewResult.reviewAnswer === 'GREEN') {
-          loadKybStatus(currentTenantId);
-        }
-      })
-      .on('idCheck.onError', (err) => { console.error('Sumsub KYB error:', err); })
-      .build();
-
-    snsWebSdkInstance.launch('#kyb-sumsub-container');
-  } catch(e) {
-    console.error('KYB start failed:', e);
-    alert('KYB start failed');
-    setLoading('kyb-start-btn', false);
-  }
-}
-
-// ── Email Verification ───────────────────────────────────────────
-async function sendEmailVerification() {
-  hideError('email-verify-error');
-  const btn = event.target;
-  btn.disabled = true;
-  btn.textContent = 'Sending...';
-  try {
-    const res = await apiFetch('/auth/email/verify/send', { method: 'POST' });
-    const data = await res.json();
-    if (!res.ok) {
-      showError('email-verify-error', extractMessage(data, 'Failed to send code'));
-    } else if (data.alreadyVerified) {
-      showSuccess('email-verify-success', '✓ Email already verified');
-      loadProfile();
-    } else {
-      showSuccess('email-verify-success', '✓ Code sent to your email (valid 10 min)');
-      document.getElementById('email-send-code-btn').style.display = 'none';
-      document.getElementById('email-verify-form').style.display = 'block';
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const {value, done} = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, {stream:true});
+      while (buffer.includes('\n')) {
+        const idx = buffer.indexOf('\n');
+        const line = buffer.substring(0, idx).trim();
+        buffer = buffer.substring(idx + 1);
+        if (!line) continue;
+        try {
+          const j = JSON.parse(line);
+          if (j.type === 'item' && j.content) {
+            const last = S.chatMessages[S.chatMessages.length - 1];
+            last.content += j.content;
+            renderChatMessages();
+          } else if (j.type === 'error') {
+            toast(j.content || 'Chat error', 'error');
+          }
+        } catch(e) {}
+      }
     }
   } catch(e) {
-    showError('email-verify-error', 'Network error');
-  } finally {
-    btn.disabled = false;
-    btn.textContent = 'Send Verification Code';
+    const last = S.chatMessages[S.chatMessages.length - 1];
+    if (last && last.role === 'assistant' && !last.content) S.chatMessages.pop();
+    toast('Failed to send message', 'error');
   }
+
+  S.chatStreaming = false;
+  const last = S.chatMessages[S.chatMessages.length - 1];
+  if (last) last.streaming = false;
+  localStorage.setItem('chatMessages', JSON.stringify(S.chatMessages));
+  renderChatMessages();
+  const sb = document.getElementById('chat-send');
+  if (sb) sb.disabled = false;
 }
 
-async function confirmEmailCode() {
-  hideError('email-verify-error');
-  const code = document.getElementById('email-verify-code').value.trim();
-  if (!code) { showError('email-verify-error', 'Enter the code from your email'); return; }
-  setLoading('email-confirm-btn', true);
-  try {
-    const res = await apiFetch('/auth/email/verify/confirm', {
-      method: 'POST',
-      body: JSON.stringify({ code }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      showError('email-verify-error', extractMessage(data, 'Invalid code'));
-    } else {
-      showSuccess('email-verify-success', '✓ Email successfully verified!');
-      document.getElementById('email-verify-form').style.display = 'none';
-      document.getElementById('email-verify-code').value = '';
-      loadProfile();
-    }
-  } catch(e) {
-    showError('email-verify-error', 'Network error');
-  } finally {
-    setLoading('email-confirm-btn', false);
-  }
-}
+/* ══════════════════════════════════════════════════════════════════
+   COUNTRY DATA
+   ══════════════════════════════════════════════════════════════════ */
+const COUNTRIES=[{code:'AF',name:'Afghanistan'},{code:'AL',name:'Albania'},{code:'DZ',name:'Algeria'},{code:'AD',name:'Andorra'},{code:'AO',name:'Angola'},{code:'AG',name:'Antigua and Barbuda'},{code:'AR',name:'Argentina'},{code:'AM',name:'Armenia'},{code:'AU',name:'Australia'},{code:'AT',name:'Austria'},{code:'AZ',name:'Azerbaijan'},{code:'BS',name:'Bahamas'},{code:'BH',name:'Bahrain'},{code:'BD',name:'Bangladesh'},{code:'BB',name:'Barbados'},{code:'BY',name:'Belarus'},{code:'BE',name:'Belgium'},{code:'BZ',name:'Belize'},{code:'BJ',name:'Benin'},{code:'BT',name:'Bhutan'},{code:'BO',name:'Bolivia'},{code:'BA',name:'Bosnia and Herzegovina'},{code:'BW',name:'Botswana'},{code:'BR',name:'Brazil'},{code:'BN',name:'Brunei'},{code:'BG',name:'Bulgaria'},{code:'BF',name:'Burkina Faso'},{code:'BI',name:'Burundi'},{code:'KH',name:'Cambodia'},{code:'CM',name:'Cameroon'},{code:'CA',name:'Canada'},{code:'CV',name:'Cape Verde'},{code:'CF',name:'Central African Republic'},{code:'TD',name:'Chad'},{code:'CL',name:'Chile'},{code:'CN',name:'China'},{code:'CO',name:'Colombia'},{code:'KM',name:'Comoros'},{code:'CG',name:'Congo'},{code:'CR',name:'Costa Rica'},{code:'HR',name:'Croatia'},{code:'CU',name:'Cuba'},{code:'CY',name:'Cyprus'},{code:'CZ',name:'Czech Republic'},{code:'DK',name:'Denmark'},{code:'DJ',name:'Djibouti'},{code:'DM',name:'Dominica'},{code:'DO',name:'Dominican Republic'},{code:'EC',name:'Ecuador'},{code:'EG',name:'Egypt'},{code:'SV',name:'El Salvador'},{code:'GQ',name:'Equatorial Guinea'},{code:'ER',name:'Eritrea'},{code:'EE',name:'Estonia'},{code:'ET',name:'Ethiopia'},{code:'FJ',name:'Fiji'},{code:'FI',name:'Finland'},{code:'FR',name:'France'},{code:'GA',name:'Gabon'},{code:'GM',name:'Gambia'},{code:'GE',name:'Georgia'},{code:'DE',name:'Germany'},{code:'GH',name:'Ghana'},{code:'GR',name:'Greece'},{code:'GD',name:'Grenada'},{code:'GT',name:'Guatemala'},{code:'GN',name:'Guinea'},{code:'GW',name:'Guinea-Bissau'},{code:'GY',name:'Guyana'},{code:'HT',name:'Haiti'},{code:'HN',name:'Honduras'},{code:'HU',name:'Hungary'},{code:'IS',name:'Iceland'},{code:'IN',name:'India'},{code:'ID',name:'Indonesia'},{code:'IR',name:'Iran'},{code:'IQ',name:'Iraq'},{code:'IE',name:'Ireland'},{code:'IL',name:'Israel'},{code:'IT',name:'Italy'},{code:'JM',name:'Jamaica'},{code:'JP',name:'Japan'},{code:'JO',name:'Jordan'},{code:'KZ',name:'Kazakhstan'},{code:'KE',name:'Kenya'},{code:'KI',name:'Kiribati'},{code:'KP',name:'North Korea'},{code:'KR',name:'South Korea'},{code:'KW',name:'Kuwait'},{code:'KG',name:'Kyrgyzstan'},{code:'LA',name:'Laos'},{code:'LV',name:'Latvia'},{code:'LB',name:'Lebanon'},{code:'LS',name:'Lesotho'},{code:'LR',name:'Liberia'},{code:'LY',name:'Libya'},{code:'LI',name:'Liechtenstein'},{code:'LT',name:'Lithuania'},{code:'LU',name:'Luxembourg'},{code:'MK',name:'North Macedonia'},{code:'MG',name:'Madagascar'},{code:'MW',name:'Malawi'},{code:'MY',name:'Malaysia'},{code:'MV',name:'Maldives'},{code:'ML',name:'Mali'},{code:'MT',name:'Malta'},{code:'MH',name:'Marshall Islands'},{code:'MR',name:'Mauritania'},{code:'MU',name:'Mauritius'},{code:'MX',name:'Mexico'},{code:'FM',name:'Micronesia'},{code:'MD',name:'Moldova'},{code:'MC',name:'Monaco'},{code:'MN',name:'Mongolia'},{code:'ME',name:'Montenegro'},{code:'MA',name:'Morocco'},{code:'MZ',name:'Mozambique'},{code:'MM',name:'Myanmar'},{code:'NA',name:'Namibia'},{code:'NR',name:'Nauru'},{code:'NP',name:'Nepal'},{code:'NL',name:'Netherlands'},{code:'NZ',name:'New Zealand'},{code:'NI',name:'Nicaragua'},{code:'NE',name:'Niger'},{code:'NG',name:'Nigeria'},{code:'NO',name:'Norway'},{code:'OM',name:'Oman'},{code:'PK',name:'Pakistan'},{code:'PW',name:'Palau'},{code:'PA',name:'Panama'},{code:'PG',name:'Papua New Guinea'},{code:'PY',name:'Paraguay'},{code:'PE',name:'Peru'},{code:'PH',name:'Philippines'},{code:'PL',name:'Poland'},{code:'PT',name:'Portugal'},{code:'QA',name:'Qatar'},{code:'RO',name:'Romania'},{code:'RU',name:'Russia'},{code:'RW',name:'Rwanda'},{code:'KN',name:'Saint Kitts and Nevis'},{code:'LC',name:'Saint Lucia'},{code:'VC',name:'Saint Vincent and the Grenadines'},{code:'WS',name:'Samoa'},{code:'SM',name:'San Marino'},{code:'ST',name:'Sao Tome and Principe'},{code:'SA',name:'Saudi Arabia'},{code:'SN',name:'Senegal'},{code:'RS',name:'Serbia'},{code:'SC',name:'Seychelles'},{code:'SL',name:'Sierra Leone'},{code:'SG',name:'Singapore'},{code:'SK',name:'Slovakia'},{code:'SI',name:'Slovenia'},{code:'SB',name:'Solomon Islands'},{code:'SO',name:'Somalia'},{code:'ZA',name:'South Africa'},{code:'SS',name:'South Sudan'},{code:'ES',name:'Spain'},{code:'LK',name:'Sri Lanka'},{code:'SD',name:'Sudan'},{code:'SR',name:'Suriname'},{code:'SE',name:'Sweden'},{code:'CH',name:'Switzerland'},{code:'SY',name:'Syria'},{code:'TW',name:'Taiwan'},{code:'TJ',name:'Tajikistan'},{code:'TZ',name:'Tanzania'},{code:'TH',name:'Thailand'},{code:'TL',name:'Timor-Leste'},{code:'TG',name:'Togo'},{code:'TO',name:'Tonga'},{code:'TT',name:'Trinidad and Tobago'},{code:'TN',name:'Tunisia'},{code:'TR',name:'Turkey'},{code:'TM',name:'Turkmenistan'},{code:'TV',name:'Tuvalu'},{code:'UG',name:'Uganda'},{code:'UA',name:'Ukraine'},{code:'AE',name:'United Arab Emirates'},{code:'GB',name:'United Kingdom'},{code:'US',name:'United States'},{code:'UY',name:'Uruguay'},{code:'UZ',name:'Uzbekistan'},{code:'VU',name:'Vanuatu'},{code:'VA',name:'Vatican City'},{code:'VE',name:'Venezuela'},{code:'VN',name:'Vietnam'},{code:'YE',name:'Yemen'},{code:'ZM',name:'Zambia'},{code:'ZW',name:'Zimbabwe'}];
 
-// ── Delete Account ────────────────────────────────────────────────
-async function deleteAccount() {
-  if (!confirm('Are you sure you want to permanently delete your account? This action cannot be undone.')) return;
-  if (!confirm('Last warning: ALL your data will be deleted. Continue?')) return;
-  setLoading('delete-account-btn', true);
-  try {
-    const res = await apiFetch('/profile', { method: 'DELETE' });
-    if (res.ok) {
-      clearTokens();
-      showPage('login');
-    } else {
-      const data = await res.json();
-      showError('profile-error', extractMessage(data, 'Failed to delete account'));
-    }
-  } catch(e) {
-    showError('profile-error', 'Network error. Please try again.');
-  } finally {
-    setLoading('delete-account-btn', false);
-  }
-}
+/* ══════════════════════════════════════════════════════════════════
+   GLOBAL EVENTS
+   ══════════════════════════════════════════════════════════════════ */
+document.getElementById('modal-backdrop').onclick = closeModal;
+document.getElementById('sheet-backdrop').onclick = closeSheet;
+window.addEventListener('resize', () => { if(S.page==='dashboard') renderChatFab(); });
 
-// ── Delete Organization ───────────────────────────────────────────
-async function deleteOrganization() {
-  if (!currentTenantId) return;
-  if (!confirm('Are you sure you want to permanently delete this organization?')) return;
-  setLoading('delete-org-btn', true);
-  try {
-    const res = await apiFetch('/tenant/' + currentTenantId, { method: 'DELETE' });
-    if (res.ok) {
-      showSuccess('org-success', '✓ Organization deleted');
-      currentTenantId = null;
-      currentTenantRole = null;
-      document.getElementById('org-detail-view').classList.remove('active');
-      document.getElementById('org-list-view').style.display = 'block';
-      loadTenants();
-    } else {
-      const data = await res.json();
-      alert(extractMessage(data, 'Failed to delete organization'));
-    }
-  } catch(e) {
-    alert('Network error. Please try again.');
-  } finally {
-    setLoading('delete-org-btn', false);
-  }
-}
-
-function escapeHtml(str) {
-  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-// ── Event listeners ───────────────────────────────────────────────
-document.getElementById('login-btn').addEventListener('click', doLogin);
-document.getElementById('register-btn').addEventListener('click', doRegister);
-document.getElementById('twofa-btn').addEventListener('click', do2FA);
-document.getElementById('logout-btn').addEventListener('click', doLogout);
-document.getElementById('save-profile-btn').addEventListener('click', doUpdateProfile);
-document.getElementById('kyc-start-btn').addEventListener('click', startKYC);
-document.getElementById('revoke-all-btn').addEventListener('click', revokeAllSessions);
-document.getElementById('kyb-start-btn').addEventListener('click', startKYB);
-document.getElementById('email-send-code-btn').addEventListener('click', sendEmailVerification);
-document.getElementById('email-resend-btn').addEventListener('click', sendEmailVerification);
-document.getElementById('email-confirm-btn').addEventListener('click', confirmEmailCode);
-document.getElementById('delete-account-btn').addEventListener('click', deleteAccount);
-document.getElementById('delete-org-btn').addEventListener('click', deleteOrganization);
-document.getElementById('invite-btn').addEventListener('click', doInviteMember);
-document.getElementById('create-org-btn').addEventListener('click', doCreateTenant);
-
-document.getElementById('toggle-create-org-btn').addEventListener('click', () => {
-  document.getElementById('create-org-form').classList.toggle('open');
-});
-
-document.getElementById('back-to-orgs-btn').addEventListener('click', () => {
-  currentTenantId = null;
-  currentTenantRole = null;
-  document.getElementById('org-detail-view').classList.remove('active');
-  document.getElementById('org-list-view').style.display = 'block';
-  loadTenants();
-});
-
-document.getElementById('go-register').addEventListener('click', () => showPage('register'));
-document.getElementById('go-login').addEventListener('click', () => showPage('login'));
-document.getElementById('go-login-from-2fa').addEventListener('click', () => showPage('login'));
-
-document.querySelector('.nav').addEventListener('click', e => {
-  const btn = e.target.closest('button[data-tab]');
-  if (btn) switchTab(btn.dataset.tab);
-});
-
-document.getElementById('sessions-list').addEventListener('click', e => {
-  const btn = e.target.closest('button.session-revoke');
-  if (btn) revokeSession(btn.dataset.sessionId);
-});
-
-document.addEventListener('keypress', (e) => {
-  if (e.key !== 'Enter') return;
-  const activePage = document.querySelector('.page.active');
-  if (!activePage) return;
-  if (activePage.id === 'page-login') doLogin();
-  if (activePage.id === 'page-register') doRegister();
-  if (activePage.id === 'page-2fa') do2FA();
-});
-
-// Init
-if (accessToken) {
-  showPage('dashboard');
+/* ══════════════════════════════════════════════════════════════════
+   INIT
+   ══════════════════════════════════════════════════════════════════ */
+if (S.accessToken) {
+  navigate('dashboard');
+  renderChatFab();
 } else {
-  showPage('login');
+  navigate('login');
 }
 </script>
 </body>
