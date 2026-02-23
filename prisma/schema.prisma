@@ -14,6 +14,7 @@ model User {
   passwordHash  String?
   emailVerified Boolean  @default(false)
   phoneVerified Boolean  @default(false)
+  isAdmin       Boolean  @default(false)
   deletedAt     DateTime?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
