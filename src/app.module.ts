@@ -14,6 +14,7 @@ import { BlockchainModule } from "./blockchain/blockchain.module";
 import { EmailModule } from "./email/email.module";
 import { AdminModule } from "./admin/admin.module";
 import { OidcModule } from "./oidc/oidc.module";
+import { AssistantModule } from "./assistant/assistant.module";
 import configuration from './config/configuration';
 
 @Module({
@@ -56,6 +57,7 @@ import configuration from './config/configuration';
     EmailModule,
     AdminModule,
     OidcModule,
+    AssistantModule,
   ],
   controllers: [AppController],
   providers: [

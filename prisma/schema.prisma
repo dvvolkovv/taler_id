@@ -24,6 +24,7 @@ model User {
   tenantMembers TenantMember[]
   auditLogs     AuditLog[]
   totpSecret    TotpSecret?
+  assistantTranscripts AssistantTranscript[]
 }
 
 model Profile {
@@ -186,4 +187,13 @@ model PendingInvite {
   token     String   @unique
   expiresAt DateTime
   createdAt DateTime @default(now())
+}
+
+model AssistantTranscript {
+  id        String   @id @default(uuid())
+  userId    String
+  messages  Json
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id])
 }
