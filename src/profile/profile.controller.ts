@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Put, Delete, Body, Param, UseGuards,
+  Controller, Get, Put, Patch, Delete, Body, Param, UseGuards,
 } from "@nestjs/common";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
@@ -44,5 +44,9 @@ export class ProfileController {
   @Delete()
   deleteAccount(@CurrentUser() user: any) {
     return this.profileService.deleteAccount(user.sub);
+  }
+  @Patch('username')
+  updateUsername(@Body('username') username: string, @CurrentUser() user: any) {
+    return this.profileService.updateUsername(user.sub, username);
   }
 }

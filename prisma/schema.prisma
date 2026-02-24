@@ -8,106 +8,81 @@ datasource db {
 }
 
 model User {
-  id            String   @id @default(uuid())
-  email         String?  @unique
-  phone         String?  @unique
-  passwordHash  String?
-  emailVerified Boolean  @default(false)
-  phoneVerified Boolean  @default(false)
-  isAdmin       Boolean  @default(false)
-  deletedAt     DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  profile       Profile?
-  sessions      Session[]
-  kycRecord     KycRecord?
-  tenantMembers TenantMember[]
-  auditLogs     AuditLog[]
-  totpSecret    TotpSecret?
+  id                   String                @id @default(uuid())
+  email                String?               @unique
+  phone                String?               @unique
+  passwordHash         String?
+  deletedAt            DateTime?
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  emailVerified        Boolean               @default(false)
+  phoneVerified        Boolean               @default(false)
+  isAdmin              Boolean               @default(false)
+  username             String?               @unique
   assistantTranscripts AssistantTranscript[]
+  auditLogs            AuditLog[]
+  kycRecord            KycRecord?
+  profile              Profile?
+  sessions             Session[]
+  tenantMembers        TenantMember[]
+  totpSecret           TotpSecret?
 }
 
 model Profile {
-  id               String    @id @default(uuid())
-  userId           String    @unique
-  firstName        String?
-  lastName         String?
-  middleName       String?
-  dateOfBirth      DateTime?
-  country          String?
-  postalCode       String?
-  walletAddress    String?
-  avatarUrl        String?
+  id                String     @id @default(uuid())
+  userId            String     @unique
+  firstName         String?
+  lastName          String?
+  middleName        String?
+  dateOfBirth       DateTime?
+  country           String?
+  postalCode        String?
+  walletAddress     String?
+  avatarUrl         String?
   preferredCurrency String?
-  language         String   @default("en")
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-
-  user             User     @relation(fields: [userId], references: [id])
-  documents        Document[]
+  language          String     @default("en")
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+  documents         Document[]
+  user              User       @relation(fields: [userId], references: [id])
 }
 
 model Document {
-  id          String       @id @default(uuid())
-  profileId   String
-  type        DocumentType
-  s3Key       String
+  id           String       @id @default(uuid())
+  profileId    String
+  type         DocumentType
+  s3Key        String
   originalName String?
-  mimeType    String?
-  status      String       @default("uploaded")
-  uploadedAt  DateTime     @default(now())
-
-  profile     Profile      @relation(fields: [profileId], references: [id])
-}
-
-enum DocumentType {
-  PASSPORT
-  NATIONAL_ID
-  DRIVERS_LICENSE
-  DIPLOMA
-  CERTIFICATE
+  mimeType     String?
+  status       String       @default("uploaded")
+  uploadedAt   DateTime     @default(now())
+  profile      Profile      @relation(fields: [profileId], references: [id])
 }
 
 model KycRecord {
-  id                  String    @id @default(uuid())
-  userId              String    @unique
-  sumsubApplicantId   String?   @unique
-  status              KycStatus @default(UNVERIFIED)
-  kycType             KycType   @default(INDIVIDUAL)
-  rejectionReason     String?
-  verifiedAt          DateTime?
-  createdAt           DateTime  @default(now())
-  updatedAt           DateTime  @updatedAt
-
-  user                User      @relation(fields: [userId], references: [id])
-}
-
-enum KycStatus {
-  UNVERIFIED
-  PENDING
-  VERIFIED
-  REJECTED
-}
-
-enum KycType {
-  INDIVIDUAL
-  SELF_EMPLOYED
-  BUSINESS
+  id                String    @id @default(uuid())
+  userId            String    @unique
+  sumsubApplicantId String?   @unique
+  status            KycStatus @default(UNVERIFIED)
+  kycType           KycType   @default(INDIVIDUAL)
+  rejectionReason   String?
+  verifiedAt        DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  user              User      @relation(fields: [userId], references: [id])
 }
 
 model Session {
-  id          String   @id @default(uuid())
-  userId      String
-  deviceInfo  String?
-  ipAddress   String?
-  location    String?
-  createdAt   DateTime @default(now())
-  lastSeenAt  DateTime @default(now())
-  expiresAt   DateTime
-  isRevoked   Boolean  @default(false)
-
-  user        User     @relation(fields: [userId], references: [id])
+  id         String   @id @default(uuid())
+  userId     String
+  deviceInfo String?
+  ipAddress  String?
+  location   String?
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+  expiresAt  DateTime
+  isRevoked  Boolean  @default(false)
+  user       User     @relation(fields: [userId], references: [id])
 }
 
 model TotpSecret {
@@ -116,7 +91,6 @@ model TotpSecret {
   secret    String
   verified  Boolean  @default(false)
   createdAt DateTime @default(now())
-
   user      User     @relation(fields: [userId], references: [id])
 }
 
@@ -128,7 +102,6 @@ model AuditLog {
   userAgent String?
   meta      Json?
   createdAt DateTime @default(now())
-
   user      User?    @relation(fields: [userId], references: [id])
 }
 
@@ -144,7 +117,7 @@ model OAuthClient {
 }
 
 model Tenant {
-  id                String    @id @default(uuid())
+  id                String         @id @default(uuid())
   name              String
   description       String?
   logoUrl           String?
@@ -152,11 +125,10 @@ model Tenant {
   website           String?
   contactEmail      String?
   contactPhone      String?
-  kybStatus         KycStatus @default(UNVERIFIED)
+  kybStatus         KycStatus      @default(UNVERIFIED)
   sumsubApplicantId String?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
-
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
   members           TenantMember[]
 }
 
@@ -166,11 +138,78 @@ model TenantMember {
   userId    String
   role      TenantRole @default(VIEWER)
   invitedAt DateTime   @default(now())
-
   tenant    Tenant     @relation(fields: [tenantId], references: [id])
   user      User       @relation(fields: [userId], references: [id])
 
   @@unique([tenantId, userId])
+}
+
+model PendingInvite {
+  id        String     @id @default(uuid())
+  tenantId  String
+  email     String
+  role      TenantRole @default(VIEWER)
+  token     String     @unique
+  expiresAt DateTime
+  createdAt DateTime   @default(now())
+}
+
+model AssistantTranscript {
+  id        String   @id @default(uuid())
+  userId    String
+  messages  Json
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model Conversation {
+  id           String                    @id @default(uuid())
+  type         ConvType                  @default(DIRECT)
+  createdAt    DateTime                  @default(now())
+  participants ConversationParticipant[]
+  messages     Message[]
+}
+
+model ConversationParticipant {
+  id             String       @id @default(uuid())
+  conversationId String
+  userId         String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, userId])
+  @@index([userId])
+}
+
+model Message {
+  id             String       @id @default(uuid())
+  conversationId String
+  senderId       String
+  content        String
+  sentAt         DateTime     @default(now())
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, sentAt])
+}
+
+enum DocumentType {
+  PASSPORT
+  NATIONAL_ID
+  DRIVERS_LICENSE
+  DIPLOMA
+  CERTIFICATE
+}
+
+enum KycStatus {
+  UNVERIFIED
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum KycType {
+  INDIVIDUAL
+  SELF_EMPLOYED
+  BUSINESS
 }
 
 enum TenantRole {
@@ -180,21 +219,7 @@ enum TenantRole {
   VIEWER
 }
 
-model PendingInvite {
-  id        String   @id @default(uuid())
-  tenantId  String
-  email     String
-  role      TenantRole @default(VIEWER)
-  token     String   @unique
-  expiresAt DateTime
-  createdAt DateTime @default(now())
-}
-
-model AssistantTranscript {
-  id        String   @id @default(uuid())
-  userId    String
-  messages  Json
-  createdAt DateTime @default(now())
-
-  user      User     @relation(fields: [userId], references: [id])
+enum ConvType {
+  DIRECT
+  GROUP
 }

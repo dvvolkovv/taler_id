@@ -15,6 +15,8 @@ import { EmailModule } from "./email/email.module";
 import { AdminModule } from "./admin/admin.module";
 import { OidcModule } from "./oidc/oidc.module";
 import { AssistantModule } from "./assistant/assistant.module";
+import { MessengerModule } from "./messenger/messenger.module";
+import { VoiceModule } from "./voice/voice.module";
 import configuration from './config/configuration';
 
 @Module({
@@ -58,6 +60,8 @@ import configuration from './config/configuration';
     AdminModule,
     OidcModule,
     AssistantModule,
+    MessengerModule,
+    VoiceModule,
   ],
   controllers: [AppController],
   providers: [

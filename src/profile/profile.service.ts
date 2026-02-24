@@ -130,4 +130,12 @@ export class ProfileService {
 
     return { success: true };
   }
+  async updateUsername(userId: string, username: string) {
+    const existing = await this.prisma.user.findFirst({
+      where: { username, NOT: { id: userId } },
+    });
+    if (existing) throw new ConflictException('Username already taken');
+    await this.prisma.user.update({ where: { id: userId }, data: { username } });
+    return { success: true, username };
+  }
 }
