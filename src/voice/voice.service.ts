@@ -14,7 +14,7 @@ export class VoiceService {
 
   async createRoom(initiatorId: string, withAi = true, userToken?: string) {
     const roomName = "call-" + uuidv4();
-    await this.rooms.createRoom({ name: roomName, emptyTimeout: 300, maxParticipants: 10 });
+    await this.rooms.createRoom({ name: roomName, emptyTimeout: 300, departureTimeout: 60, maxParticipants: 10 });
     const token = await this.makeToken(roomName, initiatorId);
     if (withAi) {
       fetch(AI_AGENT_URL + "/join", {

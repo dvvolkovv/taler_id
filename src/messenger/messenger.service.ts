@@ -53,9 +53,10 @@ export class MessengerService {
   private _formatConversation(conv: any, currentUserId: string, userMap?: Record<string, any>) {
     const otherParticipant = conv.participants.find((p: any) => p.userId !== currentUserId);
     const otherUser = otherParticipant && userMap ? userMap[otherParticipant.userId] : null;
-    const otherUserName = otherUser
-      ? (otherUser.username ?? ([otherUser.profile?.firstName, otherUser.profile?.lastName].filter(Boolean).join(' ') || null))
+    const otherFirstLast = otherUser
+      ? ([otherUser.profile?.firstName, otherUser.profile?.lastName].filter(Boolean).join(' ').trim() || null)
       : null;
+    const otherUserName = otherFirstLast ?? otherUser?.username ?? null;
     const lastMsg = conv.messages?.[0] ?? null;
     return {
       id: conv.id,
@@ -72,18 +73,36 @@ export class MessengerService {
     await this.assertParticipant(conversationId, userId);
     const messages = await this.prisma.message.findMany({
       where: { conversationId },
+      include: {
+        sender: {
+          select: {
+            username: true,
+            profile: { select: { firstName: true, lastName: true } },
+          },
+        },
+      },
       orderBy: { sentAt: 'desc' },
       take: limit + 1,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     });
     const hasMore = messages.length > limit;
+    const sliced = hasMore ? messages.slice(0, limit) : messages;
+    const enriched = sliced.map((m: any) => {
+      const u = m.sender;
+      const firstLast = u
+        ? ([u.profile?.firstName, u.profile?.lastName].filter(Boolean).join(' ').trim() || null)
+        : null;
+      const senderName = firstLast ?? u?.username ?? null;
+      const { sender, ...rest } = m;
+      return { ...rest, senderName };
+    });
     return {
-      messages: hasMore ? messages.slice(0, limit) : messages,
-      nextCursor: hasMore ? messages[limit - 1].id : undefined,
+      messages: enriched,
+      nextCursor: hasMore ? sliced[limit - 1].id : undefined,
     };
   }
 
-  async createMessage(conversationId: string, senderId: string, content: string) {
+    async createMessage(conversationId: string, senderId: string, content: string) {
     return this.prisma.message.create({ data: { conversationId, senderId, content } });
   }
 
@@ -129,5 +148,30 @@ export class MessengerService {
       avatarUrl: u.profile?.avatarUrl,
       kycStatus: u.kycRecord?.status ?? 'UNVERIFIED',
     }));
+  }
+
+  async getParticipants(conversationId: string) {
+    return this.prisma.conversationParticipant.findMany({
+      where: { conversationId },
+    });
+  }
+
+  async getFcmToken(userId: string): Promise<string | null> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { fcmToken: true },
+    });
+    return user?.fcmToken ?? null;
+  }
+
+  async getUserDisplayName(userId: string): Promise<string> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { profile: { select: { firstName: true, lastName: true } } },
+    });
+    if (!user) return 'Пользователь';
+    const fullName = [(user as any).profile?.firstName, (user as any).profile?.lastName]
+      .filter(Boolean).join(' ').trim();
+    return fullName || (user as any).username || 'Пользователь';
   }
 }

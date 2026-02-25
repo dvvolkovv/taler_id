@@ -19,6 +19,7 @@ model User {
   phoneVerified        Boolean               @default(false)
   isAdmin              Boolean               @default(false)
   username             String?               @unique
+  fcmToken             String?
   assistantTranscripts AssistantTranscript[]
   auditLogs            AuditLog[]
   kycRecord            KycRecord?
@@ -26,6 +27,7 @@ model User {
   sessions             Session[]
   tenantMembers        TenantMember[]
   totpSecret           TotpSecret?
+  messages             Message[]
 }
 
 model Profile {
@@ -187,6 +189,7 @@ model Message {
   content        String
   sentAt         DateTime     @default(now())
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender         User         @relation(fields: [senderId], references: [id])
 
   @@index([conversationId, sentAt])
 }

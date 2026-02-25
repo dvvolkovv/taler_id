@@ -20,7 +20,7 @@ export class ProfileService {
     const kyc = await this.prisma.kycRecord.findUnique({ where: { userId } });
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { email: true, phone: true, emailVerified: true, createdAt: true },
+      select: { email: true, phone: true, emailVerified: true, createdAt: true, username: true },
     });
 
     return {
@@ -30,6 +30,7 @@ export class ProfileService {
       emailVerified: user?.emailVerified ?? false,
       kycStatus: kyc?.status || "UNVERIFIED",
       createdAt: user?.createdAt,
+      username: user?.username ?? null,
     };
   }
 
@@ -41,6 +42,13 @@ export class ProfileService {
       await this.prisma.user.update({
         where: { id: userId },
         data: { phone: dto.phone || null },
+      });
+    }
+
+    if (dto.fcmToken !== undefined) {
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: { fcmToken: dto.fcmToken },
       });
     }
 
@@ -94,7 +102,7 @@ export class ProfileService {
   async exportData(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { email: true, phone: true, emailVerified: true, createdAt: true },
+      select: { email: true, phone: true, emailVerified: true, createdAt: true, username: true },
     });
     const profile = await this.prisma.profile.findUnique({
       where: { userId },

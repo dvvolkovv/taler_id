@@ -36,6 +36,10 @@ export class UpdateProfileDto {
   @IsIn(['en', 'ru', 'de'])
   @IsOptional()
   language?: string;
+
+  @IsString()
+  @IsOptional()
+  fcmToken?: string;
 }
 
 export class LinkWalletDto {

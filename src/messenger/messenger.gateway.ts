@@ -8,6 +8,7 @@ import {
 import { Server, Socket } from 'socket.io';
 import { ConfigService } from '@nestjs/config';
 import { MessengerService } from './messenger.service';
+import { FcmService } from '../common/fcm.service';
 import * as jwt from 'jsonwebtoken';
 import * as fs from 'fs';
 
@@ -20,6 +21,7 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
   constructor(
     private readonly service: MessengerService,
     private readonly configService: ConfigService,
+    private readonly fcmService: FcmService,
   ) {
     const publicKeyPath = this.configService.get<string>('jwt.publicKeyPath') ?? '';
     this.publicKey = fs.readFileSync(publicKeyPath, 'utf8');
@@ -57,9 +59,17 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
         client.data.userId,
         payload.content,
       );
-      this.server.to(payload.conversationId).emit('new_message', msg);
+      const senderName = await this.service.getUserDisplayName(client.data.userId);
+      const enrichedMsg = { ...msg, senderName };
+      // Emit to conversation room (for users who have the chat open)
+      this.server.to(payload.conversationId).emit('new_message', enrichedMsg);
+      // Also emit to personal rooms of all participants (for users on other screens)
+      const participants = await this.service.getParticipants(payload.conversationId);
+      for (const p of participants) {
+        this.server.to(`user:${p.userId}`).emit('new_message', enrichedMsg);
+      }
     } catch (e) {
-      client.emit('error', { message: e.message });
+      client.emit('error', { message: (e as Error).message });
     }
   }
 
@@ -73,10 +83,42 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
   }
 
   @SubscribeMessage('call_invite')
-  handleCallInvite(client: Socket, payload: { conversationId: string; roomName: string }) {
-    client.to(payload.conversationId).emit('call_invite', {
-      fromUserId: client.data.userId,
-      roomName: payload.roomName,
-    });
+  async handleCallInvite(
+    client: Socket,
+    payload: { conversationId: string; roomName: string },
+  ) {
+    const fromUserName = await this.service.getUserDisplayName(client.data.userId);
+    const participants = await this.service.getParticipants(payload.conversationId);
+    const calleeIds = participants
+      .filter((p) => p.userId !== client.data.userId)
+      .map((p) => p.userId);
+
+    for (const calleeId of calleeIds) {
+      this.server.to(`user:${calleeId}`).emit('call_invite', {
+        fromUserId: client.data.userId,
+        fromUserName,
+        roomName: payload.roomName,
+        conversationId: payload.conversationId,
+      });
+      // Send FCM push for background/killed app
+      const calleeToken = await this.service.getFcmToken(calleeId);
+      if (calleeToken) {
+        this.fcmService.sendCallInvite(calleeToken, fromUserName, payload.roomName, payload.conversationId).catch(() => {});
+      }
+    }
+  }
+
+  @SubscribeMessage('call_ended')
+  async handleCallEnded(client: Socket, payload: { conversationId: string; roomName: string }) {
+    const participants = await this.service.getParticipants(payload.conversationId);
+    const calleeIds = participants
+      .filter((p) => p.userId !== client.data.userId)
+      .map((p) => p.userId);
+    for (const calleeId of calleeIds) {
+      this.server.to(`user:${calleeId}`).emit('call_ended', {
+        roomName: payload.roomName,
+        fromUserId: client.data.userId,
+      });
+    }
   }
 }
