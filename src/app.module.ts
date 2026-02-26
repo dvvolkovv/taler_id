@@ -43,11 +43,16 @@ import configuration from './config/configuration';
       serveStaticOptions: { index: false },
       exclude: ['/api{/*path}', '/auth{/*path}', '/kyc{/*path}', '/profile{/*path}', '/tenant{/*path}', '/admin{/*path}', '/sessions{/*path}', '/ui/mobile{/*path}'],
     }),
+    // Uploaded user files (avatars, documents)
+    ServeStaticModule.forRoot({
+      rootPath: '/home/dvolkov/taler-id/uploads',
+      serveRoot: '/uploads',
+    }),
     // Root path (/) - main landing page
     ServeStaticModule.forRoot({
       rootPath: '/home/dvolkov/taler-id/public',
       serveRoot: '/',
-      exclude: ['/api{/*path}', '/auth{/*path}', '/kyc{/*path}', '/profile{/*path}', '/tenant{/*path}', '/admin{/*path}', '/sessions{/*path}', '/oauth{/*path}', '/ui{/*path}'],
+      exclude: ['/api{/*path}', '/auth{/*path}', '/kyc{/*path}', '/profile{/*path}', '/tenant{/*path}', '/admin{/*path}', '/sessions{/*path}', '/oauth{/*path}', '/ui{/*path}', '/uploads{/*path}'],
     }),
     PrismaModule,
     RedisModule,

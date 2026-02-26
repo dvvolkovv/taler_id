@@ -54,6 +54,7 @@ export class KycService {
         .update(body)
         .digest("hex");
       if (signature !== expectedSignature) {
+        this.logger.warn(`Webhook sig mismatch: received="${signature}" expected="${expectedSignature}" secret_len=${webhookSecret.length} body_len=${body.length}`);
         throw new BadRequestException("Invalid webhook signature");
       }
     }

@@ -5,6 +5,7 @@ import {
   OnGatewayConnection,
   OnGatewayDisconnect,
 } from '@nestjs/websockets';
+import { Logger } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { ConfigService } from '@nestjs/config';
 import { MessengerService } from './messenger.service';
@@ -15,6 +16,7 @@ import * as fs from 'fs';
 @WebSocketGateway({ namespace: '/messenger', cors: { origin: '*' } })
 export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() server: Server;
+  private readonly logger = new Logger(MessengerGateway.name);
 
   private publicKey: string;
 
@@ -52,12 +54,14 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
   }
 
   @SubscribeMessage('message')
-  async handleMessage(client: Socket, payload: { conversationId: string; content: string }) {
+  async handleMessage(client: Socket, payload: { conversationId: string; content: string; fileUrl?: string; fileName?: string; fileSize?: number; fileType?: string }) {
     try {
+      const fileData = payload.fileUrl ? { fileUrl: payload.fileUrl, fileName: payload.fileName, fileSize: payload.fileSize, fileType: payload.fileType } : undefined;
       const msg = await this.service.createMessage(
         payload.conversationId,
         client.data.userId,
         payload.content,
+        fileData,
       );
       const senderName = await this.service.getUserDisplayName(client.data.userId);
       const enrichedMsg = { ...msg, senderName };
@@ -66,7 +70,34 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
       // Also emit to personal rooms of all participants (for users on other screens)
       const participants = await this.service.getParticipants(payload.conversationId);
       for (const p of participants) {
+        if (p.userId === client.data.userId) continue;
         this.server.to(`user:${p.userId}`).emit('new_message', enrichedMsg);
+        // Check if recipient has the conversation open (joined the room)
+        const socketsInConv = await this.server.in(payload.conversationId).fetchSockets();
+        const recipientInConv = socketsInConv.some(s => s.data.userId === p.userId);
+        // Mark as delivered if recipient is online (socket connected)
+        const sockets = await this.server.in(`user:${p.userId}`).fetchSockets();
+        const isOnline = sockets.length > 0;
+        if (isOnline) {
+          await this.service.markDelivered(msg.id);
+          this.server.to(`user:${client.data.userId}`).emit('message_updated', { id: msg.id, isDelivered: true });
+        }
+        // Send FCM push unless recipient has the chat open (recipientInConv)
+        this.logger.log(`FCM: recipientId=${p.userId} online=${isOnline} inConv=${recipientInConv} → push=${!recipientInConv}`);
+        if (!recipientInConv) {
+          const fcmToken = await this.service.getFcmToken(p.userId);
+          if (fcmToken) {
+            this.fcmService.sendNewMessage(
+              fcmToken,
+              senderName,
+              payload.content,
+              payload.conversationId,
+            ).then(() => this.logger.log(`FCM sent to ${p.userId}`))
+             .catch(e => this.logger.error(`FCM failed for ${p.userId}:`, e));
+          } else {
+            this.logger.warn(`FCM: no token for user ${p.userId}`);
+          }
+        }
       }
     } catch (e) {
       client.emit('error', { message: (e as Error).message });
@@ -119,6 +150,45 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
         roomName: payload.roomName,
         fromUserId: client.data.userId,
       });
+      // Send FCM so background clients can dismiss CallKit
+      const token = await this.service.getFcmToken(calleeId);
+      if (token) {
+        this.fcmService.sendCallCancelled(token, payload.roomName).catch(() => {});
+      }
+    }
+  }
+
+  @SubscribeMessage('call_answered')
+  async handleCallAnswered(client: Socket, payload: { conversationId: string; roomName: string }) {
+    try {
+      const participants = await this.service.getParticipants(payload.conversationId);
+      for (const p of participants.filter((p) => p.userId !== client.data.userId)) {
+        this.server.to(`user:${p.userId}`).emit('call_answered', {
+          roomName: payload.roomName,
+        });
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  @SubscribeMessage('mark_read')
+  async handleMarkRead(client: Socket, payload: { conversationId: string }) {
+    try {
+      const updatedIds = await this.service.markConversationRead(payload.conversationId, client.data.userId);
+      // Notify senders that their messages were read
+      if (updatedIds.length > 0) {
+        const participants = await this.service.getParticipants(payload.conversationId);
+        for (const p of participants) {
+          if (p.userId === client.data.userId) continue;
+          this.server.to(`user:${p.userId}`).emit('messages_read', {
+            conversationId: payload.conversationId,
+            messageIds: updatedIds,
+          });
+        }
+      }
+    } catch (e) {
+      // ignore
     }
   }
 }

@@ -273,14 +273,14 @@ export class AuthService {
     const accessToken = this.jwtService.sign(payload, {
       algorithm: 'RS256',
       privateKey: this.privateKey,
-      expiresIn: '15m',
+      expiresIn: '2h',
     });
 
     const refreshToken = uuidv4();
     const refreshTtl = 30 * 24 * 60 * 60; // 30 days in seconds
     await this.redis.setEx(`refresh:${refreshToken}`, refreshTtl, sessionId);
 
-    return { accessToken, refreshToken, tokenType: 'Bearer', expiresIn: 900 };
+    return { accessToken, refreshToken, tokenType: 'Bearer', expiresIn: 7200 };
   }
 
   private async incrementFailedAttempts(key: string, ip: string) {

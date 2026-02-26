@@ -188,6 +188,12 @@ model Message {
   senderId       String
   content        String
   sentAt         DateTime     @default(now())
+  fileUrl        String?
+  fileName       String?
+  fileSize       Int?
+  fileType       String?
+  isDelivered    Boolean      @default(false)
+  isRead         Boolean      @default(false)
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sender         User         @relation(fields: [senderId], references: [id])
 

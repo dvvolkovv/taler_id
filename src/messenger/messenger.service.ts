@@ -42,12 +42,31 @@ export class MessengerService {
       select: {
         id: true,
         username: true,
-        profile: { select: { firstName: true, lastName: true } },
+        profile: { select: { firstName: true, lastName: true, avatarUrl: true } },
       },
     });
     const userMap = Object.fromEntries(users.map((u) => [u.id, u]));
 
-    return conversations.map((conv) => this._formatConversation(conv, userId, userMap));
+    // Batch unread counts for all conversations
+    const convIds = conversations.map((c) => c.id);
+    const unreadCounts = await this.prisma.message.groupBy({
+      by: ['conversationId'],
+      where: {
+        conversationId: { in: convIds },
+        senderId: { not: userId },
+        isRead: false,
+      },
+      _count: { id: true },
+    });
+    const unreadMap: Record<string, number> = {};
+    for (const r of unreadCounts) {
+      unreadMap[r.conversationId] = r._count.id;
+    }
+
+    return conversations.map((conv) => ({
+      ...this._formatConversation(conv, userId, userMap),
+      unreadCount: unreadMap[conv.id] ?? 0,
+    }));
   }
 
   private _formatConversation(conv: any, currentUserId: string, userMap?: Record<string, any>) {
@@ -66,6 +85,7 @@ export class MessengerService {
       lastMessageSenderId: lastMsg?.senderId ?? null,
       otherUserId: otherParticipant?.userId ?? null,
       otherUserName,
+      otherUserAvatar: otherUser?.profile?.avatarUrl ?? null,
     };
   }
 
@@ -102,8 +122,8 @@ export class MessengerService {
     };
   }
 
-    async createMessage(conversationId: string, senderId: string, content: string) {
-    return this.prisma.message.create({ data: { conversationId, senderId, content } });
+    async createMessage(conversationId: string, senderId: string, content: string, fileData?: { fileUrl?: string; fileName?: string; fileSize?: number; fileType?: string }) {
+    return this.prisma.message.create({ data: { conversationId, senderId, content, ...fileData } });
   }
 
   async assertParticipant(conversationId: string, userId: string) {
@@ -173,5 +193,27 @@ export class MessengerService {
     const fullName = [(user as any).profile?.firstName, (user as any).profile?.lastName]
       .filter(Boolean).join(' ').trim();
     return fullName || (user as any).username || 'Пользователь';
+  }
+
+  async markDelivered(messageId: string): Promise<void> {
+    await this.prisma.message.update({
+      where: { id: messageId },
+      data: { isDelivered: true },
+    });
+  }
+
+  async markConversationRead(conversationId: string, userId: string): Promise<string[]> {
+    // Find all unread messages in this conversation NOT sent by this user
+    const messages = await this.prisma.message.findMany({
+      where: { conversationId, isRead: false, senderId: { not: userId } },
+      select: { id: true },
+    });
+    const ids = messages.map((m: any) => m.id);
+    if (ids.length === 0) return [];
+    await this.prisma.message.updateMany({
+      where: { id: { in: ids } },
+      data: { isRead: true, isDelivered: true },
+    });
+    return ids;
   }
 }

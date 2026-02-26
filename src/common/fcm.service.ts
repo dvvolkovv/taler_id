@@ -12,7 +12,6 @@ export class FcmService {
   }
 
   private init() {
-    // Prefer file path over inline JSON (more reliable with special chars)
     const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
     const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 
@@ -73,12 +72,49 @@ export class FcmService {
         apns: {
           payload: {
             aps: {
-              alert: {
-                title: 'Входящий звонок',
-                body: `${fromName} звонит вам`,
-              },
-              sound: 'default',
               contentAvailable: true,
+            },
+          },
+          headers: {
+            'apns-priority': '5',
+            'apns-push-type': 'background',
+          },
+        },
+      });
+    } catch (e) {
+      this.logger.error('FCM sendCallInvite error:', e);
+    }
+  }
+
+  async sendNewMessage(fcmToken: string, fromName: string, body: string, conversationId: string): Promise<void> {
+    if (!this.initialized || !fcmToken) return;
+    const truncated = body.length > 100 ? body.substring(0, 100) + '…' : body;
+    try {
+      await admin.messaging().send({
+        token: fcmToken,
+        data: {
+          type: 'new_message',
+          conversationId,
+        },
+        notification: {
+          title: fromName,
+          body: truncated,
+        },
+        android: {
+          priority: 'high',
+          notification: {
+            channelId: 'messages',
+            defaultSound: true,
+          },
+        },
+        apns: {
+          payload: {
+            aps: {
+              sound: 'default',
+              alert: {
+                title: fromName,
+                body: truncated,
+              },
             },
           },
           headers: {
@@ -88,7 +124,33 @@ export class FcmService {
         },
       });
     } catch (e) {
-      this.logger.error('FCM send error:', e);
+      this.logger.error('FCM sendNewMessage error:', e);
+    }
+  }
+
+  async sendCallCancelled(fcmToken: string, roomName: string): Promise<void> {
+    if (!this.initialized || !fcmToken) return;
+    try {
+      await admin.messaging().send({
+        token: fcmToken,
+        data: {
+          type: 'call_cancelled',
+          roomName,
+        },
+        android: {
+          priority: 'high',
+        },
+        apns: {
+          payload: { aps: { contentAvailable: true } },
+          headers: {
+            'apns-priority': '5',
+            'apns-push-type': 'background',
+          },
+        },
+      });
+    } catch (e) {
+      this.logger.error('FCM sendCallCancelled error:', e);
     }
   }
 }
+

@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Req, UseGuards } from "@nestjs/common";
+import { Controller, Post, Get, Req, UseGuards, Logger } from "@nestjs/common";
 import { SkipThrottle } from "@nestjs/throttler";
 import { Request } from "express";
 import { KycService } from "./kyc.service";
@@ -11,6 +11,8 @@ interface RawBodyRequest extends Request {
 
 @Controller("kyc")
 export class KycController {
+  private readonly logger = new Logger(KycController.name);
+
   constructor(private readonly kycService: KycService) {}
 
   @Post("start")
@@ -34,7 +36,14 @@ export class KycController {
   @SkipThrottle()
   @Post("webhook")
   async webhook(@Req() req: RawBodyRequest) {
-    const signature = req.headers["x-app-token"] as string;
+    // Debug: log all x- headers from Sumsub
+    const xHeaders = Object.entries(req.headers)
+      .filter(([k]) => k.startsWith("x-"))
+      .reduce((acc, [k, v]) => ({ ...acc, [k]: v }), {});
+    this.logger.log(`Sumsub webhook headers: ${JSON.stringify(xHeaders)}`);
+    this.logger.log(`rawBody exists: ${!!req.rawBody}, body type: ${typeof req.body}`);
+
+    const signature = (req.headers["x-payload-digest"] || req.headers["x-app-access-sig"]) as string;
     const body = req.rawBody || Buffer.from(JSON.stringify(req.body));
     return this.kycService.handleWebhook(body, signature);
   }

@@ -1,6 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { AccessToken, RoomServiceClient } from "livekit-server-sdk";
 import { v4 as uuidv4 } from "uuid";
+import { PrismaService } from "../prisma/prisma.service";
 
 const LK_HOST = process.env.LIVEKIT_HOST || "http://localhost:7880";
 const LK_API_KEY = process.env.LIVEKIT_API_KEY || "lkdevkey";
@@ -11,6 +12,8 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 @Injectable()
 export class VoiceService {
   private rooms = new RoomServiceClient(LK_HOST, LK_API_KEY, LK_API_SECRET);
+
+  constructor(private readonly prisma: PrismaService) {}
 
   async createRoom(initiatorId: string, withAi = true, userToken?: string) {
     const roomName = "call-" + uuidv4();
@@ -53,7 +56,11 @@ export class VoiceService {
   }
 
   private async makeToken(room: string, identity: string) {
-    const at = new AccessToken(LK_API_KEY, LK_API_SECRET, { identity });
+    const profile = await this.prisma.profile.findUnique({ where: { userId: identity } });
+    const displayName = profile
+      ? `${profile.firstName ?? ''} ${profile.lastName ?? ''}`.trim() || identity
+      : identity;
+    const at = new AccessToken(LK_API_KEY, LK_API_SECRET, { identity, name: displayName });
     at.addGrant({ roomJoin: true, room, canPublish: true, canSubscribe: true });
     return await at.toJwt();
   }

@@ -138,12 +138,37 @@ export class ProfileService {
 
     return { success: true };
   }
-  async updateUsername(userId: string, username: string) {
+
+  async uploadAvatar(userId: string, filename: string) {
+    const avatarUrl = 'https://id.taler.tirol/uploads/avatars/' + filename;
+    await this.prisma.profile.upsert({
+      where: { userId },
+      update: { avatarUrl },
+      create: { userId, avatarUrl },
+    });
+    return { avatarUrl };
+  }
+
+    async updateUsername(userId: string, username: string) {
     const existing = await this.prisma.user.findFirst({
       where: { username, NOT: { id: userId } },
     });
     if (existing) throw new ConflictException('Username already taken');
     await this.prisma.user.update({ where: { id: userId }, data: { username } });
     return { success: true, username };
+  }
+
+  async getPublicProfile(userId: string) {
+    const [profile, user] = await Promise.all([
+      this.prisma.profile.findUnique({
+        where: { userId },
+        select: { firstName: true, lastName: true, avatarUrl: true },
+      }),
+      this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { username: true },
+      }),
+    ]);
+    return { ...profile, username: user?.username ?? null, userId };
   }
 }

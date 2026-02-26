@@ -30,3 +30,17 @@ coverage/
 # Temporary
 *.tmp
 *.swp
+
+# User uploads (binary files, not for git)
+uploads/
+
+# APK and web build outputs
+public/download/
+public/mobile/
+
+# Backup files
+*.backup
+prisma/schema.prisma.bak
+
+# Scripts
+create_admin.js
