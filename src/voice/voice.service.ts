@@ -101,9 +101,9 @@ export class VoiceService {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "gpt-4o-realtime-preview-2024-12-17",
-        voice: "alloy",
-        instructions: "You are Taler ID voice assistant. Help users with their digital identity, KYC verification status, and profile data. Be concise and helpful. Respond in the language the user speaks. You can use tools to read or update the user profile.",
+        model: "gpt-4o-mini-realtime-preview-2024-12-17",
+        voice: "marina",
+        instructions: "Ты — голосовой ассистент Taler ID. Помогай пользователям с их цифровой идентификацией, статусом KYC-верификации и данными профиля. Будь краток и полезен. Отвечай на русском языке. Ты можешь использовать инструменты для чтения или обновления профиля пользователя.",
       }),
     });
     if (!response.ok) {
