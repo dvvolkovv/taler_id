@@ -52,6 +52,13 @@ export class ProfileService {
       });
     }
 
+    if (dto.voipToken !== undefined) {
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: { voipToken: dto.voipToken },
+      });
+    }
+
     return this.prisma.profile.update({
       where: { userId },
       data: {

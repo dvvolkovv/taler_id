@@ -10,8 +10,10 @@ import { Server, Socket } from 'socket.io';
 import { ConfigService } from '@nestjs/config';
 import { MessengerService } from './messenger.service';
 import { FcmService } from '../common/fcm.service';
+import { ApnsService } from '../common/apns.service';
 import * as jwt from 'jsonwebtoken';
 import * as fs from 'fs';
+import { PrismaService } from '../prisma/prisma.service';
 
 @WebSocketGateway({ namespace: '/messenger', cors: { origin: '*' } })
 export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnect {
@@ -24,6 +26,8 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
     private readonly service: MessengerService,
     private readonly configService: ConfigService,
     private readonly fcmService: FcmService,
+    private readonly apnsService: ApnsService,
+    private readonly prisma: PrismaService,
   ) {
     const publicKeyPath = this.configService.get<string>('jwt.publicKeyPath') ?? '';
     this.publicKey = fs.readFileSync(publicKeyPath, 'utf8');
@@ -116,13 +120,18 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
   @SubscribeMessage('call_invite')
   async handleCallInvite(
     client: Socket,
-    payload: { conversationId: string; roomName: string },
+    payload: { conversationId: string; roomName: string; inviteeId?: string },
   ) {
     const fromUserName = await this.service.getUserDisplayName(client.data.userId);
-    const participants = await this.service.getParticipants(payload.conversationId);
-    const calleeIds = participants
-      .filter((p) => p.userId !== client.data.userId)
-      .map((p) => p.userId);
+    let calleeIds: string[];
+    if (payload.inviteeId) {
+      calleeIds = [payload.inviteeId];
+    } else {
+      const participants = await this.service.getParticipants(payload.conversationId);
+      calleeIds = participants
+        .filter((p) => p.userId !== client.data.userId)
+        .map((p) => p.userId);
+    }
 
     for (const calleeId of calleeIds) {
       this.server.to(`user:${calleeId}`).emit('call_invite', {
@@ -136,26 +145,41 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
       if (calleeToken) {
         this.fcmService.sendCallInvite(calleeToken, fromUserName, payload.roomName, payload.conversationId).catch(() => {});
       }
+      // Send APNs VoIP push for iOS (works even when app is killed)
+      const voipToken = await this.service.getVoipToken(calleeId);
+      if (voipToken) {
+        this.apnsService.sendVoIPCallInvite(voipToken, {
+          nameCaller: fromUserName,
+          roomName: payload.roomName,
+          conversationId: payload.conversationId,
+        }).catch(() => {});
+      }
     }
   }
 
   @SubscribeMessage('call_ended')
   async handleCallEnded(client: Socket, payload: { conversationId: string; roomName: string }) {
     const participants = await this.service.getParticipants(payload.conversationId);
-    const calleeIds = participants
-      .filter((p) => p.userId !== client.data.userId)
-      .map((p) => p.userId);
-    for (const calleeId of calleeIds) {
-      this.server.to(`user:${calleeId}`).emit('call_ended', {
+    // Broadcast to ALL participants (incl. sender's other devices) so every device dismisses
+    for (const p of participants) {
+      this.server.to(`user:${p.userId}`).emit('call_ended', {
         roomName: payload.roomName,
         fromUserId: client.data.userId,
       });
-      // Send FCM so background clients can dismiss CallKit
-      const token = await this.service.getFcmToken(calleeId);
+      const token = await this.service.getFcmToken(p.userId);
       if (token) {
         this.fcmService.sendCallCancelled(token, payload.roomName).catch(() => {});
       }
     }
+    // Log call end in call history
+    try {
+      const log = await this.prisma.callLog.findUnique({ where: { roomName: payload.roomName } });
+      if (log && !log.endedAt) {
+        const endedAt = new Date();
+        const durationSec = Math.round((endedAt.getTime() - log.startedAt.getTime()) / 1000);
+        await this.prisma.callLog.update({ where: { roomName: payload.roomName }, data: { endedAt, durationSec } });
+      }
+    } catch (_) {}
   }
 
   @SubscribeMessage('call_answered')

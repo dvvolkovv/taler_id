@@ -1,4 +1,4 @@
-import { Body, Controller, Post, Param, UseGuards, Headers } from "@nestjs/common";
+import { Body, Controller, Post, Get, Param, Query, UseGuards, Headers } from "@nestjs/common";
 import { VoiceService } from "./voice.service";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
@@ -11,12 +11,13 @@ export class VoiceController {
   @Post("rooms")
   createRoom(
     @Body("withAi") withAi: boolean,
+    @Body("conversationId") conversationId: string | undefined,
     @CurrentUser() user: any,
     @Headers("authorization") authHeader: string,
   ) {
     const userToken = authHeader ? authHeader.replace("Bearer ", "") : undefined;
     const includeAi = withAi === undefined ? true : withAi;
-    return this.service.createRoom(user.sub, includeAi, userToken);
+    return this.service.createRoom(user.sub, includeAi, userToken, conversationId);
   }
 
   @Post("rooms/:name/join")
@@ -27,5 +28,18 @@ export class VoiceController {
   @Post("session")
   createVoiceSession(@CurrentUser() user: any) {
     return this.service.createVoiceSession(user.sub);
+  }
+
+  @Get("call-history")
+  getCallHistory(
+    @CurrentUser() user: any,
+    @Query("page") page?: string,
+    @Query("limit") limit?: string,
+  ) {
+    return this.service.getCallHistory(
+      user.sub,
+      page ? parseInt(page, 10) : 0,
+      limit ? parseInt(limit, 10) : 50,
+    );
   }
 }

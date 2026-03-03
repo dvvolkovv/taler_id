@@ -208,11 +208,25 @@ export class AuthService {
     return newTokens;
   }
 
-  async logout(userId: string, sessionId: string, ip: string, userAgent: string) {
+  async logout(userId: string, sessionId: string, ip: string, userAgent: string, fcmToken?: string, voipToken?: string) {
     await this.prisma.session.update({
       where: { id: sessionId },
       data: { isRevoked: true },
     });
+    // Clear push tokens so this device stops receiving pushes for this user
+    const clearData: any = {};
+    if (fcmToken !== undefined) {
+      // Only clear if the stored token matches the one being logged out
+      const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { fcmToken: true, voipToken: true } });
+      if (user?.fcmToken === fcmToken) clearData.fcmToken = null;
+      if (voipToken !== undefined && user?.voipToken === voipToken) clearData.voipToken = null;
+    } else {
+      clearData.fcmToken = null;
+      clearData.voipToken = null;
+    }
+    if (Object.keys(clearData).length > 0) {
+      await this.prisma.user.update({ where: { id: userId }, data: clearData });
+    }
     await this.auditLog(userId, 'LOGOUT', ip, userAgent);
     return { success: true };
   }

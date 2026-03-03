@@ -20,6 +20,7 @@ model User {
   isAdmin              Boolean               @default(false)
   username             String?               @unique
   fcmToken             String?
+  voipToken            String?
   assistantTranscripts AssistantTranscript[]
   auditLogs            AuditLog[]
   kycRecord            KycRecord?
@@ -231,4 +232,16 @@ enum TenantRole {
 enum ConvType {
   DIRECT
   GROUP
+}
+
+model CallLog {
+  id             String    @id @default(uuid())
+  roomName       String    @unique
+  initiatorId    String
+  participantIds String[]
+  startedAt      DateTime  @default(now())
+  endedAt        DateTime?
+  durationSec    Int?
+  withAi         Boolean   @default(false)
+  conversationId String?
 }

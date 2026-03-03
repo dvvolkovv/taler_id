@@ -54,6 +54,7 @@
     "ioredis": "^5.9.3",
     "livekit-server-sdk": "^2.15.0",
     "multer": "^2.0.2",
+    "node-apn": "^3.0.0",
     "nodemailer": "^8.0.1",
     "oidc-provider": "^9.6.0",
     "otplib": "^13.3.0",

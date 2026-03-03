@@ -184,6 +184,14 @@ export class MessengerService {
     return user?.fcmToken ?? null;
   }
 
+  async getVoipToken(userId: string): Promise<string | null> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { voipToken: true },
+    });
+    return user?.voipToken ?? null;
+  }
+
   async getUserDisplayName(userId: string): Promise<string> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },

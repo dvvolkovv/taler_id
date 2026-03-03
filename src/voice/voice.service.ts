@@ -15,10 +15,16 @@ export class VoiceService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  async createRoom(initiatorId: string, withAi = true, userToken?: string) {
+  async createRoom(initiatorId: string, withAi = true, userToken?: string, conversationId?: string) {
     const roomName = "call-" + uuidv4();
     await this.rooms.createRoom({ name: roomName, emptyTimeout: 300, departureTimeout: 60, maxParticipants: 10 });
     const token = await this.makeToken(roomName, initiatorId);
+    // Log call start
+    try {
+      await this.prisma.callLog.create({
+        data: { roomName, initiatorId, participantIds: [initiatorId], withAi, conversationId },
+      });
+    } catch (_) {}
     if (withAi) {
       fetch(AI_AGENT_URL + "/join", {
         method: "POST",
@@ -30,7 +36,60 @@ export class VoiceService {
   }
 
   async joinRoom(roomName: string, userId: string) {
+    // Log participant joining
+    try {
+      await this.prisma.callLog.updateMany({
+        where: { roomName },
+        data: { participantIds: { push: userId } },
+      });
+    } catch (_) {}
     return { token: await this.makeToken(roomName, userId) };
+  }
+
+  async endCallLog(roomName: string): Promise<void> {
+    try {
+      const log = await this.prisma.callLog.findUnique({ where: { roomName } });
+      if (!log || log.endedAt) return;
+      const endedAt = new Date();
+      const durationSec = Math.round((endedAt.getTime() - log.startedAt.getTime()) / 1000);
+      await this.prisma.callLog.update({
+        where: { roomName },
+        data: { endedAt, durationSec },
+      });
+    } catch (_) {}
+  }
+
+  async getCallHistory(userId: string, page = 0, limit = 50) {
+    const logs = await this.prisma.callLog.findMany({
+      where: { participantIds: { has: userId } },
+      orderBy: { startedAt: "desc" },
+      skip: page * limit,
+      take: limit,
+    });
+    // Enrich with participant display names
+    const result = await Promise.all(logs.map(async (log) => {
+      const otherIds = log.participantIds.filter((id: string) => id !== userId);
+      const profiles = await this.prisma.profile.findMany({
+        where: { userId: { in: otherIds } },
+        select: { userId: true, firstName: true, lastName: true },
+      });
+      const participants = profiles.map((p) => ({
+        userId: p.userId,
+        displayName: `${p.firstName ?? ""} ${p.lastName ?? ""}`.trim() || p.userId,
+      }));
+      return {
+        id: log.id,
+        roomName: log.roomName,
+        conversationId: log.conversationId,
+        isOutgoing: log.initiatorId === userId,
+        startedAt: log.startedAt,
+        endedAt: log.endedAt,
+        durationSec: log.durationSec,
+        withAi: log.withAi,
+        participants,
+      };
+    }));
+    return result;
   }
 
   async createVoiceSession(userId: string) {
@@ -58,7 +117,7 @@ export class VoiceService {
   private async makeToken(room: string, identity: string) {
     const profile = await this.prisma.profile.findUnique({ where: { userId: identity } });
     const displayName = profile
-      ? `${profile.firstName ?? ''} ${profile.lastName ?? ''}`.trim() || identity
+      ? `${profile.firstName ?? ""} ${profile.lastName ?? ""}`.trim() || identity
       : identity;
     const at = new AccessToken(LK_API_KEY, LK_API_SECRET, { identity, name: displayName });
     at.addGrant({ roomJoin: true, room, canPublish: true, canSubscribe: true });

@@ -40,6 +40,10 @@ export class UpdateProfileDto {
   @IsString()
   @IsOptional()
   fcmToken?: string;
+
+  @IsString()
+  @IsOptional()
+  voipToken?: string;
 }
 
 export class LinkWalletDto {

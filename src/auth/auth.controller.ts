@@ -38,8 +38,8 @@ export class AuthController {
   @Post('logout')
   @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
-  async logout(@CurrentUser() user: any, @Req() req: Request) {
-    return this.authService.logout(user.sub, user.session_id, req.ip ?? '', req.headers['user-agent'] ?? '');
+  async logout(@CurrentUser() user: any, @Req() req: Request, @Body() body?: { fcmToken?: string; voipToken?: string }) {
+    return this.authService.logout(user.sub, user.session_id, req.ip ?? '', req.headers['user-agent'] ?? '', body?.fcmToken, body?.voipToken);
   }
 
   @Get('2fa/totp/setup')
