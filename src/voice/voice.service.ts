@@ -36,12 +36,15 @@ export class VoiceService {
   }
 
   async joinRoom(roomName: string, userId: string) {
-    // Log participant joining
+    // Log participant joining (deduplicate)
     try {
-      await this.prisma.callLog.updateMany({
-        where: { roomName },
-        data: { participantIds: { push: userId } },
-      });
+      const log = await this.prisma.callLog.findUnique({ where: { roomName } });
+      if (log && !log.participantIds.includes(userId)) {
+        await this.prisma.callLog.update({
+          where: { roomName },
+          data: { participantIds: { push: userId } },
+        });
+      }
     } catch (_) {}
     return { token: await this.makeToken(roomName, userId) };
   }
@@ -68,7 +71,15 @@ export class VoiceService {
     });
     // Enrich with participant display names
     const result = await Promise.all(logs.map(async (log) => {
-      const otherIds = log.participantIds.filter((id: string) => id !== userId);
+      let otherIds = [...new Set(log.participantIds)].filter((id: string) => id !== userId);
+      // Fallback: if no other participants recorded, look up from conversation
+      if (otherIds.length === 0 && log.conversationId) {
+        const convParticipants = await this.prisma.conversationParticipant.findMany({
+          where: { conversationId: log.conversationId, userId: { not: userId } },
+          select: { userId: true },
+        });
+        otherIds = convParticipants.map((cp) => cp.userId);
+      }
       const profiles = await this.prisma.profile.findMany({
         where: { userId: { in: otherIds } },
         select: { userId: true, firstName: true, lastName: true },
