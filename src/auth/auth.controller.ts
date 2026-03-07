@@ -5,6 +5,7 @@ import type { Request } from 'express';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto, Login2faDto, RefreshDto } from './dto/login.dto';
+import { ForgotPasswordDto, VerifyForgotCodeDto, ResetPasswordDto } from './dto/forgot-password.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
@@ -90,5 +91,23 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async verifyEmail(@Body() body: { code: string }, @CurrentUser() user: any) {
     return this.authService.verifyEmail(user.sub, body.code);
+  }
+
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.OK)
+  async forgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.authService.forgotPassword(dto.email);
+  }
+
+  @Post('forgot-password/verify')
+  @HttpCode(HttpStatus.OK)
+  async verifyForgotCode(@Body() dto: VerifyForgotCodeDto) {
+    return this.authService.verifyForgotCode(dto.email, dto.code);
+  }
+
+  @Post('forgot-password/reset')
+  @HttpCode(HttpStatus.OK)
+  async resetPassword(@Body() dto: ResetPasswordDto) {
+    return this.authService.resetPassword(dto.resetToken, dto.newPassword);
   }
 }

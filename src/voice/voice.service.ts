@@ -1,6 +1,8 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, NotFoundException, ForbiddenException } from "@nestjs/common";
 import { AccessToken, RoomServiceClient } from "livekit-server-sdk";
 import { v4 as uuidv4 } from "uuid";
+import * as crypto from "crypto";
+import * as bcrypt from "bcrypt";
 import { PrismaService } from "../prisma/prisma.service";
 
 const LK_HOST = process.env.LIVEKIT_HOST || "http://localhost:7880";
@@ -19,7 +21,6 @@ export class VoiceService {
     const roomName = "call-" + uuidv4();
     await this.rooms.createRoom({ name: roomName, emptyTimeout: 300, departureTimeout: 60, maxParticipants: 10 });
     const token = await this.makeToken(roomName, initiatorId);
-    // Log call start
     try {
       await this.prisma.callLog.create({
         data: { roomName, initiatorId, participantIds: [initiatorId], withAi, conversationId },
@@ -36,7 +37,6 @@ export class VoiceService {
   }
 
   async joinRoom(roomName: string, userId: string) {
-    // Log participant joining (deduplicate)
     try {
       const log = await this.prisma.callLog.findUnique({ where: { roomName } });
       if (log && !log.participantIds.includes(userId)) {
@@ -60,6 +60,12 @@ export class VoiceService {
         data: { endedAt, durationSec },
       });
     } catch (_) {}
+    try {
+      const pub = await this.prisma.publicRoom.findFirst({ where: { roomName } });
+      if (pub && pub.type === "temporary" && pub.isActive) {
+        await this.prisma.publicRoom.update({ where: { code: pub.code }, data: { isActive: false } });
+      }
+    } catch (_) {}
   }
 
   async getCallHistory(userId: string, page = 0, limit = 50) {
@@ -69,10 +75,8 @@ export class VoiceService {
       skip: page * limit,
       take: limit,
     });
-    // Enrich with participant display names
     const result = await Promise.all(logs.map(async (log) => {
       let otherIds = [...new Set(log.participantIds)].filter((id: string) => id !== userId);
-      // Fallback: if no other participants recorded, look up from conversation
       if (otherIds.length === 0 && log.conversationId) {
         const convParticipants = await this.prisma.conversationParticipant.findMany({
           where: { conversationId: log.conversationId, userId: { not: userId } },
@@ -125,6 +129,144 @@ export class VoiceService {
     return { clientSecret: data.client_secret.value as string };
   }
 
+  // ─── Public rooms ───
+
+  async getOrCreatePersonalRoom(userId: string) {
+    const profile = await this.prisma.profile.findUnique({ where: { userId } });
+    if (!profile) throw new NotFoundException("Profile not found");
+
+    if (profile.personalRoomCode) {
+      const existing = await this.prisma.publicRoom.findUnique({ where: { code: profile.personalRoomCode } });
+      if (existing) {
+        return { code: existing.code, link: `https://id.taler.tirol/room/${existing.code}` };
+      }
+    }
+
+    const code = crypto.randomBytes(4).toString("hex");
+    const roomName = "personal-" + userId.slice(0, 8) + "-" + code;
+    await this.prisma.publicRoom.create({
+      data: { code, roomName, creatorId: userId, title: "", type: "permanent" },
+    });
+    await this.prisma.profile.update({
+      where: { userId },
+      data: { personalRoomCode: code },
+    });
+    return { code, link: `https://id.taler.tirol/room/${code}` };
+  }
+
+  async createTemporaryRoom(userId: string, title?: string, password?: string) {
+    const roomName = "tmp-" + uuidv4();
+    const code = crypto.randomBytes(4).toString("hex");
+    await this.rooms.createRoom({ name: roomName, emptyTimeout: 300, departureTimeout: 60, maxParticipants: 20 });
+    const passwordHash = password ? await bcrypt.hash(password, 10) : null;
+    await this.prisma.publicRoom.create({
+      data: {
+        code,
+        roomName,
+        creatorId: userId,
+        title: title || "",
+        type: "temporary",
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        ...(passwordHash ? { passwordHash } : {}),
+      },
+    });
+    return { code, link: `https://id.taler.tirol/room/${code}` };
+  }
+
+  async deactivateTemporaryRoom(code: string, userId: string) {
+    const room = await this.prisma.publicRoom.findUnique({ where: { code } });
+    if (!room || room.type !== "temporary") throw new NotFoundException("Room not found");
+    if (room.creatorId !== userId) throw new NotFoundException("Not your room");
+    await this.prisma.publicRoom.update({ where: { code }, data: { isActive: false } });
+  }
+
+  async createPublicRoom(userId?: string, title?: string, password?: string) {
+    const roomName = "pub-" + uuidv4();
+    const code = crypto.randomBytes(4).toString("hex");
+    await this.rooms.createRoom({ name: roomName, emptyTimeout: 600, departureTimeout: 120, maxParticipants: 20 });
+    const passwordHash = password ? await bcrypt.hash(password, 10) : null;
+    await this.prisma.publicRoom.create({
+      data: {
+        code,
+        roomName,
+        creatorId: userId ?? null,
+        title: title || "",
+        ...(passwordHash ? { passwordHash } : {}),
+      },
+    });
+    return { code, roomName, link: `https://id.taler.tirol/room/${code}` };
+  }
+
+  async getPublicRoom(code: string) {
+    const room = await this.prisma.publicRoom.findUnique({ where: { code } });
+    if (!room || !room.isActive) throw new NotFoundException("Room not found");
+
+    let creatorName: string | null = null;
+    let creatorAvatar: string | null = null;
+    if (room.creatorId) {
+      const profile = await this.prisma.profile.findUnique({ where: { userId: room.creatorId } });
+      if (profile) {
+        creatorName = `${profile.firstName ?? ""} ${profile.lastName ?? ""}`.trim() || null;
+        creatorAvatar = (profile as any).avatarUrl ?? null;
+      }
+    }
+
+    return {
+      code: room.code,
+      title: room.title,
+      roomName: room.roomName,
+      isActive: room.isActive,
+      requiresPassword: !!room.passwordHash,
+      creatorName,
+      creatorAvatar,
+    };
+  }
+
+  async joinPublicRoom(code: string, guestName: string, password?: string) {
+    const room = await this.prisma.publicRoom.findUnique({ where: { code } });
+    if (!room || !room.isActive) throw new NotFoundException("Room not found");
+    if (room.type === "temporary" && room.expiresAt && new Date() > room.expiresAt) {
+      await this.prisma.publicRoom.update({ where: { code }, data: { isActive: false } });
+      throw new NotFoundException("Room has expired");
+    }
+    if (room.passwordHash) {
+      if (!password || !(await bcrypt.compare(password, room.passwordHash))) {
+        throw new ForbiddenException("Invalid room password");
+      }
+    }
+    try {
+      const timeout = room.type === "permanent" ? 600 : 300;
+      await this.rooms.createRoom({ name: room.roomName, emptyTimeout: timeout, departureTimeout: 120, maxParticipants: 20 });
+    } catch (_) {}
+    return { token: await this.makeGuestToken(room.roomName, guestName), roomName: room.roomName };
+  }
+
+  async joinPublicRoomAuth(code: string, userId: string, password?: string) {
+    const room = await this.prisma.publicRoom.findUnique({ where: { code } });
+    if (!room || !room.isActive) throw new NotFoundException("Room not found");
+    if (room.type === "temporary" && room.expiresAt && new Date() > room.expiresAt) {
+      await this.prisma.publicRoom.update({ where: { code }, data: { isActive: false } });
+      throw new NotFoundException("Room has expired");
+    }
+    if (room.passwordHash) {
+      if (!password || !(await bcrypt.compare(password, room.passwordHash))) {
+        throw new ForbiddenException("Invalid room password");
+      }
+    }
+    try {
+      const timeout = room.type === "permanent" ? 600 : 300;
+      await this.rooms.createRoom({ name: room.roomName, emptyTimeout: timeout, departureTimeout: 120, maxParticipants: 20 });
+    } catch (_) {}
+    return { token: await this.makeToken(room.roomName, userId), roomName: room.roomName };
+  }
+
+  private async makeGuestToken(room: string, displayName: string) {
+    const identity = "guest-" + crypto.randomBytes(4).toString("hex");
+    const at = new AccessToken(LK_API_KEY, LK_API_SECRET, { identity, name: displayName });
+    at.addGrant({ roomJoin: true, room, canPublish: true, canSubscribe: true });
+    return await at.toJwt();
+  }
+
   private async makeToken(room: string, identity: string) {
     const profile = await this.prisma.profile.findUnique({ where: { userId: identity } });
     const displayName = profile
@@ -133,5 +275,170 @@ export class VoiceService {
     const at = new AccessToken(LK_API_KEY, LK_API_SECRET, { identity, name: displayName });
     at.addGrant({ roomJoin: true, room, canPublish: true, canSubscribe: true });
     return await at.toJwt();
+  }
+
+  // ─── Meeting Recorder ───
+
+  async startRecorder(roomName: string, withAi = true) {
+    try {
+      const res = await fetch(AI_AGENT_URL + '/record', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomName, withAi }),
+      });
+      const data = await res.json() as any;
+      return { status: data.status || 'started' };
+    } catch (e) {
+      console.error('Failed to start recorder:', e);
+      throw new Error('Recorder service unavailable');
+    }
+  }
+
+  async stopRecorder(roomName: string) {
+    try {
+      const res = await fetch(AI_AGENT_URL + '/stop-record', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomName }),
+      });
+      const data = await res.json() as any;
+      return { status: data.status || 'stopping' };
+    } catch (e) {
+      console.error('Failed to stop recorder:', e);
+      throw new Error('Recorder service unavailable');
+    }
+  }
+
+  async getRecorderStatus(roomName: string) {
+    try {
+      const res = await fetch(AI_AGENT_URL + '/record-status/' + roomName);
+      return await res.json();
+    } catch (e) {
+      return { recording: false };
+    }
+  }
+
+  async saveMeetingSummary(data: {
+    roomName: string;
+    transcript: string;
+    summary: string;
+    keyPoints: any;
+    actionItems: any;
+    decisions: any;
+    participants: string[];
+    participantIds?: string[];
+    durationSec?: number;
+    recordingUrl?: string;
+  }) {
+    let callLogId: string | null = null;
+    try {
+      const log = await this.prisma.callLog.findUnique({ where: { roomName: data.roomName } });
+      if (log) callLogId = log.id;
+    } catch (_) {}
+
+    const summary = await this.prisma.meetingSummary.create({
+      data: {
+        roomName: data.roomName,
+        callLogId,
+        transcript: data.transcript,
+        summary: data.summary,
+        keyPoints: data.keyPoints,
+        actionItems: data.actionItems,
+        decisions: data.decisions,
+        participants: data.participants,
+        participantIds: data.participantIds ?? [],
+        durationSec: data.durationSec ?? null,
+        recordingUrl: data.recordingUrl ?? null,
+      },
+    });
+    return { id: summary.id };
+  }
+
+  async getMeetingSummaries(userId: string, page = 0, limit = 20) {
+    const logs = await this.prisma.callLog.findMany({
+      where: { participantIds: { has: userId }, meetingSummary: { isNot: null } },
+      orderBy: { startedAt: 'desc' },
+      skip: page * limit,
+      take: limit,
+      include: { meetingSummary: true },
+    });
+
+    const publicSummaries = await this.prisma.meetingSummary.findMany({
+      where: { callLogId: null, participantIds: { has: userId } },
+      orderBy: { createdAt: 'desc' },
+      skip: page * limit,
+      take: limit,
+    });
+
+    const fromLogs = logs
+      .filter(l => l.meetingSummary)
+      .map(l => ({
+        id: l.meetingSummary!.id,
+        roomName: l.roomName,
+        summary: l.meetingSummary!.summary,
+        participants: l.meetingSummary!.participants,
+        durationSec: l.meetingSummary!.durationSec,
+        actionItemsCount: Array.isArray(l.meetingSummary!.actionItems) ? (l.meetingSummary!.actionItems as any[]).length : 0,
+        createdAt: l.meetingSummary!.createdAt,
+        recordingUrl: l.meetingSummary!.recordingUrl,
+      }));
+
+    const fromPublic = publicSummaries.map(s => ({
+      id: s.id,
+      roomName: s.roomName,
+      summary: s.summary,
+      participants: s.participants,
+      durationSec: s.durationSec,
+      actionItemsCount: Array.isArray(s.actionItems) ? (s.actionItems as any[]).length : 0,
+      createdAt: s.createdAt,
+      recordingUrl: s.recordingUrl,
+    }));
+
+    return [...fromLogs, ...fromPublic].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  async getMeetingRecordings(userId: string, page = 0, limit = 20) {
+    const logs = await this.prisma.callLog.findMany({
+      where: { participantIds: { has: userId }, meetingSummary: { isNot: null } },
+      orderBy: { startedAt: 'desc' },
+      skip: page * limit,
+      take: limit,
+      include: { meetingSummary: true },
+    });
+
+    const publicSummaries = await this.prisma.meetingSummary.findMany({
+      where: { callLogId: null, participantIds: { has: userId }, recordingUrl: { not: null } },
+      orderBy: { createdAt: 'desc' },
+      skip: page * limit,
+      take: limit,
+    });
+
+    const fromLogs = logs
+      .filter(l => l.meetingSummary?.recordingUrl)
+      .map(l => ({
+        id: l.meetingSummary!.id,
+        roomName: l.roomName,
+        participants: l.meetingSummary!.participants,
+        durationSec: l.meetingSummary!.durationSec,
+        createdAt: l.meetingSummary!.createdAt,
+        recordingUrl: l.meetingSummary!.recordingUrl!,
+      }));
+
+    const fromPublic = publicSummaries.map(s => ({
+      id: s.id,
+      roomName: s.roomName,
+      participants: s.participants,
+      durationSec: s.durationSec,
+      createdAt: s.createdAt,
+      recordingUrl: s.recordingUrl!,
+    }));
+
+    return [...fromLogs, ...fromPublic].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  async getMeetingSummary(id: string) {
+    const summary = await this.prisma.meetingSummary.findUnique({ where: { id } });
+    if (!summary) throw new NotFoundException('Meeting summary not found');
+    return summary;
   }
 }

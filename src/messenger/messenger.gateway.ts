@@ -69,37 +69,35 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
       );
       const senderName = await this.service.getUserDisplayName(client.data.userId);
       const enrichedMsg = { ...msg, senderName };
-      // Emit to conversation room (for users who have the chat open)
       this.server.to(payload.conversationId).emit('new_message', enrichedMsg);
-      // Also emit to personal rooms of all participants (for users on other screens)
       const participants = await this.service.getParticipants(payload.conversationId);
       for (const p of participants) {
         if (p.userId === client.data.userId) continue;
         this.server.to(`user:${p.userId}`).emit('new_message', enrichedMsg);
-        // Check if recipient has the conversation open (joined the room)
         const socketsInConv = await this.server.in(payload.conversationId).fetchSockets();
         const recipientInConv = socketsInConv.some(s => s.data.userId === p.userId);
-        // Mark as delivered if recipient is online (socket connected)
         const sockets = await this.server.in(`user:${p.userId}`).fetchSockets();
         const isOnline = sockets.length > 0;
         if (isOnline) {
           await this.service.markDelivered(msg.id);
           this.server.to(`user:${client.data.userId}`).emit('message_updated', { id: msg.id, isDelivered: true });
         }
-        // Send FCM push unless recipient has the chat open (recipientInConv)
         this.logger.log(`FCM: recipientId=${p.userId} online=${isOnline} inConv=${recipientInConv} → push=${!recipientInConv}`);
         if (!recipientInConv) {
-          const fcmToken = await this.service.getFcmToken(p.userId);
-          if (fcmToken) {
-            this.fcmService.sendNewMessage(
-              fcmToken,
-              senderName,
-              payload.content,
-              payload.conversationId,
-            ).then(() => this.logger.log(`FCM sent to ${p.userId}`))
-             .catch(e => this.logger.error(`FCM failed for ${p.userId}:`, e));
+          const muted = await this.service.isParticipantMuted(payload.conversationId, p.userId);
+          if (muted) {
+            this.logger.log(`FCM skipped for ${p.userId}: conversation muted`);
           } else {
-            this.logger.warn(`FCM: no token for user ${p.userId}`);
+            const fcmToken = await this.service.getFcmToken(p.userId);
+            if (fcmToken) {
+              this.fcmService.sendNewMessage(
+                fcmToken,
+                senderName,
+                payload.content,
+                payload.conversationId,
+              ).then(() => this.logger.log(`FCM sent to ${p.userId}`))
+               .catch(e => this.logger.error(`FCM failed for ${p.userId}:`, e));
+            }
           }
         }
       }
@@ -120,9 +118,12 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
   @SubscribeMessage('call_invite')
   async handleCallInvite(
     client: Socket,
-    payload: { conversationId: string; roomName: string; inviteeId?: string },
+    payload: { conversationId: string; roomName: string; inviteeId?: string; e2eeKey?: string },
   ) {
     const fromUserName = await this.service.getUserDisplayName(client.data.userId);
+    const convType = await this.service.getConversationType(payload.conversationId);
+    const isGroup = convType === 'GROUP';
+
     let calleeIds: string[];
     if (payload.inviteeId) {
       calleeIds = [payload.inviteeId];
@@ -133,34 +134,58 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
         .map((p) => p.userId);
     }
 
+    // For group calls, emit group_call_started to all participants
+    if (isGroup) {
+      const participants = await this.service.getParticipants(payload.conversationId);
+      for (const p of participants) {
+        this.server.to(`user:${p.userId}`).emit('group_call_started', {
+          conversationId: payload.conversationId,
+          roomName: payload.roomName,
+          initiatorName: fromUserName,
+          initiatorId: client.data.userId,
+        });
+      }
+    }
+
     for (const calleeId of calleeIds) {
+      // Check mute before sending push (but still send socket event for banner)
+      const muted = await this.service.isParticipantMuted(payload.conversationId, calleeId);
+
       this.server.to(`user:${calleeId}`).emit('call_invite', {
         fromUserId: client.data.userId,
         fromUserName,
         roomName: payload.roomName,
         conversationId: payload.conversationId,
+        isGroupCall: isGroup,
+        ...(payload.e2eeKey ? { e2eeKey: payload.e2eeKey } : {}),
       });
-      // Send FCM push for background/killed app
-      const calleeToken = await this.service.getFcmToken(calleeId);
-      if (calleeToken) {
-        this.fcmService.sendCallInvite(calleeToken, fromUserName, payload.roomName, payload.conversationId).catch(() => {});
-      }
-      // Send APNs VoIP push for iOS (works even when app is killed)
-      const voipToken = await this.service.getVoipToken(calleeId);
-      if (voipToken) {
-        this.apnsService.sendVoIPCallInvite(voipToken, {
-          nameCaller: fromUserName,
-          roomName: payload.roomName,
-          conversationId: payload.conversationId,
-        }).catch(() => {});
+
+      if (!muted) {
+        const calleeToken = await this.service.getFcmToken(calleeId);
+        if (calleeToken) {
+          this.fcmService.sendCallInvite(calleeToken, fromUserName, payload.roomName, payload.conversationId, payload.e2eeKey).catch(() => {});
+        }
+        const voipToken = await this.service.getVoipToken(calleeId);
+        if (voipToken) {
+          this.apnsService.sendVoIPCallInvite(voipToken, {
+            nameCaller: isGroup ? `${fromUserName} (группа)` : fromUserName,
+            roomName: payload.roomName,
+            conversationId: payload.conversationId,
+            ...(payload.e2eeKey ? { e2eeKey: payload.e2eeKey } : {}),
+          }).catch(() => {});
+        }
+      } else {
+        this.logger.log(`Call push skipped for ${calleeId}: conversation muted`);
       }
     }
   }
 
   @SubscribeMessage('call_ended')
   async handleCallEnded(client: Socket, payload: { conversationId: string; roomName: string }) {
+    const convType = await this.service.getConversationType(payload.conversationId);
+    const isGroup = convType === 'GROUP';
+
     const participants = await this.service.getParticipants(payload.conversationId);
-    // Broadcast to ALL participants (incl. sender's other devices) so every device dismisses
     for (const p of participants) {
       this.server.to(`user:${p.userId}`).emit('call_ended', {
         roomName: payload.roomName,
@@ -171,7 +196,17 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
         this.fcmService.sendCallCancelled(token, payload.roomName).catch(() => {});
       }
     }
-    // Log call end in call history
+
+    // For group calls, emit group_call_ended so banner disappears
+    if (isGroup) {
+      for (const p of participants) {
+        this.server.to(`user:${p.userId}`).emit('group_call_ended', {
+          conversationId: payload.conversationId,
+          roomName: payload.roomName,
+        });
+      }
+    }
+
     try {
       const log = await this.prisma.callLog.findUnique({ where: { roomName: payload.roomName } });
       if (log && !log.endedAt) {
@@ -191,16 +226,13 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
           roomName: payload.roomName,
         });
       }
-    } catch (e) {
-      // ignore
-    }
+    } catch (e) {}
   }
 
   @SubscribeMessage('mark_read')
   async handleMarkRead(client: Socket, payload: { conversationId: string }) {
     try {
       const updatedIds = await this.service.markConversationRead(payload.conversationId, client.data.userId);
-      // Notify senders that their messages were read
       if (updatedIds.length > 0) {
         const participants = await this.service.getParticipants(payload.conversationId);
         for (const p of participants) {
@@ -211,8 +243,21 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
           });
         }
       }
-    } catch (e) {
-      // ignore
+    } catch (e) {}
+  }
+
+  // ─── Group events broadcast ───
+
+  /** Emit a group event to all participants' personal rooms */
+  async emitToConversationParticipants(conversationId: string, event: string, data: any) {
+    const participants = await this.service.getParticipants(conversationId);
+    for (const p of participants) {
+      this.server.to(`user:${p.userId}`).emit(event, data);
     }
+  }
+
+  /** Emit to a specific user's personal room */
+  emitToUser(userId: string, event: string, data: any) {
+    this.server.to(`user:${userId}`).emit(event, data);
   }
 }

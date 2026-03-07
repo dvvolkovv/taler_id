@@ -24,7 +24,7 @@ export class ApnsService {
 
   async sendVoIPCallInvite(
     voipToken: string,
-    data: { nameCaller: string; roomName: string; conversationId: string },
+    data: { nameCaller: string; roomName: string; conversationId: string; e2eeKey?: string },
   ): Promise<void> {
     if (!this.productionProvider || !this.sandboxProvider) return;
     const bundleId = process.env.APNS_BUNDLE_ID ?? 'tirol.taler.talerIdMobile';
@@ -41,7 +41,7 @@ export class ApnsService {
         appName: 'Taler ID',
         handle: '',
         type: 0,
-        extra: { roomName: data.roomName, conversationId: data.conversationId },
+        extra: { roomName: data.roomName, conversationId: data.conversationId, ...(data.e2eeKey ? { e2eeKey: data.e2eeKey } : {}) },
       };
       return note;
     };

@@ -46,6 +46,7 @@ model Profile {
   language          String     @default("en")
   createdAt         DateTime   @default(now())
   updatedAt         DateTime   @updatedAt
+  personalRoomCode  String?    @unique
   documents         Document[]
   user              User       @relation(fields: [userId], references: [id])
 }
@@ -169,6 +170,10 @@ model Conversation {
   id           String                    @id @default(uuid())
   type         ConvType                  @default(DIRECT)
   createdAt    DateTime                  @default(now())
+  name         String?
+  avatarUrl    String?
+  createdById  String?
+  updatedAt    DateTime  @updatedAt
   participants ConversationParticipant[]
   messages     Message[]
 }
@@ -177,6 +182,10 @@ model ConversationParticipant {
   id             String       @id @default(uuid())
   conversationId String
   userId         String
+  role           GroupRole  @default(MEMBER)
+  joinedAt       DateTime   @default(now())
+  isMuted        Boolean    @default(false)
+  mutedUntil     DateTime?
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@unique([conversationId, userId])
@@ -195,6 +204,7 @@ model Message {
   fileType       String?
   isDelivered    Boolean      @default(false)
   isRead         Boolean      @default(false)
+  isSystem       Boolean      @default(false)
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sender         User         @relation(fields: [senderId], references: [id])
 
@@ -229,6 +239,12 @@ enum TenantRole {
   VIEWER
 }
 
+enum GroupRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
 enum ConvType {
   DIRECT
   GROUP
@@ -244,4 +260,36 @@ model CallLog {
   durationSec    Int?
   withAi         Boolean   @default(false)
   conversationId String?
+  meetingSummary MeetingSummary?
+}
+
+model PublicRoom {
+  id        String    @id @default(uuid())
+  code      String    @unique
+  roomName  String
+  creatorId String?
+  title     String    @default("")
+  createdAt DateTime  @default(now())
+  expiresAt DateTime?
+  isActive  Boolean   @default(true)
+  passwordHash String?
+  type      String    @default("temporary")
+}
+
+model MeetingSummary {
+  id           String   @id @default(uuid())
+  roomName     String
+  callLogId    String?  @unique
+  transcript   String   @db.Text
+  summary      String   @db.Text
+  keyPoints    Json     @default("[]")
+  actionItems  Json     @default("[]")
+  decisions    Json     @default("[]")
+  participants    String[]
+  participantIds  String[]
+  recordingUrl    String?
+  durationSec  Int?
+  createdAt    DateTime @default(now())
+
+  callLog      CallLog? @relation(fields: [callLogId], references: [id])
 }

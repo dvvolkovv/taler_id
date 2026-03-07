@@ -347,4 +347,65 @@ export class AuthService {
       },
     });
   }
+
+  // ── Password Reset ──
+
+  async forgotPassword(email: string) {
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    // Always return success to prevent email enumeration
+    if (!user) return { sent: true };
+
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    await this.redis.setEx(`pwd_reset:${email}`, 600, code);
+    await this.emailService.sendOtp(email, code, 'Password reset');
+    await this.auditLog(user.id, 'PASSWORD_RESET_REQUESTED', '', '');
+    return { sent: true };
+  }
+
+  async verifyForgotCode(email: string, code: string) {
+    const stored = await this.redis.get(`pwd_reset:${email}`);
+    if (!stored || stored !== code) {
+      throw new BadRequestException('Invalid or expired code');
+    }
+
+    await this.redis.del(`pwd_reset:${email}`);
+
+    // Create a short-lived reset token (10 min)
+    const resetToken = this.jwtService.sign(
+      { email, purpose: 'password_reset' },
+      { privateKey: this.privateKey, algorithm: 'RS256', expiresIn: '10m' },
+    );
+
+    return { valid: true, resetToken };
+  }
+
+  async resetPassword(resetToken: string, newPassword: string) {
+    let payload: any;
+    try {
+      payload = this.jwtService.verify(resetToken, {
+        publicKey: this.publicKey,
+        algorithms: ['RS256'],
+      });
+    } catch {
+      throw new BadRequestException('Invalid or expired reset token');
+    }
+
+    if (payload.purpose !== 'password_reset') {
+      throw new BadRequestException('Invalid token purpose');
+    }
+
+    const user = await this.prisma.user.findUnique({ where: { email: payload.email } });
+    if (!user) throw new BadRequestException('User not found');
+
+    const bcryptRounds = this.configService.get<number>('security.bcryptRounds') ?? 12;
+    const passwordHash = await bcrypt.hash(newPassword, bcryptRounds);
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash },
+    });
+
+    await this.auditLog(user.id, 'PASSWORD_RESET', '', '');
+    return { reset: true };
+  }
 }

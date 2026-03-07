@@ -35,9 +35,6 @@ export class ProfileService {
   }
 
   async updateProfile(userId: string, dto: UpdateProfileDto) {
-    const profile = await this.prisma.profile.findUnique({ where: { userId } });
-    if (!profile) throw new NotFoundException("Profile not found");
-
     if (dto.phone !== undefined) {
       await this.prisma.user.update({
         where: { id: userId },
@@ -59,9 +56,20 @@ export class ProfileService {
       });
     }
 
-    return this.prisma.profile.update({
+    return this.prisma.profile.upsert({
       where: { userId },
-      data: {
+      update: {
+        firstName: dto.firstName,
+        lastName: dto.lastName,
+        middleName: dto.middleName,
+        dateOfBirth: dto.dateOfBirth ? new Date(dto.dateOfBirth) : undefined,
+        country: dto.country,
+        postalCode: dto.postalCode,
+        preferredCurrency: dto.preferredCurrency,
+        language: dto.language,
+      },
+      create: {
+        userId,
         firstName: dto.firstName,
         lastName: dto.lastName,
         middleName: dto.middleName,

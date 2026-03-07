@@ -290,12 +290,12 @@ async function bootstrap() {
       contentSecurityPolicy: {
         directives: {
           defaultSrc: ["'self'"],
-          scriptSrc: ["'self'", "'unsafe-inline'", "'wasm-unsafe-eval'", 'https://static.sumsub.com', 'https://www.gstatic.com'],
+          scriptSrc: ["'self'", "'unsafe-inline'", "'wasm-unsafe-eval'", 'https://static.sumsub.com', 'https://www.gstatic.com', 'https://cdn.jsdelivr.net'],
           scriptSrcAttr: ["'unsafe-inline'"],
           styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
           fontSrc: ["'self'", 'https://fonts.gstatic.com'],
           imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
-          connectSrc: ["'self'", 'https://api.sumsub.com', 'wss://api.sumsub.com', 'https://www.gstatic.com', 'https://fonts.gstatic.com', 'https://travel-n8n.up.railway.app'],
+          connectSrc: ["'self'", 'wss://id.taler.tirol', 'https://api.sumsub.com', 'wss://api.sumsub.com', 'https://www.gstatic.com', 'https://fonts.gstatic.com', 'https://travel-n8n.up.railway.app'],
           frameSrc: ["'self'", 'https://api.sumsub.com', 'https://*.sumsub.com'],
           mediaSrc: ["'self'", 'blob:', 'https://*.sumsub.com'],
           workerSrc: ["'self'", 'blob:'],
