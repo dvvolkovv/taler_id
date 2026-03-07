@@ -7,6 +7,9 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { AuditLogInterceptor } from './common/interceptors/audit-log.interceptor';
 import { PrismaService } from './prisma/prisma.service';
 import { OIDC_PROVIDER } from './oidc/oidc.service';
+import { WebSocket, WebSocketServer } from 'ws';
+import { verify } from 'jsonwebtoken';
+import * as fs from 'fs';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
@@ -360,6 +363,51 @@ async function bootstrap() {
   Logger.log(`Taler ID running on port ${port}`, 'Bootstrap');
   Logger.log(`Swagger UI available at http://localhost:${port}/docs`, 'Bootstrap');
   Logger.log(`OIDC Provider at ${process.env.OIDC_ISSUER || 'http://localhost:' + port + '/oauth'}`, 'Bootstrap');
+  // --- WebSocket Proxy: /voice/realtime-proxy -> OpenAI Realtime ---
+  const wss = new WebSocketServer({ noServer: true });
+  const httpServer = app.getHttpServer();
+  httpServer.on('upgrade', (req: any, socket: any, head: any) => {
+    const urlStr = req.url as string;
+    if (!urlStr.startsWith('/voice/realtime-proxy')) {
+      // Let Socket.io and other WebSocket handlers manage their own connections
+      return;
+    }
+    const url = new URL(urlStr, 'wss://localhost');
+    const token = url.searchParams.get('token') ||
+      (req.headers.authorization as string | undefined)?.replace('Bearer ', '') || '';
+    const jwtPublicKey = fs.readFileSync(process.env.JWT_PUBLIC_KEY_PATH as string, 'utf8');
+    try {
+      verify(token, jwtPublicKey, { algorithms: ['RS256'] });
+    } catch {
+      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    wss.handleUpgrade(req, socket, head, (clientWs) => {
+      const model = url.searchParams.get('model') ?? 'gpt-4o-realtime-preview-2024-12-17';
+      const openaiWs = new WebSocket(
+        'wss://api.openai.com/v1/realtime?model=' + model,
+        { headers: { Authorization: 'Bearer ' + process.env.OPENAI_API_KEY, 'OpenAI-Beta': 'realtime=v1' } }
+      );
+      openaiWs.on('open', () => {
+        clientWs.on('message', (data: any) => {
+          if (openaiWs.readyState === WebSocket.OPEN) openaiWs.send(data);
+        });
+        openaiWs.on('message', (data: any) => {
+          if (clientWs.readyState === WebSocket.OPEN) clientWs.send(data);
+        });
+      });
+      const cleanup = () => {
+        try { if (openaiWs.readyState === WebSocket.OPEN) openaiWs.close(); } catch(e) {}
+        try { if (clientWs.readyState === WebSocket.OPEN) clientWs.close(); } catch(e) {}
+      };
+      clientWs.on('close', cleanup);
+      openaiWs.on('close', cleanup);
+      openaiWs.on('error', (err: Error) => { Logger.error('OpenAI WS error: ' + err.message, 'RealtimeProxy'); cleanup(); });
+      clientWs.on('error', (err: Error) => { Logger.error('Client WS error: ' + err.message, 'RealtimeProxy'); cleanup(); });
+    });
+  });
+  Logger.log('WebSocket Realtime Proxy ready at /voice/realtime-proxy', 'Bootstrap');
 }
 
 bootstrap();
