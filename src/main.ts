@@ -10,12 +10,16 @@ import { OIDC_PROVIDER } from './oidc/oidc.service';
 import { WebSocket, WebSocketServer } from 'ws';
 import { verify } from 'jsonwebtoken';
 import * as fs from 'fs';
+import { json } from 'express';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     logger: ['log', 'warn', 'error'],
     rawBody: true,
   });
+
+  // Increase body size limit for large meeting transcripts (default ~100KB is too small)
+  app.use(json({ limit: '10mb' }));
 
   // Swagger/OpenAPI Configuration
   const config = new DocumentBuilder()
@@ -366,7 +370,8 @@ async function bootstrap() {
   // --- WebSocket Proxy: /voice/realtime-proxy -> OpenAI Realtime ---
   const wss = new WebSocketServer({ noServer: true });
   const httpServer = app.getHttpServer();
-  httpServer.on('upgrade', (req: any, socket: any, head: any) => {
+  httpServer.prependListener("upgrade", (req: any, socket: any, head: any) => {
+    console.log("[PROXY] upgrade req:", req.url?.substring(0, 50));
     const urlStr = req.url as string;
     if (!urlStr.startsWith('/voice/realtime-proxy')) {
       // Let Socket.io and other WebSocket handlers manage their own connections
@@ -384,17 +389,55 @@ async function bootstrap() {
       return;
     }
     wss.handleUpgrade(req, socket, head, (clientWs) => {
-      const model = url.searchParams.get('model') ?? 'gpt-4o-realtime-preview-2024-12-17';
+      const model = url.searchParams.get('model') ?? 'gpt-4o-realtime-preview';
       const openaiWs = new WebSocket(
         'wss://api.openai.com/v1/realtime?model=' + model,
         { headers: { Authorization: 'Bearer ' + process.env.OPENAI_API_KEY, 'OpenAI-Beta': 'realtime=v1' } }
       );
+      // Buffer messages from client until OpenAI WS is ready to avoid dropping session.update
+      const clientMessageQueue: any[] = [];
+      let openaiReady = false;
+      let sessionConfigured = false;
+      clientWs.on('message', (data: any, isBinary: boolean) => {
+        const forwardToOpenAI = (d: any, bin: boolean) => {
+          if (openaiWs.readyState === WebSocket.OPEN) {
+            openaiWs.send(bin ? d : d.toString(), { binary: bin });
+          }
+        };
+        if (openaiReady) {
+          if (sessionConfigured) {
+            forwardToOpenAI(data, isBinary);
+          } else {
+            // Wait for session.updated before forwarding audio to OpenAI
+            try {
+              const parsed = JSON.parse(data.toString());
+              if (parsed.type !== 'input_audio_buffer.append') {
+                forwardToOpenAI(data, isBinary);
+              }
+            } catch(_) { forwardToOpenAI(data, isBinary); }
+          }
+        } else {
+          // Only queue config messages (session.update, etc.), drop audio until OpenAI is ready
+          try {
+            const parsed = JSON.parse(data.toString());
+            if (parsed.type !== 'input_audio_buffer.append') {
+              clientMessageQueue.push({ data, isBinary });
+            }
+          } catch(_) {}
+        }
+      });
       openaiWs.on('open', () => {
-        clientWs.on('message', (data: any) => {
-          if (openaiWs.readyState === WebSocket.OPEN) openaiWs.send(data);
-        });
-        openaiWs.on('message', (data: any) => {
-          if (clientWs.readyState === WebSocket.OPEN) clientWs.send(data);
+        openaiReady = true;
+        // Flush buffered messages (e.g. session.update sent before OpenAI WS opened)
+        while (clientMessageQueue.length > 0) {
+          const item = clientMessageQueue.shift();
+          if (openaiWs.readyState === WebSocket.OPEN) {
+            openaiWs.send(item.isBinary ? item.data : item.data.toString(), { binary: item.isBinary });
+          }
+        }
+        openaiWs.on('message', (data: any, isBinary: boolean) => {
+          try { const ev = JSON.parse(data.toString()); if (ev.type === 'session.updated') sessionConfigured = true; } catch(_) {}
+          if (clientWs.readyState === WebSocket.OPEN) clientWs.send(isBinary ? data : data.toString(), { binary: isBinary });
         });
       });
       const cleanup = () => {
