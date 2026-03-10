@@ -319,6 +319,7 @@ export class VoiceService {
   }
 
   async saveMeetingSummary(data: {
+    id?: string;
     roomName: string;
     transcript: string;
     summary: string;
@@ -329,7 +330,28 @@ export class VoiceService {
     participantIds?: string[];
     durationSec?: number;
     recordingUrl?: string;
+    status?: string;
   }) {
+    // If id provided — update existing record (pending → done)
+    if (data.id) {
+      const updated = await this.prisma.meetingSummary.update({
+        where: { id: data.id },
+        data: {
+          transcript: data.transcript,
+          summary: data.summary,
+          keyPoints: data.keyPoints,
+          actionItems: data.actionItems,
+          decisions: data.decisions,
+          recordingUrl: data.recordingUrl ?? null,
+          durationSec: data.durationSec ?? null,
+          status: data.status ?? 'done',
+          ...(data.participants && { participants: data.participants }),
+          ...(data.participantIds && data.participantIds.length > 0 && { participantIds: data.participantIds }),
+        },
+      });
+      return { id: updated.id };
+    }
+
     let callLogId: string | null = null;
     try {
       const log = await this.prisma.callLog.findUnique({ where: { roomName: data.roomName } });
@@ -349,6 +371,7 @@ export class VoiceService {
         participantIds: data.participantIds ?? [],
         durationSec: data.durationSec ?? null,
         recordingUrl: data.recordingUrl ?? null,
+        status: data.status ?? 'done',
       },
     });
     return { id: summary.id };
@@ -364,7 +387,13 @@ export class VoiceService {
     });
 
     const publicSummaries = await this.prisma.meetingSummary.findMany({
-      where: { callLogId: null, participantIds: { has: userId } },
+      where: {
+        callLogId: null,
+        OR: [
+          { participantIds: { has: userId } },
+          { roomName: { startsWith: `personal-${userId.substring(0, 8)}` } },
+        ],
+      },
       orderBy: { createdAt: 'desc' },
       skip: page * limit,
       take: limit,
@@ -381,6 +410,7 @@ export class VoiceService {
         actionItemsCount: Array.isArray(l.meetingSummary!.actionItems) ? (l.meetingSummary!.actionItems as any[]).length : 0,
         createdAt: l.meetingSummary!.createdAt,
         recordingUrl: l.meetingSummary!.recordingUrl,
+        status: (l.meetingSummary as any).status ?? 'done',
       }));
 
     const fromPublic = publicSummaries.map(s => ({
@@ -392,6 +422,7 @@ export class VoiceService {
       actionItemsCount: Array.isArray(s.actionItems) ? (s.actionItems as any[]).length : 0,
       createdAt: s.createdAt,
       recordingUrl: s.recordingUrl,
+      status: (s as any).status ?? 'done',
     }));
 
     return [...fromLogs, ...fromPublic].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
@@ -407,7 +438,14 @@ export class VoiceService {
     });
 
     const publicSummaries = await this.prisma.meetingSummary.findMany({
-      where: { callLogId: null, participantIds: { has: userId }, recordingUrl: { not: null } },
+      where: {
+        callLogId: null,
+        recordingUrl: { not: null },
+        OR: [
+          { participantIds: { has: userId } },
+          { roomName: { startsWith: `personal-${userId.substring(0, 8)}` } },
+        ],
+      },
       orderBy: { createdAt: 'desc' },
       skip: page * limit,
       take: limit,
