@@ -150,6 +150,34 @@
     }
     .participant-tile video { width: 100%; height: 100%; object-fit: cover; }
     .participant-tile.speaking { border-color: #4CAF50; box-shadow: 0 0 12px rgba(76,175,80,0.5); }
+    /* Presenter / pinned layout */
+    .video-grid.has-featured { flex-direction: column; flex-wrap: nowrap; overflow: hidden; }
+    .participant-tile.featured {
+      flex: 1 1 auto !important; width: 100% !important; max-width: 100% !important;
+      min-width: unset !important; min-height: 0 !important; cursor: zoom-out; order: -1;
+    }
+    .tiles-strip {
+      display: flex; flex-direction: row; flex-wrap: nowrap; gap: 6px;
+      overflow-x: auto; overflow-y: hidden; flex-shrink: 0; height: 130px;
+      padding: 4px 8px; align-items: stretch; scrollbar-width: thin;
+    }
+    .participant-tile.mini {
+      flex: 0 0 160px !important; width: 160px !important; min-width: 120px !important;
+      max-width: 160px !important; height: 100% !important; min-height: unset !important; cursor: pointer;
+    }
+    .screen-click-hint {
+      position: absolute; bottom: 38px; left: 50%; transform: translateX(-50%);
+      background: rgba(22,126,242,0.90); color: #fff; font-size: 11px; padding: 4px 10px;
+      border-radius: 8px; white-space: nowrap; opacity: 0; transition: opacity 0.2s; pointer-events: none;
+    }
+    .participant-tile:hover .screen-click-hint { opacity: 1; }
+    .featured-unpin-hint {
+      position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.55);
+      color: #fff; font-size: 11px; padding: 4px 10px; border-radius: 8px;
+      white-space: nowrap; opacity: 0; transition: opacity 0.2s; pointer-events: none;
+    }
+    .participant-tile.featured:hover .featured-unpin-hint { opacity: 1; }
+
     .participant-name {
       position: absolute; bottom: 8px; left: 8px;
       background: rgba(10,22,40,0.75); backdrop-filter: blur(8px);
@@ -400,6 +428,17 @@
         <div class="ctrl-btn-tooltip">AI запишет встречу и создаст резюме с задачами</div>
       </div>
       <div class="ctrl-wrap">
+        <button class="ctrl-btn" id="btn-fullscreen" onclick="toggleFullscreen()" title="На весь экран">
+          <svg id="fs-icon-enter" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+          </svg>
+          <svg id="fs-icon-exit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none">
+            <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 0 2-2h3M3 16h3a2 2 0 0 0 2 2v3"/>
+          </svg>
+        </button>
+        <div class="ctrl-label">Полный</div>
+      </div>
+            <div class="ctrl-wrap">
         <button class="ctrl-btn ctrl-btn-leave" onclick="leaveRoom()" title="Выйти">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
             <path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.42 19.42 0 0 1 4.43 13a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.34 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L7.32 9.9"/>
@@ -420,6 +459,7 @@
     let micEnabled = true;
     let camEnabled = true;
     let screenEnabled = false;
+    let pinnedTileId = null;
     let aiRecording = false;
 
     // ── Current device IDs ──
@@ -860,7 +900,8 @@
           screenTile = document.createElement('div');
           screenTile.id = screenId;
           screenTile.className = 'participant-tile';
-          screenTile.style.cssText = 'flex:1 1 90%;max-width:100%;min-height:280px;';
+          screenTile.style.cssText = 'flex:1 1 90%;max-width:100%;min-height:280px;cursor:pointer;';
+          screenTile.onclick = () => setPinnedTile(screenTile.id);
           document.getElementById('video-grid').prepend(screenTile);
         }
         screenTile.innerHTML = '';
@@ -871,6 +912,14 @@
         lbl.className = 'participant-name';
         lbl.textContent = displayName + ' — экран';
         screenTile.appendChild(lbl);
+        const hint = document.createElement('div');
+        hint.className = 'screen-click-hint';
+        hint.textContent = '⧂ Нажмите для увеличения';
+        screenTile.appendChild(hint);
+        const unpinHint = document.createElement('div');
+        unpinHint.className = 'featured-unpin-hint';
+        unpinHint.textContent = '✕ Нажмите для отмены';
+        screenTile.appendChild(unpinHint);
       } else if (screenTile) {
         screenTile.remove();
       }
@@ -878,6 +927,7 @@
     }
 
     function updateTileLayout() {
+      if (pinnedTileId) { rebuildPinnedLayout(); return; }
       const grid = document.getElementById('video-grid');
       if (!grid) return;
       const tiles = grid.querySelectorAll('.participant-tile');
@@ -896,8 +946,21 @@
     }
 
     function removeParticipant(participant) {
-      document.getElementById('tile-' + participant.identity)?.remove();
-      document.getElementById('tile-screen-' + participant.identity)?.remove();
+      const _tid = 'tile-' + participant.identity;
+      const _sid = 'tile-screen-' + participant.identity;
+      if (pinnedTileId === _tid || pinnedTileId === _sid) {
+        pinnedTileId = null;
+        const _strip = document.getElementById('tiles-strip');
+        if (_strip) {
+          Array.from(_strip.querySelectorAll('.participant-tile')).forEach(t => {
+            document.getElementById('video-grid')?.appendChild(t);
+          });
+          _strip.remove();
+        }
+        document.getElementById('video-grid')?.classList.remove('has-featured');
+      }
+      document.getElementById(_tid)?.remove();
+      document.getElementById(_sid)?.remove();
       updateTileLayout();
     }
 
@@ -1020,6 +1083,70 @@
     // ═══════════════════════════════════════════
     // ── RECORDING ──
     // ═══════════════════════════════════════════
+
+
+    // Presenter mode
+    function setPinnedTile(id) {
+      pinnedTileId = (pinnedTileId === id) ? null : id;
+      rebuildPinnedLayout();
+    }
+    function rebuildPinnedLayout() {
+      const grid = document.getElementById('video-grid');
+      let strip = document.getElementById('tiles-strip');
+      if (!pinnedTileId || !document.getElementById(pinnedTileId)) {
+        pinnedTileId = null;
+        if (strip) {
+          Array.from(strip.querySelectorAll('.participant-tile')).forEach(t => grid.insertBefore(t, strip));
+          strip.remove();
+        }
+        grid.querySelectorAll('.participant-tile').forEach(t => {
+          t.classList.remove('featured', 'mini');
+          t.style.cursor = t.id.startsWith('tile-screen-') ? 'pointer' : '';
+        });
+        grid.classList.remove('has-featured');
+        updateTileLayout();
+        return;
+      }
+      grid.classList.add('has-featured');
+      if (!strip) {
+        strip = document.createElement('div');
+        strip.id = 'tiles-strip';
+        strip.className = 'tiles-strip';
+        grid.appendChild(strip);
+      }
+      const allTiles = [
+        ...Array.from(grid.querySelectorAll(':scope > .participant-tile')),
+        ...Array.from(strip.querySelectorAll('.participant-tile'))
+      ];
+      allTiles.forEach(t => {
+        if (t.id === pinnedTileId) {
+          t.classList.add('featured'); t.classList.remove('mini'); t.style.cursor = 'zoom-out';
+          if (t.parentElement !== grid) grid.insertBefore(t, strip);
+        } else {
+          t.classList.remove('featured'); t.classList.add('mini'); t.style.cursor = 'pointer';
+          if (t.parentElement !== strip) strip.appendChild(t);
+        }
+      });
+    }
+
+    // Fullscreen
+    function toggleFullscreen() {
+      if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+        const el = document.documentElement;
+        (el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen)?.call(el).catch(() => {});
+      } else {
+        (document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen)?.call(document).catch(() => {});
+      }
+    }
+    ['fullscreenchange', 'webkitfullscreenchange'].forEach(ev => {
+      document.addEventListener(ev, () => {
+        const isFS = !!(document.fullscreenElement || document.webkitFullscreenElement);
+        const ei = document.getElementById('fs-icon-enter');
+        const ex = document.getElementById('fs-icon-exit');
+        if (ei) ei.style.display = isFS ? 'none' : '';
+        if (ex) ex.style.display = isFS ? '' : 'none';
+      });
+    });
 
     function toggleRecording() {
       if (isRecording) {
