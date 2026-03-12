@@ -205,6 +205,10 @@ model Message {
   isDelivered    Boolean      @default(false)
   isRead         Boolean      @default(false)
   isSystem       Boolean      @default(false)
+  isEdited       Boolean      @default(false)
+  deletedAt     DateTime?
+  hiddenFor     MessageHidden[]
+  editedAt       DateTime?
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sender         User         @relation(fields: [senderId], references: [id])
 
@@ -289,7 +293,18 @@ model MeetingSummary {
   participantIds  String[]
   recordingUrl    String?
   durationSec  Int?
+  status       String   @default("done")
   createdAt    DateTime @default(now())
 
   callLog      CallLog? @relation(fields: [callLogId], references: [id])
+}
+
+model MessageHidden {
+  id        String  @id @default(uuid())
+  messageId String
+  userId    String
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+  @@index([userId])
 }

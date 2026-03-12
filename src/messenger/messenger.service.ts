@@ -175,7 +175,11 @@ export class MessengerService {
   async getGroupMembers(conversationId: string, userId: string) {
     await this.assertParticipant(conversationId, userId);
     const participants = await this.prisma.conversationParticipant.findMany({
-      where: { conversationId },
+      where: {
+        conversationId,
+        deletedAt: null,
+        NOT: { hiddenFor: { some: { userId } } },
+      },
       orderBy: [{ role: 'asc' }, { joinedAt: 'asc' }],
     });
     const userIds = participants.map((p) => p.userId);
@@ -412,6 +416,31 @@ export class MessengerService {
     const fullName = [(user as any).profile?.firstName, (user as any).profile?.lastName]
       .filter(Boolean).join(' ').trim();
     return fullName || (user as any).username || 'Пользователь';
+  }
+
+  async editMessage(messageId: string, senderId: string, newContent: string) {
+    const msg = await this.prisma.message.findUnique({ where: { id: messageId } });
+    if (!msg || msg.senderId !== senderId) throw new Error('Not allowed');
+    return this.prisma.message.update({
+      where: { id: messageId },
+      data: { content: newContent, isEdited: true, editedAt: new Date() },
+    });
+  }
+
+  async deleteMessage(messageId: string, requesterId: string, scope: 'self' | 'all') {
+    const msg = await this.prisma.message.findUnique({ where: { id: messageId } });
+    if (!msg) throw new Error('Message not found');
+    if (scope === 'all') {
+      if (msg.senderId !== requesterId) throw new ForbiddenException('Only sender can delete for everyone');
+      await this.prisma.message.update({ where: { id: messageId }, data: { deletedAt: new Date() } });
+    } else {
+      await (this.prisma as any).messageHidden.upsert({
+        where: { messageId_userId: { messageId, userId: requesterId } },
+        create: { messageId, userId: requesterId },
+        update: {},
+      });
+    }
+    return { messageId, conversationId: msg.conversationId, scope };
   }
 
   async markDelivered(messageId: string): Promise<void> {

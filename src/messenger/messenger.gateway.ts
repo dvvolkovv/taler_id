@@ -106,6 +106,40 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
     }
   }
 
+  @SubscribeMessage('edit_message')
+  async handleEditMessage(client: Socket, payload: { conversationId: string; messageId: string; content: string }) {
+    try {
+      const updated = await this.service.editMessage(payload.messageId, client.data.userId, payload.content);
+      this.server.to(payload.conversationId).emit('message_updated', {
+        id: updated.id, content: updated.content, isEdited: true,
+      });
+    } catch (e) {
+      client.emit('error', { message: e.message });
+    }
+  }
+
+  @SubscribeMessage('delete_message')
+  async handleDeleteMessage(client: Socket, payload: { conversationId: string; messageId: string; scope: 'self' | 'all' }) {
+    try {
+      const result = await this.service.deleteMessage(payload.messageId, client.data.userId, payload.scope);
+      if (payload.scope === 'all') {
+        this.server.to(payload.conversationId).emit('message_deleted', {
+          messageId: payload.messageId,
+          conversationId: payload.conversationId,
+          scope: 'all',
+        });
+      } else {
+        this.server.to().emit('message_deleted', {
+          messageId: payload.messageId,
+          conversationId: payload.conversationId,
+          scope: 'self',
+        });
+      }
+    } catch (e) {
+      client.emit('error', { message: e.message });
+    }
+  }
+
   @SubscribeMessage('typing')
   handleTyping(client: Socket, payload: { conversationId: string; isTyping: boolean }) {
     client.to(payload.conversationId).emit('typing', {
