@@ -10,6 +10,7 @@ const LK_API_KEY = process.env.LIVEKIT_API_KEY || "lkdevkey";
 const LK_API_SECRET = process.env.LIVEKIT_API_SECRET || "lkSecret2024TalerID";
 const AI_AGENT_URL = process.env.AI_AGENT_URL || "http://localhost:3100";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
+const BASE_URL = process.env.BASE_URL || "https://id.taler.tirol";
 
 @Injectable()
 export class VoiceService {
@@ -138,7 +139,7 @@ export class VoiceService {
     if (profile.personalRoomCode) {
       const existing = await this.prisma.publicRoom.findUnique({ where: { code: profile.personalRoomCode } });
       if (existing) {
-        return { code: existing.code, link: `https://id.taler.tirol/room/${existing.code}` };
+        return { code: existing.code, link: `${BASE_URL}/room/${existing.code}` };
       }
     }
 
@@ -151,7 +152,7 @@ export class VoiceService {
       where: { userId },
       data: { personalRoomCode: code },
     });
-    return { code, link: `https://id.taler.tirol/room/${code}` };
+    return { code, link: `${BASE_URL}/room/${code}` };
   }
 
   async createTemporaryRoom(userId: string, title?: string, password?: string) {
@@ -170,7 +171,7 @@ export class VoiceService {
         ...(passwordHash ? { passwordHash } : {}),
       },
     });
-    return { code, link: `https://id.taler.tirol/room/${code}` };
+    return { code, link: `${BASE_URL}/room/${code}` };
   }
 
   async deactivateTemporaryRoom(code: string, userId: string) {
@@ -194,7 +195,7 @@ export class VoiceService {
         ...(passwordHash ? { passwordHash } : {}),
       },
     });
-    return { code, roomName, link: `https://id.taler.tirol/room/${code}` };
+    return { code, roomName, link: `${BASE_URL}/room/${code}` };
   }
 
   async getPublicRoom(code: string) {
