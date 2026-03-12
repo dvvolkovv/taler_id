@@ -129,7 +129,7 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
           scope: 'all',
         });
       } else {
-        this.server.to().emit('message_deleted', {
+        this.server.to(`user:${client.data.userId}`).emit('message_deleted', {
           messageId: payload.messageId,
           conversationId: payload.conversationId,
           scope: 'self',

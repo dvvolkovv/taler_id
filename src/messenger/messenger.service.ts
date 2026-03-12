@@ -175,11 +175,7 @@ export class MessengerService {
   async getGroupMembers(conversationId: string, userId: string) {
     await this.assertParticipant(conversationId, userId);
     const participants = await this.prisma.conversationParticipant.findMany({
-      where: {
-        conversationId,
-        deletedAt: null,
-        NOT: { hiddenFor: { some: { userId } } },
-      },
+      where: { conversationId },
       orderBy: [{ role: 'asc' }, { joinedAt: 'asc' }],
     });
     const userIds = participants.map((p) => p.userId);
@@ -306,7 +302,11 @@ export class MessengerService {
   async getMessages(conversationId: string, userId: string, cursor?: string, limit = 30) {
     await this.assertParticipant(conversationId, userId);
     const messages = await this.prisma.message.findMany({
-      where: { conversationId },
+      where: {
+        conversationId,
+        deletedAt: null,
+        NOT: { hiddenFor: { some: { userId } } },
+      },
       include: {
         sender: {
           select: {
