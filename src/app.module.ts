@@ -34,14 +34,14 @@ import configuration from './config/configuration';
     ServeStaticModule.forRoot({
       rootPath: '/home/dvolkov/taler-id/public/mobile',
       serveRoot: '/ui/mobile',
-      exclude: ['/api{/*path}', '/auth{/*path}', '/kyc{/*path}', '/profile{/*path}', '/tenant{/*path}', '/admin{/*path}', '/sessions{/*path}', '/ui/admin{/*path}'],
+      exclude: ['/ui/admin{/*path}'],
     }),
     // Main UI (admin panel, invite pages, etc.)
     ServeStaticModule.forRoot({
       rootPath: '/home/dvolkov/taler-id/public',
       serveRoot: '/ui',
       serveStaticOptions: { index: false },
-      exclude: ['/api{/*path}', '/auth{/*path}', '/kyc{/*path}', '/profile{/*path}', '/tenant{/*path}', '/admin{/*path}', '/sessions{/*path}', '/ui/mobile{/*path}'],
+      exclude: ['/ui/mobile{/*path}'],
     }),
     // Uploaded user files (avatars, documents)
     ServeStaticModule.forRoot({
@@ -52,7 +52,7 @@ import configuration from './config/configuration';
     ServeStaticModule.forRoot({
       rootPath: '/home/dvolkov/taler-id/public',
       serveRoot: '/',
-      exclude: ['/api{/*path}', '/auth{/*path}', '/kyc{/*path}', '/profile{/*path}', '/tenant{/*path}', '/admin{/*path}', '/sessions{/*path}', '/oauth{/*path}', '/ui{/*path}', '/uploads{/*path}'],
+      exclude: ['/ui{/*path}', '/uploads{/*path}'],
     }),
     PrismaModule,
     RedisModule,
