@@ -210,7 +210,7 @@ export class MessengerService {
       where: { participants: { some: { userId } } },
       include: {
         participants: true,
-        messages: { orderBy: { sentAt: 'desc' }, take: 1 },
+        messages: { where: { deletedAt: null, NOT: { hiddenFor: { some: { userId } } } }, orderBy: { sentAt: 'desc' }, take: 1 },
       },
       orderBy: { createdAt: 'desc' },
     });
