@@ -11,9 +11,12 @@ import * as path from 'path';
 export class BlockchainService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(BlockchainService.name);
   private api: ApiPromise | null = null;
+  private provider: WsProvider | null = null;
   private contract: ContractPromise | null = null;
   private attester: KeyringPair | null = null;
   private connected = false;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private destroying = false;
 
   constructor(private readonly config: ConfigService) {}
 
@@ -27,10 +30,37 @@ export class BlockchainService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy() {
-    if (this.api) {
-      await this.api.disconnect();
-      this.logger.log('Disconnected from Taler blockchain');
+    this.destroying = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
     }
+    await this.cleanup();
+    this.logger.log('Disconnected from Taler blockchain');
+  }
+
+  private async cleanup() {
+    this.connected = false;
+    this.contract = null;
+    if (this.api) {
+      try { await this.api.disconnect(); } catch {}
+      this.api = null;
+    }
+    if (this.provider) {
+      try { this.provider.disconnect(); } catch {}
+      this.provider = null;
+    }
+  }
+
+  private scheduleReconnect() {
+    if (this.destroying || this.reconnectTimer) return;
+    this.logger.log('Scheduling blockchain reconnect in 30s...');
+    this.reconnectTimer = setTimeout(async () => {
+      this.reconnectTimer = null;
+      if (this.destroying) return;
+      await this.cleanup();
+      await this.connect();
+    }, 30_000);
   }
 
   private async connect() {
@@ -44,8 +74,20 @@ export class BlockchainService implements OnModuleInit, OnModuleDestroy {
 
     try {
       this.logger.log('Connecting to Taler blockchain: ' + wsUrl);
-      const provider = new WsProvider(wsUrl);
-      this.api = await ApiPromise.create({ provider });
+      // Disable auto-reconnect (0 = no auto-reconnect) to prevent listener leaks
+      this.provider = new WsProvider(wsUrl, 0);
+      this.api = await ApiPromise.create({ provider: this.provider });
+
+      // Handle disconnection — reconnect manually with full cleanup
+      this.provider.on('disconnected', () => {
+        this.logger.warn('Blockchain WS disconnected');
+        this.connected = false;
+        this.scheduleReconnect();
+      });
+
+      this.provider.on('error', (err: any) => {
+        this.logger.error('Blockchain WS error: ' + (err?.message || String(err)));
+      });
 
       const chain = await this.api.rpc.system.chain();
       const nodeVersion = await this.api.rpc.system.version();
@@ -71,6 +113,7 @@ export class BlockchainService implements OnModuleInit, OnModuleDestroy {
       this.connected = true;
     } catch (err: any) {
       this.logger.error('Failed to connect to Taler blockchain: ' + (err?.message || String(err)));
+      this.scheduleReconnect();
     }
   }
 
