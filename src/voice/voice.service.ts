@@ -279,6 +279,60 @@ export class VoiceService {
     return await at.toJwt();
   }
 
+  // ─── Voice Translator ───
+
+  async startTranslator(roomName: string) {
+    try {
+      const res = await fetch(AI_AGENT_URL + '/translator/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomName }),
+      });
+      const data = await res.json() as any;
+      return { status: data.status || 'started' };
+    } catch (e) {
+      console.error('Failed to start translator:', e);
+      throw new Error('Translator service unavailable');
+    }
+  }
+
+  async stopTranslator(roomName: string) {
+    try {
+      const res = await fetch(AI_AGENT_URL + '/translator/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomName }),
+      });
+      const data = await res.json() as any;
+      return { status: data.status || 'stopped' };
+    } catch (e) {
+      console.error('Failed to stop translator:', e);
+      throw new Error('Translator service unavailable');
+    }
+  }
+
+  async setTranslatorLang(roomName: string, userId: string, lang: string) {
+    try {
+      const res = await fetch(AI_AGENT_URL + '/translator/set-lang', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomName, userId, lang }),
+      });
+      return await res.json();
+    } catch (e) {
+      return { ok: false, reason: 'Translator service unavailable' };
+    }
+  }
+
+  async getTranslatorStatus(roomName: string) {
+    try {
+      const res = await fetch(AI_AGENT_URL + '/translator/status/' + roomName);
+      return await res.json();
+    } catch (e) {
+      return { running: false };
+    }
+  }
+
   // ─── Meeting Recorder ───
 
   async startRecorder(roomName: string, withAi = true) {

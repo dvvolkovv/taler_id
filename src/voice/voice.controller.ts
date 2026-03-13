@@ -122,6 +122,35 @@ export class VoiceController {
     return this.service.getRecorderStatus(roomName);
   }
 
+  // ─── Voice Translator ───
+
+  @Post("rooms/:roomName/translator/start")
+  @UseGuards(JwtAuthGuard)
+  startTranslator(@Param("roomName") roomName: string) {
+    return this.service.startTranslator(roomName);
+  }
+
+  @Post("rooms/:roomName/translator/stop")
+  @UseGuards(JwtAuthGuard)
+  stopTranslator(@Param("roomName") roomName: string) {
+    return this.service.stopTranslator(roomName);
+  }
+
+  @Post("rooms/:roomName/set-lang")
+  @UseGuards(JwtAuthGuard)
+  setTranslatorLang(
+    @Param("roomName") roomName: string,
+    @Body("lang") lang: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.setTranslatorLang(roomName, user.sub, lang);
+  }
+
+  @Get("rooms/:roomName/translator/status")
+  getTranslatorStatus(@Param("roomName") roomName: string) {
+    return this.service.getTranslatorStatus(roomName);
+  }
+
   // ─── Meeting Summaries ───
 
   @Post("meetings/save")
