@@ -1,4 +1,3 @@
-import * as fs from 'fs';
 import { Injectable, NotFoundException, ForbiddenException } from "@nestjs/common";
 import { AccessToken, RoomServiceClient } from "livekit-server-sdk";
 import { v4 as uuidv4 } from "uuid";
@@ -118,7 +117,7 @@ export class VoiceService {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "gpt-realtime",
+        model: "gpt-realtime-mini",
         voice: "marin",
         instructions: "Ты — голосовой ассистент Taler ID. Помогай пользователям с их цифровой идентификацией, статусом KYC-верификации и данными профиля. Будь краток и полезен. Отвечай на русском языке. Ты можешь использовать инструменты для чтения или обновления профиля пользователя.",
       }),
@@ -536,26 +535,6 @@ export class VoiceService {
     return summary;
   }
 
-  async transcribeAudio(file: Express.Multer.File): Promise<{ text: string }> {
-    if (!OPENAI_API_KEY) throw new Error('OPENAI_API_KEY not configured');
-    const fileBuffer = fs.readFileSync(file.path);
-    const blob = new Blob([fileBuffer], { type: file.mimetype || 'audio/m4a' });
-    const form = new FormData();
-    form.append('model', 'whisper-1');
-    form.append('file', blob, file.originalname || 'audio.m4a');
-    const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
-      body: form,
-    });
-    if (!response.ok) {
-      const err = await response.text();
-      throw new Error(`Whisper error ${response.status}: ${err}`);
-    }
-    const data = await response.json() as { text: string };
-    try { fs.unlinkSync(file.path); } catch (_) {}
-    return { text: data.text };
-  }
 
   getTranslatorLanguages() {
     return [
