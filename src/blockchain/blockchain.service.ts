@@ -26,7 +26,8 @@ export class BlockchainService implements OnModuleInit, OnModuleDestroy {
       this.logger.warn('Blockchain integration disabled (BLOCKCHAIN_ENABLED != true)');
       return;
     }
-    await this.connect();
+    // Connect in background — do not block NestJS startup
+    this.connect().catch(err => this.logger.error("Blockchain init error: " + (err?.message || String(err))));
   }
 
   async onModuleDestroy() {
@@ -59,7 +60,8 @@ export class BlockchainService implements OnModuleInit, OnModuleDestroy {
       this.reconnectTimer = null;
       if (this.destroying) return;
       await this.cleanup();
-      await this.connect();
+      // Connect in background — do not block NestJS startup
+    this.connect().catch(err => this.logger.error("Blockchain init error: " + (err?.message || String(err))));
     }, 30_000);
   }
 
@@ -76,7 +78,8 @@ export class BlockchainService implements OnModuleInit, OnModuleDestroy {
       this.logger.log('Connecting to Taler blockchain: ' + wsUrl);
       // Disable auto-reconnect (0 = no auto-reconnect) to prevent listener leaks
       this.provider = new WsProvider(wsUrl, 0);
-      this.api = await ApiPromise.create({ provider: this.provider });
+      const connectTimeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Blockchain connection timeout (15s)")), 15_000));
+      this.api = await Promise.race([ApiPromise.create({ provider: this.provider }), connectTimeout]);
 
       // Handle disconnection — reconnect manually with full cleanup
       this.provider.on('disconnected', () => {
