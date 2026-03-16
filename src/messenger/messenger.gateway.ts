@@ -166,7 +166,9 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
     client: Socket,
     payload: { conversationId: string; roomName: string; inviteeId?: string; e2eeKey?: string },
   ) {
-    const fromUserName = await this.service.getUserDisplayName(client.data.userId);
+    const callerInfo = await this.service.getUserCallInfo(client.data.userId);
+    const fromUserName = callerInfo.name;
+    const fromUserAvatar = callerInfo.avatarUrl;
     const convType = await this.service.getConversationType(payload.conversationId);
     const isGroup = convType === 'GROUP';
 
@@ -200,6 +202,7 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
       this.server.to(`user:${calleeId}`).emit('call_invite', {
         fromUserId: client.data.userId,
         fromUserName,
+        fromUserAvatar,
         roomName: payload.roomName,
         conversationId: payload.conversationId,
         isGroupCall: isGroup,

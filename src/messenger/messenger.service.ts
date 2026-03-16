@@ -420,14 +420,22 @@ export class MessengerService {
   }
 
   async getUserDisplayName(userId: string): Promise<string> {
+    const info = await this.getUserCallInfo(userId);
+    return info.name;
+  }
+
+  async getUserCallInfo(userId: string): Promise<{ name: string; avatarUrl: string | null }> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      include: { profile: { select: { firstName: true, lastName: true } } },
+      include: { profile: { select: { firstName: true, lastName: true, avatarUrl: true } } },
     });
-    if (!user) return 'Пользователь';
+    if (!user) return { name: 'Пользователь', avatarUrl: null };
     const fullName = [(user as any).profile?.firstName, (user as any).profile?.lastName]
       .filter(Boolean).join(' ').trim();
-    return fullName || (user as any).username || 'Пользователь';
+    return {
+      name: fullName || (user as any).username || 'Пользователь',
+      avatarUrl: (user as any).profile?.avatarUrl ?? null,
+    };
   }
 
   async editMessage(messageId: string, senderId: string, newContent: string) {
