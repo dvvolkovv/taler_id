@@ -179,6 +179,14 @@ export class MessengerController {
   @Post('contacts/request')
   async sendContactRequest(@Body('receiverId') receiverId: string, @CurrentUser() user: any) {
     const result = await this.service.sendContactRequest(user.sub, receiverId);
+    // If auto-accepted (reverse request existed), notify about acceptance
+    if ('conversationId' in result) {
+      this.gateway.emitToUser(receiverId, 'contact_request_accepted', {
+        senderId: user.sub,
+        conversationId: result.conversationId,
+      });
+      return result;
+    }
     // Notify receiver about new request
     this.gateway.emitToUser(receiverId, 'contact_request', {
       id: result.id,
