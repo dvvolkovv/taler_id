@@ -280,6 +280,21 @@ export class VoiceService {
 
   // ─── Voice Translator ───
 
+  async getTranslatorLanguages() {
+    try {
+      const res = await fetch(AI_AGENT_URL + '/translator/languages');
+      return await res.json();
+    } catch (e) {
+      // Fallback if agent is unavailable
+      return [
+        { code: 'ru', name: 'Русский' },
+        { code: 'en', name: 'English' },
+        { code: 'de', name: 'Deutsch' },
+        { code: 'it', name: 'Italiano' },
+      ];
+    }
+  }
+
   async startTranslator(roomName: string) {
     try {
       const res = await fetch(AI_AGENT_URL + '/translator/start', {
@@ -311,6 +326,12 @@ export class VoiceService {
   }
 
   async setTranslatorLang(roomName: string, userId: string, lang: string) {
+    // Also set LiveKit participant metadata so translator can read lang from existing participants
+    try {
+      await this.rooms.updateParticipant(roomName, userId, { metadata: JSON.stringify({ lang }) });
+    } catch (e) {
+      console.warn('Failed to update participant metadata:', (e as Error).message);
+    }
     try {
       const res = await fetch(AI_AGENT_URL + '/translator/set-lang', {
         method: 'POST',

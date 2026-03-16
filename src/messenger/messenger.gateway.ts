@@ -141,10 +141,22 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
   }
 
   @SubscribeMessage('typing')
-  handleTyping(client: Socket, payload: { conversationId: string; isTyping: boolean }) {
+  async handleTyping(client: Socket, payload: { conversationId: string; isTyping: boolean }) {
+    const userId = client.data.userId;
+    let userName: string | undefined;
+    try {
+      const profile = await this.prisma.profile.findUnique({
+        where: { userId },
+        select: { firstName: true, lastName: true },
+      });
+      if (profile) {
+        userName = [profile.firstName, profile.lastName].filter(Boolean).join(' ') || undefined;
+      }
+    } catch (_) {}
     client.to(payload.conversationId).emit('typing', {
       conversationId: payload.conversationId,
-      userId: client.data.userId,
+      userId,
+      userName,
       isTyping: payload.isTyping,
     });
   }

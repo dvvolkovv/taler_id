@@ -7,6 +7,18 @@ export class MessengerService {
 
   // ─── DIRECT conversations (existing) ───
 
+  async findExistingDirectConversation(userAId: string, userBId: string) {
+    return this.prisma.conversation.findFirst({
+      where: {
+        type: 'DIRECT',
+        AND: [
+          { participants: { some: { userId: userAId } } },
+          { participants: { some: { userId: userBId } } },
+        ],
+      },
+    });
+  }
+
   async getOrCreateDirectConversation(userAId: string, userBId: string) {
     const existing = await this.prisma.conversation.findFirst({
       where: {
@@ -555,5 +567,122 @@ export class MessengerService {
       return false;
     }
     return true;
+  }
+
+  // ─── Contact Requests ───
+
+  async sendContactRequest(senderId: string, receiverId: string) {
+    if (senderId === receiverId) throw new BadRequestException('Cannot send request to yourself');
+
+    // Check if there's already an accepted contact or existing conversation
+    const existing = await this.prisma.contactRequest.findUnique({
+      where: { senderId_receiverId: { senderId, receiverId } },
+    });
+    if (existing?.status === 'ACCEPTED') throw new BadRequestException('Already contacts');
+    if (existing?.status === 'PENDING') throw new BadRequestException('Request already sent');
+
+    // Check reverse direction too
+    const reverse = await this.prisma.contactRequest.findUnique({
+      where: { senderId_receiverId: { senderId: receiverId, receiverId: senderId } },
+    });
+    if (reverse?.status === 'ACCEPTED') throw new BadRequestException('Already contacts');
+    if (reverse?.status === 'PENDING') {
+      // Auto-accept: they already want to talk to us
+      return this.acceptContactRequest(reverse.id, senderId);
+    }
+
+    const request = await this.prisma.contactRequest.upsert({
+      where: { senderId_receiverId: { senderId, receiverId } },
+      create: { senderId, receiverId, status: 'PENDING' },
+      update: { status: 'PENDING', updatedAt: new Date() },
+    });
+
+    // Get sender info for notification
+    const sender = await this.prisma.user.findUnique({
+      where: { id: senderId },
+      include: { profile: { select: { firstName: true, lastName: true, avatarUrl: true } } },
+    });
+    const senderName = [sender?.profile?.firstName, sender?.profile?.lastName]
+      .filter(Boolean).join(' ') || sender?.username || '';
+
+    return {
+      ...request,
+      senderName,
+      senderAvatar: sender?.profile?.avatarUrl,
+      senderUsername: sender?.username,
+    };
+  }
+
+  async getContactRequests(userId: string) {
+    const incoming = await this.prisma.contactRequest.findMany({
+      where: { receiverId: userId, status: 'PENDING' },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    // Enrich with sender profiles
+    const enriched = await Promise.all(
+      incoming.map(async (r) => {
+        const sender = await this.prisma.user.findUnique({
+          where: { id: r.senderId },
+          include: { profile: { select: { firstName: true, lastName: true, avatarUrl: true } } },
+        });
+        return {
+          ...r,
+          senderName: [sender?.profile?.firstName, sender?.profile?.lastName]
+            .filter(Boolean).join(' ') || sender?.username || '',
+          senderAvatar: sender?.profile?.avatarUrl,
+          senderUsername: sender?.username,
+          senderEmail: sender?.email,
+        };
+      }),
+    );
+    return enriched;
+  }
+
+  async acceptContactRequest(requestId: string, userId: string) {
+    const request = await this.prisma.contactRequest.findUnique({ where: { id: requestId } });
+    if (!request) throw new NotFoundException('Request not found');
+    if (request.receiverId !== userId && request.senderId !== userId) {
+      throw new ForbiddenException('Not your request');
+    }
+    if (request.status !== 'PENDING') throw new BadRequestException('Request already processed');
+
+    await this.prisma.contactRequest.update({
+      where: { id: requestId },
+      data: { status: 'ACCEPTED' },
+    });
+
+    // Create direct conversation
+    const conv = await this.getOrCreateDirectConversation(request.senderId, request.receiverId);
+
+    return {
+      senderId: request.senderId,
+      receiverId: request.receiverId,
+      conversationId: conv.id,
+    };
+  }
+
+  async rejectContactRequest(requestId: string, userId: string) {
+    const request = await this.prisma.contactRequest.findUnique({ where: { id: requestId } });
+    if (!request) throw new NotFoundException('Request not found');
+    if (request.receiverId !== userId) throw new ForbiddenException('Not your request');
+
+    return this.prisma.contactRequest.update({
+      where: { id: requestId },
+      data: { status: 'REJECTED' },
+    });
+  }
+
+  async hasContactWith(userA: string, userB: string): Promise<boolean> {
+    const contact = await this.prisma.contactRequest.findFirst({
+      where: {
+        status: 'ACCEPTED',
+        OR: [
+          { senderId: userA, receiverId: userB },
+          { senderId: userB, receiverId: userA },
+        ],
+      },
+    });
+    return !!contact;
   }
 }

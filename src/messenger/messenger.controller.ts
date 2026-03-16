@@ -1,6 +1,6 @@
 import {
   Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards,
-  UseInterceptors, UploadedFile,
+  UseInterceptors, UploadedFile, ForbiddenException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
@@ -26,7 +26,17 @@ export class MessengerController {
   // ─── Direct conversations ───
 
   @Post('conversations')
-  create(@Body('participantId') participantId: string, @CurrentUser() user: any) {
+  async create(@Body('participantId') participantId: string, @CurrentUser() user: any) {
+    // Check if there's an existing conversation (bypass contact check)
+    // or if they have an accepted contact
+    const hasContact = await this.service.hasContactWith(user.sub, participantId);
+    if (!hasContact) {
+      // Check if conversation already exists (legacy contacts from before contact request feature)
+      const existing = await this.service.findExistingDirectConversation(user.sub, participantId);
+      if (!existing) {
+        throw new ForbiddenException('Нужно сначала отправить запрос на общение');
+      }
+    }
     return this.service.getOrCreateDirectConversation(user.sub, participantId);
   }
 
@@ -162,6 +172,44 @@ export class MessengerController {
     for (const m of members) {
       this.gateway.emitToUser(m.userId, 'group_deleted', { conversationId: id });
     }
+  }
+
+  // ─── Contact requests ───
+
+  @Post('contacts/request')
+  async sendContactRequest(@Body('receiverId') receiverId: string, @CurrentUser() user: any) {
+    const result = await this.service.sendContactRequest(user.sub, receiverId);
+    // Notify receiver about new request
+    this.gateway.emitToUser(receiverId, 'contact_request', {
+      id: result.id,
+      senderId: user.sub,
+      senderName: result.senderName,
+      senderAvatar: result.senderAvatar,
+      senderUsername: result.senderUsername,
+    });
+    return result;
+  }
+
+  @Get('contacts/requests')
+  getContactRequests(@CurrentUser() user: any) {
+    return this.service.getContactRequests(user.sub);
+  }
+
+  @Patch('contacts/requests/:id/accept')
+  async acceptContactRequest(@Param('id') id: string, @CurrentUser() user: any) {
+    const result = await this.service.acceptContactRequest(id, user.sub);
+    // Notify sender that request was accepted
+    this.gateway.emitToUser(result.senderId, 'contact_request_accepted', {
+      requestId: id,
+      acceptedBy: user.sub,
+      conversationId: result.conversationId,
+    });
+    return result;
+  }
+
+  @Patch('contacts/requests/:id/reject')
+  async rejectContactRequest(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.service.rejectContactRequest(id, user.sub);
   }
 
   // ─── User search ───

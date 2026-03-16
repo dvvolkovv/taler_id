@@ -308,3 +308,22 @@ model MessageHidden {
   @@unique([messageId, userId])
   @@index([userId])
 }
+
+model ContactRequest {
+  id         String               @id @default(uuid())
+  senderId   String
+  receiverId String
+  status     ContactRequestStatus @default(PENDING)
+  createdAt  DateTime             @default(now())
+  updatedAt  DateTime             @updatedAt
+
+  @@unique([senderId, receiverId])
+  @@index([receiverId, status])
+  @@index([senderId, status])
+}
+
+enum ContactRequestStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}

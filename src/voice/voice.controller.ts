@@ -124,12 +124,10 @@ export class VoiceController {
 
   // ─── Voice Translator ───
 
-
   @Get("translator/languages")
   getTranslatorLanguages() {
     return this.service.getTranslatorLanguages();
   }
-
 
   @Post("rooms/:roomName/translator/start")
   @UseGuards(JwtAuthGuard)
