@@ -472,7 +472,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.17.2/dist/livekit-client.umd.js"></script>
   <script>
-    const API_BASE = '/api';
+    const API_BASE = location.hostname.includes('staging') ? '' : '/api';
     let room = null;
     let roomCode = '';
     let roomTitle = 'Голосовая комната';
@@ -708,7 +708,7 @@
       }
     }
 
-    function getLivekitUrl() { return 'wss://id.taler.tirol/livekit/'; }
+    function getLivekitUrl() { return `wss://${location.hostname}/livekit/`; }
 
     function getDisplayName(participant) {
       const name = participant.name;
