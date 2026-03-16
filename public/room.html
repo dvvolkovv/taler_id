@@ -230,6 +230,8 @@
     .ctrl-btn.recording svg { stroke: var(--rec); }
     .ctrl-btn.ai-active { background: rgba(22,126,242,0.25); }
     .ctrl-btn.ai-active svg { stroke: var(--primary); }
+    .ctrl-btn.translator-on { background: rgba(16,185,129,0.25); }
+    .ctrl-btn.translator-on svg { stroke: #10B981; }
     .ctrl-btn-tooltip {
       position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%);
       background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
@@ -427,6 +429,24 @@
         <div class="ctrl-label" id="ai-rec-label">AI Запись</div>
         <div class="ctrl-btn-tooltip">AI запишет встречу и создаст резюме с задачами</div>
       </div>
+      <div class="ctrl-wrap" style="position:relative">
+        <button class="ctrl-btn" id="btn-translator" onclick="toggleTranslator()" title="Переводчик">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 8l6 6"/>
+            <path d="M4 14l6-6 2-3"/>
+            <path d="M2 5h12"/>
+            <path d="M7 2h1"/>
+            <path d="M22 22l-5-10-5 10"/>
+            <path d="M14 18h6"/>
+          </svg>
+          <span id="translator-lang-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:var(--primary);color:#fff;font-size:9px;font-weight:700;border-radius:4px;padding:1px 4px;line-height:1.2"></span>
+        </button>
+        <div class="ctrl-label" id="translator-label">Перевод</div>
+        <div class="device-popup" id="popup-translator" style="bottom:60px;min-width:200px">
+          <div class="device-popup-title">Язык перевода</div>
+          <div id="translator-lang-list"></div>
+        </div>
+      </div>
       <div class="ctrl-wrap">
         <button class="ctrl-btn" id="btn-fullscreen" onclick="toggleFullscreen()" title="На весь экран">
           <svg id="fs-icon-enter" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -461,6 +481,12 @@
     let screenEnabled = false;
     let pinnedTileId = null;
     let aiRecording = false;
+
+    // ── Translator state ──
+    let translatorEnabled = false;
+    let translatorLang = 'en';
+    let translatorLangs = [];
+    let localIdentity = '';
 
     // ── Current device IDs ──
     let currentMicId = '';
@@ -584,17 +610,30 @@
         })
         .on(RoomEvent.TrackMuted, (pub, participant) => renderParticipant(participant))
         .on(RoomEvent.TrackUnmuted, (pub, participant) => renderParticipant(participant))
+        .on(RoomEvent.TrackPublished, (pub, participant) => {
+          // Auto-subscribe to matching translation track
+          if (participant.identity === 'voice-translator' && translatorEnabled) {
+            const wantedName = 'translation-' + translatorLang;
+            if (pub.trackName === wantedName) {
+              pub.setSubscribed(true);
+            }
+          }
+        })
         .on(RoomEvent.ParticipantConnected, (participant) => {
           renderParticipant(participant);
           updateCount();
           setTimeout(() => renderParticipant(participant), 500);
           if (isRecording) broadcastRecordingStatus(true);
           if (participant.identity === 'meeting-recorder') { aiRecording = true; updateControlButtons(); }
+          if (participant.identity === 'voice-translator' && translatorEnabled) {
+            setTimeout(() => updateTranslationTrackSubscription(), 500);
+          }
         })
         .on(RoomEvent.ParticipantDisconnected, (participant) => {
           removeParticipant(participant);
           updateCount();
           if (participant.identity === 'meeting-recorder') { aiRecording = false; updateControlButtons(); }
+          if (participant.identity === 'voice-translator') { translatorEnabled = false; updateTranslatorUI(); }
           if (recordingParticipants.has(participant.identity)) {
             recordingParticipants.delete(participant.identity);
             updateRecordingBanner();
@@ -656,10 +695,12 @@
         } catch (_) {
           try { await room.localParticipant.setMicrophoneEnabled(true, micOpts); camEnabled = false; } catch (_2) {}
         }
+        localIdentity = room.localParticipant.identity;
         showStep('step-call');
         updateCount();
         renderParticipant(room.localParticipant);
         room.remoteParticipants.forEach(p => renderParticipant(p));
+        loadTranslatorLanguages();
       } catch (e) {
         document.getElementById('join-error').textContent = 'Не удалось подключиться к комнате.';
         document.getElementById('btn-join').disabled = false;
@@ -847,8 +888,8 @@
       const camPub = participant.getTrackPublication(Track.Source.Camera);
       const camTrack = camPub && !camPub.isMuted ? camPub.track : null;
 
-      // Hide recorder tile — it's a silent observer
-      if (id === 'meeting-recorder') {
+      // Hide recorder and translator tiles — they are silent observers
+      if (id === 'meeting-recorder' || id === 'voice-translator') {
         tile.style.display = 'none';
         updateTileLayout();
         return;
@@ -1056,6 +1097,8 @@
     function leaveRoom() {
       if (isRecording) stopRecording(true);
       aiRecording = false;
+      translatorEnabled = false;
+      updateTranslatorUI();
       if (room) { room.disconnect(); room = null; }
       recordingParticipants.clear();
       updateRecordingBanner();
@@ -1403,6 +1446,148 @@
       videos[0].addEventListener('canplay', showVideos, { once: true });
       videos.forEach(v => { v.src = '/room/video.mp4'; v.load(); });
     })();
+
+    // ═══════════════════════════════════════════
+    // ── TRANSLATOR ──
+    // ═══════════════════════════════════════════
+
+    async function loadTranslatorLanguages() {
+      try {
+        const res = await fetch(`${API_BASE}/voice/translator/languages`);
+        translatorLangs = await res.json();
+      } catch (e) {
+        translatorLangs = [
+          { code: 'ru', name: 'Русский' },
+          { code: 'en', name: 'English' },
+          { code: 'de', name: 'Deutsch' },
+          { code: 'it', name: 'Italiano' },
+        ];
+      }
+      renderTranslatorLangList();
+    }
+
+    function renderTranslatorLangList() {
+      const list = document.getElementById('translator-lang-list');
+      if (!list) return;
+      let html = '';
+      translatorLangs.forEach(l => {
+        const isActive = translatorLang === l.code;
+        html += `<div class="device-option${isActive ? ' active' : ''}" onclick="selectTranslatorLang('${l.code}')">
+          <span class="check">${isActive ? '✓' : ''}</span>
+          <span class="dev-name">${l.name}</span>
+        </div>`;
+      });
+      html += `<div style="padding:8px 12px;border-top:1px solid var(--border);margin-top:4px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--text);font-size:13px">
+          <input type="checkbox" id="translator-toggle" ${translatorEnabled ? 'checked' : ''} onchange="toggleTranslatorSwitch(this.checked)" style="width:16px;height:16px;accent-color:var(--primary)">
+          Переводчик ${translatorEnabled ? 'включён' : 'выключен'}
+        </label>
+      </div>`;
+      list.innerHTML = html;
+    }
+
+    function toggleTranslator() {
+      const popup = document.getElementById('popup-translator');
+      const overlay = document.getElementById('popup-overlay');
+      if (popup.classList.contains('active')) {
+        closeAllPopups();
+      } else {
+        closeAllPopups();
+        renderTranslatorLangList();
+        popup.classList.add('active');
+        overlay.classList.add('active');
+      }
+    }
+
+    async function toggleTranslatorSwitch(enabled) {
+      if (!room) return;
+      translatorEnabled = enabled;
+      updateTranslatorUI();
+      if (enabled) {
+        await startTranslatorAgent();
+      }
+      updateTranslationTrackSubscription();
+      closeAllPopups();
+    }
+
+    async function selectTranslatorLang(lang) {
+      translatorLang = lang;
+      renderTranslatorLangList();
+      updateTranslatorUI();
+
+      if (!translatorEnabled) {
+        translatorEnabled = true;
+        await startTranslatorAgent();
+      }
+      await setServerLang(lang);
+      updateTranslationTrackSubscription();
+      // Retry subscription — track may take time to appear
+      for (const delay of [500, 1500, 3000, 5000]) {
+        setTimeout(() => {
+          if (translatorEnabled && translatorLang === lang) {
+            updateTranslationTrackSubscription();
+          }
+        }, delay);
+      }
+      closeAllPopups();
+    }
+
+    async function startTranslatorAgent() {
+      if (!room) return;
+      try {
+        await fetch(`${API_BASE}/voice/rooms/${room.name}/translator/public/start`, { method: 'POST' });
+        await setServerLang(translatorLang);
+      } catch (e) {
+        console.error('[TRANSLATOR] Start failed:', e);
+      }
+    }
+
+    async function setServerLang(lang) {
+      if (!room) return;
+      try {
+        await fetch(`${API_BASE}/voice/rooms/${room.name}/set-lang-public`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ identity: localIdentity, lang }),
+        });
+      } catch (e) {
+        console.warn('[TRANSLATOR] setLang failed:', e);
+      }
+    }
+
+    function updateTranslatorUI() {
+      const btn = document.getElementById('btn-translator');
+      const label = document.getElementById('translator-label');
+      const badge = document.getElementById('translator-lang-badge');
+      if (translatorEnabled) {
+        btn.className = 'ctrl-btn translator-on';
+        label.textContent = translatorLang.toUpperCase();
+        badge.textContent = translatorLang.toUpperCase();
+        badge.style.display = '';
+      } else {
+        btn.className = 'ctrl-btn';
+        label.textContent = 'Перевод';
+        badge.style.display = 'none';
+      }
+    }
+
+    function updateTranslationTrackSubscription() {
+      if (!room) return;
+      const { Track } = LivekitClient;
+      const translator = Array.from(room.remoteParticipants.values())
+        .find(p => p.identity === 'voice-translator');
+      if (!translator) return;
+
+      translator.audioTrackPublications.forEach(pub => {
+        const wantedName = 'translation-' + translatorLang;
+        if (translatorEnabled && pub.trackName === wantedName) {
+          pub.setSubscribed(true);
+        } else if (pub.trackName && pub.trackName.startsWith('translation-')) {
+          pub.setSubscribed(false);
+        }
+      });
+    }
+
   </script>
 </body>
 </html>

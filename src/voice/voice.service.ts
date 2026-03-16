@@ -344,6 +344,25 @@ export class VoiceService {
     }
   }
 
+  async setTranslatorLangByIdentity(roomName: string, identity: string, lang: string) {
+    // Same as setTranslatorLang but uses participant identity directly (for guests)
+    try {
+      await this.rooms.updateParticipant(roomName, identity, { metadata: JSON.stringify({ lang }) });
+    } catch (e) {
+      console.warn('Failed to update participant metadata:', (e as Error).message);
+    }
+    try {
+      const res = await fetch(AI_AGENT_URL + '/translator/set-lang', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomName, userId: identity, lang }),
+      });
+      return await res.json();
+    } catch (e) {
+      return { ok: false, reason: 'Translator service unavailable' };
+    }
+  }
+
   async getTranslatorStatus(roomName: string) {
     try {
       const res = await fetch(AI_AGENT_URL + '/translator/status/' + roomName);

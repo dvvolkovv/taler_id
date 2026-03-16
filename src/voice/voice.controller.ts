@@ -156,6 +156,27 @@ export class VoiceController {
     return this.service.getTranslatorStatus(roomName);
   }
 
+  // ─── Public Translator (no auth — protected by roomName UUID) ───
+
+  @Post("rooms/:roomName/translator/public/start")
+  startTranslatorPublic(@Param("roomName") roomName: string) {
+    return this.service.startTranslator(roomName);
+  }
+
+  @Post("rooms/:roomName/translator/public/stop")
+  stopTranslatorPublic(@Param("roomName") roomName: string) {
+    return this.service.stopTranslator(roomName);
+  }
+
+  @Post("rooms/:roomName/set-lang-public")
+  setTranslatorLangPublic(
+    @Param("roomName") roomName: string,
+    @Body("identity") identity: string,
+    @Body("lang") lang: string,
+  ) {
+    return this.service.setTranslatorLangByIdentity(roomName, identity, lang);
+  }
+
   // ─── Meeting Summaries ───
 
   @Post("meetings/save")
