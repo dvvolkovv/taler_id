@@ -8,4 +8,8 @@ export class UpdateGroupDto {
   @IsString()
   @IsOptional()
   avatarUrl?: string;
+
+  @IsString()
+  @IsOptional()
+  description?: string;
 }

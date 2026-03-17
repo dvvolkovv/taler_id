@@ -75,6 +75,7 @@ export class VoiceService {
       orderBy: { startedAt: "desc" },
       skip: page * limit,
       take: limit,
+      include: { meetingSummary: { select: { id: true, summary: true, recordingUrl: true } } },
     });
     const result = await Promise.all(logs.map(async (log) => {
       let otherIds = [...new Set(log.participantIds)].filter((id: string) => id !== userId);
@@ -102,10 +103,51 @@ export class VoiceService {
         endedAt: log.endedAt,
         durationSec: log.durationSec,
         withAi: log.withAi,
+        meetingSummary: log.meetingSummary ? { id: log.meetingSummary.id, summary: log.meetingSummary.summary, recordingUrl: log.meetingSummary.recordingUrl } : null,
         participants,
       };
     }));
     return result;
+  }
+
+
+  async getCallDetail(callId: string, userId: string) {
+    const log = await this.prisma.callLog.findUnique({
+      where: { id: callId },
+      include: { meetingSummary: true },
+    });
+    if (!log) throw new Error("Call not found");
+    if (!log.participantIds.includes(userId)) throw new Error("Access denied");
+    const profiles = await this.prisma.profile.findMany({
+      where: { userId: { in: log.participantIds } },
+      select: { userId: true, firstName: true, lastName: true, avatarUrl: true },
+    });
+    const participants = profiles.map((p) => ({
+      userId: p.userId,
+      displayName: `${p.firstName ?? ""} ${p.lastName ?? ""}`.trim() || p.userId,
+      avatarUrl: p.avatarUrl,
+    }));
+    return {
+      id: log.id,
+      roomName: log.roomName,
+      conversationId: log.conversationId,
+      isOutgoing: log.initiatorId === userId,
+      startedAt: log.startedAt,
+      endedAt: log.endedAt,
+      durationSec: log.durationSec,
+      withAi: log.withAi,
+      participants,
+      summary: log.meetingSummary ? {
+        id: log.meetingSummary.id,
+        summary: log.meetingSummary.summary,
+        keyPoints: log.meetingSummary.keyPoints,
+        actionItems: log.meetingSummary.actionItems,
+        decisions: log.meetingSummary.decisions,
+        transcript: log.meetingSummary.transcript,
+        status: log.meetingSummary.status,
+        recordingUrl: log.meetingSummary.recordingUrl,
+      } : null,
+    };
   }
 
   async createVoiceSession(userId: string) {

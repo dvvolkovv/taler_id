@@ -137,13 +137,14 @@ export class MessengerService {
     return { userId: targetUserId, newRole };
   }
 
-  async updateGroupInfo(conversationId: string, requesterId: string, data: { name?: string; avatarUrl?: string }) {
+  async updateGroupInfo(conversationId: string, requesterId: string, data: { name?: string; avatarUrl?: string; description?: string }) {
     const conv = await this._getConversationOrThrow(conversationId);
     if (conv.type !== 'GROUP') throw new BadRequestException('Not a group conversation');
     await this.assertGroupRole(conversationId, requesterId, ['OWNER', 'ADMIN']);
     const update: any = {};
     if (data.name !== undefined) update.name = data.name.trim();
     if (data.avatarUrl !== undefined) update.avatarUrl = data.avatarUrl;
+    if (data.description !== undefined) update.description = data.description;
     if (Object.keys(update).length === 0) return conv;
     return this.prisma.conversation.update({
       where: { id: conversationId },
@@ -294,6 +295,7 @@ export class MessengerService {
       type: conv.type,
       name: conv.name ?? null,
       avatarUrl: conv.avatarUrl ?? null,
+      description: conv.description ?? null,
       participantCount: conv.participants.length,
       myRole: myParticipant?.role ?? null,
       participantIds: conv.participants.map((p: any) => p.userId),

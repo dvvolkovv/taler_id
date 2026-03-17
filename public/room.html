@@ -143,12 +143,12 @@
       gap: 6px; padding: 8px; overflow: auto; background: var(--bg);
     }
     .participant-tile {
-      position: relative; background: var(--surface); border: 1px solid var(--border);
+      position: relative; background: #000; border: 1px solid var(--border);
       border-radius: 16px; overflow: hidden; display: flex; align-items: center;
-      justify-content: center; min-height: 120px;
+      justify-content: center; aspect-ratio: 16/9;
       transition: flex-basis 0.2s, border-color 0.2s, box-shadow 0.2s;
     }
-    .participant-tile video { width: 100%; height: 100%; object-fit: cover; }
+    .participant-tile video { width: 100%; height: 100%; object-fit: contain; }
     .participant-tile.speaking { border-color: #4CAF50; box-shadow: 0 0 12px rgba(76,175,80,0.5); }
     /* Presenter / pinned layout */
     .video-grid.has-featured { flex-direction: column; flex-wrap: nowrap; overflow: hidden; }
@@ -442,9 +442,12 @@
           <span id="translator-lang-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:var(--primary);color:#fff;font-size:9px;font-weight:700;border-radius:4px;padding:1px 4px;line-height:1.2"></span>
         </button>
         <div class="ctrl-label" id="translator-label">Перевод</div>
-        <div class="device-popup" id="popup-translator" style="bottom:60px;min-width:200px">
-          <div class="device-popup-title">Язык перевода</div>
-          <div id="translator-lang-list"></div>
+        <div class="device-popup" id="popup-translator" style="bottom:60px;min-width:220px;max-width:260px">
+          <div class="device-popup-title">Я говорю на</div>
+          <input type="text" id="translator-search" placeholder="Поиск языка…" autocomplete="off"
+            style="margin:4px 10px 6px;width:calc(100% - 20px);padding:7px 10px;font-size:13px;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,0.06);color:var(--text);outline:none"
+            oninput="renderTranslatorLangList(this.value)">
+          <div id="translator-lang-list" style="max-height:210px;overflow-y:auto"></div>
         </div>
       </div>
       <div class="ctrl-wrap">
@@ -584,6 +587,16 @@
 
       room
         .on(RoomEvent.TrackSubscribed, (track, pub, participant) => {
+          // For translation tracks: only attach audio for our selected language
+          if (participant.identity === 'voice-translator' && pub.trackName && pub.trackName.startsWith('translation-')) {
+            const wantedName = 'translation-' + translatorLang;
+            if (!translatorEnabled || pub.trackName !== wantedName) {
+              // Mute unwanted translation tracks (can't prevent auto-subscribe, but can silence)
+              try { track.setVolume(0); } catch (_) {}
+              track.detach().forEach(el => el.remove());
+              return;
+            }
+          }
           renderParticipant(participant);
           updateCount();
           if (track.kind === Track.Kind.Audio) {
@@ -897,7 +910,7 @@
 
       if (camTrack) {
         const videoEl = camTrack.attach();
-        videoEl.style.cssText = 'width:100%;height:100%;object-fit:cover;';
+        videoEl.style.cssText = 'width:100%;height:100%;object-fit:contain;';
         if (participant === room.localParticipant) videoEl.style.transform = 'scaleX(-1)';
         tile.appendChild(videoEl);
       } else {
@@ -1466,17 +1479,20 @@
       renderTranslatorLangList();
     }
 
-    function renderTranslatorLangList() {
+    function renderTranslatorLangList(filter) {
       const list = document.getElementById('translator-lang-list');
       if (!list) return;
+      const q = (filter || '').toLowerCase().trim();
+      const filtered = q ? translatorLangs.filter(l => l.name.toLowerCase().includes(q) || l.code.toLowerCase().includes(q)) : translatorLangs;
       let html = '';
-      translatorLangs.forEach(l => {
+      filtered.forEach(l => {
         const isActive = translatorLang === l.code;
         html += `<div class="device-option${isActive ? ' active' : ''}" onclick="selectTranslatorLang('${l.code}')">
           <span class="check">${isActive ? '✓' : ''}</span>
           <span class="dev-name">${l.name}</span>
         </div>`;
       });
+      if (!filtered.length) html = '<div style="padding:8px 14px;color:var(--text-2);font-size:13px">Не найдено</div>';
       html += `<div style="padding:8px 12px;border-top:1px solid var(--border);margin-top:4px">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--text);font-size:13px">
           <input type="checkbox" id="translator-toggle" ${translatorEnabled ? 'checked' : ''} onchange="toggleTranslatorSwitch(this.checked)" style="width:16px;height:16px;accent-color:var(--primary)">
@@ -1493,9 +1509,12 @@
         closeAllPopups();
       } else {
         closeAllPopups();
+        const searchInput = document.getElementById('translator-search');
+        if (searchInput) searchInput.value = '';
         renderTranslatorLangList();
         popup.classList.add('active');
         overlay.classList.add('active');
+        setTimeout(() => { if (searchInput) searchInput.focus(); }, 50);
       }
     }
 
@@ -1512,11 +1531,12 @@
 
     async function selectTranslatorLang(lang) {
       translatorLang = lang;
+      const wasEnabled = translatorEnabled;
+      translatorEnabled = true;
       renderTranslatorLangList();
       updateTranslatorUI();
 
-      if (!translatorEnabled) {
-        translatorEnabled = true;
+      if (!wasEnabled) {
         await startTranslatorAgent();
       }
       await setServerLang(lang);
@@ -1573,17 +1593,33 @@
 
     function updateTranslationTrackSubscription() {
       if (!room) return;
-      const { Track } = LivekitClient;
       const translator = Array.from(room.remoteParticipants.values())
         .find(p => p.identity === 'voice-translator');
       if (!translator) return;
 
+      const wantedName = 'translation-' + translatorLang;
       translator.audioTrackPublications.forEach(pub => {
-        const wantedName = 'translation-' + translatorLang;
+        if (!pub.trackName || !pub.trackName.startsWith('translation-')) return;
+        const track = pub.track;
         if (translatorEnabled && pub.trackName === wantedName) {
+          // Subscribe and attach wanted track
           pub.setSubscribed(true);
-        } else if (pub.trackName && pub.trackName.startsWith('translation-')) {
-          pub.setSubscribed(false);
+          if (track) {
+            try { track.setVolume(1); } catch (_) {}
+            // Attach if not already attached
+            if (!document.getElementById('audio-voice-translator-' + pub.trackSid)) {
+              const audioEl = track.attach();
+              audioEl.id = 'audio-voice-translator-' + pub.trackSid;
+              audioEl.style.display = 'none';
+              document.body.appendChild(audioEl);
+            }
+          }
+        } else {
+          // Mute and detach unwanted tracks
+          if (track) {
+            try { track.setVolume(0); } catch (_) {}
+            track.detach().forEach(el => el.remove());
+          }
         }
       });
     }

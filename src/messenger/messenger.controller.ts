@@ -137,6 +137,7 @@ export class MessengerController {
       conversationId: id,
       name: dto.name,
       avatarUrl: dto.avatarUrl,
+      description: dto.description,
     });
     return result;
   }

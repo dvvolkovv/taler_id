@@ -105,6 +105,16 @@ export class VoiceController {
     );
   }
 
+
+  @Get("call-history/:id")
+  @UseGuards(JwtAuthGuard)
+  getCallDetail(
+    @Param("id") id: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.getCallDetail(id, user.sub);
+  }
+
   // ─── Meeting Recorder (no auth — protected by roomName UUID) ───
 
   @Post("rooms/:roomName/recorder/start")
