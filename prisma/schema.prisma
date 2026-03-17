@@ -209,6 +209,7 @@ model Message {
   isEdited       Boolean      @default(false)
   deletedAt     DateTime?
   hiddenFor     MessageHidden[]
+  reactions     MessageReaction[]
   editedAt       DateTime?
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sender         User         @relation(fields: [senderId], references: [id])
@@ -327,4 +328,16 @@ enum ContactRequestStatus {
   PENDING
   ACCEPTED
   REJECTED
+}
+
+model MessageReaction {
+  id        String   @id @default(uuid())
+  messageId String
+  userId    String
+  emoji     String
+  createdAt DateTime @default(now())
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+  @@index([messageId])
 }

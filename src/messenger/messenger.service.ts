@@ -328,6 +328,7 @@ export class MessengerService {
             profile: { select: { firstName: true, lastName: true } },
           },
         },
+        reactions: { select: { userId: true, emoji: true } },
       },
       orderBy: { sentAt: 'desc' },
       take: limit + 1,
@@ -341,8 +342,8 @@ export class MessengerService {
         ? ([u.profile?.firstName, u.profile?.lastName].filter(Boolean).join(' ').trim() || null)
         : null;
       const senderName = firstLast ?? u?.username ?? null;
-      const { sender, ...rest } = m;
-      return { ...rest, senderName };
+      const { sender, reactions, ...rest } = m;
+      return { ...rest, senderName, reactions: reactions ?? [] };
     });
     return {
       messages: enriched,
@@ -694,5 +695,46 @@ export class MessengerService {
       },
     });
     return !!contact;
+  }
+
+  // ─── Reactions ───
+
+  async toggleReaction(messageId: string, userId: string, emoji: string) {
+    const msg = await this.prisma.message.findUnique({ where: { id: messageId } });
+    if (!msg) throw new Error('Message not found');
+    await this.assertParticipant(msg.conversationId, userId);
+
+    const existing = await (this.prisma as any).messageReaction.findUnique({
+      where: { messageId_userId: { messageId, userId } },
+    });
+
+    if (existing && existing.emoji === emoji) {
+      // Same emoji — remove reaction
+      await (this.prisma as any).messageReaction.delete({
+        where: { id: existing.id },
+      });
+    } else if (existing) {
+      // Different emoji — update
+      await (this.prisma as any).messageReaction.update({
+        where: { id: existing.id },
+        data: { emoji },
+      });
+    } else {
+      // New reaction
+      await (this.prisma as any).messageReaction.create({
+        data: { messageId, userId, emoji },
+      });
+    }
+
+    // Return current reactions for this message
+    return this.getMessageReactions(messageId);
+  }
+
+  async getMessageReactions(messageId: string) {
+    const reactions = await (this.prisma as any).messageReaction.findMany({
+      where: { messageId },
+      select: { userId: true, emoji: true },
+    });
+    return reactions;
   }
 }

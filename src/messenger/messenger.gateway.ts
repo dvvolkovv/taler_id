@@ -68,7 +68,7 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
         fileData,
       );
       const senderName = await this.service.getUserDisplayName(client.data.userId);
-      const enrichedMsg = { ...msg, senderName };
+      const enrichedMsg = { ...msg, senderName, reactions: [] };
       this.server.to(payload.conversationId).emit('new_message', enrichedMsg);
       const participants = await this.service.getParticipants(payload.conversationId);
       for (const p of participants) {
@@ -276,6 +276,24 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
         });
       }
     } catch (e) {}
+  }
+
+
+  @SubscribeMessage('react_message')
+  async handleReactMessage(client: Socket, payload: { conversationId: string; messageId: string; emoji: string }) {
+    try {
+      const reactions = await this.service.toggleReaction(payload.messageId, client.data.userId, payload.emoji);
+      const participants = await this.service.getParticipants(payload.conversationId);
+      for (const p of participants) {
+        this.server.to(`user:${p.userId}`).emit('message_reaction_updated', {
+          messageId: payload.messageId,
+          conversationId: payload.conversationId,
+          reactions,
+        });
+      }
+    } catch (e) {
+      client.emit('error', { message: (e as Error).message });
+    }
   }
 
   @SubscribeMessage('mark_read')
