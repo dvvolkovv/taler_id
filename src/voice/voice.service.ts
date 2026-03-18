@@ -320,6 +320,18 @@ export class VoiceService {
     return await at.toJwt();
   }
 
+  // ─── E2EE ───
+
+  async disableE2EE(roomName: string) {
+    try {
+      await this.rooms.updateRoomMetadata(roomName, JSON.stringify({ e2ee_disabled: true }));
+      return { ok: true };
+    } catch (e) {
+      console.error('Failed to update room metadata for E2EE disable:', e);
+      return { ok: false, reason: (e as Error).message };
+    }
+  }
+
   // ─── Voice Translator ───
 
   async getTranslatorLanguages() {
@@ -338,6 +350,9 @@ export class VoiceService {
   }
 
   async startTranslator(roomName: string) {
+    // Disable E2EE first — translator needs unencrypted audio
+    await this.disableE2EE(roomName);
+
     try {
       const res = await fetch(AI_AGENT_URL + '/translator/start', {
         method: 'POST',

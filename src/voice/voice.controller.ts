@@ -132,6 +132,14 @@ export class VoiceController {
     return this.service.getRecorderStatus(roomName);
   }
 
+  // ─── E2EE ───
+
+  @Post("rooms/:roomName/disable-e2ee")
+  @UseGuards(JwtAuthGuard)
+  disableE2EE(@Param("roomName") roomName: string) {
+    return this.service.disableE2EE(roomName);
+  }
+
   // ─── Voice Translator ───
 
   @Get("translator/languages")
