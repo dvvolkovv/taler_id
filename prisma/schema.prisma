@@ -262,6 +262,7 @@ model CallLog {
   initiatorId    String
   participantIds String[]
   startedAt      DateTime  @default(now())
+  answeredAt     DateTime?
   endedAt        DateTime?
   durationSec    Int?
   withAi         Boolean   @default(false)

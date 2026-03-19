@@ -55,7 +55,10 @@ export class VoiceService {
       const log = await this.prisma.callLog.findUnique({ where: { roomName } });
       if (!log || log.endedAt) return;
       const endedAt = new Date();
-      const durationSec = Math.round((endedAt.getTime() - log.startedAt.getTime()) / 1000);
+      // durationSec = talk time (from answeredAt), or 0 if never answered
+      const durationSec = log.answeredAt
+        ? Math.round((endedAt.getTime() - log.answeredAt.getTime()) / 1000)
+        : 0;
       await this.prisma.callLog.update({
         where: { roomName },
         data: { endedAt, durationSec },
@@ -99,6 +102,7 @@ export class VoiceService {
         roomName: log.roomName,
         conversationId: log.conversationId,
         isOutgoing: log.initiatorId === userId,
+        isMissed: !log.answeredAt && log.endedAt != null && log.initiatorId !== userId,
         startedAt: log.startedAt,
         endedAt: log.endedAt,
         durationSec: log.durationSec,
@@ -382,10 +386,10 @@ export class VoiceService {
     }
   }
 
-  async setTranslatorLang(roomName: string, userId: string, lang: string) {
+  async setTranslatorLang(roomName: string, userId: string, lang: string, sourceLang?: string) {
     // Also set LiveKit participant metadata so translator can read lang from existing participants
     try {
-      await this.rooms.updateParticipant(roomName, userId, { metadata: JSON.stringify({ lang }) });
+      await this.rooms.updateParticipant(roomName, userId, { metadata: JSON.stringify({ lang, sourceLang: sourceLang || lang }) });
     } catch (e) {
       console.warn('Failed to update participant metadata:', (e as Error).message);
     }
@@ -393,7 +397,7 @@ export class VoiceService {
       const res = await fetch(AI_AGENT_URL + '/translator/set-lang', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomName, userId, lang }),
+        body: JSON.stringify({ roomName, userId, lang, sourceLang: sourceLang || lang }),
       });
       return await res.json();
     } catch (e) {

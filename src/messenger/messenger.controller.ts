@@ -240,7 +240,7 @@ export class MessengerController {
           cb(null, `${uuidv4()}${extname(file.originalname)}`);
         },
       }),
-      limits: { fileSize: 20 * 1024 * 1024 },
+      limits: { fileSize: 100 * 1024 * 1024 },
     }),
   )
   uploadFile(@UploadedFile() file: Express.Multer.File) {
@@ -251,5 +251,15 @@ export class MessengerController {
       fileSize: file.size,
       fileType,
     };
+  }
+
+  @Post('call-ended')
+  async endCall(
+    @Body('conversationId') conversationId: string,
+    @Body('roomName') roomName: string,
+    @CurrentUser() user: any,
+  ) {
+    await this.gateway.endCallFromHttp(user.sub, conversationId, roomName);
+    return { ok: true };
   }
 }

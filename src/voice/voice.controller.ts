@@ -164,9 +164,10 @@ export class VoiceController {
   setTranslatorLang(
     @Param("roomName") roomName: string,
     @Body("lang") lang: string,
+    @Body("sourceLang") sourceLang: string,
     @CurrentUser() user: any,
   ) {
-    return this.service.setTranslatorLang(roomName, user.sub, lang);
+    return this.service.setTranslatorLang(roomName, user.sub, lang, sourceLang);
   }
 
   @Get("rooms/:roomName/translator/status")
@@ -191,6 +192,7 @@ export class VoiceController {
     @Param("roomName") roomName: string,
     @Body("identity") identity: string,
     @Body("lang") lang: string,
+    @Body("sourceLang") sourceLang: string,
   ) {
     return this.service.setTranslatorLangByIdentity(roomName, identity, lang);
   }

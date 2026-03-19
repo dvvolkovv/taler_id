@@ -182,6 +182,18 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
         .map((p) => p.userId);
     }
 
+    // Add callees to CallLog so missed calls appear in their history
+    try {
+      const log = await this.prisma.callLog.findUnique({ where: { roomName: payload.roomName } });
+      if (log) {
+        const allIds = new Set([...log.participantIds, ...calleeIds]);
+        await this.prisma.callLog.update({
+          where: { roomName: payload.roomName },
+          data: { participantIds: [...allIds] },
+        });
+      }
+    } catch (_) {}
+
     // For group calls, emit group_call_started to all participants
     if (isGroup) {
       const participants = await this.service.getParticipants(payload.conversationId);
@@ -235,14 +247,32 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
     const isGroup = convType === 'GROUP';
 
     const participants = await this.service.getParticipants(payload.conversationId);
+
+    // Look up CallLog to determine initiator and whether call was answered
+    let callLog: any = null;
+    try {
+      callLog = await this.prisma.callLog.findUnique({ where: { roomName: payload.roomName } });
+    } catch (_) {}
+    const initiatorId = callLog?.initiatorId;
+    const wasAnswered = !!callLog?.answeredAt;
+
+    const callerProfile = initiatorId
+      ? await this.prisma.profile.findUnique({ where: { userId: initiatorId } })
+      : null;
+    const callerName = callerProfile ? `${callerProfile.firstName ?? ''} ${callerProfile.lastName ?? ''}`.trim() : 'Неизвестный';
+
     for (const p of participants) {
       this.server.to(`user:${p.userId}`).emit('call_ended', {
         roomName: payload.roomName,
         fromUserId: client.data.userId,
       });
-      const token = await this.service.getFcmToken(p.userId);
-      if (token) {
-        this.fcmService.sendCallCancelled(token, payload.roomName).catch(() => {});
+      // Send missed call push ONLY when call was never answered,
+      // and ONLY to non-initiators (callees who missed the call).
+      if (!wasAnswered && initiatorId && p.userId !== initiatorId) {
+        const token = await this.service.getFcmToken(p.userId);
+        if (token) {
+          this.fcmService.sendCallCancelled(token, payload.roomName, callerName).catch(() => {});
+        }
       }
     }
 
@@ -257,10 +287,13 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
     }
 
     try {
-      const log = await this.prisma.callLog.findUnique({ where: { roomName: payload.roomName } });
+      const log = callLog ?? await this.prisma.callLog.findUnique({ where: { roomName: payload.roomName } });
       if (log && !log.endedAt) {
         const endedAt = new Date();
-        const durationSec = Math.round((endedAt.getTime() - log.startedAt.getTime()) / 1000);
+        // durationSec = talk time (from answeredAt), or 0 if never answered
+        const durationSec = log.answeredAt
+          ? Math.round((endedAt.getTime() - new Date(log.answeredAt).getTime()) / 1000)
+          : 0;
         await this.prisma.callLog.update({ where: { roomName: payload.roomName }, data: { endedAt, durationSec } });
       }
     } catch (_) {}
@@ -269,6 +302,16 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
   @SubscribeMessage('call_answered')
   async handleCallAnswered(client: Socket, payload: { conversationId: string; roomName: string }) {
     try {
+      // Mark answeredAt in CallLog (first answer wins)
+      try {
+        const log = await this.prisma.callLog.findUnique({ where: { roomName: payload.roomName } });
+        if (log && !log.answeredAt) {
+          await this.prisma.callLog.update({
+            where: { roomName: payload.roomName },
+            data: { answeredAt: new Date() },
+          });
+        }
+      } catch (_) {}
       const participants = await this.service.getParticipants(payload.conversationId);
       for (const p of participants.filter((p) => p.userId !== client.data.userId)) {
         this.server.to(`user:${p.userId}`).emit('call_answered', {
@@ -326,5 +369,10 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
   /** Emit to a specific user's personal room */
   emitToUser(userId: string, event: string, data: any) {
     this.server.to(`user:${userId}`).emit(event, data);
+  }
+
+  /** HTTP fallback for call_ended (used by mobile app as backup) */
+  async endCallFromHttp(userId: string, conversationId: string, roomName: string) {
+    await this.handleCallEnded({ data: { userId } } as any, { conversationId, roomName });
   }
 }

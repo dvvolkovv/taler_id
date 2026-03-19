@@ -129,7 +129,7 @@ export class FcmService {
     }
   }
 
-  async sendCallCancelled(fcmToken: string, roomName: string): Promise<void> {
+  async sendCallCancelled(fcmToken: string, roomName: string, fromName?: string): Promise<void> {
     if (!this.initialized || !fcmToken) return;
     try {
       await admin.messaging().send({
@@ -137,6 +137,7 @@ export class FcmService {
         data: {
           type: 'call_cancelled',
           roomName,
+          fromName: fromName || 'Неизвестный',
         },
         android: {
           priority: 'high',
