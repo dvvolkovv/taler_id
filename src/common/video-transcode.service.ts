@@ -32,7 +32,8 @@ export class VideoTranscodeService {
       const inputData = Buffer.concat(chunks);
       fs.writeFileSync(inputPath, inputData);
 
-      // Probe to check if already H.264
+      // Probe codec and determine transcoding strategy
+      let codec = '';
       try {
         const { stdout } = await execFileAsync('ffprobe', [
           '-v', 'quiet',
@@ -41,30 +42,47 @@ export class VideoTranscodeService {
           '-of', 'csv=p=0',
           inputPath,
         ], { timeout: 10000 });
-
-        const codec = stdout.trim();
-        if (codec === 'h264') {
-          this.logger.log(`[transcode] ${s3Key} already H.264, skipping`);
-          return null;
-        }
-        this.logger.log(`[transcode] ${s3Key} codec=${codec}, transcoding to H.264`);
+        codec = stdout.trim().replace(/[,\s]+$/, '');
       } catch {
-        this.logger.warn(`[transcode] ffprobe failed for ${s3Key}, attempting transcode anyway`);
+        this.logger.warn(`[transcode] ffprobe failed for ${s3Key}, attempting full transcode`);
       }
 
-      // Transcode: H.264 video + AAC audio + loudnorm
-      await execFileAsync('ffmpeg', [
-        '-i', inputPath,
-        '-c:v', 'libx264',
-        '-preset', 'medium',
-        '-crf', '23',
-        '-c:a', 'aac',
-        '-b:a', '128k',
-        '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11',
-        '-movflags', '+faststart',
-        '-y',
-        outputPath,
-      ], { timeout: 600000 }); // 10 min timeout
+      const isAlreadyMp4 = s3Key.toLowerCase().endsWith('.mp4');
+
+      if (codec === 'h264' && isAlreadyMp4) {
+        this.logger.log(`[transcode] ${s3Key} already H.264 MP4, skipping`);
+        return null;
+      }
+
+      if (codec === 'h264') {
+        // Already H.264 but in MOV container: remux (fast, no re-encode) + normalize audio
+        this.logger.log(`[transcode] ${s3Key} H.264 in MOV, remuxing to MP4 + loudnorm`);
+        await execFileAsync('ffmpeg', [
+          '-i', inputPath,
+          '-c:v', 'copy',
+          '-c:a', 'aac',
+          '-b:a', '128k',
+          '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11',
+          '-movflags', '+faststart',
+          '-y',
+          outputPath,
+        ], { timeout: 300000 });
+      } else {
+        // Full transcode: re-encode video + audio
+        this.logger.log(`[transcode] ${s3Key} codec=${codec}, full transcode to H.264`);
+        await execFileAsync('ffmpeg', [
+          '-i', inputPath,
+          '-c:v', 'libx264',
+          '-preset', 'medium',
+          '-crf', '23',
+          '-c:a', 'aac',
+          '-b:a', '128k',
+          '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11',
+          '-movflags', '+faststart',
+          '-y',
+          outputPath,
+        ], { timeout: 600000 });
+      }
 
       if (!fs.existsSync(outputPath)) {
         this.logger.error(`[transcode] Output file not created for ${s3Key}`);
