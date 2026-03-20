@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90" viewBox="0 0 1920 1080">
+  <defs>
+    <linearGradient id="nightSky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0a1628"/>
+      <stop offset="40%" stop-color="#132244"/>
+      <stop offset="70%" stop-color="#1a3060"/>
+      <stop offset="100%" stop-color="#2a4570"/>
+    </linearGradient>
+    <linearGradient id="cityGlow" x1="0.5" y1="1" x2="0.5" y2="0">
+      <stop offset="0%" stop-color="#f0a050" stop-opacity="0.15"/>
+      <stop offset="40%" stop-color="#f0a050" stop-opacity="0.05"/>
+      <stop offset="100%" stop-color="#f0a050" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a3060"/>
+      <stop offset="100%" stop-color="#0a1628"/>
+    </linearGradient>
+  </defs>
+  <rect width="1920" height="1080" fill="url(#nightSky)"/>
+  <circle cx="1650" cy="150" r="40" fill="#e8e0c8" opacity="0.8"/>
+  <circle cx="1660" cy="145" r="38" fill="#0a1628" opacity="0.3"/>
+  <rect width="1920" height="1080" fill="url(#cityGlow)"/>
+  <rect x="50" y="480" width="80" height="400" fill="#0d1a30"/>
+  <rect x="210" y="440" width="50" height="440" fill="#0d1a30"/>
+  <rect x="350" y="380" width="45" height="500" fill="#0d1a30"/>
+  <rect x="480" y="350" width="55" height="530" fill="#0e1b32"/>
+  <rect x="545" y="420" width="80" height="460" fill="#111f38"/>
+  <rect x="635" y="300" width="50" height="580" fill="#0d1a30"/>
+  <rect x="695" y="220" width="40" height="660" fill="#0e1b32"/>
+  <rect x="745" y="380" width="70" height="500" fill="#111f38"/>
+  <rect x="825" y="320" width="55" height="560" fill="#0d1a30"/>
+  <rect x="890" y="400" width="80" height="480" fill="#101e35"/>
+  <rect x="980" y="250" width="45" height="630" fill="#0e1b32"/>
+  <rect x="1105" y="360" width="75" height="520" fill="#0d1a30"/>
+  <rect x="1250" y="340" width="65" height="540" fill="#0e1b32"/>
+  <rect x="1390" y="380" width="80" height="500" fill="#0d1a30"/>
+  <rect x="1535" y="480" width="70" height="400" fill="#0e1b32"/>
+  <rect x="1680" y="500" width="60" height="380" fill="#0d1a30"/>
+  <rect x="1840" y="520" width="80" height="360" fill="#0e1b32"/>
+  <!-- Window lights -->
+  <rect x="225" y="460" width="6" height="6" fill="#f0c860" opacity="0.7"/>
+  <rect x="370" y="430" width="6" height="6" fill="#f0c860" opacity="0.7"/>
+  <rect x="505" y="400" width="6" height="6" fill="#f0c860" opacity="0.7"/>
+  <rect x="655" y="350" width="6" height="6" fill="#f0c860" opacity="0.7"/>
+  <rect x="710" y="280" width="5" height="5" fill="#f0c860" opacity="0.6"/>
+  <rect x="850" y="370" width="6" height="6" fill="#f0c860" opacity="0.7"/>
+  <rect x="995" y="320" width="5" height="5" fill="#f0c860" opacity="0.6"/>
+  <rect x="1130" y="410" width="6" height="6" fill="#f0c860" opacity="0.7"/>
+  <rect x="1270" y="400" width="6" height="6" fill="#f0c860" opacity="0.7"/>
+  <rect x="1415" y="430" width="6" height="6" fill="#f0c860" opacity="0.6"/>
+  <rect x="1560" y="530" width="6" height="6" fill="#f0c860" opacity="0.7"/>
+  <rect x="0" y="880" width="1920" height="200" fill="url(#water)"/>
+</svg>

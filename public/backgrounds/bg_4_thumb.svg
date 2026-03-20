@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90" viewBox="0 0 1920 1080">
+  <defs>
+    <linearGradient id="wallBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f5ead5"/>
+      <stop offset="100%" stop-color="#e8d9c0"/>
+    </linearGradient>
+    <linearGradient id="wood" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#8b6b4a"/>
+      <stop offset="50%" stop-color="#7a5c3e"/>
+      <stop offset="100%" stop-color="#6b4e35"/>
+    </linearGradient>
+    <linearGradient id="woodSide" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#6b4e35"/>
+      <stop offset="100%" stop-color="#5a4030"/>
+    </linearGradient>
+  </defs>
+  <rect width="1920" height="1080" fill="url(#wallBg)"/>
+  <rect x="80" y="40" width="40" height="1000" fill="url(#woodSide)"/>
+  <rect x="1800" y="40" width="40" height="1000" fill="url(#woodSide)"/>
+  <rect x="80" y="40" width="1760" height="20" fill="url(#wood)"/>
+  <rect x="80" y="240" width="1760" height="18" fill="url(#wood)"/>
+  <rect x="80" y="460" width="1760" height="18" fill="url(#wood)"/>
+  <rect x="80" y="680" width="1760" height="18" fill="url(#wood)"/>
+  <rect x="80" y="900" width="1760" height="18" fill="url(#wood)"/>
+  <rect x="80" y="1020" width="1760" height="20" fill="url(#wood)"/>
+  <rect x="120" y="60" width="1680" height="180" fill="#d4c4a8" opacity="0.5"/>
+  <rect x="120" y="258" width="1680" height="202" fill="#d4c4a8" opacity="0.5"/>
+  <rect x="120" y="478" width="1680" height="202" fill="#d4c4a8" opacity="0.5"/>
+  <rect x="120" y="698" width="1680" height="202" fill="#d4c4a8" opacity="0.5"/>
+  <!-- Simplified book rows for thumbnail -->
+  <rect x="150" y="80" width="30" height="158" rx="2" fill="#c0392b"/>
+  <rect x="185" y="95" width="25" height="143" rx="2" fill="#2980b9"/>
+  <rect x="215" y="85" width="35" height="153" rx="2" fill="#27ae60"/>
+  <rect x="255" y="100" width="22" height="138" rx="2" fill="#f39c12"/>
+  <rect x="282" y="78" width="28" height="160" rx="2" fill="#8e44ad"/>
+  <rect x="500" y="82" width="28" height="156" rx="2" fill="#e74c3c"/>
+  <rect x="533" y="95" width="32" height="143" rx="2" fill="#3498db"/>
+  <rect x="750" y="82" width="28" height="156" rx="2" fill="#e67e22"/>
+  <rect x="783" y="95" width="35" height="143" rx="2" fill="#2ecc71"/>
+  <rect x="1050" y="90" width="30" height="148" rx="2" fill="#2c3e50"/>
+  <rect x="1085" y="80" width="28" height="158" rx="2" fill="#27ae60"/>
+  <rect x="1350" y="82" width="30" height="156" rx="2" fill="#16a085"/>
+  <rect x="1550" y="90" width="32" height="148" rx="2" fill="#8e44ad"/>
+  <rect x="150" y="300" width="28" height="158" rx="2" fill="#3498db"/>
+  <rect x="183" y="310" width="32" height="148" rx="2" fill="#e74c3c"/>
+  <rect x="400" y="300" width="30" height="158" rx="2" fill="#c0392b"/>
+  <rect x="600" y="300" width="30" height="158" rx="2" fill="#34495e"/>
+  <rect x="900" y="300" width="28" height="158" rx="2" fill="#16a085"/>
+  <rect x="1200" y="305" width="28" height="153" rx="2" fill="#f39c12"/>
+  <rect x="1500" y="300" width="35" height="158" rx="2" fill="#27ae60"/>
+  <rect x="150" y="520" width="30" height="158" rx="2" fill="#f39c12"/>
+  <rect x="185" y="530" width="25" height="148" rx="2" fill="#9b59b6"/>
+  <rect x="500" y="520" width="30" height="158" rx="2" fill="#1abc9c"/>
+  <rect x="800" y="520" width="30" height="158" rx="2" fill="#e74c3c"/>
+  <rect x="1100" y="520" width="32" height="158" rx="2" fill="#2c3e50"/>
+  <rect x="1400" y="520" width="28" height="158" rx="2" fill="#3498db"/>
+  <rect x="150" y="740" width="32" height="158" rx="2" fill="#2c3e50"/>
+  <rect x="400" y="740" width="30" height="158" rx="2" fill="#e74c3c"/>
+  <rect x="700" y="740" width="30" height="158" rx="2" fill="#f1c40f"/>
+  <rect x="1000" y="740" width="28" height="158" rx="2" fill="#3498db"/>
+  <rect x="1300" y="740" width="28" height="158" rx="2" fill="#2980b9"/>
+  <rect x="1600" y="740" width="30" height="158" rx="2" fill="#9b59b6"/>
+  <rect width="1920" height="1080" fill="#f5e0c0" opacity="0.06"/>
+</svg>

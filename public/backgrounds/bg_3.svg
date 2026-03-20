@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+  <defs>
+    <linearGradient id="base" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2d1b69"/>
+      <stop offset="30%" stop-color="#5b2d8e"/>
+      <stop offset="60%" stop-color="#3a5aaa"/>
+      <stop offset="100%" stop-color="#1a3a7a"/>
+    </linearGradient>
+    <radialGradient id="glow1" cx="0.2" cy="0.3">
+      <stop offset="0%" stop-color="#8b5cf6" stop-opacity="0.6"/>
+      <stop offset="50%" stop-color="#7c3aed" stop-opacity="0.2"/>
+      <stop offset="100%" stop-color="#7c3aed" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx="0.8" cy="0.7">
+      <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.5"/>
+      <stop offset="50%" stop-color="#2563eb" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#2563eb" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow3" cx="0.5" cy="0.5">
+      <stop offset="0%" stop-color="#a78bfa" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#a78bfa" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="wave1" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#8b5cf6" stop-opacity="0"/>
+      <stop offset="30%" stop-color="#8b5cf6" stop-opacity="0.15"/>
+      <stop offset="70%" stop-color="#3b82f6" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#3b82f6" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="wave2" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#6d28d9" stop-opacity="0"/>
+      <stop offset="40%" stop-color="#6d28d9" stop-opacity="0.12"/>
+      <stop offset="60%" stop-color="#4f46e5" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#4f46e5" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <!-- Base gradient -->
+  <rect width="1920" height="1080" fill="url(#base)"/>
+  <!-- Radial glows -->
+  <rect width="1920" height="1080" fill="url(#glow1)"/>
+  <rect width="1920" height="1080" fill="url(#glow2)"/>
+  <rect width="1920" height="1080" fill="url(#glow3)"/>
+  <!-- Flowing wave shapes -->
+  <path d="M0 300 Q480 200 960 350 Q1440 500 1920 350 L1920 550 Q1440 700 960 550 Q480 400 0 500 Z" fill="url(#wave1)"/>
+  <path d="M0 500 Q480 400 960 550 Q1440 700 1920 550 L1920 750 Q1440 900 960 750 Q480 600 0 700 Z" fill="url(#wave2)"/>
+  <path d="M0 150 Q320 80 640 180 Q960 280 1280 180 Q1600 80 1920 150 L1920 250 Q1600 180 1280 280 Q960 380 640 280 Q320 180 0 250 Z" fill="#7c3aed" opacity="0.06"/>
+  <path d="M0 700 Q320 630 640 730 Q960 830 1280 730 Q1600 630 1920 700 L1920 800 Q1600 730 1280 830 Q960 930 640 830 Q320 730 0 800 Z" fill="#3b82f6" opacity="0.06"/>
+  <!-- Subtle orbs -->
+  <circle cx="350" cy="250" r="150" fill="#8b5cf6" opacity="0.05"/>
+  <circle cx="1500" cy="700" r="200" fill="#3b82f6" opacity="0.05"/>
+  <circle cx="960" cy="500" r="250" fill="#6d28d9" opacity="0.04"/>
+  <circle cx="1700" cy="200" r="100" fill="#a78bfa" opacity="0.06"/>
+  <circle cx="200" cy="800" r="120" fill="#4f46e5" opacity="0.06"/>
+  <!-- Fine particle dots for texture -->
+  <circle cx="300" cy="200" r="2" fill="white" opacity="0.15"/>
+  <circle cx="800" cy="400" r="1.5" fill="white" opacity="0.12"/>
+  <circle cx="1200" cy="300" r="2" fill="white" opacity="0.1"/>
+  <circle cx="1600" cy="600" r="1.5" fill="white" opacity="0.12"/>
+  <circle cx="500" cy="700" r="2" fill="white" opacity="0.1"/>
+  <circle cx="1000" cy="800" r="1.5" fill="white" opacity="0.08"/>
+  <circle cx="150" cy="500" r="1" fill="white" opacity="0.15"/>
+  <circle cx="1800" cy="400" r="1" fill="white" opacity="0.12"/>
+  <circle cx="700" cy="150" r="1.5" fill="white" opacity="0.1"/>
+  <circle cx="1400" cy="900" r="2" fill="white" opacity="0.08"/>
+</svg>

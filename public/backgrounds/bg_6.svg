@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+  <defs>
+    <linearGradient id="pastel" x1="0" y1="0" x2="0.3" y2="1">
+      <stop offset="0%" stop-color="#d4e8f5"/>
+      <stop offset="30%" stop-color="#dfeef8"/>
+      <stop offset="60%" stop-color="#eaf4fb"/>
+      <stop offset="100%" stop-color="#f8fbfe"/>
+    </linearGradient>
+    <radialGradient id="softGlow1" cx="0.3" cy="0.4">
+      <stop offset="0%" stop-color="#c5e0f0" stop-opacity="0.4"/>
+      <stop offset="100%" stop-color="#c5e0f0" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="softGlow2" cx="0.7" cy="0.6">
+      <stop offset="0%" stop-color="#e0eef8" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#e0eef8" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="subtleWave" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#d0e4f2" stop-opacity="0"/>
+      <stop offset="50%" stop-color="#d0e4f2" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#d0e4f2" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <!-- Base gradient -->
+  <rect width="1920" height="1080" fill="url(#pastel)"/>
+  <!-- Soft glows -->
+  <rect width="1920" height="1080" fill="url(#softGlow1)"/>
+  <rect width="1920" height="1080" fill="url(#softGlow2)"/>
+  <!-- Very subtle wave shapes for depth -->
+  <path d="M0 400 Q480 350 960 420 Q1440 490 1920 400 L1920 500 Q1440 570 960 500 Q480 430 0 500 Z" fill="url(#subtleWave)"/>
+  <path d="M0 600 Q480 560 960 620 Q1440 680 1920 620 L1920 700 Q1440 760 960 700 Q480 640 0 700 Z" fill="#ccdff0" opacity="0.06"/>
+  <path d="M0 200 Q480 170 960 210 Q1440 250 1920 200 L1920 280 Q1440 320 960 280 Q480 240 0 280 Z" fill="#ccdff0" opacity="0.04"/>
+  <!-- Subtle orbs -->
+  <circle cx="400" cy="350" r="200" fill="#d4e8f5" opacity="0.08"/>
+  <circle cx="1400" cy="600" r="250" fill="#e0eef8" opacity="0.06"/>
+  <circle cx="960" cy="450" r="300" fill="#d8ecf6" opacity="0.05"/>
+</svg>

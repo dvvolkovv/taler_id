@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90" viewBox="0 0 1920 1080">
+  <defs>
+    <linearGradient id="base" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2d1b69"/>
+      <stop offset="30%" stop-color="#5b2d8e"/>
+      <stop offset="60%" stop-color="#3a5aaa"/>
+      <stop offset="100%" stop-color="#1a3a7a"/>
+    </linearGradient>
+    <radialGradient id="glow1" cx="0.2" cy="0.3">
+      <stop offset="0%" stop-color="#8b5cf6" stop-opacity="0.6"/>
+      <stop offset="50%" stop-color="#7c3aed" stop-opacity="0.2"/>
+      <stop offset="100%" stop-color="#7c3aed" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx="0.8" cy="0.7">
+      <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.5"/>
+      <stop offset="50%" stop-color="#2563eb" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#2563eb" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="wave1" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#8b5cf6" stop-opacity="0"/>
+      <stop offset="30%" stop-color="#8b5cf6" stop-opacity="0.15"/>
+      <stop offset="70%" stop-color="#3b82f6" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#3b82f6" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="wave2" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#6d28d9" stop-opacity="0"/>
+      <stop offset="40%" stop-color="#6d28d9" stop-opacity="0.12"/>
+      <stop offset="60%" stop-color="#4f46e5" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#4f46e5" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect width="1920" height="1080" fill="url(#base)"/>
+  <rect width="1920" height="1080" fill="url(#glow1)"/>
+  <rect width="1920" height="1080" fill="url(#glow2)"/>
+  <path d="M0 300 Q480 200 960 350 Q1440 500 1920 350 L1920 550 Q1440 700 960 550 Q480 400 0 500 Z" fill="url(#wave1)"/>
+  <path d="M0 500 Q480 400 960 550 Q1440 700 1920 550 L1920 750 Q1440 900 960 750 Q480 600 0 700 Z" fill="url(#wave2)"/>
+  <circle cx="350" cy="250" r="150" fill="#8b5cf6" opacity="0.05"/>
+  <circle cx="1500" cy="700" r="200" fill="#3b82f6" opacity="0.05"/>
+  <circle cx="960" cy="500" r="250" fill="#6d28d9" opacity="0.04"/>
+</svg>

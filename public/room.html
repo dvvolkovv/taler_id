@@ -232,6 +232,8 @@
     .ctrl-btn.ai-active svg { stroke: var(--primary); }
     .ctrl-btn.translator-on { background: rgba(16,185,129,0.25); }
     .ctrl-btn.translator-on svg { stroke: #10B981; }
+    .ctrl-btn.bg-active { background: rgba(22,126,242,0.25); }
+    .ctrl-btn.bg-active svg { stroke: var(--primary); }
     .ctrl-btn-tooltip {
       position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%);
       background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
@@ -288,6 +290,41 @@
       display: none; position: fixed; inset: 0; z-index: 99;
     }
     .popup-overlay.active { display: block; }
+
+    /* Background effects picker */
+    .bg-picker {
+      display: none; position: absolute; bottom: calc(100% + 8px); left: 50%;
+      transform: translateX(-50%);
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 10px; min-width: 320px;
+      z-index: 100; box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    }
+    .bg-picker.active { display: block; }
+    .bg-picker-title {
+      font-size: 11px; font-weight: 600; color: var(--text-2);
+      text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;
+    }
+    .bg-picker-grid {
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px;
+    }
+    .bg-option {
+      width: 100%; aspect-ratio: 16/9; border-radius: 8px; border: 2px solid transparent;
+      cursor: pointer; overflow: hidden; position: relative;
+      transition: border-color 0.15s, transform 0.1s;
+      background: rgba(255,255,255,0.06);
+    }
+    .bg-option:hover { border-color: rgba(255,255,255,0.2); transform: scale(1.04); }
+    .bg-option.selected { border-color: var(--primary); }
+    .bg-option img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .bg-option-label {
+      position: absolute; bottom: 0; left: 0; right: 0;
+      background: rgba(0,0,0,0.6); color: #fff; font-size: 9px;
+      text-align: center; padding: 2px; font-weight: 500;
+    }
+    .bg-option-icon {
+      width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
+    }
+    .bg-option-icon svg { width: 28px; height: 28px; stroke: var(--text-2); }
   </style>
 </head>
 <body>
@@ -375,6 +412,20 @@
           <button class="device-arrow" onclick="openDevicePopup('cam', event)" title="Выбрать камеру">&#9662;</button>
         </div>
         <div class="device-popup" id="popup-cam"></div>
+      </div>
+      <div class="ctrl-wrap" style="position:relative">
+        <button class="ctrl-btn" id="btn-bg" onclick="openBgPicker(event)" title="Фон">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="2" width="20" height="20" rx="2"/>
+            <circle cx="8.5" cy="8.5" r="1.5"/>
+            <path d="M20.4 14.5L16 10 4 20"/>
+          </svg>
+        </button>
+        <div class="ctrl-label">Фон</div>
+        <div class="bg-picker" id="bg-picker">
+          <div class="bg-picker-title">Фон видео</div>
+          <div class="bg-picker-grid" id="bg-picker-grid"></div>
+        </div>
       </div>
       <div class="ctrl-wrap">
         <button class="ctrl-btn" id="btn-speaker" onclick="toggleSpeaker()" title="Динамик">
@@ -497,6 +548,22 @@
     let currentSpeakerId = '';
     let speakerEnabled = true;
     let lastDeviceList = [];
+
+    // ── Background effects state ──
+    let bgEffect = 'none'; // 'none' | 'blur' | 'bg_1' ... 'bg_6'
+    let bgProcessor = null;
+    let trackProcessorsModule = null;
+
+    const bgOptions = [
+      { id: 'none', label: 'Без фона', icon: true },
+      { id: 'blur', label: 'Размытие', icon: true },
+      { id: 'bg_1', label: 'Офис', img: '/backgrounds/bg_1.svg' },
+      { id: 'bg_2', label: 'Природа', img: '/backgrounds/bg_2.svg' },
+      { id: 'bg_3', label: 'Градиент', img: '/backgrounds/bg_3.svg' },
+      { id: 'bg_4', label: 'Библиотека', img: '/backgrounds/bg_4.svg' },
+      { id: 'bg_5', label: 'Город', img: '/backgrounds/bg_5.svg' },
+      { id: 'bg_6', label: 'Минимализм', img: '/backgrounds/bg_6.svg' },
+    ];
 
     // ── Recording state ──
     let isRecording = false;
@@ -737,6 +804,8 @@
 
     function closeAllPopups() {
       document.querySelectorAll('.device-popup').forEach(p => p.classList.remove('active'));
+      const bgPicker = document.getElementById('bg-picker');
+      if (bgPicker) bgPicker.classList.remove('active');
       document.getElementById('popup-overlay').classList.remove('active');
     }
 
@@ -1039,10 +1108,21 @@
       updateControlButtons();
     }
 
-    function toggleCam() {
+    async function toggleCam() {
       if (!room) return;
       camEnabled = !camEnabled;
-      room.localParticipant.setCameraEnabled(camEnabled);
+      if (!camEnabled && bgProcessor) {
+        // Remove background processor before disabling camera
+        const { Track } = LivekitClient;
+        const camPub = room.localParticipant.getTrackPublication(Track.Source.Camera);
+        if (camPub?.track) {
+          try { await camPub.track.stopProcessor(); } catch (_) {}
+        }
+        bgProcessor = null;
+        bgEffect = 'none';
+        updateBgButton();
+      }
+      await room.localParticipant.setCameraEnabled(camEnabled);
       updateControlButtons();
     }
 
@@ -1622,6 +1702,135 @@
           }
         }
       });
+    }
+
+    // ── Background effects ──
+
+    async function loadTrackProcessors() {
+      if (trackProcessorsModule) return trackProcessorsModule;
+      try {
+        trackProcessorsModule = await import('https://unpkg.com/@livekit/track-processors@0.7.2/dist/index.mjs');
+        return trackProcessorsModule;
+      } catch (e) {
+        console.error('[BG] Failed to load track processors:', e);
+        return null;
+      }
+    }
+
+    function buildBgPickerGrid() {
+      const grid = document.getElementById('bg-picker-grid');
+      grid.innerHTML = '';
+      bgOptions.forEach(opt => {
+        const div = document.createElement('div');
+        div.className = 'bg-option' + (bgEffect === opt.id ? ' selected' : '');
+        div.onclick = () => applyBgEffect(opt.id);
+        if (opt.icon) {
+          const iconDiv = document.createElement('div');
+          iconDiv.className = 'bg-option-icon';
+          if (opt.id === 'none') {
+            iconDiv.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>';
+          } else {
+            iconDiv.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3C7.03 3 3 7.03 3 12s4.03 9 9 9 9-4.03 9-9-4.03-9-9-9z" opacity="0.3"/><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6" opacity="0.5"/><circle cx="12" cy="12" r="2"/></svg>';
+          }
+          div.appendChild(iconDiv);
+        } else {
+          const img = document.createElement('img');
+          img.src = opt.img;
+          img.alt = opt.label;
+          img.loading = 'lazy';
+          div.appendChild(img);
+        }
+        const label = document.createElement('div');
+        label.className = 'bg-option-label';
+        label.textContent = opt.label;
+        div.appendChild(label);
+        grid.appendChild(div);
+      });
+    }
+
+    function openBgPicker(event) {
+      event.stopPropagation();
+      closeAllPopups();
+      buildBgPickerGrid();
+      document.getElementById('bg-picker').classList.add('active');
+      document.getElementById('popup-overlay').classList.add('active');
+    }
+
+    async function applyBgEffect(effectId) {
+      if (!room) return;
+      const { Track } = LivekitClient;
+      const camPub = room.localParticipant.getTrackPublication(Track.Source.Camera);
+      const videoTrack = camPub?.track;
+
+      if (effectId === 'none') {
+        // Remove processor
+        if (videoTrack && bgProcessor) {
+          try { await videoTrack.stopProcessor(); } catch (e) { console.warn('[BG] stopProcessor:', e); }
+        }
+        bgProcessor = null;
+        bgEffect = 'none';
+        updateBgButton();
+        closeAllPopups();
+        buildBgPickerGrid();
+        return;
+      }
+
+      const mod = await loadTrackProcessors();
+      if (!mod) {
+        console.error('[BG] Track processors not available');
+        return;
+      }
+
+      // If camera is off, turn it on first
+      if (!camEnabled) {
+        camEnabled = true;
+        await room.localParticipant.setCameraEnabled(true);
+        updateControlButtons();
+        // Wait for track to be available
+        await new Promise(r => setTimeout(r, 500));
+      }
+
+      const freshPub = room.localParticipant.getTrackPublication(Track.Source.Camera);
+      const track = freshPub?.track;
+      if (!track) {
+        console.warn('[BG] No camera track available');
+        return;
+      }
+
+      try {
+        // Stop existing processor first
+        if (bgProcessor) {
+          try { await track.stopProcessor(); } catch (_) {}
+        }
+
+        if (effectId === 'blur') {
+          bgProcessor = mod.BackgroundProcessor({ mode: 'background-blur', blurRadius: 10 });
+        } else {
+          // Virtual background from image
+          const opt = bgOptions.find(o => o.id === effectId);
+          if (opt && opt.img) {
+            bgProcessor = mod.BackgroundProcessor({ mode: 'virtual-background', imagePath: opt.img });
+          }
+        }
+
+        if (bgProcessor) {
+          await track.setProcessor(bgProcessor);
+        }
+        bgEffect = effectId;
+      } catch (e) {
+        console.error('[BG] Failed to apply effect:', e);
+        bgProcessor = null;
+        bgEffect = 'none';
+      }
+
+      updateBgButton();
+      closeAllPopups();
+      buildBgPickerGrid();
+    }
+
+    function updateBgButton() {
+      const btn = document.getElementById('btn-bg');
+      btn.className = 'ctrl-btn' + (bgEffect !== 'none' ? ' bg-active' : '');
     }
 
   </script>
