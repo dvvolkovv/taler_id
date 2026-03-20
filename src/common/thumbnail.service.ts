@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import * as sharp from 'sharp';
+import sharp = require('sharp');
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs';
