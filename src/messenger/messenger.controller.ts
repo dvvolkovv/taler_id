@@ -247,7 +247,9 @@ export class MessengerController {
 
   @Post('files/check')
   async checkFile(@Body() body: { sha256: string; fileSize: number; mimeType: string }) {
+    this.logger.log(`[files/check] sha256=${body.sha256} size=${body.fileSize} mime=${body.mimeType}`);
     const record = await this.prisma.fileRecord.findUnique({ where: { sha256: body.sha256 } });
+    this.logger.log(`[files/check] record found: ${!!record}${record ? ` id=${record.id} refCount=${record.refCount}` : ''}`);
     if (record) {
       await this.prisma.fileRecord.update({ where: { id: record.id }, data: { refCount: { increment: 1 } } });
       return {
