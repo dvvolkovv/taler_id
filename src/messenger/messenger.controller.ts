@@ -19,6 +19,7 @@ import { ChangeGroupRoleDto } from './dto/change-role.dto';
 import { FileStorageService } from '../common/file-storage.service';
 import { ThumbnailService } from '../common/thumbnail.service';
 import { Public } from '../common/decorators/public.decorator';
+import { RedisService } from '../redis/redis.service';
 
 @Controller('messenger')
 @UseGuards(JwtAuthGuard)
@@ -30,6 +31,7 @@ export class MessengerController {
     private readonly gateway: MessengerGateway,
     private readonly fileStorage: FileStorageService,
     private readonly thumbnailService: ThumbnailService,
+    private readonly redis: RedisService,
   ) {}
 
   // ─── Direct conversations ───
@@ -335,6 +337,151 @@ export class MessengerController {
   getFileUrl(@Query('key') key: string) {
     if (!key) throw new ForbiddenException('key is required');
     return { url: this.fileStorage.getPublicUrl(key) };
+  }
+
+  // ─── Chunked upload (Phase 2) ───
+
+  @Post('files/init')
+  async initChunkedUpload(
+    @Body() body: { fileName: string; fileSize: number; mimeType: string },
+    @CurrentUser() user: any,
+  ) {
+    const ext = extname(body.fileName);
+    const s3Key = `files/${uuidv4()}${ext}`;
+    const uploadId = await this.fileStorage.createMultipartUpload(s3Key, body.mimeType);
+
+    // S3 minimum part size is 5MB (except last part)
+    const partSize = 5 * 1024 * 1024;
+    const totalParts = Math.ceil(body.fileSize / partSize);
+
+    // Store state in Redis (24h TTL)
+    const state = {
+      s3Key,
+      uploadId,
+      fileName: body.fileName,
+      fileSize: body.fileSize,
+      mimeType: body.mimeType,
+      parts: [] as { PartNumber: number; ETag: string }[],
+      totalParts,
+      userId: user.sub,
+    };
+    await this.redis.setEx(`chunked:${uploadId}`, 86400, JSON.stringify(state));
+
+    return { uploadId, s3Key, partSize, totalParts };
+  }
+
+  @Post('files/chunk')
+  @UseInterceptors(
+    FileInterceptor('chunk', {
+      storage: memoryStorage(),
+      limits: { fileSize: 6 * 1024 * 1024 },
+    }),
+  )
+  async uploadChunk(
+    @UploadedFile() chunk: Express.Multer.File,
+    @Body('uploadId') uploadId: string,
+    @Body('partNumber') partNumberStr: string,
+  ) {
+    const partNumber = parseInt(partNumberStr, 10);
+    const raw = await this.redis.get(`chunked:${uploadId}`);
+    if (!raw) throw new NotFoundException('Upload not found or expired');
+    const state = JSON.parse(raw);
+
+    const etag = await this.fileStorage.uploadPart(state.s3Key, uploadId, partNumber, chunk.buffer);
+
+    state.parts.push({ PartNumber: partNumber, ETag: etag });
+    await this.redis.setEx(`chunked:${uploadId}`, 86400, JSON.stringify(state));
+
+    return { etag, partNumber };
+  }
+
+  @Post('files/complete')
+  async completeChunkedUpload(@Body('uploadId') uploadId: string) {
+    const raw = await this.redis.get(`chunked:${uploadId}`);
+    if (!raw) throw new NotFoundException('Upload not found or expired');
+    const state = JSON.parse(raw);
+
+    // Sort parts by PartNumber
+    state.parts.sort((a: any, b: any) => a.PartNumber - b.PartNumber);
+
+    // Complete S3 multipart upload
+    await this.fileStorage.completeMultipartUpload(state.s3Key, uploadId, state.parts);
+
+    const fileUrl = this.fileStorage.getPublicUrl(state.s3Key);
+
+    // Determine file type
+    let fileType = 'document';
+    if (state.mimeType.startsWith('image/')) fileType = 'image';
+    else if (state.mimeType.startsWith('video/')) fileType = 'video';
+    else if (state.mimeType.startsWith('audio/')) fileType = 'audio';
+
+    // Generate thumbnails (download from S3 first)
+    let thumbnailSmallUrl: string | undefined;
+    let thumbnailMediumUrl: string | undefined;
+    let thumbnailLargeUrl: string | undefined;
+
+    try {
+      if (fileType === 'image' || fileType === 'video') {
+        const { stream } = await this.fileStorage.getObject(state.s3Key);
+        const chunks: Buffer[] = [];
+        for await (const c of stream) chunks.push(Buffer.from(c));
+        const fileData = Buffer.concat(chunks);
+
+        if (fileType === 'image') {
+          const thumbs = await this.thumbnailService.generateImageThumbnails(fileData);
+          if (thumbs.small) {
+            const k = `thumbs/${uuidv4()}_s.jpg`;
+            await this.fileStorage.upload(k, thumbs.small, 'image/jpeg');
+            thumbnailSmallUrl = this.fileStorage.getPublicUrl(k);
+          }
+          if (thumbs.medium) {
+            const k = `thumbs/${uuidv4()}_m.jpg`;
+            await this.fileStorage.upload(k, thumbs.medium, 'image/jpeg');
+            thumbnailMediumUrl = this.fileStorage.getPublicUrl(k);
+          }
+          if (thumbs.large) {
+            const k = `thumbs/${uuidv4()}_l.jpg`;
+            await this.fileStorage.upload(k, thumbs.large, 'image/jpeg');
+            thumbnailLargeUrl = this.fileStorage.getPublicUrl(k);
+          }
+        } else if (fileType === 'video') {
+          const thumbs = await this.thumbnailService.generateVideoThumbnail(fileData);
+          if (thumbs.medium) {
+            const k = `thumbs/${uuidv4()}_m.jpg`;
+            await this.fileStorage.upload(k, thumbs.medium, 'image/jpeg');
+            thumbnailMediumUrl = this.fileStorage.getPublicUrl(k);
+          }
+        }
+      }
+    } catch (e) {
+      this.logger.error('Thumbnail generation failed for chunked upload:', e);
+    }
+
+    // Clean up Redis
+    await this.redis.del(`chunked:${uploadId}`);
+
+    return {
+      fileUrl,
+      fileName: state.fileName,
+      fileSize: state.fileSize,
+      fileType,
+      s3Key: state.s3Key,
+      thumbnailSmallUrl,
+      thumbnailMediumUrl,
+      thumbnailLargeUrl,
+    };
+  }
+
+  @Delete('files/:uploadId')
+  async abortChunkedUpload(@Param('uploadId') uploadId: string) {
+    const raw = await this.redis.get(`chunked:${uploadId}`);
+    if (!raw) throw new NotFoundException('Upload not found');
+    const state = JSON.parse(raw);
+
+    await this.fileStorage.abortMultipartUpload(state.s3Key, uploadId);
+    await this.redis.del(`chunked:${uploadId}`);
+
+    return { ok: true };
   }
 
   @Post('call-ended')
