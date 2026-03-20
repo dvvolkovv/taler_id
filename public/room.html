@@ -1709,7 +1709,7 @@
     async function loadTrackProcessors() {
       if (trackProcessorsModule) return trackProcessorsModule;
       try {
-        trackProcessorsModule = await import('https://unpkg.com/@livekit/track-processors@0.7.2/dist/index.mjs');
+        trackProcessorsModule = await import('https://cdn.jsdelivr.net/npm/@livekit/track-processors@0.7.2/dist/index.mjs');
         return trackProcessorsModule;
       } catch (e) {
         console.error('[BG] Failed to load track processors:', e);
