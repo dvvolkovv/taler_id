@@ -1,7 +1,9 @@
 import {
   Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards,
   UseInterceptors, UploadedFile, ForbiddenException, Logger,
+  Res, StreamableFile, NotFoundException,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { extname } from 'path';
@@ -16,6 +18,7 @@ import { AddMembersDto } from './dto/add-members.dto';
 import { ChangeGroupRoleDto } from './dto/change-role.dto';
 import { FileStorageService } from '../common/file-storage.service';
 import { ThumbnailService } from '../common/thumbnail.service';
+import { Public } from '../common/decorators/public.decorator';
 
 @Controller('messenger')
 @UseGuards(JwtAuthGuard)
@@ -256,7 +259,7 @@ export class MessengerController {
 
     // Upload original to S3
     await this.fileStorage.upload(s3Key, file.buffer, file.mimetype);
-    const fileUrl = await this.fileStorage.getPresignedUrl(s3Key, 3600);
+    const fileUrl = this.fileStorage.getPublicUrl(s3Key);
 
     // Generate thumbnails
     let thumbnailSmallUrl: string | undefined;
@@ -269,24 +272,24 @@ export class MessengerController {
         if (thumbs.small) {
           const smallKey = `thumbs/${uuidv4()}_s.jpg`;
           await this.fileStorage.upload(smallKey, thumbs.small, 'image/jpeg');
-          thumbnailSmallUrl = await this.fileStorage.getPresignedUrl(smallKey, 3600);
+          thumbnailSmallUrl = this.fileStorage.getPublicUrl(smallKey);
         }
         if (thumbs.medium) {
           const medKey = `thumbs/${uuidv4()}_m.jpg`;
           await this.fileStorage.upload(medKey, thumbs.medium, 'image/jpeg');
-          thumbnailMediumUrl = await this.fileStorage.getPresignedUrl(medKey, 3600);
+          thumbnailMediumUrl = this.fileStorage.getPublicUrl(medKey);
         }
         if (thumbs.large) {
           const lgKey = `thumbs/${uuidv4()}_l.jpg`;
           await this.fileStorage.upload(lgKey, thumbs.large, 'image/jpeg');
-          thumbnailLargeUrl = await this.fileStorage.getPresignedUrl(lgKey, 3600);
+          thumbnailLargeUrl = this.fileStorage.getPublicUrl(lgKey);
         }
       } else if (fileType === 'video') {
         const thumbs = await this.thumbnailService.generateVideoThumbnail(file.buffer);
         if (thumbs.medium) {
           const medKey = `thumbs/${uuidv4()}_m.jpg`;
           await this.fileStorage.upload(medKey, thumbs.medium, 'image/jpeg');
-          thumbnailMediumUrl = await this.fileStorage.getPresignedUrl(medKey, 3600);
+          thumbnailMediumUrl = this.fileStorage.getPublicUrl(medKey);
         }
       }
     } catch (e) {
@@ -305,13 +308,33 @@ export class MessengerController {
     };
   }
 
-  // ─── Presigned URL refresh ───
+  // ─── File download (streams from S3, no auth required for URLs embedded in messages) ───
+
+  @Public()
+  @Get('files/download')
+  async downloadFile(
+    @Query('key') key: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    if (!key) throw new ForbiddenException('key is required');
+    try {
+      const { stream, contentType } = await this.fileStorage.getObject(key);
+      res.set({
+        'Content-Type': contentType,
+        'Cache-Control': 'public, max-age=86400',
+      });
+      return new StreamableFile(stream);
+    } catch {
+      throw new NotFoundException('File not found');
+    }
+  }
+
+  // ─── URL refresh (returns public backend URL for a given S3 key) ───
 
   @Get('files/url')
-  async getFileUrl(@Query('key') key: string) {
+  getFileUrl(@Query('key') key: string) {
     if (!key) throw new ForbiddenException('key is required');
-    const url = await this.fileStorage.getPresignedUrl(key, 3600);
-    return { url };
+    return { url: this.fileStorage.getPublicUrl(key) };
   }
 
   @Post('call-ended')
