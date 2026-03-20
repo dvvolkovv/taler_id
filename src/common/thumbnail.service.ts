@@ -21,9 +21,9 @@ export class ThumbnailService {
   async generateImageThumbnails(data: Buffer): Promise<ThumbnailResult> {
     try {
       const [small, medium, large] = await Promise.all([
-        sharp(data).resize(100, 100, { fit: 'inside' }).jpeg({ quality: 80 }).toBuffer(),
-        sharp(data).resize(320, 320, { fit: 'inside' }).jpeg({ quality: 80 }).toBuffer(),
-        sharp(data).resize(800, 800, { fit: 'inside' }).jpeg({ quality: 80 }).toBuffer(),
+        sharp(data).rotate().resize(100, 100, { fit: 'inside' }).jpeg({ quality: 80 }).toBuffer(),
+        sharp(data).rotate().resize(320, 320, { fit: 'inside' }).jpeg({ quality: 80 }).toBuffer(),
+        sharp(data).rotate().resize(800, 800, { fit: 'inside' }).jpeg({ quality: 80 }).toBuffer(),
       ]);
       return { small, medium, large };
     } catch (e) {
