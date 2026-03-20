@@ -1,9 +1,9 @@
 import {
   Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards,
-  UseInterceptors, UploadedFile, ForbiddenException,
+  UseInterceptors, UploadedFile, ForbiddenException, Logger,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
+import { memoryStorage } from 'multer';
 import { extname } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { MessengerService } from './messenger.service';
@@ -14,13 +14,19 @@ import { CreateGroupDto } from './dto/create-group.dto';
 import { UpdateGroupDto } from './dto/update-group.dto';
 import { AddMembersDto } from './dto/add-members.dto';
 import { ChangeGroupRoleDto } from './dto/change-role.dto';
+import { FileStorageService } from '../common/file-storage.service';
+import { ThumbnailService } from '../common/thumbnail.service';
 
 @Controller('messenger')
 @UseGuards(JwtAuthGuard)
 export class MessengerController {
+  private readonly logger = new Logger(MessengerController.name);
+
   constructor(
     private readonly service: MessengerService,
     private readonly gateway: MessengerGateway,
+    private readonly fileStorage: FileStorageService,
+    private readonly thumbnailService: ThumbnailService,
   ) {}
 
   // ─── Direct conversations ───
@@ -229,28 +235,83 @@ export class MessengerController {
     return this.service.searchUsers(q, user.sub);
   }
 
-  // ─── File upload ───
+  // ─── File upload (S3) ───
 
   @Post('files')
   @UseInterceptors(
     FileInterceptor('file', {
-      storage: diskStorage({
-        destination: '/home/dvolkov/taler-id/uploads/files',
-        filename: (_req, file, cb) => {
-          cb(null, `${uuidv4()}${extname(file.originalname)}`);
-        },
-      }),
+      storage: memoryStorage(),
       limits: { fileSize: 100 * 1024 * 1024 },
     }),
   )
-  uploadFile(@UploadedFile() file: Express.Multer.File) {
-    const fileType = file.mimetype.startsWith('image/') ? 'image' : 'document';
+  async uploadFile(@UploadedFile() file: Express.Multer.File) {
+    const ext = extname(file.originalname);
+    const s3Key = `files/${uuidv4()}${ext}`;
+
+    // Determine file type
+    let fileType = 'document';
+    if (file.mimetype.startsWith('image/')) fileType = 'image';
+    else if (file.mimetype.startsWith('video/')) fileType = 'video';
+    else if (file.mimetype.startsWith('audio/')) fileType = 'audio';
+
+    // Upload original to S3
+    await this.fileStorage.upload(s3Key, file.buffer, file.mimetype);
+    const fileUrl = await this.fileStorage.getPresignedUrl(s3Key, 3600);
+
+    // Generate thumbnails
+    let thumbnailSmallUrl: string | undefined;
+    let thumbnailMediumUrl: string | undefined;
+    let thumbnailLargeUrl: string | undefined;
+
+    try {
+      if (fileType === 'image') {
+        const thumbs = await this.thumbnailService.generateImageThumbnails(file.buffer);
+        if (thumbs.small) {
+          const smallKey = `thumbs/${uuidv4()}_s.jpg`;
+          await this.fileStorage.upload(smallKey, thumbs.small, 'image/jpeg');
+          thumbnailSmallUrl = await this.fileStorage.getPresignedUrl(smallKey, 3600);
+        }
+        if (thumbs.medium) {
+          const medKey = `thumbs/${uuidv4()}_m.jpg`;
+          await this.fileStorage.upload(medKey, thumbs.medium, 'image/jpeg');
+          thumbnailMediumUrl = await this.fileStorage.getPresignedUrl(medKey, 3600);
+        }
+        if (thumbs.large) {
+          const lgKey = `thumbs/${uuidv4()}_l.jpg`;
+          await this.fileStorage.upload(lgKey, thumbs.large, 'image/jpeg');
+          thumbnailLargeUrl = await this.fileStorage.getPresignedUrl(lgKey, 3600);
+        }
+      } else if (fileType === 'video') {
+        const thumbs = await this.thumbnailService.generateVideoThumbnail(file.buffer);
+        if (thumbs.medium) {
+          const medKey = `thumbs/${uuidv4()}_m.jpg`;
+          await this.fileStorage.upload(medKey, thumbs.medium, 'image/jpeg');
+          thumbnailMediumUrl = await this.fileStorage.getPresignedUrl(medKey, 3600);
+        }
+      }
+    } catch (e) {
+      this.logger.error('Thumbnail generation failed, continuing without thumbnails:', e);
+    }
+
     return {
-      fileUrl: `https://id.taler.tirol/uploads/files/${file.filename}`,
+      fileUrl,
       fileName: file.originalname,
       fileSize: file.size,
       fileType,
+      s3Key,
+      thumbnailSmallUrl,
+      thumbnailMediumUrl,
+      thumbnailLargeUrl,
     };
+  }
+
+  // ─── Presigned URL refresh ───
+
+  @Get('files/url')
+  async getFileUrl(@Query('key') key: string) {
+    if (!key) throw new ForbiddenException('key is required');
+    const url = await this.fileStorage.getPresignedUrl(key, 3600);
+    return { url };
   }
 
   @Post('call-ended')

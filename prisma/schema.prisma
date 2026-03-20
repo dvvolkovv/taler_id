@@ -203,6 +203,10 @@ model Message {
   fileName       String?
   fileSize       Int?
   fileType       String?
+  s3Key          String?
+  thumbnailSmallUrl  String?
+  thumbnailMediumUrl String?
+  thumbnailLargeUrl  String?
   isDelivered    Boolean      @default(false)
   isRead         Boolean      @default(false)
   isSystem       Boolean      @default(false)

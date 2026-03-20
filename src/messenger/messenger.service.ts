@@ -351,7 +351,10 @@ export class MessengerService {
     };
   }
 
-  async createMessage(conversationId: string, senderId: string, content: string, fileData?: { fileUrl?: string; fileName?: string; fileSize?: number; fileType?: string }) {
+  async createMessage(conversationId: string, senderId: string, content: string, fileData?: {
+    fileUrl?: string; fileName?: string; fileSize?: number; fileType?: string;
+    s3Key?: string; thumbnailSmallUrl?: string; thumbnailMediumUrl?: string; thumbnailLargeUrl?: string;
+  }) {
     return this.prisma.message.create({ data: { conversationId, senderId, content, ...fileData } });
   }
 

@@ -58,9 +58,20 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
   }
 
   @SubscribeMessage('message')
-  async handleMessage(client: Socket, payload: { conversationId: string; content: string; fileUrl?: string; fileName?: string; fileSize?: number; fileType?: string }) {
+  async handleMessage(client: Socket, payload: {
+    conversationId: string; content: string;
+    fileUrl?: string; fileName?: string; fileSize?: number; fileType?: string;
+    s3Key?: string; thumbnailSmallUrl?: string; thumbnailMediumUrl?: string; thumbnailLargeUrl?: string;
+  }) {
     try {
-      const fileData = payload.fileUrl ? { fileUrl: payload.fileUrl, fileName: payload.fileName, fileSize: payload.fileSize, fileType: payload.fileType } : undefined;
+      const fileData = payload.fileUrl ? {
+        fileUrl: payload.fileUrl, fileName: payload.fileName,
+        fileSize: payload.fileSize, fileType: payload.fileType,
+        s3Key: payload.s3Key,
+        thumbnailSmallUrl: payload.thumbnailSmallUrl,
+        thumbnailMediumUrl: payload.thumbnailMediumUrl,
+        thumbnailLargeUrl: payload.thumbnailLargeUrl,
+      } : undefined;
       const msg = await this.service.createMessage(
         payload.conversationId,
         client.data.userId,
