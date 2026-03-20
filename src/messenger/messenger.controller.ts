@@ -22,6 +22,7 @@ import { ThumbnailService } from '../common/thumbnail.service';
 import { Public } from '../common/decorators/public.decorator';
 import { RedisService } from '../redis/redis.service';
 import { PrismaService } from '../prisma/prisma.service';
+import sharp = require('sharp');
 
 @Controller('messenger')
 @UseGuards(JwtAuthGuard)
@@ -36,6 +37,23 @@ export class MessengerController {
     private readonly redis: RedisService,
     private readonly prisma: PrismaService,
   ) {}
+
+  /**
+   * Compute a content hash for deduplication.
+   * For images: hash raw pixel data (ignoring EXIF metadata that iOS changes on each export).
+   * For everything else: hash the full file bytes.
+   */
+  private async computeContentHash(data: Buffer, mimeType: string): Promise<string> {
+    if (mimeType.startsWith('image/')) {
+      try {
+        const rawPixels = await sharp(data).raw().toBuffer();
+        return createHash('sha256').update(rawPixels).digest('hex');
+      } catch {
+        // Fallback to full file hash if sharp fails
+      }
+    }
+    return createHash('sha256').update(data).digest('hex');
+  }
 
   // ─── Direct conversations ───
 
@@ -243,33 +261,6 @@ export class MessengerController {
     return this.service.searchUsers(q, user.sub);
   }
 
-  // ─── File deduplication check ───
-
-  @Post('files/check')
-  async checkFile(@Body() body: { sha256: string; fileSize: number; mimeType: string }) {
-    this.logger.log(`[files/check] sha256=${body.sha256} size=${body.fileSize} mime=${body.mimeType}`);
-    const record = await this.prisma.fileRecord.findUnique({ where: { sha256: body.sha256 } });
-    this.logger.log(`[files/check] record found: ${!!record}${record ? ` id=${record.id} refCount=${record.refCount}` : ''}`);
-    if (record) {
-      await this.prisma.fileRecord.update({ where: { id: record.id }, data: { refCount: { increment: 1 } } });
-      return {
-        exists: true,
-        fileRecord: {
-          id: record.id,
-          fileUrl: this.fileStorage.getPublicUrl(record.s3Key),
-          fileName: record.s3Key.split('/').pop(),
-          fileSize: record.size,
-          fileType: record.mimeType,
-          s3Key: record.s3Key,
-          thumbnailSmallUrl: record.thumbnailSmall ? this.fileStorage.getPublicUrl(record.thumbnailSmall) : null,
-          thumbnailMediumUrl: record.thumbnailMedium ? this.fileStorage.getPublicUrl(record.thumbnailMedium) : null,
-          thumbnailLargeUrl: record.thumbnailLarge ? this.fileStorage.getPublicUrl(record.thumbnailLarge) : null,
-        },
-      };
-    }
-    return { exists: false };
-  }
-
   // ─── File upload (S3) ───
 
   @Post('files')
@@ -331,8 +322,9 @@ export class MessengerController {
       this.logger.error('Thumbnail generation failed, continuing without thumbnails:', e);
     }
 
-    // File deduplication: compute SHA-256 and check for existing FileRecord
-    const sha256 = createHash('sha256').update(file.buffer).digest('hex');
+    // File deduplication: compute content hash (pixel-based for images)
+    const sha256 = await this.computeContentHash(file.buffer, file.mimetype);
+    this.logger.log(`[upload] content hash=${sha256} size=${file.size} mime=${file.mimetype}`);
     let fileRecordId: string | undefined;
 
     const existingRecord = await this.prisma.fileRecord.findUnique({ where: { sha256 } });
@@ -556,7 +548,8 @@ export class MessengerController {
     let fileRecordId: string | undefined;
 
     if (fileData) {
-      const sha256 = createHash('sha256').update(fileData).digest('hex');
+      const sha256 = await this.computeContentHash(fileData, state.mimeType);
+      this.logger.log(`[chunked-complete] content hash=${sha256} size=${state.fileSize} mime=${state.mimeType}`);
       const existingRecord = await this.prisma.fileRecord.findUnique({ where: { sha256 } });
 
       if (existingRecord) {
