@@ -215,10 +215,26 @@ model Message {
   hiddenFor     MessageHidden[]
   reactions     MessageReaction[]
   editedAt       DateTime?
+  fileRecordId   String?
+  fileRecord     FileRecord? @relation(fields: [fileRecordId], references: [id])
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sender         User         @relation(fields: [senderId], references: [id])
 
   @@index([conversationId, sentAt])
+}
+
+model FileRecord {
+  id              String   @id @default(uuid())
+  sha256          String   @unique
+  s3Key           String   @unique
+  mimeType        String?
+  size            Int
+  thumbnailSmall  String?
+  thumbnailMedium String?
+  thumbnailLarge  String?
+  refCount        Int      @default(1)
+  createdAt       DateTime @default(now())
+  messages        Message[]
 }
 
 enum DocumentType {

@@ -1,9 +1,15 @@
-import { Injectable, ForbiddenException, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, ForbiddenException, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { FileStorageService } from '../common/file-storage.service';
 
 @Injectable()
 export class MessengerService {
-  constructor(private prisma: PrismaService) {}
+  private readonly logger = new Logger(MessengerService.name);
+
+  constructor(
+    private prisma: PrismaService,
+    private readonly fileStorage: FileStorageService,
+  ) {}
 
   // ─── DIRECT conversations (existing) ───
 
@@ -459,6 +465,30 @@ export class MessengerService {
     if (scope === 'all') {
       if (msg.senderId !== requesterId) throw new ForbiddenException('Only sender can delete for everyone');
       await this.prisma.message.update({ where: { id: messageId }, data: { deletedAt: new Date() } });
+
+      // Handle FileRecord refCount decrement
+      if ((msg as any).fileRecordId) {
+        try {
+          const fileRecord = await this.prisma.fileRecord.update({
+            where: { id: (msg as any).fileRecordId },
+            data: { refCount: { decrement: 1 } },
+          });
+          if (fileRecord.refCount <= 0) {
+            // Delete all associated S3 objects
+            try {
+              await this.fileStorage.delete(fileRecord.s3Key);
+              if (fileRecord.thumbnailSmall) await this.fileStorage.delete(fileRecord.thumbnailSmall);
+              if (fileRecord.thumbnailMedium) await this.fileStorage.delete(fileRecord.thumbnailMedium);
+              if (fileRecord.thumbnailLarge) await this.fileStorage.delete(fileRecord.thumbnailLarge);
+            } catch (e) {
+              this.logger.error('Failed to delete S3 objects for FileRecord:', e);
+            }
+            await this.prisma.fileRecord.delete({ where: { id: fileRecord.id } });
+          }
+        } catch (e) {
+          this.logger.error('Failed to update FileRecord refCount:', e);
+        }
+      }
     } else {
       await (this.prisma as any).messageHidden.upsert({
         where: { messageId_userId: { messageId, userId: requesterId } },

@@ -8,6 +8,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { extname } from 'path';
 import { v4 as uuidv4 } from 'uuid';
+import { createHash } from 'crypto';
 import { MessengerService } from './messenger.service';
 import { MessengerGateway } from './messenger.gateway';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -20,6 +21,7 @@ import { FileStorageService } from '../common/file-storage.service';
 import { ThumbnailService } from '../common/thumbnail.service';
 import { Public } from '../common/decorators/public.decorator';
 import { RedisService } from '../redis/redis.service';
+import { PrismaService } from '../prisma/prisma.service';
 
 @Controller('messenger')
 @UseGuards(JwtAuthGuard)
@@ -32,6 +34,7 @@ export class MessengerController {
     private readonly fileStorage: FileStorageService,
     private readonly thumbnailService: ThumbnailService,
     private readonly redis: RedisService,
+    private readonly prisma: PrismaService,
   ) {}
 
   // ─── Direct conversations ───
@@ -240,6 +243,31 @@ export class MessengerController {
     return this.service.searchUsers(q, user.sub);
   }
 
+  // ─── File deduplication check ───
+
+  @Post('files/check')
+  async checkFile(@Body() body: { sha256: string; fileSize: number; mimeType: string }) {
+    const record = await this.prisma.fileRecord.findUnique({ where: { sha256: body.sha256 } });
+    if (record) {
+      await this.prisma.fileRecord.update({ where: { id: record.id }, data: { refCount: { increment: 1 } } });
+      return {
+        exists: true,
+        fileRecord: {
+          id: record.id,
+          fileUrl: this.fileStorage.getPublicUrl(record.s3Key),
+          fileName: record.s3Key.split('/').pop(),
+          fileSize: record.size,
+          fileType: record.mimeType,
+          s3Key: record.s3Key,
+          thumbnailSmallUrl: record.thumbnailSmall ? this.fileStorage.getPublicUrl(record.thumbnailSmall) : null,
+          thumbnailMediumUrl: record.thumbnailMedium ? this.fileStorage.getPublicUrl(record.thumbnailMedium) : null,
+          thumbnailLargeUrl: record.thumbnailLarge ? this.fileStorage.getPublicUrl(record.thumbnailLarge) : null,
+        },
+      };
+    }
+    return { exists: false };
+  }
+
   // ─── File upload (S3) ───
 
   @Post('files')
@@ -267,36 +295,84 @@ export class MessengerController {
     let thumbnailSmallUrl: string | undefined;
     let thumbnailMediumUrl: string | undefined;
     let thumbnailLargeUrl: string | undefined;
+    let thumbnailSmallKey: string | undefined;
+    let thumbnailMediumKey: string | undefined;
+    let thumbnailLargeKey: string | undefined;
 
     try {
       if (fileType === 'image') {
         const thumbs = await this.thumbnailService.generateImageThumbnails(file.buffer);
         if (thumbs.small) {
-          const smallKey = `thumbs/${uuidv4()}_s.jpg`;
-          await this.fileStorage.upload(smallKey, thumbs.small, 'image/jpeg');
-          thumbnailSmallUrl = this.fileStorage.getPublicUrl(smallKey);
+          thumbnailSmallKey = `thumbs/${uuidv4()}_s.jpg`;
+          await this.fileStorage.upload(thumbnailSmallKey, thumbs.small, 'image/jpeg');
+          thumbnailSmallUrl = this.fileStorage.getPublicUrl(thumbnailSmallKey);
         }
         if (thumbs.medium) {
-          const medKey = `thumbs/${uuidv4()}_m.jpg`;
-          await this.fileStorage.upload(medKey, thumbs.medium, 'image/jpeg');
-          thumbnailMediumUrl = this.fileStorage.getPublicUrl(medKey);
+          thumbnailMediumKey = `thumbs/${uuidv4()}_m.jpg`;
+          await this.fileStorage.upload(thumbnailMediumKey, thumbs.medium, 'image/jpeg');
+          thumbnailMediumUrl = this.fileStorage.getPublicUrl(thumbnailMediumKey);
         }
         if (thumbs.large) {
-          const lgKey = `thumbs/${uuidv4()}_l.jpg`;
-          await this.fileStorage.upload(lgKey, thumbs.large, 'image/jpeg');
-          thumbnailLargeUrl = this.fileStorage.getPublicUrl(lgKey);
+          thumbnailLargeKey = `thumbs/${uuidv4()}_l.jpg`;
+          await this.fileStorage.upload(thumbnailLargeKey, thumbs.large, 'image/jpeg');
+          thumbnailLargeUrl = this.fileStorage.getPublicUrl(thumbnailLargeKey);
         }
       } else if (fileType === 'video') {
         const thumbs = await this.thumbnailService.generateVideoThumbnail(file.buffer);
         if (thumbs.medium) {
-          const medKey = `thumbs/${uuidv4()}_m.jpg`;
-          await this.fileStorage.upload(medKey, thumbs.medium, 'image/jpeg');
-          thumbnailMediumUrl = this.fileStorage.getPublicUrl(medKey);
+          thumbnailMediumKey = `thumbs/${uuidv4()}_m.jpg`;
+          await this.fileStorage.upload(thumbnailMediumKey, thumbs.medium, 'image/jpeg');
+          thumbnailMediumUrl = this.fileStorage.getPublicUrl(thumbnailMediumKey);
         }
       }
     } catch (e) {
       this.logger.error('Thumbnail generation failed, continuing without thumbnails:', e);
     }
+
+    // File deduplication: compute SHA-256 and check for existing FileRecord
+    const sha256 = createHash('sha256').update(file.buffer).digest('hex');
+    let fileRecordId: string | undefined;
+
+    const existingRecord = await this.prisma.fileRecord.findUnique({ where: { sha256 } });
+    if (existingRecord) {
+      // Duplicate found: increment refCount, delete just-uploaded S3 objects, use existing record's data
+      await this.prisma.fileRecord.update({ where: { id: existingRecord.id }, data: { refCount: { increment: 1 } } });
+      // Delete the just-uploaded objects
+      try {
+        await this.fileStorage.delete(s3Key);
+        if (thumbnailSmallKey) await this.fileStorage.delete(thumbnailSmallKey);
+        if (thumbnailMediumKey) await this.fileStorage.delete(thumbnailMediumKey);
+        if (thumbnailLargeKey) await this.fileStorage.delete(thumbnailLargeKey);
+      } catch (e) {
+        this.logger.error('Failed to delete duplicate S3 objects:', e);
+      }
+      fileRecordId = existingRecord.id;
+      return {
+        fileUrl: this.fileStorage.getPublicUrl(existingRecord.s3Key),
+        fileName: file.originalname,
+        fileSize: file.size,
+        fileType,
+        s3Key: existingRecord.s3Key,
+        thumbnailSmallUrl: existingRecord.thumbnailSmall ? this.fileStorage.getPublicUrl(existingRecord.thumbnailSmall) : undefined,
+        thumbnailMediumUrl: existingRecord.thumbnailMedium ? this.fileStorage.getPublicUrl(existingRecord.thumbnailMedium) : undefined,
+        thumbnailLargeUrl: existingRecord.thumbnailLarge ? this.fileStorage.getPublicUrl(existingRecord.thumbnailLarge) : undefined,
+        fileRecordId,
+      };
+    }
+
+    // No duplicate: create new FileRecord
+    const fileRecord = await this.prisma.fileRecord.create({
+      data: {
+        sha256,
+        s3Key,
+        mimeType: file.mimetype,
+        size: file.size,
+        thumbnailSmall: thumbnailSmallKey,
+        thumbnailMedium: thumbnailMediumKey,
+        thumbnailLarge: thumbnailLargeKey,
+      },
+    });
+    fileRecordId = fileRecord.id;
 
     return {
       fileUrl,
@@ -307,6 +383,7 @@ export class MessengerController {
       thumbnailSmallUrl,
       thumbnailMediumUrl,
       thumbnailLargeUrl,
+      fileRecordId,
     };
   }
 
@@ -415,46 +492,113 @@ export class MessengerController {
     else if (state.mimeType.startsWith('video/')) fileType = 'video';
     else if (state.mimeType.startsWith('audio/')) fileType = 'audio';
 
-    // Generate thumbnails (download from S3 first)
+    // Download file from S3 for thumbnails and hashing
+    let fileData: Buffer | undefined;
     let thumbnailSmallUrl: string | undefined;
     let thumbnailMediumUrl: string | undefined;
     let thumbnailLargeUrl: string | undefined;
+    let thumbnailSmallKey: string | undefined;
+    let thumbnailMediumKey: string | undefined;
+    let thumbnailLargeKey: string | undefined;
 
     try {
       if (fileType === 'image' || fileType === 'video') {
         const { stream } = await this.fileStorage.getObject(state.s3Key);
         const chunks: Buffer[] = [];
         for await (const c of stream) chunks.push(Buffer.from(c));
-        const fileData = Buffer.concat(chunks);
+        fileData = Buffer.concat(chunks);
 
         if (fileType === 'image') {
           const thumbs = await this.thumbnailService.generateImageThumbnails(fileData);
           if (thumbs.small) {
-            const k = `thumbs/${uuidv4()}_s.jpg`;
-            await this.fileStorage.upload(k, thumbs.small, 'image/jpeg');
-            thumbnailSmallUrl = this.fileStorage.getPublicUrl(k);
+            thumbnailSmallKey = `thumbs/${uuidv4()}_s.jpg`;
+            await this.fileStorage.upload(thumbnailSmallKey, thumbs.small, 'image/jpeg');
+            thumbnailSmallUrl = this.fileStorage.getPublicUrl(thumbnailSmallKey);
           }
           if (thumbs.medium) {
-            const k = `thumbs/${uuidv4()}_m.jpg`;
-            await this.fileStorage.upload(k, thumbs.medium, 'image/jpeg');
-            thumbnailMediumUrl = this.fileStorage.getPublicUrl(k);
+            thumbnailMediumKey = `thumbs/${uuidv4()}_m.jpg`;
+            await this.fileStorage.upload(thumbnailMediumKey, thumbs.medium, 'image/jpeg');
+            thumbnailMediumUrl = this.fileStorage.getPublicUrl(thumbnailMediumKey);
           }
           if (thumbs.large) {
-            const k = `thumbs/${uuidv4()}_l.jpg`;
-            await this.fileStorage.upload(k, thumbs.large, 'image/jpeg');
-            thumbnailLargeUrl = this.fileStorage.getPublicUrl(k);
+            thumbnailLargeKey = `thumbs/${uuidv4()}_l.jpg`;
+            await this.fileStorage.upload(thumbnailLargeKey, thumbs.large, 'image/jpeg');
+            thumbnailLargeUrl = this.fileStorage.getPublicUrl(thumbnailLargeKey);
           }
         } else if (fileType === 'video') {
           const thumbs = await this.thumbnailService.generateVideoThumbnail(fileData);
           if (thumbs.medium) {
-            const k = `thumbs/${uuidv4()}_m.jpg`;
-            await this.fileStorage.upload(k, thumbs.medium, 'image/jpeg');
-            thumbnailMediumUrl = this.fileStorage.getPublicUrl(k);
+            thumbnailMediumKey = `thumbs/${uuidv4()}_m.jpg`;
+            await this.fileStorage.upload(thumbnailMediumKey, thumbs.medium, 'image/jpeg');
+            thumbnailMediumUrl = this.fileStorage.getPublicUrl(thumbnailMediumKey);
           }
         }
       }
     } catch (e) {
       this.logger.error('Thumbnail generation failed for chunked upload:', e);
+    }
+
+    // File deduplication: compute SHA-256
+    // If we didn't download the file yet (non-image/video), download it now for hashing
+    if (!fileData) {
+      try {
+        const { stream } = await this.fileStorage.getObject(state.s3Key);
+        const chunks: Buffer[] = [];
+        for await (const c of stream) chunks.push(Buffer.from(c));
+        fileData = Buffer.concat(chunks);
+      } catch (e) {
+        this.logger.error('Failed to download file for hashing:', e);
+      }
+    }
+
+    let fileRecordId: string | undefined;
+
+    if (fileData) {
+      const sha256 = createHash('sha256').update(fileData).digest('hex');
+      const existingRecord = await this.prisma.fileRecord.findUnique({ where: { sha256 } });
+
+      if (existingRecord) {
+        // Duplicate found: increment refCount, delete just-uploaded S3 objects
+        await this.prisma.fileRecord.update({ where: { id: existingRecord.id }, data: { refCount: { increment: 1 } } });
+        try {
+          await this.fileStorage.delete(state.s3Key);
+          if (thumbnailSmallKey) await this.fileStorage.delete(thumbnailSmallKey);
+          if (thumbnailMediumKey) await this.fileStorage.delete(thumbnailMediumKey);
+          if (thumbnailLargeKey) await this.fileStorage.delete(thumbnailLargeKey);
+        } catch (e) {
+          this.logger.error('Failed to delete duplicate S3 objects:', e);
+        }
+        fileRecordId = existingRecord.id;
+
+        // Clean up Redis
+        await this.redis.del(`chunked:${uploadId}`);
+
+        return {
+          fileUrl: this.fileStorage.getPublicUrl(existingRecord.s3Key),
+          fileName: state.fileName,
+          fileSize: state.fileSize,
+          fileType,
+          s3Key: existingRecord.s3Key,
+          thumbnailSmallUrl: existingRecord.thumbnailSmall ? this.fileStorage.getPublicUrl(existingRecord.thumbnailSmall) : undefined,
+          thumbnailMediumUrl: existingRecord.thumbnailMedium ? this.fileStorage.getPublicUrl(existingRecord.thumbnailMedium) : undefined,
+          thumbnailLargeUrl: existingRecord.thumbnailLarge ? this.fileStorage.getPublicUrl(existingRecord.thumbnailLarge) : undefined,
+          fileRecordId,
+        };
+      }
+
+      // No duplicate: create new FileRecord
+      const fileRecord = await this.prisma.fileRecord.create({
+        data: {
+          sha256,
+          s3Key: state.s3Key,
+          mimeType: state.mimeType,
+          size: state.fileSize,
+          thumbnailSmall: thumbnailSmallKey,
+          thumbnailMedium: thumbnailMediumKey,
+          thumbnailLarge: thumbnailLargeKey,
+        },
+      });
+      fileRecordId = fileRecord.id;
     }
 
     // Clean up Redis
@@ -469,6 +613,7 @@ export class MessengerController {
       thumbnailSmallUrl,
       thumbnailMediumUrl,
       thumbnailLargeUrl,
+      fileRecordId,
     };
   }
 
