@@ -1718,13 +1718,10 @@
     async function loadTrackProcessors() {
       if (trackProcessorsModule) return trackProcessorsModule;
       try {
-        console.log('[BG] Loading track processors module...');
         trackProcessorsModule = await import('https://cdn.jsdelivr.net/npm/@livekit/track-processors@0.7.2/dist/index.mjs');
-        console.log('[BG] Module loaded, exports:', Object.keys(trackProcessorsModule));
         return trackProcessorsModule;
       } catch (e) {
         console.error('[BG] Failed to load track processors:', e);
-        alert('Ошибка загрузки модуля фонов: ' + e.message);
         return null;
       }
     }
@@ -1815,11 +1812,9 @@
           try { await track.stopProcessor(); } catch (_) {}
         }
 
-        console.log('[BG] Applying effect:', effectId);
         if (effectId === 'blur') {
           bgProcessor = mod.BackgroundBlur(10);
         } else {
-          // Virtual background from image
           const opt = bgOptions.find(o => o.id === effectId);
           if (opt && opt.img) {
             bgProcessor = mod.VirtualBackground(opt.img);
@@ -1827,14 +1822,11 @@
         }
 
         if (bgProcessor) {
-          console.log('[BG] Setting processor on track...');
           await track.setProcessor(bgProcessor);
-          console.log('[BG] Processor set successfully');
         }
         bgEffect = effectId;
       } catch (e) {
         console.error('[BG] Failed to apply effect:', e);
-        alert('Ошибка применения фона: ' + e.message);
         bgProcessor = null;
         bgEffect = 'none';
       }
