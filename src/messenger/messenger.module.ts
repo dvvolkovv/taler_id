@@ -7,10 +7,11 @@ import { FcmService } from '../common/fcm.service';
 import { ApnsService } from '../common/apns.service';
 import { FileStorageService } from '../common/file-storage.service';
 import { ThumbnailService } from '../common/thumbnail.service';
+import { VideoTranscodeService } from '../common/video-transcode.service';
 
 @Module({
   imports: [ConfigModule],
   controllers: [MessengerController],
-  providers: [MessengerService, MessengerGateway, FcmService, ApnsService, FileStorageService, ThumbnailService],
+  providers: [MessengerService, MessengerGateway, FcmService, ApnsService, FileStorageService, ThumbnailService, VideoTranscodeService],
 })
 export class MessengerModule {}

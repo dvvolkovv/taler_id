@@ -22,6 +22,7 @@ import { ThumbnailService } from '../common/thumbnail.service';
 import { Public } from '../common/decorators/public.decorator';
 import { RedisService } from '../redis/redis.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { VideoTranscodeService } from '../common/video-transcode.service';
 import sharp = require('sharp');
 
 @Controller('messenger')
@@ -36,6 +37,7 @@ export class MessengerController {
     private readonly thumbnailService: ThumbnailService,
     private readonly redis: RedisService,
     private readonly prisma: PrismaService,
+    private readonly videoTranscode: VideoTranscodeService,
   ) {}
 
   /**
@@ -296,25 +298,25 @@ export class MessengerController {
       if (fileType === 'image') {
         const thumbs = await this.thumbnailService.generateImageThumbnails(file.buffer);
         if (thumbs.small) {
-          thumbnailSmallKey = `thumbs/${uuidv4()}_s.jpg`;
-          await this.fileStorage.upload(thumbnailSmallKey, thumbs.small, 'image/jpeg');
+          thumbnailSmallKey = `thumbs/${uuidv4()}_s.webp`;
+          await this.fileStorage.upload(thumbnailSmallKey, thumbs.small, 'image/webp');
           thumbnailSmallUrl = this.fileStorage.getPublicUrl(thumbnailSmallKey);
         }
         if (thumbs.medium) {
-          thumbnailMediumKey = `thumbs/${uuidv4()}_m.jpg`;
-          await this.fileStorage.upload(thumbnailMediumKey, thumbs.medium, 'image/jpeg');
+          thumbnailMediumKey = `thumbs/${uuidv4()}_m.webp`;
+          await this.fileStorage.upload(thumbnailMediumKey, thumbs.medium, 'image/webp');
           thumbnailMediumUrl = this.fileStorage.getPublicUrl(thumbnailMediumKey);
         }
         if (thumbs.large) {
-          thumbnailLargeKey = `thumbs/${uuidv4()}_l.jpg`;
-          await this.fileStorage.upload(thumbnailLargeKey, thumbs.large, 'image/jpeg');
+          thumbnailLargeKey = `thumbs/${uuidv4()}_l.webp`;
+          await this.fileStorage.upload(thumbnailLargeKey, thumbs.large, 'image/webp');
           thumbnailLargeUrl = this.fileStorage.getPublicUrl(thumbnailLargeKey);
         }
       } else if (fileType === 'video') {
         const thumbs = await this.thumbnailService.generateVideoThumbnail(file.buffer);
         if (thumbs.medium) {
-          thumbnailMediumKey = `thumbs/${uuidv4()}_m.jpg`;
-          await this.fileStorage.upload(thumbnailMediumKey, thumbs.medium, 'image/jpeg');
+          thumbnailMediumKey = `thumbs/${uuidv4()}_m.webp`;
+          await this.fileStorage.upload(thumbnailMediumKey, thumbs.medium, 'image/webp');
           thumbnailMediumUrl = this.fileStorage.getPublicUrl(thumbnailMediumKey);
         }
       }
@@ -367,6 +369,18 @@ export class MessengerController {
       },
     });
     fileRecordId = fileRecord.id;
+
+    // Background video transcoding (fire-and-forget)
+    if (fileType === 'video') {
+      this.videoTranscode.transcodeToH264(s3Key).then(async (result) => {
+        if (result) {
+          await this.prisma.fileRecord.update({
+            where: { id: fileRecord.id },
+            data: { size: result.size, mimeType: 'video/mp4' },
+          });
+        }
+      }).catch((e) => this.logger.error('Background transcode failed:', e));
+    }
 
     return {
       fileUrl,
@@ -514,25 +528,25 @@ export class MessengerController {
         if (fileType === 'image') {
           const thumbs = await this.thumbnailService.generateImageThumbnails(fileData);
           if (thumbs.small) {
-            thumbnailSmallKey = `thumbs/${uuidv4()}_s.jpg`;
-            await this.fileStorage.upload(thumbnailSmallKey, thumbs.small, 'image/jpeg');
+            thumbnailSmallKey = `thumbs/${uuidv4()}_s.webp`;
+            await this.fileStorage.upload(thumbnailSmallKey, thumbs.small, 'image/webp');
             thumbnailSmallUrl = this.fileStorage.getPublicUrl(thumbnailSmallKey);
           }
           if (thumbs.medium) {
-            thumbnailMediumKey = `thumbs/${uuidv4()}_m.jpg`;
-            await this.fileStorage.upload(thumbnailMediumKey, thumbs.medium, 'image/jpeg');
+            thumbnailMediumKey = `thumbs/${uuidv4()}_m.webp`;
+            await this.fileStorage.upload(thumbnailMediumKey, thumbs.medium, 'image/webp');
             thumbnailMediumUrl = this.fileStorage.getPublicUrl(thumbnailMediumKey);
           }
           if (thumbs.large) {
-            thumbnailLargeKey = `thumbs/${uuidv4()}_l.jpg`;
-            await this.fileStorage.upload(thumbnailLargeKey, thumbs.large, 'image/jpeg');
+            thumbnailLargeKey = `thumbs/${uuidv4()}_l.webp`;
+            await this.fileStorage.upload(thumbnailLargeKey, thumbs.large, 'image/webp');
             thumbnailLargeUrl = this.fileStorage.getPublicUrl(thumbnailLargeKey);
           }
         } else if (fileType === 'video') {
           const thumbs = await this.thumbnailService.generateVideoThumbnail(fileData);
           if (thumbs.medium) {
-            thumbnailMediumKey = `thumbs/${uuidv4()}_m.jpg`;
-            await this.fileStorage.upload(thumbnailMediumKey, thumbs.medium, 'image/jpeg');
+            thumbnailMediumKey = `thumbs/${uuidv4()}_m.webp`;
+            await this.fileStorage.upload(thumbnailMediumKey, thumbs.medium, 'image/webp');
             thumbnailMediumUrl = this.fileStorage.getPublicUrl(thumbnailMediumKey);
           }
         }
@@ -603,6 +617,18 @@ export class MessengerController {
         },
       });
       fileRecordId = fileRecord.id;
+
+      // Background video transcoding (fire-and-forget)
+      if (fileType === 'video') {
+        this.videoTranscode.transcodeToH264(state.s3Key).then(async (result) => {
+          if (result) {
+            await this.prisma.fileRecord.update({
+              where: { id: fileRecord.id },
+              data: { size: result.size, mimeType: 'video/mp4' },
+            });
+          }
+        }).catch((e) => this.logger.error('Background transcode failed:', e));
+      }
     }
 
     // Clean up Redis
