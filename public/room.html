@@ -398,8 +398,28 @@
     .call-body { display: flex; flex: 1; overflow: hidden; }
     .call-main { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 
+    /* Camera prompt banner */
+    .cam-prompt {
+      position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 14px; padding: 14px 20px; display: flex; align-items: center; gap: 14px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5); z-index: 300;
+      animation: camPromptIn 0.3s ease;
+    }
+    @keyframes camPromptIn { from { opacity: 0; transform: translateX(-50%) translateY(-10px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+    .cam-prompt-text { font-size: 14px; color: var(--text); white-space: nowrap; }
+    .cam-prompt-btn {
+      padding: 8px 16px; border-radius: 10px; border: none;
+      font-family: inherit; font-size: 13px; font-weight: 600;
+      cursor: pointer; transition: opacity 0.15s; white-space: nowrap;
+    }
+    .cam-prompt-btn.accept { background: var(--primary); color: #fff; }
+    .cam-prompt-btn.decline { background: rgba(255,255,255,0.08); color: var(--text-2); }
+    .cam-prompt-btn:hover { opacity: 0.85; }
+
     @media (max-width: 640px) {
       .chat-panel { position: fixed; inset: 0; width: 100%; z-index: 200; border-left: none; }
+      .cam-prompt { left: 16px; right: 16px; transform: none; flex-wrap: wrap; justify-content: center; }
     }
   </style>
 </head>
@@ -912,20 +932,18 @@
         // Unblock audio playback immediately while user gesture is still active
         room.startAudio().catch(() => {});
         const micOpts = currentMicId ? { deviceId: currentMicId } : undefined;
-        const camOpts = currentCamId ? { deviceId: currentCamId } : undefined;
-        try {
-          await room.localParticipant.enableCameraAndMicrophone({ microphone: micOpts, camera: camOpts });
-        } catch (_) {
-          // Fallback: enable mic and camera separately
-          try { await room.localParticipant.setMicrophoneEnabled(true, micOpts); } catch (_2) {}
-          try { await room.localParticipant.setCameraEnabled(true, camOpts); } catch (_3) { camEnabled = false; }
-        }
+        // Enable only microphone on join; camera will be offered via prompt
+        camEnabled = false;
+        try { await room.localParticipant.setMicrophoneEnabled(true, micOpts); } catch (_2) {}
         localIdentity = room.localParticipant.identity;
         showStep('step-call');
         updateCount();
+        updateControlButtons();
         renderParticipant(room.localParticipant);
         room.remoteParticipants.forEach(p => renderParticipant(p));
         loadTranslatorLanguages();
+        // Show camera prompt
+        showCameraPrompt();
       } catch (e) {
         document.getElementById('join-error').textContent = 'Не удалось подключиться к комнате.';
         document.getElementById('btn-join').disabled = false;
@@ -1975,6 +1993,47 @@
     function updateBgButton() {
       const btn = document.getElementById('btn-bg');
       btn.className = 'ctrl-btn' + (bgEffect !== 'none' ? ' bg-active' : '');
+    }
+
+    // ── Camera prompt ──
+    function showCameraPrompt() {
+      const existing = document.getElementById('cam-prompt');
+      if (existing) existing.remove();
+      const div = document.createElement('div');
+      div.className = 'cam-prompt';
+      div.id = 'cam-prompt';
+      div.innerHTML = `
+        <svg viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:22px;height:22px;flex-shrink:0">
+          <polygon points="23 7 16 12 23 17 23 7"/>
+          <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+        </svg>
+        <span class="cam-prompt-text">Включить камеру?</span>
+        <button class="cam-prompt-btn accept" onclick="acceptCamera()">Включить</button>
+        <button class="cam-prompt-btn decline" onclick="dismissCameraPrompt()">Нет</button>
+      `;
+      document.body.appendChild(div);
+      // Auto-dismiss after 10 seconds
+      setTimeout(() => { const el = document.getElementById('cam-prompt'); if (el) el.remove(); }, 10000);
+    }
+
+    async function acceptCamera() {
+      const el = document.getElementById('cam-prompt');
+      if (el) el.remove();
+      if (!room) return;
+      try {
+        const camOpts = currentCamId ? { deviceId: currentCamId } : undefined;
+        await room.localParticipant.setCameraEnabled(true, camOpts);
+        camEnabled = true;
+        updateControlButtons();
+        renderParticipant(room.localParticipant);
+      } catch (e) {
+        console.warn('[CAM] Failed to enable camera:', e);
+      }
+    }
+
+    function dismissCameraPrompt() {
+      const el = document.getElementById('cam-prompt');
+      if (el) el.remove();
     }
 
     // ═══════════════════════════════════════════
