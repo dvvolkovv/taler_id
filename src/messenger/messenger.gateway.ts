@@ -169,17 +169,20 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
     const callerInfo = await this.service.getUserCallInfo(client.data.userId);
     const fromUserName = callerInfo.name;
     const fromUserAvatar = callerInfo.avatarUrl;
-    const convType = await this.service.getConversationType(payload.conversationId);
+    const hasConversation = payload.conversationId && payload.conversationId.length > 0;
+    const convType = hasConversation ? await this.service.getConversationType(payload.conversationId) : null;
     const isGroup = convType === 'GROUP';
 
     let calleeIds: string[];
     if (payload.inviteeId) {
       calleeIds = [payload.inviteeId];
-    } else {
+    } else if (hasConversation) {
       const participants = await this.service.getParticipants(payload.conversationId);
       calleeIds = participants
         .filter((p) => p.userId !== client.data.userId)
         .map((p) => p.userId);
+    } else {
+      return; // No inviteeId and no conversationId — nothing to do
     }
 
     // Add callees to CallLog so missed calls appear in their history
@@ -195,7 +198,7 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
     } catch (_) {}
 
     // For group calls, emit group_call_started to all participants
-    if (isGroup) {
+    if (isGroup && hasConversation) {
       const participants = await this.service.getParticipants(payload.conversationId);
       for (const p of participants) {
         this.server.to(`user:${p.userId}`).emit('group_call_started', {
@@ -209,14 +212,16 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
 
     for (const calleeId of calleeIds) {
       // Check mute before sending push (but still send socket event for banner)
-      const muted = await this.service.isParticipantMuted(payload.conversationId, calleeId);
+      const muted = hasConversation
+        ? await this.service.isParticipantMuted(payload.conversationId, calleeId)
+        : false;
 
       this.server.to(`user:${calleeId}`).emit('call_invite', {
         fromUserId: client.data.userId,
         fromUserName,
         fromUserAvatar,
         roomName: payload.roomName,
-        conversationId: payload.conversationId,
+        conversationId: payload.conversationId || undefined,
         isGroupCall: isGroup,
         ...(payload.e2eeKey ? { e2eeKey: payload.e2eeKey } : {}),
       });
@@ -224,14 +229,14 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
       if (!muted) {
         const calleeToken = await this.service.getFcmToken(calleeId);
         if (calleeToken) {
-          this.fcmService.sendCallInvite(calleeToken, fromUserName, payload.roomName, payload.conversationId, payload.e2eeKey).catch(() => {});
+          this.fcmService.sendCallInvite(calleeToken, fromUserName, payload.roomName, payload.conversationId || '', payload.e2eeKey).catch(() => {});
         }
         const voipToken = await this.service.getVoipToken(calleeId);
         if (voipToken) {
           this.apnsService.sendVoIPCallInvite(voipToken, {
             nameCaller: isGroup ? `${fromUserName} (группа)` : fromUserName,
             roomName: payload.roomName,
-            conversationId: payload.conversationId,
+            conversationId: payload.conversationId || '',
             ...(payload.e2eeKey ? { e2eeKey: payload.e2eeKey } : {}),
           }).catch(() => {});
         }
