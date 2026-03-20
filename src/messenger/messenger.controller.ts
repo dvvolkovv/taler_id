@@ -391,11 +391,20 @@ export class MessengerController {
   ) {
     if (!key) throw new ForbiddenException('key is required');
     try {
-      const { stream, contentType } = await this.fileStorage.getObject(key);
-      res.set({
+      const { stream, contentType, contentLength } = await this.fileStorage.getObject(key);
+      const etag = `"${createHash('md5').update(key).digest('hex')}"`;
+      // Return 304 if client has cached version
+      if (res.req.headers['if-none-match'] === etag) {
+        res.status(304).end();
+        return;
+      }
+      const headers: Record<string, string | number> = {
         'Content-Type': contentType,
-        'Cache-Control': 'public, max-age=86400',
-      });
+        'Cache-Control': 'public, max-age=604800, immutable',
+        'ETag': etag,
+      };
+      if (contentLength) headers['Content-Length'] = contentLength;
+      res.set(headers);
       return new StreamableFile(stream);
     } catch {
       throw new NotFoundException('File not found');

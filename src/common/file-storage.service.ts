@@ -57,13 +57,14 @@ export class FileStorageService {
     );
   }
 
-  async getObject(key: string): Promise<{ stream: Readable; contentType: string }> {
+  async getObject(key: string): Promise<{ stream: Readable; contentType: string; contentLength?: number }> {
     const resp = await this.client.send(
       new GetObjectCommand({ Bucket: this.bucket, Key: key }),
     );
     return {
       stream: resp.Body as Readable,
       contentType: resp.ContentType ?? 'application/octet-stream',
+      contentLength: resp.ContentLength,
     };
   }
 
