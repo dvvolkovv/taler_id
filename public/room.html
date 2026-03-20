@@ -524,6 +524,15 @@
     </div>
   </div>
 
+  <!-- Import map for ESM-based track-processors (resolves bare specifiers in browser) -->
+  <script type="importmap">
+  {
+    "imports": {
+      "livekit-client": "https://cdn.jsdelivr.net/npm/livekit-client@2.17.2/dist/livekit-client.esm.mjs",
+      "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs"
+    }
+  }
+  </script>
   <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.17.2/dist/livekit-client.umd.js"></script>
   <script>
     const API_BASE = location.hostname.includes('staging') ? '' : '/api';
@@ -1709,10 +1718,13 @@
     async function loadTrackProcessors() {
       if (trackProcessorsModule) return trackProcessorsModule;
       try {
+        console.log('[BG] Loading track processors module...');
         trackProcessorsModule = await import('https://cdn.jsdelivr.net/npm/@livekit/track-processors@0.7.2/dist/index.mjs');
+        console.log('[BG] Module loaded, exports:', Object.keys(trackProcessorsModule));
         return trackProcessorsModule;
       } catch (e) {
         console.error('[BG] Failed to load track processors:', e);
+        alert('Ошибка загрузки модуля фонов: ' + e.message);
         return null;
       }
     }
@@ -1803,6 +1815,7 @@
           try { await track.stopProcessor(); } catch (_) {}
         }
 
+        console.log('[BG] Applying effect:', effectId);
         if (effectId === 'blur') {
           bgProcessor = mod.BackgroundBlur(10);
         } else {
@@ -1814,11 +1827,14 @@
         }
 
         if (bgProcessor) {
+          console.log('[BG] Setting processor on track...');
           await track.setProcessor(bgProcessor);
+          console.log('[BG] Processor set successfully');
         }
         bgEffect = effectId;
       } catch (e) {
         console.error('[BG] Failed to apply effect:', e);
+        alert('Ошибка применения фона: ' + e.message);
         bgProcessor = null;
         bgEffect = 'none';
       }
