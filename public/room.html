@@ -1804,12 +1804,12 @@
         }
 
         if (effectId === 'blur') {
-          bgProcessor = mod.BackgroundProcessor({ mode: 'background-blur', blurRadius: 10 });
+          bgProcessor = mod.BackgroundBlur(10);
         } else {
           // Virtual background from image
           const opt = bgOptions.find(o => o.id === effectId);
           if (opt && opt.img) {
-            bgProcessor = mod.BackgroundProcessor({ mode: 'virtual-background', imagePath: opt.img });
+            bgProcessor = mod.VirtualBackground(opt.img);
           }
         }
 
