@@ -111,6 +111,14 @@
       background: var(--primary); color: #fff; font-size: 11px;
       font-weight: 600; padding: 3px 8px; border-radius: 8px;
     }
+    .copy-link-btn {
+      display: flex; align-items: center; gap: 6px; background: rgba(255,255,255,0.08);
+      border: 1px solid var(--border); color: var(--text-2); border-radius: 8px;
+      padding: 5px 10px; cursor: pointer; font-family: inherit; font-size: 11px;
+      font-weight: 500; transition: background 0.15s, color 0.15s; white-space: nowrap;
+    }
+    .copy-link-btn:hover { background: rgba(255,255,255,0.14); color: var(--text); }
+    .copy-link-btn.copied { background: rgba(16,185,129,0.20); color: #10B981; border-color: rgba(16,185,129,0.3); }
 
     /* Recording indicator in header */
     .rec-indicator {
@@ -474,6 +482,13 @@
         <div class="rec-time" id="rec-time">00:00</div>
       </div>
       <div class="call-header-badge" id="participant-count">1</div>
+      <button class="copy-link-btn" id="copy-link-btn" onclick="copyRoomLink()" title="Скопировать ссылку">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+        </svg>
+        <span id="copy-link-text">Ссылка</span>
+      </button>
     </div>
     <div class="rec-banner" id="rec-banner">
       <div class="rec-dot"></div>
@@ -1993,6 +2008,30 @@
     function updateBgButton() {
       const btn = document.getElementById('btn-bg');
       btn.className = 'ctrl-btn' + (bgEffect !== 'none' ? ' bg-active' : '');
+    }
+
+    // ── Copy room link ──
+    function copyRoomLink() {
+      const url = window.location.href;
+      navigator.clipboard.writeText(url).then(() => {
+        const btn = document.getElementById('copy-link-btn');
+        const text = document.getElementById('copy-link-text');
+        btn.classList.add('copied');
+        text.textContent = 'Скопировано!';
+        setTimeout(() => { btn.classList.remove('copied'); text.textContent = 'Ссылка'; }, 2000);
+      }).catch(() => {
+        // Fallback for older browsers
+        const ta = document.createElement('textarea');
+        ta.value = window.location.href;
+        ta.style.cssText = 'position:fixed;opacity:0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        const text = document.getElementById('copy-link-text');
+        text.textContent = 'Скопировано!';
+        setTimeout(() => { text.textContent = 'Ссылка'; }, 2000);
+      });
     }
 
     // ── Camera prompt ──
