@@ -91,11 +91,12 @@ export class VoiceService {
       }
       const profiles = await this.prisma.profile.findMany({
         where: { userId: { in: otherIds } },
-        select: { userId: true, firstName: true, lastName: true },
+        select: { userId: true, firstName: true, lastName: true, avatarUrl: true },
       });
       const participants = profiles.map((p) => ({
         userId: p.userId,
         displayName: `${p.firstName ?? ""} ${p.lastName ?? ""}`.trim() || p.userId,
+        avatarUrl: p.avatarUrl ?? undefined,
       }));
       return {
         id: log.id,
