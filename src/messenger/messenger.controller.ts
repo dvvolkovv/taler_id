@@ -89,6 +89,17 @@ export class MessengerController {
     return this.service.getMessages(id, user.sub, cursor, limit ? +limit : 30);
   }
 
+  @Get('conversations/:id/media')
+  sharedMedia(
+    @Param('id') id: string,
+    @Query('type') type: string,
+    @Query('cursor') cursor: string,
+    @Query('limit') limit: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.getSharedMedia(id, user.sub, type, cursor, limit ? +limit : 50);
+  }
+
   // ─── Group conversations ───
 
   @Post('conversations/group')

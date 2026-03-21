@@ -357,6 +357,43 @@ export class MessengerService {
     };
   }
 
+  async getSharedMedia(conversationId: string, userId: string, type?: string, cursor?: string, limit = 50) {
+    await this.assertParticipant(conversationId, userId);
+    const fileTypes = type === 'documents'
+      ? ['document']
+      : type === 'links'
+        ? []
+        : ['image', 'video'];
+    const where: any = {
+      conversationId,
+      deletedAt: null,
+      NOT: { hiddenFor: { some: { userId } } },
+    };
+    if (type === 'links') {
+      where.content = { contains: 'http' };
+      where.fileType = null;
+    } else {
+      where.fileType = { in: fileTypes };
+    }
+    const messages = await this.prisma.message.findMany({
+      where,
+      select: {
+        id: true, content: true, sentAt: true, senderId: true,
+        fileUrl: true, fileName: true, fileSize: true, fileType: true,
+        thumbnailSmallUrl: true, thumbnailMediumUrl: true, thumbnailLargeUrl: true,
+      },
+      orderBy: { sentAt: 'desc' },
+      take: limit + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    });
+    const hasMore = messages.length > limit;
+    const sliced = hasMore ? messages.slice(0, limit) : messages;
+    return {
+      items: sliced,
+      nextCursor: hasMore ? sliced[limit - 1].id : undefined,
+    };
+  }
+
   async createMessage(conversationId: string, senderId: string, content: string, fileData?: {
     fileUrl?: string; fileName?: string; fileSize?: number; fileType?: string;
     s3Key?: string; thumbnailSmallUrl?: string; thumbnailMediumUrl?: string; thumbnailLargeUrl?: string;
