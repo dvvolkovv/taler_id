@@ -358,6 +358,22 @@ export class VoiceService {
     // Disable E2EE first — translator needs unencrypted audio
     await this.disableE2EE(roomName);
 
+    // Set default sourceLang for all participants without metadata
+    try {
+      const participants = await this.rooms.listParticipants(roomName);
+      for (const p of participants) {
+        if (p.identity === 'voice-translator' || p.identity === 'ai-assistant' || p.identity === 'meeting-recorder') continue;
+        try {
+          const meta = p.metadata ? JSON.parse(p.metadata) : {};
+          if (!meta.lang || !meta.sourceLang) {
+            await this.rooms.updateParticipant(roomName, p.identity, {
+              metadata: JSON.stringify({ lang: meta.lang || 'ru', sourceLang: meta.sourceLang || 'ru' }),
+            });
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+
     try {
       const res = await fetch(AI_AGENT_URL + '/translator/start', {
         method: 'POST',
