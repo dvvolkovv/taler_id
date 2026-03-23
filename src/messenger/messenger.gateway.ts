@@ -270,7 +270,18 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
       callLog = await this.prisma.callLog.findUnique({ where: { roomName: payload.roomName } });
     } catch (_) {}
     const initiatorId = callLog?.initiatorId;
-    const wasAnswered = !!callLog?.answeredAt;
+    // Call is considered answered if:
+    // 1. answeredAt is set (callee sent call_answered), OR
+    // 2. call_ended came from the callee (they were in the room = answered), OR
+    // 3. call_ended came from someone other than the initiator (they participated)
+    const senderIsCallee = initiatorId && client.data.userId !== initiatorId;
+    const wasAnswered = !!callLog?.answeredAt || !!senderIsCallee;
+    // If callee is ending the call, also set answeredAt if not yet set (fixes race condition)
+    if (senderIsCallee && callLog && !callLog.answeredAt) {
+      try {
+        await this.prisma.callLog.update({ where: { roomName: payload.roomName }, data: { answeredAt: callLog.startedAt } });
+      } catch (_) {}
+    }
 
     const callerProfile = initiatorId
       ? await this.prisma.profile.findUnique({ where: { userId: initiatorId } })
