@@ -406,6 +406,90 @@
     .call-body { display: flex; flex: 1; overflow: hidden; }
     .call-main { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 
+    /* Consent dialog overlay */
+    .consent-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 400; animation: fadeIn 0.2s ease;
+    }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    .consent-dialog {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 16px; padding: 24px; max-width: 380px; width: 90%;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.6); text-align: center;
+    }
+    .consent-icon {
+      width: 56px; height: 56px; border-radius: 50%; margin: 0 auto 16px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .consent-icon.rec { background: rgba(239,68,68,0.15); }
+    .consent-icon.rec svg { stroke: var(--rec); }
+    .consent-title { font-size: 17px; font-weight: 600; color: var(--text); margin-bottom: 8px; }
+    .consent-text { font-size: 13px; color: var(--text-2); margin-bottom: 20px; line-height: 1.5; }
+    .consent-buttons { display: flex; gap: 10px; justify-content: center; }
+    .consent-btn {
+      padding: 10px 24px; border-radius: 10px; border: none;
+      font-family: inherit; font-size: 14px; font-weight: 600;
+      cursor: pointer; transition: opacity 0.15s;
+    }
+    .consent-btn:hover { opacity: 0.85; }
+    .consent-btn.accept { background: var(--primary); color: #fff; }
+    .consent-btn.decline { background: rgba(255,255,255,0.08); color: var(--text-2); }
+
+    /* Consent pending status (shown to initiator) */
+    .consent-status {
+      position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 14px; padding: 14px 20px; z-index: 350;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5); text-align: center;
+      min-width: 280px; animation: camPromptIn 0.3s ease;
+    }
+    .consent-status-title { font-size: 14px; font-weight: 600; color: var(--text); margin-bottom: 8px; }
+    .consent-status-info { font-size: 12px; color: var(--text-2); margin-bottom: 12px; }
+    .consent-participants {
+      display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px;
+      max-height: 160px; overflow-y: auto;
+    }
+    .consent-participant {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 6px 10px; background: rgba(255,255,255,0.04); border-radius: 8px;
+      font-size: 13px; color: var(--text);
+    }
+    .consent-participant .status { font-size: 11px; font-weight: 600; }
+    .consent-participant .status.waiting { color: var(--text-2); }
+    .consent-participant .status.accepted { color: #10B981; }
+    .consent-participant .status.declined { color: var(--rec); }
+    .consent-cancel-btn {
+      padding: 6px 16px; border-radius: 8px; border: none;
+      background: rgba(255,255,255,0.08); color: var(--text-2);
+      font-family: inherit; font-size: 12px; cursor: pointer;
+    }
+    .consent-cancel-btn:hover { background: rgba(255,255,255,0.12); }
+
+    /* Transcription indicator */
+    .transcript-indicator {
+      display: none; align-items: center; gap: 6px;
+      background: rgba(16,185,129,0.15); border: 1px solid rgba(16,185,129,0.3);
+      padding: 4px 10px; border-radius: 8px; margin-left: 8px;
+    }
+    .transcript-indicator.active { display: flex; }
+    .transcript-dot {
+      width: 8px; height: 8px; border-radius: 50%; background: #10B981;
+      animation: recPulse 1.2s ease-in-out infinite;
+    }
+    .transcript-label { font-size: 11px; font-weight: 600; color: #10B981; }
+
+    /* Transcription banner */
+    .transcript-banner {
+      display: none; align-items: center; justify-content: center; gap: 8px;
+      padding: 8px 16px;
+      background: rgba(16,185,129,0.12);
+      border-bottom: 1px solid rgba(16,185,129,0.25);
+      font-size: 13px; font-weight: 500; color: #10B981;
+    }
+    .transcript-banner.active { display: flex; }
+    .transcript-banner .transcript-dot { width: 6px; height: 6px; }
+
     /* Camera prompt banner */
     .cam-prompt {
       position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
@@ -481,6 +565,10 @@
         <div class="rec-dot"></div>
         <div class="rec-time" id="rec-time">00:00</div>
       </div>
+      <div class="transcript-indicator" id="transcript-indicator">
+        <div class="transcript-dot"></div>
+        <div class="transcript-label">Протокол</div>
+      </div>
       <div class="call-header-badge" id="participant-count">1</div>
       <button class="copy-link-btn" id="copy-link-btn" onclick="copyRoomLink()" title="Скопировать ссылку">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px">
@@ -493,6 +581,10 @@
     <div class="rec-banner" id="rec-banner">
       <div class="rec-dot"></div>
       <span id="rec-banner-text"></span>
+    </div>
+    <div class="transcript-banner" id="transcript-banner">
+      <div class="transcript-dot"></div>
+      <span id="transcript-banner-text"></span>
     </div>
     <div class="call-body">
       <div class="call-main">
@@ -597,18 +689,17 @@
         <div class="ctrl-btn-tooltip">Запись видео и аудио в файл .webm</div>
       </div>
       <div class="ctrl-wrap">
-        <button class="ctrl-btn" id="btn-ai-rec" onclick="toggleAiRecorder()" title="AI Запись">
+        <button class="ctrl-btn" id="btn-transcript" onclick="toggleTranscription()" title="Протоколирование">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="4" y="4" width="16" height="16" rx="2"/>
-            <circle cx="9" cy="12" r="1.5" fill="currentColor" stroke="none"/>
-            <circle cx="15" cy="12" r="1.5" fill="currentColor" stroke="none"/>
-            <path d="M8 16h8"/>
-            <path d="M9 4V2"/>
-            <path d="M15 4V2"/>
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+            <line x1="16" y1="13" x2="8" y2="13"/>
+            <line x1="16" y1="17" x2="8" y2="17"/>
+            <polyline points="10 9 9 9 8 9"/>
           </svg>
         </button>
-        <div class="ctrl-label" id="ai-rec-label">AI Запись</div>
-        <div class="ctrl-btn-tooltip">AI запишет встречу и создаст резюме с задачами</div>
+        <div class="ctrl-label" id="transcript-label">Протокол</div>
+        <div class="ctrl-btn-tooltip">Протоколирование встречи (без согласования)</div>
       </div>
       <div class="ctrl-wrap" style="position:relative">
         <button class="ctrl-btn" id="btn-translator" onclick="toggleTranslator()" title="Переводчик">
@@ -682,7 +773,17 @@
     let camEnabled = true;
     let screenEnabled = false;
     let pinnedTileId = null;
-    let aiRecording = false;
+    // ── Recording consent state ──
+    let recordingInitiatorId = null;    // identity of who initiated recording
+    let recordingInitiatorName = '';
+    let consentPending = false;         // initiator waiting for responses
+    let consentResponses = new Map();   // identity → { name, accepted: true/false/null }
+    let recordingApproved = false;      // all consented, recording active
+
+    // ── Transcription state ──
+    let transcriptionActive = false;
+    let transcriptionInitiatorId = null;
+    let transcriptionInitiatorName = '';
 
     // ── Translator state ──
     let translatorEnabled = false;
@@ -852,7 +953,10 @@
           updateCount();
           setTimeout(() => renderParticipant(participant), 500);
           if (isRecording) broadcastRecordingStatus(true);
-          if (participant.identity === 'meeting-recorder') { aiRecording = true; updateControlButtons(); }
+          // If we're the recording initiator and consent is pending/approved, notify new participant
+          if (recordingInitiatorId === localIdentity && (consentPending || recordingApproved)) {
+            sendConsentRequestTo(participant);
+          }
           if (participant.identity === 'voice-translator' && translatorEnabled) {
             setTimeout(() => updateTranslationTrackSubscription(), 500);
           }
@@ -860,8 +964,22 @@
         .on(RoomEvent.ParticipantDisconnected, (participant) => {
           removeParticipant(participant);
           updateCount();
-          if (participant.identity === 'meeting-recorder') { aiRecording = false; updateControlButtons(); }
           if (participant.identity === 'voice-translator') { translatorEnabled = false; updateTranslatorUI(); }
+          // If recording initiator left, end recording
+          if (participant.identity === recordingInitiatorId && (isRecording || consentPending)) {
+            endRecordingSession();
+          }
+          // Remove from consent tracking
+          if (consentPending && consentResponses.has(participant.identity)) {
+            consentResponses.delete(participant.identity);
+            checkAllConsented();
+          }
+          // If transcription initiator left, end transcription
+          if (participant.identity === transcriptionInitiatorId && transcriptionActive) {
+            transcriptionActive = false;
+            transcriptionInitiatorId = null;
+            updateTranscriptionUI();
+          }
           if (recordingParticipants.has(participant.identity)) {
             recordingParticipants.delete(participant.identity);
             updateRecordingBanner();
@@ -878,11 +996,30 @@
               handleRecordingStatus(participant, msg);
             }
             if (msg.type === 'recorder_status') {
-              aiRecording = msg.recording;
-              updateControlButtons();
+              // legacy AI recorder status
             }
             if (msg.type === 'chat_message' && participant) {
               appendChatMessage(msg.name || getDisplayName(participant), msg.text, msg.ts || Date.now(), false);
+            }
+            // ── Recording consent protocol ──
+            if (msg.type === 'recording_consent_request' && participant) {
+              handleConsentRequest(participant, msg);
+            }
+            if (msg.type === 'recording_consent_response' && participant) {
+              handleConsentResponse(participant, msg);
+            }
+            if (msg.type === 'recording_approved') {
+              handleRecordingApproved(msg);
+            }
+            if (msg.type === 'recording_denied') {
+              handleRecordingDenied(msg);
+            }
+            if (msg.type === 'recording_ended') {
+              handleRecordingEnded(msg);
+            }
+            // ── Transcription protocol ──
+            if (msg.type === 'transcription_status') {
+              handleTranscriptionStatus(msg);
             }
           } catch (_) {}
         })
@@ -895,6 +1032,11 @@
         })
         .on(RoomEvent.Disconnected, () => {
           if (isRecording) stopRecording(true);
+          resetRecordingState();
+          transcriptionActive = false;
+          transcriptionInitiatorId = null;
+          removeConsentDialog();
+          removeConsentStatusUI();
           recordingParticipants.clear();
           updateRecordingBanner();
           showDisconnected();
@@ -1327,49 +1469,45 @@
       spkBtn.className = 'ctrl-btn' + (speakerEnabled ? '' : ' muted');
       scrBtn.className = 'ctrl-btn' + (screenEnabled ? ' screen-on' : '');
       recBtn.className = 'ctrl-btn' + (isRecording ? ' recording' : '');
-      document.getElementById('rec-label').textContent = isRecording ? 'Стоп' : 'Запись';
+      const recActive = isRecording || consentPending;
+      document.getElementById('rec-label').textContent = recActive ? 'Стоп' : 'Запись';
       document.getElementById('speaker-icon-on').style.display = speakerEnabled ? '' : 'none';
       document.getElementById('speaker-icon-off').style.display = speakerEnabled ? 'none' : '';
-      const aiRecBtn = document.getElementById('btn-ai-rec');
-      aiRecBtn.className = 'ctrl-btn' + (aiRecording ? ' ai-active' : '');
-      document.getElementById('ai-rec-label').textContent = aiRecording ? 'AI Стоп' : 'AI Запись';
-    }
-
-    async function toggleAiRecorder() {
-      if (!room) return;
-      const roomName = room.name;
-      const btn = document.getElementById('btn-ai-rec');
-      btn.disabled = true;
-
-      try {
-        if (!aiRecording) {
-          const res = await fetch(`${API_BASE}/voice/rooms/${roomName}/recorder/start`, { method: 'POST' });
-          if (res.ok) {
-            aiRecording = true;
-            updateControlButtons();
-          } else {
-            const err = await res.json().catch(() => ({}));
-            console.warn('[AI-REC] Start failed:', err);
-          }
-        } else {
-          const res = await fetch(`${API_BASE}/voice/rooms/${roomName}/recorder/stop`, { method: 'POST' });
-          if (res.ok) {
-            aiRecording = false;
-            updateControlButtons();
-          }
-        }
-      } catch (e) {
-        console.error('[AI-REC] Error:', e);
-      } finally {
-        btn.disabled = false;
+      // Transcription button
+      const transcBtn = document.getElementById('btn-transcript');
+      transcBtn.className = 'ctrl-btn' + (transcriptionActive ? ' translator-on' : '');
+      document.getElementById('transcript-label').textContent = transcriptionActive ? 'Стоп' : 'Протокол';
+      // Recording button disabled if not initiator and recording is active
+      const recBtn2 = document.getElementById('btn-rec');
+      if (recordingApproved && recordingInitiatorId !== localIdentity) {
+        recBtn2.style.opacity = '0.4';
+        recBtn2.style.pointerEvents = 'none';
+      } else {
+        recBtn2.style.opacity = '';
+        recBtn2.style.pointerEvents = '';
       }
     }
 
+    // toggleAiRecorder removed — replaced by toggleTranscription with consent-free flow
+
     function leaveRoom() {
       if (isRecording) stopRecording(true);
-      aiRecording = false;
+      if (recordingInitiatorId === localIdentity) {
+        broadcastData({ type: 'recording_ended', initiatorId: localIdentity });
+      }
+      if (transcriptionActive && transcriptionInitiatorId === localIdentity) {
+        // Stop transcription on server before leaving
+        if (room) fetch(`${API_BASE}/voice/rooms/${room.name}/recorder/stop`, { method: 'POST' }).catch(() => {});
+        broadcastData({ type: 'transcription_status', active: false, initiatorId: localIdentity });
+      }
+      resetRecordingState();
+      transcriptionActive = false;
+      transcriptionInitiatorId = null;
+      updateTranscriptionUI();
       translatorEnabled = false;
       updateTranslatorUI();
+      removeConsentDialog();
+      removeConsentStatusUI();
       if (room) { room.disconnect(); room = null; }
       recordingParticipants.clear();
       updateRecordingBanner();
@@ -1463,11 +1601,404 @@
     });
 
     function toggleRecording() {
-      if (isRecording) {
-        stopRecording(true);
-      } else {
-        startRecording();
+      // If we are the initiator and recording/consent is active — stop
+      if (recordingInitiatorId === localIdentity && (isRecording || consentPending)) {
+        endRecordingSession();
+        return;
       }
+      // If recording is active by someone else — can't stop
+      if (recordingApproved && recordingInitiatorId !== localIdentity) return;
+      // Start consent flow
+      requestRecordingConsent();
+    }
+
+    // ═══════════════════════════════════════════
+    // ── RECORDING CONSENT FLOW ──
+    // ═══════════════════════════════════════════
+
+    function requestRecordingConsent() {
+      if (!room || consentPending || isRecording) return;
+
+      const participants = Array.from(room.remoteParticipants.values())
+        .filter(p => p.identity !== 'meeting-recorder' && p.identity !== 'voice-translator');
+
+      // If no other participants, start recording directly
+      if (participants.length === 0) {
+        recordingInitiatorId = localIdentity;
+        recordingInitiatorName = getDisplayName(room.localParticipant);
+        recordingApproved = true;
+        startRecording();
+        broadcastRecordingApproved();
+        return;
+      }
+
+      // Set consent state
+      consentPending = true;
+      recordingInitiatorId = localIdentity;
+      recordingInitiatorName = getDisplayName(room.localParticipant);
+      consentResponses.clear();
+
+      participants.forEach(p => {
+        consentResponses.set(p.identity, { name: getDisplayName(p), accepted: null });
+      });
+
+      // Broadcast consent request to all
+      broadcastData({
+        type: 'recording_consent_request',
+        initiatorId: localIdentity,
+        initiatorName: recordingInitiatorName,
+      });
+
+      // Show consent pending UI to initiator
+      showConsentStatusUI();
+      updateControlButtons();
+    }
+
+    function sendConsentRequestTo(participant) {
+      if (!room) return;
+      if (participant.identity === 'meeting-recorder' || participant.identity === 'voice-translator') return;
+
+      // Add to tracking if consent is pending
+      if (consentPending && !consentResponses.has(participant.identity)) {
+        consentResponses.set(participant.identity, { name: getDisplayName(participant), accepted: null });
+        showConsentStatusUI(); // refresh UI
+      }
+
+      // Send request directly (broadcast works too since others ignore duplicates)
+      broadcastData({
+        type: 'recording_consent_request',
+        initiatorId: recordingInitiatorId,
+        initiatorName: recordingInitiatorName,
+      });
+    }
+
+    function handleConsentRequest(participant, msg) {
+      // Don't show to self (initiator)
+      if (msg.initiatorId === localIdentity) return;
+      // Don't show if already recording
+      if (isRecording && recordingInitiatorId === msg.initiatorId) return;
+      // Store initiator info
+      recordingInitiatorId = msg.initiatorId;
+      recordingInitiatorName = msg.initiatorName;
+      // Show consent dialog
+      showConsentDialog(msg.initiatorName);
+    }
+
+    function handleConsentResponse(participant, msg) {
+      // Only the initiator processes responses
+      if (recordingInitiatorId !== localIdentity) return;
+      if (!consentPending) return;
+
+      const identity = participant.identity;
+      if (consentResponses.has(identity)) {
+        consentResponses.set(identity, {
+          name: msg.responderName || getDisplayName(participant),
+          accepted: msg.accepted,
+        });
+      }
+      showConsentStatusUI(); // refresh
+
+      if (!msg.accepted) {
+        // Someone declined — cancel
+        consentPending = false;
+        removeConsentStatusUI();
+        broadcastData({ type: 'recording_denied', initiatorId: localIdentity, declinedBy: msg.responderName });
+        showNotification(`${msg.responderName} отклонил запись`, 'error');
+        resetRecordingState();
+        return;
+      }
+
+      checkAllConsented();
+    }
+
+    function checkAllConsented() {
+      if (!consentPending) return;
+      const all = Array.from(consentResponses.values());
+      if (all.length === 0) return;
+      const allAccepted = all.every(r => r.accepted === true);
+      if (allAccepted) {
+        consentPending = false;
+        recordingApproved = true;
+        removeConsentStatusUI();
+        startRecording();
+        broadcastRecordingApproved();
+        showNotification('Все участники согласились. Запись началась.', 'success');
+      }
+    }
+
+    function broadcastRecordingApproved() {
+      broadcastData({
+        type: 'recording_approved',
+        initiatorId: recordingInitiatorId,
+        initiatorName: recordingInitiatorName,
+      });
+    }
+
+    function handleRecordingApproved(msg) {
+      recordingInitiatorId = msg.initiatorId;
+      recordingInitiatorName = msg.initiatorName;
+      recordingApproved = true;
+      // Remove consent dialog if still open
+      removeConsentDialog();
+      updateControlButtons();
+      updateRecordingBanner();
+    }
+
+    function handleRecordingDenied(msg) {
+      // Someone declined — close dialog
+      removeConsentDialog();
+      resetRecordingState();
+      if (msg.declinedBy) {
+        showNotification(`${msg.declinedBy} отклонил запись`, 'error');
+      }
+    }
+
+    function handleRecordingEnded(msg) {
+      removeConsentDialog();
+      if (isRecording && recordingInitiatorId === localIdentity) {
+        stopRecording(true);
+      }
+      resetRecordingState();
+      showNotification('Запись завершена', 'info');
+    }
+
+    function endRecordingSession() {
+      // Only initiator can end
+      if (recordingInitiatorId !== localIdentity) return;
+
+      if (isRecording) stopRecording(true);
+      if (consentPending) removeConsentStatusUI();
+
+      broadcastData({ type: 'recording_ended', initiatorId: localIdentity });
+      resetRecordingState();
+    }
+
+    function resetRecordingState() {
+      recordingInitiatorId = null;
+      recordingInitiatorName = '';
+      consentPending = false;
+      recordingApproved = false;
+      consentResponses.clear();
+      updateControlButtons();
+      updateRecordingBanner();
+    }
+
+    // ── Consent UI (shown to participant being asked) ──
+
+    function showConsentDialog(initiatorName) {
+      removeConsentDialog(); // prevent duplicates
+      const overlay = document.createElement('div');
+      overlay.className = 'consent-overlay';
+      overlay.id = 'consent-dialog-overlay';
+      overlay.innerHTML = `
+        <div class="consent-dialog">
+          <div class="consent-icon rec">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:28px;height:28px">
+              <circle cx="12" cy="12" r="10"/>
+              <circle cx="12" cy="12" r="4" fill="currentColor"/>
+            </svg>
+          </div>
+          <div class="consent-title">Запрос на запись</div>
+          <div class="consent-text">
+            <strong>${escapeHtml(initiatorName)}</strong> хочет начать запись встречи.<br>
+            Ваш голос и видео будут записаны.
+          </div>
+          <div class="consent-buttons">
+            <button class="consent-btn accept" onclick="respondToConsent(true)">Согласен</button>
+            <button class="consent-btn decline" onclick="respondToConsent(false)">Отклонить</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+    }
+
+    function removeConsentDialog() {
+      const el = document.getElementById('consent-dialog-overlay');
+      if (el) el.remove();
+    }
+
+    function respondToConsent(accepted) {
+      removeConsentDialog();
+      if (!room) return;
+
+      broadcastData({
+        type: 'recording_consent_response',
+        accepted,
+        responderId: localIdentity,
+        responderName: getDisplayName(room.localParticipant),
+      });
+
+      if (accepted) {
+        showNotification('Вы согласились на запись', 'success');
+      } else {
+        showNotification('Вы отклонили запись', 'info');
+        resetRecordingState();
+      }
+    }
+
+    // ── Consent status UI (shown to initiator while waiting) ──
+
+    function showConsentStatusUI() {
+      removeConsentStatusUI();
+      const div = document.createElement('div');
+      div.className = 'consent-status';
+      div.id = 'consent-status';
+
+      let participantsHtml = '';
+      consentResponses.forEach((data, identity) => {
+        let statusText, statusClass;
+        if (data.accepted === null) { statusText = 'Ожидание...'; statusClass = 'waiting'; }
+        else if (data.accepted) { statusText = 'Согласен'; statusClass = 'accepted'; }
+        else { statusText = 'Отклонил'; statusClass = 'declined'; }
+        participantsHtml += `
+          <div class="consent-participant">
+            <span>${escapeHtml(data.name)}</span>
+            <span class="status ${statusClass}">${statusText}</span>
+          </div>`;
+      });
+
+      div.innerHTML = `
+        <div class="consent-status-title">Запрос на запись</div>
+        <div class="consent-status-info">Ожидание согласия участников...</div>
+        <div class="consent-participants">${participantsHtml}</div>
+        <button class="consent-cancel-btn" onclick="endRecordingSession()">Отменить</button>
+      `;
+      document.body.appendChild(div);
+    }
+
+    function removeConsentStatusUI() {
+      const el = document.getElementById('consent-status');
+      if (el) el.remove();
+    }
+
+    // ═══════════════════════════════════════════
+    // ── TRANSCRIPTION (ПРОТОКОЛИРОВАНИЕ) ──
+    // ═══════════════════════════════════════════
+
+    async function toggleTranscription() {
+      if (!room) return;
+      const roomName = room.name;
+      const btn = document.getElementById('btn-transcript');
+      btn.disabled = true;
+
+      try {
+        if (!transcriptionActive) {
+          // Start transcription — no consent needed
+          const res = await fetch(`${API_BASE}/voice/rooms/${roomName}/recorder/start`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ withAi: true }),
+          });
+          if (res.ok) {
+            transcriptionActive = true;
+            transcriptionInitiatorId = localIdentity;
+            transcriptionInitiatorName = getDisplayName(room.localParticipant);
+            broadcastData({
+              type: 'transcription_status',
+              active: true,
+              initiatorId: localIdentity,
+              initiatorName: transcriptionInitiatorName,
+            });
+            updateTranscriptionUI();
+            showNotification('Протоколирование начато', 'success');
+          } else {
+            console.warn('[TRANSCRIPT] Start failed');
+            showNotification('Не удалось начать протоколирование', 'error');
+          }
+        } else {
+          // Only initiator can stop
+          if (transcriptionInitiatorId !== localIdentity) {
+            showNotification('Только инициатор может остановить протоколирование', 'info');
+            btn.disabled = false;
+            return;
+          }
+          const res = await fetch(`${API_BASE}/voice/rooms/${roomName}/recorder/stop`, { method: 'POST' });
+          if (res.ok) {
+            transcriptionActive = false;
+            transcriptionInitiatorId = null;
+            broadcastData({ type: 'transcription_status', active: false, initiatorId: localIdentity });
+            updateTranscriptionUI();
+            showNotification('Протоколирование завершено', 'success');
+          }
+        }
+      } catch (e) {
+        console.error('[TRANSCRIPT] Error:', e);
+        showNotification('Ошибка протоколирования', 'error');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function handleTranscriptionStatus(msg) {
+      transcriptionActive = msg.active;
+      if (msg.active) {
+        transcriptionInitiatorId = msg.initiatorId;
+        transcriptionInitiatorName = msg.initiatorName || '';
+      } else {
+        transcriptionInitiatorId = null;
+        transcriptionInitiatorName = '';
+      }
+      updateTranscriptionUI();
+    }
+
+    function updateTranscriptionUI() {
+      const indicator = document.getElementById('transcript-indicator');
+      const banner = document.getElementById('transcript-banner');
+      const bannerText = document.getElementById('transcript-banner-text');
+
+      if (transcriptionActive) {
+        indicator.classList.add('active');
+        if (transcriptionInitiatorName) {
+          bannerText.textContent = `${transcriptionInitiatorName} ведёт протоколирование`;
+        } else {
+          bannerText.textContent = 'Протоколирование';
+        }
+        banner.classList.add('active');
+      } else {
+        indicator.classList.remove('active');
+        banner.classList.remove('active');
+      }
+      updateControlButtons();
+    }
+
+    // ── Shared helpers ──
+
+    function broadcastData(msg) {
+      if (!room) return;
+      try {
+        room.localParticipant.publishData(encoder.encode(JSON.stringify(msg)), { reliable: true });
+      } catch (e) {
+        console.warn('[DATA] Failed to broadcast:', e);
+      }
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    function showNotification(text, type) {
+      const existing = document.getElementById('app-notification');
+      if (existing) existing.remove();
+
+      const colors = {
+        success: { bg: 'rgba(16,185,129,0.15)', border: 'rgba(16,185,129,0.3)', text: '#10B981' },
+        error: { bg: 'rgba(239,68,68,0.15)', border: 'rgba(239,68,68,0.3)', text: '#EF4444' },
+        info: { bg: 'rgba(22,126,242,0.15)', border: 'rgba(22,126,242,0.3)', text: '#167EF2' },
+      };
+      const c = colors[type] || colors.info;
+
+      const div = document.createElement('div');
+      div.id = 'app-notification';
+      div.style.cssText = `position:fixed;top:20px;left:50%;transform:translateX(-50%);
+        background:${c.bg};border:1px solid ${c.border};color:${c.text};
+        padding:10px 20px;border-radius:10px;font-size:13px;font-weight:500;
+        z-index:500;box-shadow:0 4px 16px rgba(0,0,0,0.3);
+        animation:camPromptIn 0.3s ease;white-space:nowrap;`;
+      div.textContent = text;
+      document.body.appendChild(div);
+      setTimeout(() => { const el = document.getElementById('app-notification'); if (el) el.remove(); }, 3500);
     }
 
     async function startRecording() {
