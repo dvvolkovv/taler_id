@@ -65,6 +65,20 @@ function isHallucination(text) {
 
 // ─── OpenAI Realtime Session per Language ─────────────────
 
+// Compute RMS amplitude of a PCM16 base64 audio frame
+function getFrameRMS(base64Audio) {
+  const buf = Buffer.from(base64Audio, 'base64');
+  const int16 = new Int16Array(buf.buffer, buf.byteOffset, Math.floor(buf.byteLength / 2));
+  if (int16.length === 0) return 0;
+  let sumSq = 0;
+  for (let i = 0; i < int16.length; i++) sumSq += int16[i] * int16[i];
+  return Math.sqrt(sumSq / int16.length);
+}
+
+const SPEECH_RMS_THRESHOLD = 400;  // RMS threshold to consider frame as speech (0–32768)
+const SILENCE_COMMIT_MS = 600;     // commit after 600ms of silence
+const FORCE_COMMIT_MS = 7000;      // force-commit after 7s of continuous speech
+
 function createRealtimeSession(sourceLang, targetLang, onAudioDelta, onError) {
   const tag = `${sourceLang}→${targetLang}`;
   console.log(`[TRANSLATOR] Opening WS for ${tag}`);
@@ -120,13 +134,8 @@ function createRealtimeSession(sourceLang, targetLang, onAudioDelta, onError) {
         input_audio_format: 'pcm16',
         output_audio_format: 'pcm16',
         input_audio_transcription: { model: 'whisper-1' },
-        turn_detection: {
-          type: 'server_vad',
-          threshold: 0.5,
-          prefix_padding_ms: 300,
-          silence_duration_ms: 400,
-          create_response: true,
-        },
+        // Manual mode: no server_vad → responses are NEVER interrupted by new speech
+        turn_detection: null,
       },
     }));
   });
@@ -135,39 +144,15 @@ function createRealtimeSession(sourceLang, targetLang, onAudioDelta, onError) {
     try {
       const event = JSON.parse(raw.toString());
 
-      // Log all event types for debugging (except frequent audio deltas)
-      if (event.type !== 'response.audio.delta' && event.type !== 'input_audio_buffer.speech_started' && event.type !== 'input_audio_buffer.speech_stopped') {
+      if (event.type !== 'response.audio.delta') {
         console.log(`[TRANSLATOR] [${tag}] event: ${event.type}`);
       }
 
       if (event.type === 'session.updated') {
         ready = true;
         console.log(`[TRANSLATOR] Session configured for ${tag}`);
-        for (const msg of pendingMessages) {
-          ws.send(msg);
-        }
+        for (const msg of pendingMessages) ws.send(msg);
         pendingMessages.length = 0;
-      }
-
-      // Force-commit after 7s of continuous speech (prevents huge buffer)
-      if (event.type === 'input_audio_buffer.speech_started') {
-        ws._speechStartMs = Date.now();
-        if (!ws._forceCommitTimer) {
-          ws._forceCommitTimer = setInterval(() => {
-            if (!ws._speechStartMs) return;
-            const elapsed = Date.now() - ws._speechStartMs;
-            if (elapsed >= 7000 && ws.readyState === WebSocket.OPEN && !ws._responding) {
-              console.log('[TRANSLATOR] [' + tag + '] Force-committing after ' + elapsed + 'ms of speech');
-              ws._speechStartMs = Date.now();
-              ws.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
-              ws.send(JSON.stringify({ type: 'response.create' }));
-            }
-          }, 1000);
-        }
-      }
-
-      if (event.type === 'input_audio_buffer.speech_stopped') {
-        ws._speechStartMs = null;
       }
 
       if (event.type === 'response.created') {
@@ -177,45 +162,34 @@ function createRealtimeSession(sourceLang, targetLang, onAudioDelta, onError) {
       if (event.type === 'response.audio.delta' && event.delta) {
         if (!ws._audioStartLogged) {
           ws._audioStartLogged = true;
-          console.log(`[TRANSLATOR] [${tag}] >>> AUDIO OUTPUT STARTED (translating...)`);
+          console.log(`[TRANSLATOR] [${tag}] >>> AUDIO OUTPUT STARTED`);
         }
         onAudioDelta(Buffer.from(event.delta, 'base64'));
       }
 
       if (event.type === 'response.audio.done') {
-        console.log(`[TRANSLATOR] [${tag}] >>> AUDIO OUTPUT COMPLETE`);
         ws._audioStartLogged = false;
       }
 
       if (event.type === 'response.done') {
         const status = event.response?.status;
-        const usage = event.response?.usage;
-        console.log(`[TRANSLATOR] [${tag}] response.done status=${status} usage=${JSON.stringify(usage)}`);
+        console.log(`[TRANSLATOR] [${tag}] response.done status=${status}`);
         ws._responding = false;
-        ws._speechStartMs = null;
+        // If speech accumulated while we were responding, commit it now
+        if (ws._pendingCommit) {
+          ws._pendingCommit = false;
+          ws._doCommit('post-response');
+        }
       }
 
-      // Log transcription + filter hallucinations
       if (event.type === 'conversation.item.input_audio_transcription.completed' && event.transcript) {
         const heard = event.transcript.trim();
         console.log(`[TRANSLATOR] [${tag}] heard: "${heard}"`);
-
-        if (isHallucination(heard)) {
-          console.log(`[TRANSLATOR] [${tag}] FILTERED: hallucination`);
-        }
-      }
-
-      if (event.type === 'response.audio_transcript.delta' && event.delta) {
-        // First text of translation
-        if (!ws._textStartLogged) {
-          ws._textStartLogged = true;
-          console.log(`[TRANSLATOR] [${tag}] translating text: "${event.delta}..."`);
-        }
+        if (isHallucination(heard)) console.log(`[TRANSLATOR] [${tag}] FILTERED: hallucination`);
       }
 
       if (event.type === 'response.audio_transcript.done' && event.transcript) {
         console.log(`[TRANSLATOR] [${tag}] translated: "${event.transcript.trim()}"`);
-        ws._textStartLogged = false;
       }
 
       if (event.type === 'error') {
@@ -229,20 +203,62 @@ function createRealtimeSession(sourceLang, targetLang, onAudioDelta, onError) {
     if (onError) onError(err);
   });
 
-  ws.on('close', (code, reason) => {
+  ws.on('close', (code) => {
     console.log(`[TRANSLATOR] WS closed (${tag}), code=${code}`);
-    if (ws._forceCommitTimer) { clearInterval(ws._forceCommitTimer); ws._forceCommitTimer = null; }
+    if (ws._silenceTimer) { clearTimeout(ws._silenceTimer); ws._silenceTimer = null; }
   });
 
+  // Commit current buffer and request translation
+  ws._doCommit = (reason) => {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    if (ws._responding) {
+      // Don't interrupt ongoing response — set flag to commit after it finishes
+      ws._pendingCommit = true;
+      return;
+    }
+    console.log(`[TRANSLATOR] [${tag}] Committing (${reason})`);
+    ws._speechStartMs = null;
+    ws.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
+    ws.send(JSON.stringify({ type: 'response.create' }));
+  };
+
   ws.sendAudio = (base64Audio) => {
-    const msg = JSON.stringify({
-      type: 'input_audio_buffer.append',
-      audio: base64Audio,
-    });
+    const msg = JSON.stringify({ type: 'input_audio_buffer.append', audio: base64Audio });
     if (ready && ws.readyState === WebSocket.OPEN) {
       ws.send(msg);
     } else if (ws.readyState === WebSocket.CONNECTING) {
       pendingMessages.push(msg);
+      return;
+    } else {
+      return;
+    }
+
+    // Amplitude-based speech/silence detection (replaces server_vad)
+    const rms = getFrameRMS(base64Audio);
+    const isSpeech = rms >= SPEECH_RMS_THRESHOLD;
+    const now = Date.now();
+
+    if (isSpeech) {
+      if (!ws._hasSpeech) {
+        ws._hasSpeech = true;
+        ws._speechStartMs = now;
+      }
+      // Cancel pending silence timer
+      if (ws._silenceTimer) { clearTimeout(ws._silenceTimer); ws._silenceTimer = null; }
+      // Force-commit if speech has been going on too long
+      if (ws._speechStartMs && (now - ws._speechStartMs) >= FORCE_COMMIT_MS) {
+        ws._speechStartMs = now;
+        ws._doCommit('force-7s');
+      }
+    } else if (ws._hasSpeech && !ws._silenceTimer) {
+      // Speech just ended — start silence timer
+      ws._silenceTimer = setTimeout(() => {
+        ws._silenceTimer = null;
+        if (ws._hasSpeech) {
+          ws._hasSpeech = false;
+          ws._doCommit('silence');
+        }
+      }, SILENCE_COMMIT_MS);
     }
   };
 
