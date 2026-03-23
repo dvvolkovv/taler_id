@@ -698,7 +698,7 @@ export class VoiceService {
 
     // Transcribe with Whisper
     const formData = new FormData();
-    const blob = new Blob([audioBuffer], { type: 'audio/mpeg' });
+    const blob = new Blob([new Uint8Array(audioBuffer)], { type: 'audio/mpeg' });
     formData.append('file', blob, 'recording.mp3');
     formData.append('model', 'whisper-1');
     formData.append('response_format', 'verbose_json');
