@@ -275,16 +275,25 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
     // 2. call_ended came from the callee (they were in the room = answered), OR
     // 3. call_ended came from someone other than the initiator (they participated)
     const senderIsCallee = initiatorId && client.data.userId !== initiatorId;
-    const wasAnswered = !!callLog?.answeredAt || !!senderIsCallee;
     // If callee is ending the call, also set answeredAt if not yet set (fixes race condition)
     if (senderIsCallee && callLog && !callLog.answeredAt) {
       try {
+        const answeredAt = callLog.startedAt;
+        const updateData: any = { answeredAt };
+        // If endedAt was already set by initiator, recalculate durationSec
+        if (callLog.endedAt) {
+          updateData.durationSec = Math.round(
+            (new Date(callLog.endedAt).getTime() - new Date(answeredAt).getTime()) / 1000,
+          );
+        }
         callLog = await this.prisma.callLog.update({
           where: { roomName: payload.roomName },
-          data: { answeredAt: callLog.startedAt },
+          data: updateData,
         });
       } catch (_) {}
     }
+    // Determine wasAnswered AFTER fallback so it reflects the updated state
+    const wasAnswered = !!callLog?.answeredAt || !!senderIsCallee;
 
     const callerProfile = initiatorId
       ? await this.prisma.profile.findUnique({ where: { userId: initiatorId } })
@@ -298,7 +307,8 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
       });
       // Send missed call push ONLY when call was never answered,
       // and ONLY to non-initiators (callees who missed the call).
-      if (!wasAnswered && initiatorId && p.userId !== initiatorId) {
+      // Also skip if endedAt already set (another call_ended already processed).
+      if (!wasAnswered && !callLog?.endedAt && initiatorId && p.userId !== initiatorId) {
         const token = await this.service.getFcmToken(p.userId);
         if (token) {
           this.fcmService.sendCallCancelled(token, payload.roomName, callerName).catch(() => {});
