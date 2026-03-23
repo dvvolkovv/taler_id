@@ -279,7 +279,10 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
     // If callee is ending the call, also set answeredAt if not yet set (fixes race condition)
     if (senderIsCallee && callLog && !callLog.answeredAt) {
       try {
-        await this.prisma.callLog.update({ where: { roomName: payload.roomName }, data: { answeredAt: callLog.startedAt } });
+        callLog = await this.prisma.callLog.update({
+          where: { roomName: payload.roomName },
+          data: { answeredAt: callLog.startedAt },
+        });
       } catch (_) {}
     }
 
