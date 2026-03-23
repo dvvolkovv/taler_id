@@ -1,11 +1,16 @@
-import { Body, Controller, Post, Get, Delete, Param, Query, UseGuards, Headers } from "@nestjs/common";
+import { Body, Controller, Post, Get, Delete, Param, Query, UseGuards, Headers, UseInterceptors, UploadedFile } from "@nestjs/common";
+import { FileInterceptor } from "@nestjs/platform-express";
 import { VoiceService } from "./voice.service";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
+import { FileStorageService } from "../common/file-storage.service";
 
 @Controller("voice")
 export class VoiceController {
-  constructor(private readonly service: VoiceService) {}
+  constructor(
+    private readonly service: VoiceService,
+    private readonly fileStorage: FileStorageService,
+  ) {}
 
   @Post("rooms")
   @UseGuards(JwtAuthGuard)
@@ -243,5 +248,24 @@ export class VoiceController {
       page ? parseInt(page, 10) : 0,
       limit ? parseInt(limit, 10) : 20,
     );
+  }
+
+  // ─── Recording Upload (S3) ───
+
+  @Post("recordings/upload")
+  @UseInterceptors(FileInterceptor("file"))
+  async uploadRecording(@UploadedFile() file: any) {
+    const key = `recordings/${Date.now()}-${file.originalname}`;
+    await this.fileStorage.upload(key, file.buffer, file.mimetype || "audio/mpeg");
+    const url = this.fileStorage.getPublicUrl(key);
+    return { url, key };
+  }
+
+  // ─── Post-hoc Transcription ───
+
+  @Post("recordings/:id/transcribe")
+  @UseGuards(JwtAuthGuard)
+  async transcribeRecording(@Param("id") id: string) {
+    return this.service.transcribeExistingRecording(id);
   }
 }

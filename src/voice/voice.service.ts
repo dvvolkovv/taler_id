@@ -5,6 +5,8 @@ import * as crypto from "crypto";
 import * as bcrypt from "bcrypt";
 import { PrismaService } from "../prisma/prisma.service";
 
+import { FileStorageService } from "../common/file-storage.service";
+
 const LK_HOST = process.env.LIVEKIT_HOST || "http://localhost:7880";
 const LK_API_KEY = process.env.LIVEKIT_API_KEY || "lkdevkey";
 const LK_API_SECRET = process.env.LIVEKIT_API_SECRET || "lkSecret2024TalerID";
@@ -16,7 +18,10 @@ const BASE_URL = process.env.BASE_URL || "https://id.taler.tirol";
 export class VoiceService {
   private rooms = new RoomServiceClient(LK_HOST, LK_API_KEY, LK_API_SECRET);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly fileStorage: FileStorageService,
+  ) {}
 
   async createRoom(initiatorId: string, withAi = true, userToken?: string, conversationId?: string) {
     const roomName = "call-" + uuidv4();
@@ -636,6 +641,9 @@ export class VoiceService {
         durationSec: l.meetingSummary!.durationSec,
         createdAt: l.meetingSummary!.createdAt,
         recordingUrl: l.meetingSummary!.recordingUrl!,
+        status: (l.meetingSummary as any).status ?? 'done',
+        hasTranscript: !!l.meetingSummary!.transcript && l.meetingSummary!.transcript.length > 0,
+        hasSummary: !!l.meetingSummary!.summary && l.meetingSummary!.summary.length > 0,
       }));
 
     const fromPublic = publicSummaries.map(s => ({
@@ -645,6 +653,9 @@ export class VoiceService {
       durationSec: s.durationSec,
       createdAt: s.createdAt,
       recordingUrl: s.recordingUrl!,
+      status: (s as any).status ?? 'done',
+      hasTranscript: !!s.transcript && s.transcript.length > 0,
+      hasSummary: !!s.summary && s.summary.length > 0,
     }));
 
     return [...fromLogs, ...fromPublic].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
@@ -654,6 +665,119 @@ export class VoiceService {
     const summary = await this.prisma.meetingSummary.findUnique({ where: { id } });
     if (!summary) throw new NotFoundException('Meeting summary not found');
     return summary;
+  }
+
+  async transcribeExistingRecording(meetingId: string) {
+    const meeting = await this.prisma.meetingSummary.findUnique({ where: { id: meetingId } });
+    if (!meeting) throw new NotFoundException('Meeting not found');
+    if (!meeting.recordingUrl) throw new Error('No recording URL');
+
+    // Mark as processing
+    await this.prisma.meetingSummary.update({
+      where: { id: meetingId },
+      data: { status: 'processing' },
+    });
+
+    // Download recording
+    let audioBuffer: Buffer;
+    const url = meeting.recordingUrl;
+
+    if (url.includes('/messenger/files/download?key=')) {
+      // S3 stored — read via FileStorageService
+      const key = decodeURIComponent(url.split('key=')[1]);
+      const { stream } = await this.fileStorage.getObject(key);
+      const chunks: Buffer[] = [];
+      for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+      audioBuffer = Buffer.concat(chunks);
+    } else {
+      // External URL — fetch
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`Failed to download recording: ${res.status}`);
+      audioBuffer = Buffer.from(await res.arrayBuffer());
+    }
+
+    // Transcribe with Whisper
+    const formData = new FormData();
+    const blob = new Blob([audioBuffer], { type: 'audio/mpeg' });
+    formData.append('file', blob, 'recording.mp3');
+    formData.append('model', 'whisper-1');
+    formData.append('response_format', 'verbose_json');
+    formData.append('timestamp_granularities[]', 'segment');
+
+    const whisperRes = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
+      body: formData,
+    });
+
+    if (!whisperRes.ok) {
+      const errText = await whisperRes.text();
+      await this.prisma.meetingSummary.update({ where: { id: meetingId }, data: { status: 'done' } });
+      throw new Error(`Whisper error ${whisperRes.status}: ${errText}`);
+    }
+
+    const whisperData = await whisperRes.json() as any;
+    const segments = whisperData.segments ?? [];
+    const transcript = segments.length > 0
+      ? segments.map((s: any) => {
+          const mm = String(Math.floor(s.start / 60)).padStart(2, '0');
+          const ss = String(Math.floor(s.start % 60)).padStart(2, '0');
+          return `[${mm}:${ss}] ${s.text.trim()}`;
+        }).join('\n')
+      : whisperData.text?.trim() ?? '';
+
+    // Summarize with GPT-4o
+    let summary = { summary: '', keyPoints: [] as string[], actionItems: [] as any[], decisions: [] as string[] };
+    if (transcript.length > 0) {
+      const gptRes = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${OPENAI_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o',
+          response_format: { type: 'json_object' },
+          messages: [
+            {
+              role: 'system',
+              content: `Ты — ассистент для анализа встреч. Проанализируй транскрипт и верни JSON с полями:
+- "summary": краткое резюме встречи (2-3 абзаца, на языке встречи)
+- "keyPoints": массив ключевых моментов (строки)
+- "actionItems": массив задач, каждая: { "task": "описание", "assignee": "имя или null", "deadline": "срок или null" }
+- "decisions": массив принятых решений (строки)
+Пиши резюме на том же языке, на котором проходила встреча.`,
+            },
+            { role: 'user', content: transcript },
+          ],
+          max_tokens: 4096,
+        }),
+      });
+
+      if (gptRes.ok) {
+        const gptData = await gptRes.json() as any;
+        try {
+          summary = JSON.parse(gptData.choices[0].message.content);
+        } catch {
+          summary.summary = gptData.choices[0].message.content;
+        }
+      }
+    }
+
+    // Update meeting summary
+    const updated = await this.prisma.meetingSummary.update({
+      where: { id: meetingId },
+      data: {
+        transcript,
+        summary: summary.summary || '',
+        keyPoints: summary.keyPoints || [],
+        actionItems: summary.actionItems || [],
+        decisions: summary.decisions || [],
+        status: 'done',
+      },
+    });
+
+    return { id: updated.id, status: 'done' };
   }
 
 }
