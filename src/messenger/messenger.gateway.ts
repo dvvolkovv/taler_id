@@ -259,6 +259,7 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
 
   @SubscribeMessage('call_ended')
   async handleCallEnded(client: Socket, payload: { conversationId: string; roomName: string }) {
+    this.logger.log(`[call_ended] from=${client.data.userId} room=${payload.roomName} conv=${payload.conversationId}`);
     const convType = await this.service.getConversationType(payload.conversationId);
     const isGroup = convType === 'GROUP';
 
@@ -294,6 +295,7 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
     }
     // Determine wasAnswered AFTER fallback so it reflects the updated state
     const wasAnswered = !!callLog?.answeredAt || !!senderIsCallee;
+    this.logger.log(`[call_ended] initiator=${initiatorId} senderIsCallee=${senderIsCallee} wasAnswered=${wasAnswered} answeredAt=${callLog?.answeredAt} endedAt=${callLog?.endedAt}`);
 
     const callerProfile = initiatorId
       ? await this.prisma.profile.findUnique({ where: { userId: initiatorId } })
@@ -341,6 +343,7 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
 
   @SubscribeMessage('call_answered')
   async handleCallAnswered(client: Socket, payload: { conversationId: string; roomName: string }) {
+    this.logger.log(`[call_answered] from=${client.data.userId} room=${payload.roomName} conv=${payload.conversationId}`);
     try {
       // Mark answeredAt in CallLog (first answer wins)
       try {
