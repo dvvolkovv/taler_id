@@ -48,7 +48,7 @@ export class FcmService {
     }
   }
 
-  async sendCallInvite(fcmToken: string, fromName: string, roomName: string, conversationId: string, e2eeKey?: string): Promise<void> {
+  async sendCallInvite(fcmToken: string, fromName: string, roomName: string, conversationId: string, e2eeKey?: string, fromAvatar?: string): Promise<void> {
     if (!this.initialized || !fcmToken) return;
     try {
       await admin.messaging().send({
@@ -59,6 +59,7 @@ export class FcmService {
           conversationId,
           fromName,
           ...(e2eeKey ? { e2eeKey } : {}),
+          ...(fromAvatar ? { fromAvatar } : {}),
         },
         android: {
           priority: 'high',

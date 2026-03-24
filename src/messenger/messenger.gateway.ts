@@ -240,7 +240,7 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
       if (!muted) {
         const calleeToken = await this.service.getFcmToken(calleeId);
         if (calleeToken) {
-          this.fcmService.sendCallInvite(calleeToken, fromUserName, payload.roomName, payload.conversationId || '', payload.e2eeKey).catch(() => {});
+          this.fcmService.sendCallInvite(calleeToken, fromUserName, payload.roomName, payload.conversationId || '', payload.e2eeKey, fromUserAvatar).catch(() => {});
         }
         const voipToken = await this.service.getVoipToken(calleeId);
         if (voipToken) {
