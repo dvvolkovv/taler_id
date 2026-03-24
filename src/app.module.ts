@@ -17,6 +17,7 @@ import { OidcModule } from "./oidc/oidc.module";
 import { AssistantModule } from "./assistant/assistant.module";
 import { MessengerModule } from "./messenger/messenger.module";
 import { VoiceModule } from "./voice/voice.module";
+import { ProfileSectionsModule } from "./profile-sections/profile-sections.module";
 import configuration from './config/configuration';
 
 @Module({
@@ -67,6 +68,7 @@ import configuration from './config/configuration';
     AssistantModule,
     MessengerModule,
     VoiceModule,
+    ProfileSectionsModule,
   ],
   controllers: [AppController],
   providers: [

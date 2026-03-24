@@ -25,6 +25,7 @@ model User {
   auditLogs            AuditLog[]
   kycRecord            KycRecord?
   profile              Profile?
+  profileSections      ProfileSection[]
   sessions             Session[]
   tenantMembers        TenantMember[]
   totpSecret           TotpSecret?
@@ -349,6 +350,36 @@ enum ContactRequestStatus {
   PENDING
   ACCEPTED
   REJECTED
+}
+
+enum SectionType {
+  VALUES
+  WORLDVIEW
+  SKILLS
+  INTERESTS
+  DESIRES
+  BACKGROUND
+  LIKES_DISLIKES
+}
+
+enum SectionVisibility {
+  PUBLIC
+  CONTACTS
+  PRIVATE
+}
+
+model ProfileSection {
+  id         String            @id @default(uuid())
+  userId     String
+  type       SectionType
+  content    Json
+  visibility SectionVisibility @default(PRIVATE)
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+  user       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, type])
+  @@index([userId])
 }
 
 model MessageReaction {
