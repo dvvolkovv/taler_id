@@ -26,24 +26,29 @@ export class MessengerService {
   }
 
   async getOrCreateDirectConversation(userAId: string, userBId: string) {
-    const existing = await this.prisma.conversation.findFirst({
-      where: {
-        type: 'DIRECT',
-        AND: [
-          { participants: { some: { userId: userAId } } },
-          { participants: { some: { userId: userBId } } },
-        ],
-      },
-      include: { participants: true, messages: { orderBy: { sentAt: 'desc' }, take: 1 } },
+    const [idA, idB] = [userAId, userBId].sort();
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${idA} || '-' || ${idB}))`;
+      const existing = await tx.conversation.findFirst({
+        where: {
+          type: 'DIRECT',
+          AND: [
+            { participants: { some: { userId: userAId } } },
+            { participants: { some: { userId: userBId } } },
+          ],
+        },
+        include: { participants: true, messages: { orderBy: { sentAt: 'desc' }, take: 1 } },
+      });
+      if (existing) return this._formatConversation(existing, userAId);
+      const conv = await tx.conversation.create({
+        data: {
+          type: 'DIRECT',
+          participants: { create: [{ userId: userAId }, { userId: userBId }] },
+        },
+        include: { participants: true, messages: true },
+      });
+      return this._formatConversation(conv, userAId);
     });
-    const conv = existing ?? await this.prisma.conversation.create({
-      data: {
-        type: 'DIRECT',
-        participants: { create: [{ userId: userAId }, { userId: userBId }] },
-      },
-      include: { participants: true, messages: true },
-    });
-    return this._formatConversation(conv, userAId);
   }
 
   // ─── GROUP conversations (new) ───
