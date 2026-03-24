@@ -155,7 +155,8 @@ export class ProfileService {
   }
 
   async uploadAvatar(userId: string, filename: string) {
-    const avatarUrl = 'https://id.taler.tirol/uploads/avatars/' + filename;
+    const baseUrl = process.env.BASE_URL || 'https://id.taler.tirol';
+    const avatarUrl = `${baseUrl}/uploads/avatars/${filename}`;
     await this.prisma.profile.upsert({
       where: { userId },
       update: { avatarUrl },
