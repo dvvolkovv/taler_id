@@ -817,6 +817,25 @@ export class MessengerService {
     return !!contact;
   }
 
+  async getContactStatus(myId: string, targetId: string): Promise<{ isContact: boolean; pendingRequest: 'sent' | 'received' | null; requestId: string | null }> {
+    const req = await this.prisma.contactRequest.findFirst({
+      where: {
+        OR: [
+          { senderId: myId, receiverId: targetId },
+          { senderId: targetId, receiverId: myId },
+        ],
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!req) return { isContact: false, pendingRequest: null, requestId: null };
+    if (req.status === 'ACCEPTED') return { isContact: true, pendingRequest: null, requestId: null };
+    if (req.status === 'PENDING') {
+      const dir: 'sent' | 'received' = req.senderId === myId ? 'sent' : 'received';
+      return { isContact: false, pendingRequest: dir, requestId: req.id };
+    }
+    return { isContact: false, pendingRequest: null, requestId: null };
+  }
+
   // ─── Reactions ───
 
   async toggleReaction(messageId: string, userId: string, emoji: string) {

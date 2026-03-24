@@ -25,6 +25,7 @@ export class ProfileService {
 
     return {
       ...profile,
+      id: userId,
       email: user?.email,
       phone: user?.phone,
       emailVerified: user?.emailVerified ?? false,

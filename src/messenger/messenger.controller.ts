@@ -261,6 +261,12 @@ export class MessengerController {
     return this.service.getSentContactRequests(user.sub);
   }
 
+  @Get('contacts/check/:userId')
+  getContactStatus(@Param('userId') userId: string, @CurrentUser() user: any) {
+    return this.service.getContactStatus(user.sub, userId);
+  }
+
+
   @Patch('contacts/requests/:id/accept')
   async acceptContactRequest(@Param('id') id: string, @CurrentUser() user: any) {
     const result = await this.service.acceptContactRequest(id, user.sub);
