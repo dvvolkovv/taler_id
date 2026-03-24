@@ -359,7 +359,8 @@ enum SectionType {
   INTERESTS
   DESIRES
   BACKGROUND
-  LIKES_DISLIKES
+  LIKES
+  DISLIKES
 }
 
 enum SectionVisibility {

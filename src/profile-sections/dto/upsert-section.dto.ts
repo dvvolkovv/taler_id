@@ -7,7 +7,8 @@ export enum SectionType {
   INTERESTS = 'INTERESTS',
   DESIRES = 'DESIRES',
   BACKGROUND = 'BACKGROUND',
-  LIKES_DISLIKES = 'LIKES_DISLIKES',
+  LIKES = 'LIKES',
+  DISLIKES = 'DISLIKES',
 }
 
 export enum SectionVisibility {
