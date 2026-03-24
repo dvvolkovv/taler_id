@@ -660,7 +660,31 @@ export class MessengerService {
       where: { senderId_receiverId: { senderId, receiverId } },
     });
     if (existing?.status === 'ACCEPTED') throw new BadRequestException('Already contacts');
-    if (existing?.status === 'PENDING') throw new BadRequestException('Request already sent');
+    if (existing?.status === 'PENDING') {
+      // Check 24h cooldown for resending
+      const hoursSince = (Date.now() - new Date(existing.updatedAt).getTime()) / (1000 * 60 * 60);
+      if (hoursSince < 24) {
+        throw new BadRequestException('Повторный запрос можно отправить через ' + Math.ceil(24 - hoursSince) + ' ч.');
+      }
+      // Allow resend — update timestamp
+      const request = await this.prisma.contactRequest.update({
+        where: { id: existing.id },
+        data: { updatedAt: new Date() },
+      });
+      const sender = await this.prisma.user.findUnique({
+        where: { id: senderId },
+        include: { profile: { select: { firstName: true, lastName: true, avatarUrl: true } } },
+      });
+      const senderName = [sender?.profile?.firstName, sender?.profile?.lastName]
+        .filter(Boolean).join(' ') || sender?.username || '';
+      return {
+        ...request,
+        senderName,
+        senderAvatar: sender?.profile?.avatarUrl,
+        senderUsername: sender?.username,
+        resent: true,
+      };
+    }
 
     // Check reverse direction too
     const reverse = await this.prisma.contactRequest.findUnique({
@@ -714,6 +738,32 @@ export class MessengerService {
           senderAvatar: sender?.profile?.avatarUrl,
           senderUsername: sender?.username,
           senderEmail: sender?.email,
+        };
+      }),
+    );
+    return enriched;
+  }
+
+  async getSentContactRequests(userId: string) {
+    const sent = await this.prisma.contactRequest.findMany({
+      where: { senderId: userId },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    // Enrich with receiver profiles
+    const enriched = await Promise.all(
+      sent.map(async (r) => {
+        const receiver = await this.prisma.user.findUnique({
+          where: { id: r.receiverId },
+          include: { profile: { select: { firstName: true, lastName: true, avatarUrl: true } } },
+        });
+        return {
+          ...r,
+          receiverName: [receiver?.profile?.firstName, receiver?.profile?.lastName]
+            .filter(Boolean).join(' ') || receiver?.username || '',
+          receiverAvatar: receiver?.profile?.avatarUrl,
+          receiverUsername: receiver?.username,
+          receiverEmail: receiver?.email,
         };
       }),
     );

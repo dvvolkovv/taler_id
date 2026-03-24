@@ -23,6 +23,7 @@ import { Public } from '../common/decorators/public.decorator';
 import { RedisService } from '../redis/redis.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { VideoTranscodeService } from '../common/video-transcode.service';
+import { FcmService } from '../common/fcm.service';
 import sharp = require('sharp');
 
 @Controller('messenger')
@@ -38,6 +39,7 @@ export class MessengerController {
     private readonly redis: RedisService,
     private readonly prisma: PrismaService,
     private readonly videoTranscode: VideoTranscodeService,
+    private readonly fcmService: FcmService,
   ) {}
 
   /**
@@ -241,12 +243,22 @@ export class MessengerController {
       senderAvatar: result.senderAvatar,
       senderUsername: result.senderUsername,
     });
+    // Send FCM push to receiver
+    const receiverFcmToken = await this.service.getFcmToken(receiverId);
+    if (receiverFcmToken) {
+      this.fcmService.sendContactRequest(receiverFcmToken, result.senderName).catch(() => {});
+    }
     return result;
   }
 
   @Get('contacts/requests')
   getContactRequests(@CurrentUser() user: any) {
     return this.service.getContactRequests(user.sub);
+  }
+
+  @Get('contacts/requests/sent')
+  getSentContactRequests(@CurrentUser() user: any) {
+    return this.service.getSentContactRequests(user.sub);
   }
 
   @Patch('contacts/requests/:id/accept')

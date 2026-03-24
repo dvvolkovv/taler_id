@@ -129,6 +129,46 @@ export class FcmService {
     }
   }
 
+  async sendContactRequest(fcmToken: string, fromName: string): Promise<void> {
+    if (!this.initialized || !fcmToken) return;
+    try {
+      await admin.messaging().send({
+        token: fcmToken,
+        data: {
+          type: 'contact_request',
+        },
+        notification: {
+          title: 'Запрос на общение',
+          body: `${fromName} хочет начать общение с вами`,
+        },
+        android: {
+          priority: 'high',
+          notification: {
+            channelId: 'messages',
+            defaultSound: true,
+          },
+        },
+        apns: {
+          payload: {
+            aps: {
+              sound: 'default',
+              alert: {
+                title: 'Запрос на общение',
+                body: `${fromName} хочет начать общение с вами`,
+              },
+            },
+          },
+          headers: {
+            'apns-priority': '10',
+            'apns-push-type': 'alert',
+          },
+        },
+      });
+    } catch (e) {
+      this.logger.error('FCM sendContactRequest error:', e);
+    }
+  }
+
   async sendCallCancelled(fcmToken: string, roomName: string, fromName?: string): Promise<void> {
     if (!this.initialized || !fcmToken) return;
     try {
