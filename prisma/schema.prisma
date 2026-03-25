@@ -318,6 +318,7 @@ model MeetingSummary {
   recordingUrl    String?
   durationSec  Int?
   status       String   @default("done")
+  participantTracks Json     @default("{}")
   createdAt    DateTime @default(now())
 
   callLog      CallLog? @relation(fields: [callLogId], references: [id])

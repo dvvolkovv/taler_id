@@ -512,6 +512,7 @@ export class VoiceService {
     durationSec?: number;
     recordingUrl?: string;
     status?: string;
+    participantTracks?: any;
   }) {
     // If id provided — update existing record (pending → done)
     if (data.id) {
@@ -528,6 +529,7 @@ export class VoiceService {
           status: data.status ?? 'done',
           ...(data.participants && { participants: data.participants }),
           ...(data.participantIds && data.participantIds.length > 0 && { participantIds: data.participantIds }),
+          ...(data.participantTracks && { participantTracks: data.participantTracks }),
         },
       });
       return { id: updated.id };
@@ -553,6 +555,7 @@ export class VoiceService {
         durationSec: data.durationSec ?? null,
         recordingUrl: data.recordingUrl ?? null,
         status: data.status ?? 'done',
+        ...(data.participantTracks && { participantTracks: data.participantTracks }),
       },
     });
     return { id: summary.id };
@@ -696,35 +699,105 @@ export class VoiceService {
       audioBuffer = Buffer.from(await res.arrayBuffer());
     }
 
-    // Transcribe with Whisper
-    const formData = new FormData();
-    const blob = new Blob([new Uint8Array(audioBuffer)], { type: 'audio/mpeg' });
-    formData.append('file', blob, 'recording.mp3');
-    formData.append('model', 'whisper-1');
-    formData.append('response_format', 'verbose_json');
-    formData.append('timestamp_granularities[]', 'segment');
+    // Check if we have per-participant tracks for speaker diarization
+    const participantTracks = (meeting as any).participantTracks as Record<string, string> | null;
+    const hasMultipleTracks = participantTracks && typeof participantTracks === 'object' && Object.keys(participantTracks).length > 1;
 
-    const whisperRes = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
-      body: formData,
-    });
+    let transcript = '';
 
-    if (!whisperRes.ok) {
-      const errText = await whisperRes.text();
-      await this.prisma.meetingSummary.update({ where: { id: meetingId }, data: { status: 'done' } });
-      throw new Error(`Whisper error ${whisperRes.status}: ${errText}`);
-    }
+    if (hasMultipleTracks) {
+      // Speaker diarization: transcribe each participant track separately and merge by timestamp
+      console.log('[VOICE] Speaker diarization: transcribing', Object.keys(participantTracks).length, 'tracks separately');
+      const allSegments: { start: number; end: number; text: string; speaker: string }[] = [];
 
-    const whisperData = await whisperRes.json() as any;
-    const segments = whisperData.segments ?? [];
-    const transcript = segments.length > 0
-      ? segments.map((s: any) => {
+      for (const [speakerName, trackUrl] of Object.entries(participantTracks)) {
+        try {
+          // Download individual track
+          let trackBuffer: Buffer;
+          if ((trackUrl as string).includes('/messenger/files/download?key=')) {
+            const key = decodeURIComponent((trackUrl as string).split('key=')[1]);
+            const { stream } = await this.fileStorage.getObject(key);
+            const chunks: Buffer[] = [];
+            for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+            trackBuffer = Buffer.concat(chunks);
+          } else {
+            const trackRes = await fetch(trackUrl as string);
+            if (!trackRes.ok) { console.warn('[VOICE] Failed to download track for', speakerName); continue; }
+            trackBuffer = Buffer.from(await trackRes.arrayBuffer());
+          }
+
+          // Transcribe this track
+          const trackForm = new FormData();
+          const trackBlob = new Blob([new Uint8Array(trackBuffer)], { type: 'audio/ogg' });
+          trackForm.append('file', trackBlob, speakerName + '.ogg');
+          trackForm.append('model', 'whisper-1');
+          trackForm.append('response_format', 'verbose_json');
+          trackForm.append('timestamp_granularities[]', 'segment');
+
+          const trackWhisperRes = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
+            body: trackForm,
+          });
+
+          if (!trackWhisperRes.ok) {
+            console.warn('[VOICE] Whisper error for track', speakerName, ':', trackWhisperRes.status);
+            continue;
+          }
+
+          const trackData = await trackWhisperRes.json() as any;
+          const segs = trackData.segments ?? [];
+          for (const s of segs) {
+            allSegments.push({ start: s.start, end: s.end, text: s.text.trim(), speaker: speakerName });
+          }
+          if (segs.length === 0 && trackData.text) {
+            allSegments.push({ start: 0, end: 0, text: trackData.text.trim(), speaker: speakerName });
+          }
+        } catch (e) {
+          console.warn('[VOICE] Error transcribing track for', speakerName, ':', (e as Error).message);
+        }
+      }
+
+      // Sort by timestamp and format
+      allSegments.sort((a, b) => a.start - b.start);
+      transcript = allSegments
+        .map(s => {
           const mm = String(Math.floor(s.start / 60)).padStart(2, '0');
           const ss = String(Math.floor(s.start % 60)).padStart(2, '0');
-          return `[${mm}:${ss}] ${s.text.trim()}`;
-        }).join('\n')
-      : whisperData.text?.trim() ?? '';
+          return `[${mm}:${ss}] ${s.speaker}: ${s.text}`;
+        })
+        .join('\n');
+    } else {
+      // Single mixed recording - transcribe without speaker info
+      const formData = new FormData();
+      const blob = new Blob([new Uint8Array(audioBuffer)], { type: 'audio/mpeg' });
+      formData.append('file', blob, 'recording.mp3');
+      formData.append('model', 'whisper-1');
+      formData.append('response_format', 'verbose_json');
+      formData.append('timestamp_granularities[]', 'segment');
+
+      const whisperRes = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
+        body: formData,
+      });
+
+      if (!whisperRes.ok) {
+        const errText = await whisperRes.text();
+        await this.prisma.meetingSummary.update({ where: { id: meetingId }, data: { status: 'done' } });
+        throw new Error(`Whisper error ${whisperRes.status}: ${errText}`);
+      }
+
+      const whisperData = await whisperRes.json() as any;
+      const segments = whisperData.segments ?? [];
+      transcript = segments.length > 0
+        ? segments.map((s: any) => {
+            const mm = String(Math.floor(s.start / 60)).padStart(2, '0');
+            const ss = String(Math.floor(s.start % 60)).padStart(2, '0');
+            return `[${mm}:${ss}] ${s.text.trim()}`;
+          }).join('\n')
+        : whisperData.text?.trim() ?? '';
+    }
 
     // Summarize with GPT-4o
     let summary = { summary: '', keyPoints: [] as string[], actionItems: [] as any[], decisions: [] as string[] };
@@ -741,12 +814,12 @@ export class VoiceService {
           messages: [
             {
               role: 'system',
-              content: `Ты — ассистент для анализа встреч. Проанализируй транскрипт и верни JSON с полями:
-- "summary": краткое резюме встречи (2-3 абзаца, на языке встречи)
-- "keyPoints": массив ключевых моментов (строки)
-- "actionItems": массив задач, каждая: { "task": "описание", "assignee": "имя или null", "deadline": "срок или null" }
-- "decisions": массив принятых решений (строки)
-Пиши резюме на том же языке, на котором проходила встреча.`,
+              content: `Ты — профессиональный ассистент для анализа деловых встреч. Внимательно проанализируй транскрипт и верни JSON с полями:
+- "summary": структурированное резюме встречи (2-3 абзаца). Включи контекст встречи, основные обсуждённые темы и общий итог. Пиши на языке встречи.
+- "keyPoints": массив ключевых моментов (строки). Каждый пункт должен быть конкретным и информативным — не общие фразы, а суть обсуждённого. Формат: "[Тема] — описание".
+- "actionItems": массив задач, каждая: { "task": "конкретное описание задачи с ожидаемым результатом", "assignee": "имя ответственного или null", "deadline": "срок или null" }. Извлекай задачи из явных обещаний, договорённостей и поручений.
+- "decisions": массив принятых решений (строки). Включай только явно согласованные решения, а не предложения или обсуждения.
+Пиши резюме на том же языке, на котором проходила встреча. Если есть спикеры — указывай кто что сказал/предложил/решил.`,
             },
             { role: 'user', content: transcript },
           ],
