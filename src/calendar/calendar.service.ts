@@ -36,11 +36,11 @@ export class CalendarService {
     startAt: string; endAt?: string; allDay?: boolean;
     reminderAt?: string; contactIds?: string[]; createdBy?: string;
   }) {
-    return this.prisma.calendarEvent.create({
+    const event = await this.prisma.calendarEvent.create({
       data: {
         userId,
         title: data.title,
-        description: data.description,
+        description: data.description ?? null,
         type: data.type as any,
         startAt: new Date(data.startAt),
         endAt: data.endAt ? new Date(data.endAt) : null,
@@ -50,6 +50,30 @@ export class CalendarService {
         createdBy: data.createdBy ?? 'MANUAL',
       },
     });
+
+    // Send push invites to participants
+    if (data.contactIds && data.contactIds.length > 0) {
+      const creator = await this.prisma.user.findUnique({
+        where: { id: userId },
+        include: { profile: { select: { firstName: true, lastName: true } } },
+      });
+      const creatorName = [creator?.profile?.firstName, creator?.profile?.lastName].filter(Boolean).join(' ') || 'Пользователь';
+      const startFormatted = new Date(data.startAt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+
+      for (const contactId of data.contactIds) {
+        const user = await this.prisma.user.findUnique({ where: { id: contactId }, select: { fcmToken: true } });
+        if (user?.fcmToken) {
+          this.fcmService.sendNewMessage(
+            user.fcmToken,
+            'Приглашение на встречу',
+            creatorName + ' приглашает вас: ' + data.title + ' (' + startFormatted + ')',
+            '',
+          ).catch(() => {});
+        }
+      }
+    }
+
+    return event;
   }
 
   async update(userId: string, id: string, data: any) {
