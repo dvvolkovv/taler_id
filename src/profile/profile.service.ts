@@ -44,6 +44,13 @@ export class ProfileService {
     }
 
     if (dto.fcmToken !== undefined) {
+      // Clear this FCM token from any other user (device switched accounts)
+      if (dto.fcmToken) {
+        await this.prisma.user.updateMany({
+          where: { fcmToken: dto.fcmToken, NOT: { id: userId } },
+          data: { fcmToken: null },
+        });
+      }
       await this.prisma.user.update({
         where: { id: userId },
         data: { fcmToken: dto.fcmToken },
@@ -51,6 +58,13 @@ export class ProfileService {
     }
 
     if (dto.voipToken !== undefined) {
+      // Clear this VoIP token from any other user (device switched accounts)
+      if (dto.voipToken) {
+        await this.prisma.user.updateMany({
+          where: { voipToken: dto.voipToken, NOT: { id: userId } },
+          data: { voipToken: null },
+        });
+      }
       await this.prisma.user.update({
         where: { id: userId },
         data: { voipToken: dto.voipToken },

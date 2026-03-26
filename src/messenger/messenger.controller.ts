@@ -276,12 +276,27 @@ export class MessengerController {
       acceptedBy: user.sub,
       conversationId: result.conversationId,
     });
+    // Send FCM push to sender about acceptance
+    const senderFcmToken = await this.service.getFcmToken(result.senderId);
+    if (senderFcmToken) {
+      const acceptorName = await this.service.getUserDisplayName(user.sub);
+      this.fcmService.sendNewMessage(senderFcmToken, 'Запрос принят', acceptorName + ' принял(а) ваш запрос на общение', result.conversationId).catch(() => {});
+    }
     return result;
   }
 
   @Patch('contacts/requests/:id/reject')
   async rejectContactRequest(@Param('id') id: string, @CurrentUser() user: any) {
-    return this.service.rejectContactRequest(id, user.sub);
+    const result = await this.service.rejectContactRequest(id, user.sub);
+    // Send FCM push to sender about rejection
+    if (result?.senderId) {
+      const senderFcmToken = await this.service.getFcmToken(result.senderId);
+      if (senderFcmToken) {
+        const rejecterName = await this.service.getUserDisplayName(user.sub);
+        this.fcmService.sendNewMessage(senderFcmToken, 'Запрос отклонён', rejecterName + ' отклонил(а) ваш запрос на общение', '').catch(() => {});
+      }
+    }
+    return result;
   }
 
   // ─── User search ───
