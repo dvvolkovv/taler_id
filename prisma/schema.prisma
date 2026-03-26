@@ -32,6 +32,7 @@ model User {
   messages             Message[]
   notes                Note[]
   calendarEvents       CalendarEvent[]
+  calendarInvites      CalendarInvite[]
 }
 
 model Profile {
@@ -436,6 +437,7 @@ model CalendarEvent {
   createdAt    DateTime          @default(now())
   updatedAt    DateTime          @updatedAt
   user         User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  invites      CalendarInvite[]
 
   @@index([userId, startAt])
   @@index([reminderAt, reminderSent])
@@ -445,4 +447,26 @@ enum CalendarEventType {
   CALL
   EVENT
   REMINDER
+}
+
+// ─── Calendar Invites ───
+
+model CalendarInvite {
+  id        String            @id @default(uuid())
+  eventId   String
+  userId    String
+  status    InviteStatus      @default(PENDING)
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+  event     CalendarEvent     @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+  @@index([userId, status])
+}
+
+enum InviteStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
 }

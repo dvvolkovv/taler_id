@@ -32,4 +32,25 @@ export class CalendarController {
   remove(@CurrentUser() user: any, @Param('id') id: string) {
     return this.service.remove(user.sub, id);
   }
+
+  @Get('invites')
+  getMyInvites(@CurrentUser() user: any) {
+    return this.service.getMyInvites(user.sub);
+  }
+
+  @Patch('invites/:id/accept')
+  acceptInvite(@CurrentUser() user: any, @Param('id') id: string) {
+    return this.service.acceptInvite(id, user.sub);
+  }
+
+  @Patch('invites/:id/decline')
+  declineInvite(@CurrentUser() user: any, @Param('id') id: string) {
+    return this.service.declineInvite(id, user.sub);
+  }
+
+  @Get(':id/invites')
+  getEventInvites(@CurrentUser() user: any, @Param('id') id: string) {
+    return this.service.getEventInvites(id, user.sub);
+  }
 }
+
