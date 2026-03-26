@@ -28,7 +28,7 @@ export class MessengerService {
   async getOrCreateDirectConversation(userAId: string, userBId: string) {
     const [idA, idB] = [userAId, userBId].sort();
     return this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${idA} || '-' || ${idB}))`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${idA} || '-' || ${idB}))`;
       const existing = await tx.conversation.findFirst({
         where: {
           type: 'DIRECT',

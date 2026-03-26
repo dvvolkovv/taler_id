@@ -178,6 +178,7 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
     payload: { conversationId: string; roomName: string; inviteeId?: string; e2eeKey?: string },
   ) {
     const callerInfo = await this.service.getUserCallInfo(client.data.userId);
+    this.logger.log(`[call_invite] caller=${client.data.userId} conv=${payload.conversationId} room=${payload.roomName} inviteeId=${payload.inviteeId}`);
     const fromUserName = callerInfo.name;
     const fromUserAvatar = callerInfo.avatarUrl;
     const hasConversation = payload.conversationId && payload.conversationId.length > 0;
@@ -239,6 +240,7 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
 
       if (!muted) {
         const calleeToken = await this.service.getFcmToken(calleeId);
+        this.logger.log(`[call_invite] calleeId=${calleeId} fcmToken=${calleeToken ? "YES(" + calleeToken.substring(0,20) + "...)" : "NULL"}`);
         if (calleeToken) {
           this.fcmService.sendCallInvite(calleeToken, fromUserName, payload.roomName, payload.conversationId || '', payload.e2eeKey, fromUserAvatar ?? undefined).catch(() => {});
         }
