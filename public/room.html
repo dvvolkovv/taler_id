@@ -956,12 +956,32 @@
           updateCount();
           setTimeout(() => renderParticipant(participant), 500);
           if (isRecording) broadcastRecordingStatus(true);
-          // If we're the recording initiator and consent is still pending, notify new human participant
           const pid = participant.identity;
-          if (consentPending && recordingInitiatorId === localIdentity &&
-              pid !== 'meeting-recorder' && pid !== 'ai-assistant' && pid !== 'voice-translator') {
-            consentResponses.set(pid, { name: getDisplayName(participant), accepted: null });
-            sendConsentRequestTo(participant);
+          const isHuman = pid !== 'meeting-recorder' && pid !== 'ai-assistant' && pid !== 'voice-translator';
+          if (isHuman) {
+            // Consent still pending — add to tracking and notify
+            if (consentPending && recordingInitiatorId === localIdentity) {
+              consentResponses.set(pid, { name: getDisplayName(participant), accepted: null });
+              sendConsentRequestTo(participant);
+            }
+            // Local recording already active — ask late joiner for consent
+            if ((isRecording || recordingApproved) && recordingInitiatorId === localIdentity) {
+              setTimeout(() => sendDataTo(pid, {
+                type: 'recording_consent_request',
+                initiatorId: localIdentity,
+                initiatorName: recordingInitiatorName,
+                recordingActive: true,
+              }), 1500);
+            }
+            // Server recording active — ask late joiner for consent
+            if (srvRecActive && srvRecInitiatorId === localIdentity) {
+              setTimeout(() => sendDataTo(pid, {
+                type: 'srv_rec_consent_request',
+                initiatorId: localIdentity,
+                initiatorName: srvRecInitiatorName,
+                recordingActive: true,
+              }), 1500);
+            }
           }
           if (participant.identity === 'voice-translator' && translatorEnabled) {
             setTimeout(() => updateTranslationTrackSubscription(), 500);
@@ -1717,15 +1737,12 @@
     }
 
     function handleConsentRequest(participant, msg) {
-      // Don't show to self (initiator)
       if (msg.initiatorId === localIdentity) return;
-      // Don't show if already recording
-      if (isRecording && recordingInitiatorId === msg.initiatorId) return;
-      // Store initiator info
+      // Regular request while already recording from same initiator — skip (dedup)
+      if (isRecording && recordingInitiatorId === msg.initiatorId && !msg.recordingActive) return;
       recordingInitiatorId = msg.initiatorId;
       recordingInitiatorName = msg.initiatorName;
-      // Show consent dialog
-      showConsentDialog(msg.initiatorName);
+      showConsentDialog(msg.initiatorName, msg.recordingActive);
     }
 
     function handleConsentResponse(participant, msg) {
@@ -1831,11 +1848,16 @@
 
     // ── Consent UI (shown to participant being asked) ──
 
-    function showConsentDialog(initiatorName) {
-      removeConsentDialog(); // prevent duplicates
+    function showConsentDialog(initiatorName, recordingActive = false) {
+      removeConsentDialog();
       const overlay = document.createElement('div');
       overlay.className = 'consent-overlay';
       overlay.id = 'consent-dialog-overlay';
+      overlay.dataset.recordingActive = recordingActive ? '1' : '0';
+      const title = recordingActive ? 'Идёт запись встречи' : 'Запрос на запись';
+      const text = recordingActive
+        ? `<strong>${escapeHtml(initiatorName)}</strong> ведёт запись этой встречи.<br>Ваш голос и видео будут записаны.<br><span style="color:var(--error);font-size:12px">При отказе вы покинете комнату.</span>`
+        : `<strong>${escapeHtml(initiatorName)}</strong> хочет начать запись встречи.<br>Ваш голос и видео будут записаны.`;
       overlay.innerHTML = `
         <div class="consent-dialog">
           <div class="consent-icon rec">
@@ -1844,14 +1866,11 @@
               <circle cx="12" cy="12" r="4" fill="currentColor"/>
             </svg>
           </div>
-          <div class="consent-title">Запрос на запись</div>
-          <div class="consent-text">
-            <strong>${escapeHtml(initiatorName)}</strong> хочет начать запись встречи.<br>
-            Ваш голос и видео будут записаны.
-          </div>
+          <div class="consent-title">${title}</div>
+          <div class="consent-text">${text}</div>
           <div class="consent-buttons">
             <button class="consent-btn accept" onclick="respondToConsent(true)">Согласен</button>
-            <button class="consent-btn decline" onclick="respondToConsent(false)">Отклонить</button>
+            <button class="consent-btn decline" onclick="respondToConsent(false)">Покинуть</button>
           </div>
         </div>
       `;
@@ -1864,6 +1883,8 @@
     }
 
     function respondToConsent(accepted) {
+      const overlay = document.getElementById('consent-dialog-overlay');
+      const isActiveRec = overlay && overlay.dataset.recordingActive === '1';
       removeConsentDialog();
       if (!room) return;
 
@@ -1876,6 +1897,9 @@
 
       if (accepted) {
         showNotification('Вы согласились на запись', 'success');
+      } else if (isActiveRec) {
+        // Recording already active — must leave
+        leaveRoom();
       } else {
         showNotification('Вы отклонили запись', 'info');
         resetRecordingState();
@@ -1967,13 +1991,16 @@
 
     function handleSrvRecConsentRequest(participant, msg) {
       if (msg.initiatorId === localIdentity) return;
-      if (srvRecActive && srvRecInitiatorId === msg.initiatorId) return;
+      // Dedup: skip regular request if server recording already active from same initiator
+      if (srvRecActive && srvRecInitiatorId === msg.initiatorId && !msg.recordingActive) return;
       srvRecInitiatorId = msg.initiatorId;
       srvRecInitiatorName = msg.initiatorName;
-      showSrvRecConsentDialog(msg.initiatorName);
+      showSrvRecConsentDialog(msg.initiatorName, msg.recordingActive);
     }
 
     function respondToSrvRecConsent(accepted) {
+      const overlay = document.getElementById('srv-rec-consent-overlay');
+      const isActiveRec = overlay && overlay.dataset.recordingActive === '1';
       removeSrvRecConsentDialog();
       broadcastData({
         type: 'srv_rec_consent_response',
@@ -1981,7 +2008,13 @@
         responderId: localIdentity,
         responderName: getDisplayName(room.localParticipant),
       });
-      if (!accepted) resetSrvRecState();
+      if (!accepted) {
+        if (isActiveRec) {
+          leaveRoom();
+        } else {
+          resetSrvRecState();
+        }
+      }
     }
 
     function handleSrvRecConsentResponse(participant, msg) {
@@ -2113,11 +2146,16 @@
       }
     }
 
-    function showSrvRecConsentDialog(initiatorName) {
+    function showSrvRecConsentDialog(initiatorName, recordingActive = false) {
       removeSrvRecConsentDialog();
       const overlay = document.createElement('div');
       overlay.className = 'consent-overlay';
       overlay.id = 'srv-rec-consent-overlay';
+      overlay.dataset.recordingActive = recordingActive ? '1' : '0';
+      const title = recordingActive ? 'Идёт запись на сервер' : 'Запрос записи на сервер';
+      const text = recordingActive
+        ? `<strong>${escapeHtml(initiatorName)}</strong> ведёт запись этой встречи на сервере.<br>Ваш голос и видео будут записаны.<br><span style="color:var(--error);font-size:12px">При отказе вы покинете комнату.</span>`
+        : `<strong>${escapeHtml(initiatorName)}</strong> хочет начать запись встречи на сервере.<br>Ваш голос и видео будут записаны.`;
       overlay.innerHTML = `
         <div class="consent-dialog">
           <div class="consent-icon rec">
@@ -2125,14 +2163,11 @@
               <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4.03 3-9 3S3 13.66 3 12"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/>
             </svg>
           </div>
-          <div class="consent-title">Запрос записи на сервер</div>
-          <div class="consent-text">
-            <strong>${escapeHtml(initiatorName)}</strong> хочет начать запись встречи на сервере.<br>
-            Ваш голос и видео будут записаны.
-          </div>
+          <div class="consent-title">${title}</div>
+          <div class="consent-text">${text}</div>
           <div class="consent-buttons">
             <button class="consent-btn accept" onclick="respondToSrvRecConsent(true)">Согласен</button>
-            <button class="consent-btn decline" onclick="respondToSrvRecConsent(false)">Отклонить</button>
+            <button class="consent-btn decline" onclick="respondToSrvRecConsent(false)">Покинуть</button>
           </div>
         </div>
       `;
@@ -2191,6 +2226,19 @@
         room.localParticipant.publishData(encoder.encode(JSON.stringify(msg)), { reliable: true });
       } catch (e) {
         console.warn('[DATA] Failed to broadcast:', e);
+      }
+    }
+
+    function sendDataTo(identity, msg) {
+      if (!room) return;
+      msg.msgId = (localIdentity || 'web') + '_' + (_msgSeq++);
+      try {
+        room.localParticipant.publishData(encoder.encode(JSON.stringify(msg)), {
+          reliable: true,
+          destinationIdentities: [identity],
+        });
+      } catch (e) {
+        console.warn('[DATA] Failed to send to', identity, e);
       }
     }
 
