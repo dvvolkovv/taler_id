@@ -87,4 +87,33 @@ export class ProfileController {
   uploadAvatar(@UploadedFile() file: Express.Multer.File, @CurrentUser() user: any) {
     return this.profileService.uploadAvatar(user.sub, file.filename);
   }
+
+  // ── Video Backgrounds ──────────────────────────────────────────────
+
+  @Get('backgrounds')
+  getBackgrounds(@CurrentUser() user: any) {
+    return this.profileService.getBackgrounds(user.sub);
+  }
+
+  @Post('backgrounds')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: require('multer').memoryStorage(),
+      limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
+      fileFilter: (_req, file, cb) => {
+        if (!file.mimetype.match(/^image\//)) {
+          return cb(new Error('Only image files are allowed'), false);
+        }
+        cb(null, true);
+      },
+    }),
+  )
+  uploadBackground(@UploadedFile() file: Express.Multer.File, @CurrentUser() user: any) {
+    return this.profileService.uploadBackground(user.sub, file);
+  }
+
+  @Delete('backgrounds/:id')
+  deleteBackground(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.profileService.deleteBackground(user.sub, id);
+  }
 }

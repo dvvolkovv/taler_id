@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards,
+  Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, UseGuards,
   UseInterceptors, UploadedFile, ForbiddenException, Logger,
   Res, StreamableFile, NotFoundException,
 } from '@nestjs/common';
@@ -297,6 +297,23 @@ export class MessengerController {
       }
     }
     return result;
+  }
+
+  // ─── Contact Aliases ───
+
+  @Get("contacts/aliases")
+  getAliases(@CurrentUser() user: any) {
+    return this.service.getContactAliases(user.sub);
+  }
+
+  @Put("contacts/aliases/:targetId")
+  setAlias(@CurrentUser() user: any, @Param("targetId") targetId: string, @Body("customName") customName: string) {
+    return this.service.setContactAlias(user.sub, targetId, customName);
+  }
+
+  @Delete("contacts/aliases/:targetId")
+  removeAlias(@CurrentUser() user: any, @Param("targetId") targetId: string) {
+    return this.service.removeContactAlias(user.sub, targetId);
   }
 
   // ─── User search ───

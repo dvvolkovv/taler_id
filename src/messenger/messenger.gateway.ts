@@ -420,4 +420,48 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
   async endCallFromHttp(userId: string, conversationId: string, roomName: string) {
     await this.handleCallEnded({ data: { userId } } as any, { conversationId, roomName });
   }
+
+  // ── Call Hold/Resume ──────────────────────────────────────────────
+
+  @SubscribeMessage('call_hold')
+  async handleCallHold(client: any, payload: { roomName: string; conversationId?: string }) {
+    const userId = client.data?.userId;
+    if (!userId || !payload.roomName) return;
+    this.logger.log(`[call_hold] from=${userId} room=${payload.roomName}`);
+
+    if (payload.conversationId) {
+      const participants = await this.prisma.conversationParticipant.findMany({
+        where: { conversationId: payload.conversationId },
+        select: { userId: true },
+      });
+      for (const p of participants) {
+        if (p.userId === userId) continue;
+        this.server.to(`user:${p.userId}`).emit('call_hold', {
+          roomName: payload.roomName,
+          userId,
+        });
+      }
+    }
+  }
+
+  @SubscribeMessage('call_resume')
+  async handleCallResume(client: any, payload: { roomName: string; conversationId?: string }) {
+    const userId = client.data?.userId;
+    if (!userId || !payload.roomName) return;
+    this.logger.log(`[call_resume] from=${userId} room=${payload.roomName}`);
+
+    if (payload.conversationId) {
+      const participants = await this.prisma.conversationParticipant.findMany({
+        where: { conversationId: payload.conversationId },
+        select: { userId: true },
+      });
+      for (const p of participants) {
+        if (p.userId === userId) continue;
+        this.server.to(`user:${p.userId}`).emit('call_resume', {
+          roomName: payload.roomName,
+          userId,
+        });
+      }
+    }
+  }
 }

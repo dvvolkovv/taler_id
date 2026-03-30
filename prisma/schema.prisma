@@ -470,3 +470,33 @@ enum InviteStatus {
   ACCEPTED
   DECLINED
 }
+
+// ─── Contact Aliases ───
+
+model ContactAlias {
+  id        String   @id @default(uuid())
+  ownerId   String
+  targetId  String
+  customName String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([ownerId, targetId])
+  @@index([ownerId])
+}
+
+// ─── User Video Backgrounds ───
+
+model UserBackground {
+  id           String   @id @default(uuid())
+  userId       String
+  s3Key        String
+  thumbnailUrl String?
+  fileUrl      String
+  fileName     String
+  fileSize     Int
+  mimeType     String
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+}

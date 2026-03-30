@@ -1,15 +1,17 @@
 import {
+
   Injectable,
   NotFoundException,
   BadRequestException,
   ConflictException,
 } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
+import { FileStorageService } from "../common/file-storage.service";
 import { UpdateProfileDto, LinkWalletDto } from "./dto/update-profile.dto";
 
 @Injectable()
 export class ProfileService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService, private fileStorage: FileStorageService) {}
 
   async getProfile(userId: string) {
     const profile = await this.prisma.profile.findUnique({
@@ -201,5 +203,74 @@ export class ProfileService {
       }),
     ]);
     return { ...profile, username: user?.username ?? null, userId };
+  }
+
+  // ── Video Backgrounds ──────────────────────────────────────────────
+
+  async getBackgrounds(userId: string) {
+    return this.prisma.userBackground.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async uploadBackground(userId: string, file: Express.Multer.File) {
+    // Max 10 backgrounds per user
+    const count = await this.prisma.userBackground.count({ where: { userId } });
+    if (count >= 10) {
+      throw new BadRequestException('Maximum 10 backgrounds allowed');
+    }
+
+    const { v4: uuidv4 } = require('uuid');
+    const { extname } = require('path');
+    const ext = extname(file.originalname) || '.jpg';
+    const s3Key = `backgrounds/${userId}/${uuidv4()}${ext}`;
+
+    await this.fileStorage.upload(s3Key, file.buffer, file.mimetype);
+    const fileUrl = this.fileStorage.getPublicUrl(s3Key);
+
+    // Generate thumbnail
+    let thumbnailUrl: string | null = null;
+    try {
+      const sharp = require('sharp');
+      const thumbBuffer = await sharp(file.buffer)
+        .resize(200, 200, { fit: 'cover' })
+        .webp({ quality: 80 })
+        .toBuffer();
+      const thumbKey = `backgrounds/${userId}/thumb_${uuidv4()}.webp`;
+      await this.fileStorage.upload(thumbKey, thumbBuffer, 'image/webp');
+      thumbnailUrl = this.fileStorage.getPublicUrl(thumbKey);
+    } catch (e) {
+      // Thumbnail generation failed — continue without it
+    }
+
+    return this.prisma.userBackground.create({
+      data: {
+        userId,
+        s3Key,
+        fileUrl,
+        thumbnailUrl,
+        fileName: file.originalname,
+        fileSize: file.size,
+        mimeType: file.mimetype,
+      },
+    });
+  }
+
+  async deleteBackground(userId: string, id: string) {
+    const bg = await this.prisma.userBackground.findFirst({
+      where: { id, userId },
+    });
+    if (!bg) throw new NotFoundException('Background not found');
+
+    // Delete from S3
+    try {
+      await this.fileStorage.delete(bg.s3Key);
+    } catch (e) {
+      // S3 deletion failed — continue anyway
+    }
+
+    await this.prisma.userBackground.delete({ where: { id } });
+    return { deleted: true };
   }
 }

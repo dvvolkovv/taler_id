@@ -275,20 +275,25 @@ export class MessengerService {
       if (c.conversationId) activeCallMap[c.conversationId] = c.roomName;
     }
 
+    // Load contact aliases for name overrides
+    const aliases = await this.prisma.contactAlias.findMany({ where: { ownerId: userId } });
+    const aliasMap: Record<string, string> = {};
+    for (const a of aliases) aliasMap[a.targetId] = a.customName;
+
     return conversations.map((conv) => ({
-      ...this._formatConversation(conv, userId, userMap, activeCallMap),
+      ...this._formatConversation(conv, userId, userMap, activeCallMap, aliasMap),
       unreadCount: unreadMap[conv.id] ?? 0,
     }));
   }
 
-  private _formatConversation(conv: any, currentUserId: string, userMap?: Record<string, any>, activeCallMap?: Record<string, string>) {
+  private _formatConversation(conv: any, currentUserId: string, userMap?: Record<string, any>, activeCallMap?: Record<string, string>, aliasMap?: Record<string, string>) {
     const myParticipant = conv.participants.find((p: any) => p.userId === currentUserId);
     const otherParticipant = conv.participants.find((p: any) => p.userId !== currentUserId);
     const otherUser = otherParticipant && userMap ? userMap[otherParticipant.userId] : null;
     const otherFirstLast = otherUser
       ? ([otherUser.profile?.firstName, otherUser.profile?.lastName].filter(Boolean).join(' ').trim() || null)
       : null;
-    const otherUserName = otherFirstLast ?? otherUser?.username ?? null;
+    const otherUserName = (aliasMap && otherParticipant ? aliasMap[otherParticipant.userId] : null) ?? otherFirstLast ?? otherUser?.username ?? null;
     const lastMsg = conv.messages?.[0] ?? null;
 
     // Find sender name for last message (for group chats)
@@ -880,5 +885,28 @@ export class MessengerService {
       select: { userId: true, emoji: true },
     });
     return reactions;
+  }
+
+  // ─── Contact Aliases ───
+
+  async getContactAliases(ownerId: string) {
+    return this.prisma.contactAlias.findMany({ where: { ownerId } });
+  }
+
+  async setContactAlias(ownerId: string, targetId: string, customName: string) {
+    return this.prisma.contactAlias.upsert({
+      where: { ownerId_targetId: { ownerId, targetId } },
+      create: { ownerId, targetId, customName },
+      update: { customName },
+    });
+  }
+
+  async removeContactAlias(ownerId: string, targetId: string) {
+    try {
+      await this.prisma.contactAlias.delete({
+        where: { ownerId_targetId: { ownerId, targetId } },
+      });
+    } catch (_) {}
+    return { ok: true };
   }
 }
