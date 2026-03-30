@@ -4,6 +4,7 @@ const { AccessToken } = require('livekit-server-sdk');
 const WebSocket = require('ws');
 const { startRecording, stopRecording, getRecordingStatus } = require('./recorder');
 const { startTranslator, stopTranslator, updateParticipantLang, getTranslatorStatus, getTranslatorLanguages } = require('./translator');
+const { startHoldMusic, stopHoldMusic, getHoldMusicStatus } = require('./hold-music');
 
 let livekitRtc = null;
 try {
@@ -295,6 +296,36 @@ async function joinRoom(roomName, userId, userToken) {
   await room.localParticipant.publishTrack(audioTrack, publishOpts);
   console.log('AI audio track published to room:', roomName);
 }
+
+// ── HOLD MUSIC ──
+
+app.post('/hold-music/start', async (req, res) => {
+  const { roomName } = req.body;
+  if (!roomName) return res.status(400).json({ error: 'roomName required' });
+  try {
+    const result = await startHoldMusic(roomName);
+    res.json(result);
+  } catch (e) {
+    console.error('Hold music start error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/hold-music/stop', async (req, res) => {
+  const { roomName } = req.body;
+  if (!roomName) return res.status(400).json({ error: 'roomName required' });
+  try {
+    const result = await stopHoldMusic(roomName);
+    res.json(result);
+  } catch (e) {
+    console.error('Hold music stop error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/hold-music/status/:roomName', (req, res) => {
+  res.json(getHoldMusicStatus(req.params.roomName));
+});
 
 const PORT = process.env.PORT || 3100;
 app.listen(PORT, () => console.log('AI Agent listening on :' + PORT));
