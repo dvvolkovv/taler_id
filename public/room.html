@@ -1743,6 +1743,7 @@
       recordingInitiatorId = msg.initiatorId;
       recordingInitiatorName = msg.initiatorName;
       showConsentDialog(msg.initiatorName, msg.recordingActive);
+      updateControlButtons();
     }
 
     function handleConsentResponse(participant, msg) {
@@ -1996,6 +1997,7 @@
       srvRecInitiatorId = msg.initiatorId;
       srvRecInitiatorName = msg.initiatorName;
       showSrvRecConsentDialog(msg.initiatorName, msg.recordingActive);
+      updateControlButtons();
     }
 
     function respondToSrvRecConsent(accepted) {
