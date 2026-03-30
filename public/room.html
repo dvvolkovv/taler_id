@@ -236,6 +236,10 @@
     .ctrl-btn.screen-on svg { stroke: var(--primary); }
     .ctrl-btn.recording { background: rgba(239,68,68,0.20); }
     .ctrl-btn.recording svg { stroke: var(--rec); }
+    .ctrl-btn.srv-rec-on { background: rgba(239,68,68,0.20); }
+    .ctrl-btn.srv-rec-on svg { stroke: var(--rec); }
+    .ctrl-btn.srv-rec-waiting { background: rgba(239,68,68,0.10); }
+    .ctrl-btn.srv-rec-waiting svg { stroke: var(--rec); opacity: 0.6; }
     .ctrl-btn.ai-active { background: rgba(22,126,242,0.25); }
     .ctrl-btn.ai-active svg { stroke: var(--primary); }
     .ctrl-btn.translator-on { background: rgba(16,185,129,0.25); }
@@ -567,7 +571,7 @@
       </div>
       <div class="transcript-indicator" id="transcript-indicator">
         <div class="transcript-dot"></div>
-        <div class="transcript-label">Протокол</div>
+        <div class="transcript-label">Сервер</div>
       </div>
       <div class="call-header-badge" id="participant-count">1</div>
       <button class="copy-link-btn" id="copy-link-btn" onclick="copyRoomLink()" title="Скопировать ссылку">
@@ -686,20 +690,16 @@
           </svg>
         </button>
         <div class="ctrl-label" id="rec-label">Запись</div>
-        <div class="ctrl-btn-tooltip">Запись видео и аудио в файл .webm</div>
+        <div class="ctrl-btn-tooltip">Запись локально на устройство в файл .webm (с согласием участников)</div>
       </div>
       <div class="ctrl-wrap">
-        <button class="ctrl-btn" id="btn-transcript" onclick="toggleTranscription()" title="Протоколирование">
+        <button class="ctrl-btn" id="btn-srv-rec" onclick="toggleServerRecording()" title="Запись на сервер">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-            <polyline points="14 2 14 8 20 8"/>
-            <line x1="16" y1="13" x2="8" y2="13"/>
-            <line x1="16" y1="17" x2="8" y2="17"/>
-            <polyline points="10 9 9 9 8 9"/>
+            <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4.03 3-9 3S3 13.66 3 12"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/>
           </svg>
         </button>
-        <div class="ctrl-label" id="transcript-label">Протокол</div>
-        <div class="ctrl-btn-tooltip">Протоколирование встречи (без согласования)</div>
+        <div class="ctrl-label" id="srv-rec-label">На сервер</div>
+        <div class="ctrl-btn-tooltip">Запись на сервер (с согласием участников)</div>
       </div>
       <div class="ctrl-wrap" style="position:relative">
         <button class="ctrl-btn" id="btn-translator" onclick="toggleTranslator()" title="Переводчик">
@@ -780,14 +780,17 @@
     let consentResponses = new Map();   // identity → { name, accepted: true/false/null }
     let recordingApproved = false;      // all consented, recording active
 
-    // ── Transcription state ──
-    let transcriptionActive = false;
-    let transcriptionInitiatorId = null;
-    let transcriptionInitiatorName = '';
+    // ── Server recording state ──
+    let srvRecActive = false;
+    let srvRecInitiatorId = null;
+    let srvRecInitiatorName = '';
+    let srvRecConsentPending = false;
+    let srvRecConsentResponses = new Map();
+    let srvRecApproved = false;
 
     // ── Translator state ──
     let translatorEnabled = false;
-    let translatorLang = 'en';
+    let translatorLang = '';
     let translatorLangs = [];
     let localIdentity = '';
 
@@ -977,11 +980,15 @@
             consentResponses.delete(participant.identity);
             checkAllConsented();
           }
-          // If transcription initiator left, end transcription
-          if (participant.identity === transcriptionInitiatorId && transcriptionActive) {
-            transcriptionActive = false;
-            transcriptionInitiatorId = null;
-            updateTranscriptionUI();
+          // If server recording initiator left, reset
+          if (participant.identity === srvRecInitiatorId && (srvRecActive || srvRecConsentPending)) {
+            removeSrvRecConsentDialog();
+            removeSrvRecConsentStatusUI();
+            resetSrvRecState();
+          }
+          if (srvRecConsentPending && srvRecConsentResponses.has(participant.identity)) {
+            srvRecConsentResponses.delete(participant.identity);
+            checkAllSrvRecConsented();
           }
           if (recordingParticipants.has(participant.identity)) {
             recordingParticipants.delete(participant.identity);
@@ -1026,9 +1033,21 @@
             if (msg.type === 'recording_ended') {
               handleRecordingEnded(msg);
             }
-            // ── Transcription protocol ──
-            if (msg.type === 'transcription_status') {
-              handleTranscriptionStatus(msg);
+            // ── Server recording protocol ──
+            if (msg.type === 'srv_rec_consent_request' && participant) {
+              handleSrvRecConsentRequest(participant, msg);
+            }
+            if (msg.type === 'srv_rec_consent_response' && participant) {
+              handleSrvRecConsentResponse(participant, msg);
+            }
+            if (msg.type === 'srv_rec_approved') {
+              handleSrvRecApproved(msg);
+            }
+            if (msg.type === 'srv_rec_denied') {
+              handleSrvRecDenied(msg);
+            }
+            if (msg.type === 'srv_rec_ended') {
+              handleSrvRecEnded(msg);
             }
           } catch (_) {}
         })
@@ -1042,8 +1061,9 @@
         .on(RoomEvent.Disconnected, () => {
           if (isRecording) stopRecording(true);
           resetRecordingState();
-          transcriptionActive = false;
-          transcriptionInitiatorId = null;
+          removeSrvRecConsentDialog();
+          removeSrvRecConsentStatusUI();
+          resetSrvRecState();
           removeConsentDialog();
           removeConsentStatusUI();
           recordingParticipants.clear();
@@ -1341,14 +1361,14 @@
         recBadge.innerHTML = '<div class="rec-dot"></div><span>REC</span>';
         tile.appendChild(recBadge);
       }
-      // Transcription badge — show on the initiator's tile
-      if (transcriptionActive && transcriptionInitiatorId === id) {
-        const transBadge = document.createElement('div');
-        transBadge.className = 'tile-rec-badge';
-        transBadge.style.background = 'rgba(34,197,94,0.85)';
-        transBadge.style.right = isParticipantRecording ? '70px' : '8px';
-        transBadge.innerHTML = '<span style="font-size:12px">📝</span><span>AI</span>';
-        tile.appendChild(transBadge);
+      // Server recording badge
+      if (srvRecActive && srvRecInitiatorId === id) {
+        const srvBadge = document.createElement('div');
+        srvBadge.className = 'tile-rec-badge';
+        srvBadge.style.background = 'rgba(239,68,68,0.85)';
+        srvBadge.style.right = isParticipantRecording ? '70px' : '8px';
+        srvBadge.innerHTML = '<div class="rec-dot" style="width:6px;height:6px"></div><span>SRV</span>';
+        tile.appendChild(srvBadge);
       }
 
       // Screen share tile
@@ -1492,13 +1512,21 @@
       document.getElementById('rec-label').textContent = recActive ? 'Стоп' : 'Запись';
       document.getElementById('speaker-icon-on').style.display = speakerEnabled ? '' : 'none';
       document.getElementById('speaker-icon-off').style.display = speakerEnabled ? 'none' : '';
-      // Transcription button
-      const transcBtn = document.getElementById('btn-transcript');
-      transcBtn.className = 'ctrl-btn' + (transcriptionActive ? ' translator-on' : '');
-      document.getElementById('transcript-label').textContent = transcriptionActive ? 'Стоп' : 'Протокол';
-      // Recording button disabled if not initiator and recording is active
+      // Server recording button
+      const srvRecBtn = document.getElementById('btn-srv-rec');
+      srvRecBtn.className = 'ctrl-btn' + (srvRecActive ? ' srv-rec-on' : srvRecConsentPending ? ' srv-rec-waiting' : '');
+      document.getElementById('srv-rec-label').textContent = srvRecActive ? 'Стоп' : (srvRecConsentPending ? 'Ожидание' : 'На сервер');
+      // Disable for non-initiator from moment consent is requested (not just after approved)
+      if (srvRecInitiatorId && srvRecInitiatorId !== localIdentity) {
+        srvRecBtn.style.opacity = '0.4';
+        srvRecBtn.style.pointerEvents = 'none';
+      } else {
+        srvRecBtn.style.opacity = '';
+        srvRecBtn.style.pointerEvents = '';
+      }
+      // Local recording button: disable for non-initiator from moment consent is requested
       const recBtn2 = document.getElementById('btn-rec');
-      if (recordingApproved && recordingInitiatorId !== localIdentity) {
+      if (recordingInitiatorId && recordingInitiatorId !== localIdentity) {
         recBtn2.style.opacity = '0.4';
         recBtn2.style.pointerEvents = 'none';
       } else {
@@ -1507,22 +1535,19 @@
       }
     }
 
-    // toggleAiRecorder removed — replaced by toggleTranscription with consent-free flow
-
     function leaveRoom() {
       if (isRecording) stopRecording(true);
       if (recordingInitiatorId === localIdentity) {
         broadcastData({ type: 'recording_ended', initiatorId: localIdentity });
       }
-      if (transcriptionActive && transcriptionInitiatorId === localIdentity) {
-        // Stop transcription on server before leaving
-        if (room) fetch(`${API_BASE}/voice/rooms/${room.name}/recorder/stop`, { method: 'POST' }).catch(() => {});
-        broadcastData({ type: 'transcription_status', active: false, initiatorId: localIdentity });
+      if (srvRecInitiatorId === localIdentity) {
+        if (srvRecActive) stopServerRecording();
+        broadcastData({ type: 'srv_rec_ended', initiatorId: localIdentity });
       }
       resetRecordingState();
-      transcriptionActive = false;
-      transcriptionInitiatorId = null;
-      updateTranscriptionUI();
+      removeSrvRecConsentDialog();
+      removeSrvRecConsentStatusUI();
+      resetSrvRecState();
       translatorEnabled = false;
       updateTranslatorUI();
       removeConsentDialog();
@@ -1625,8 +1650,8 @@
         endRecordingSession();
         return;
       }
-      // If recording is active by someone else — can't stop
-      if (recordingApproved && recordingInitiatorId !== localIdentity) return;
+      // Only initiator can stop; if someone else is recording/pending — block
+      if (recordingInitiatorId && recordingInitiatorId !== localIdentity) return;
       // Start consent flow
       requestRecordingConsent();
     }
@@ -1893,94 +1918,260 @@
     }
 
     // ═══════════════════════════════════════════
-    // ── TRANSCRIPTION (ПРОТОКОЛИРОВАНИЕ) ──
+    // ── SERVER RECORDING (ЗАПИСЬ НА СЕРВЕР) ──
     // ═══════════════════════════════════════════
 
-    async function toggleTranscription() {
+    function toggleServerRecording() {
       if (!room) return;
-      const roomName = room.name;
-      const btn = document.getElementById('btn-transcript');
-      btn.disabled = true;
+      if (srvRecInitiatorId === localIdentity && (srvRecActive || srvRecConsentPending)) {
+        endServerRecordingSession();
+        return;
+      }
+      if (srvRecInitiatorId && srvRecInitiatorId !== localIdentity) return;
+      requestSrvRecConsent();
+    }
 
+    function requestSrvRecConsent() {
+      if (!room || srvRecConsentPending || srvRecActive) return;
+
+      const participants = Array.from(room.remoteParticipants.values())
+        .filter(p => p.identity !== 'meeting-recorder' && p.identity !== 'voice-translator' && p.identity !== 'ai-assistant');
+
+      srvRecInitiatorId = localIdentity;
+      srvRecInitiatorName = getDisplayName(room.localParticipant);
+      srvRecConsentResponses.clear();
+
+      if (participants.length === 0) {
+        srvRecApproved = true;
+        startServerRecording();
+        broadcastData({ type: 'srv_rec_approved', initiatorId: localIdentity, initiatorName: srvRecInitiatorName });
+        return;
+      }
+
+      srvRecConsentPending = true;
+      participants.forEach(p => {
+        srvRecConsentResponses.set(p.identity, { name: getDisplayName(p), accepted: null });
+      });
+
+      broadcastData({ type: 'srv_rec_consent_request', initiatorId: localIdentity, initiatorName: srvRecInitiatorName });
+      showSrvRecConsentStatusUI();
+      updateControlButtons();
+
+      [2000, 4000, 7000].forEach(delay => {
+        setTimeout(() => {
+          if (!srvRecConsentPending) return;
+          broadcastData({ type: 'srv_rec_consent_request', initiatorId: localIdentity, initiatorName: srvRecInitiatorName });
+        }, delay);
+      });
+    }
+
+    function handleSrvRecConsentRequest(participant, msg) {
+      if (msg.initiatorId === localIdentity) return;
+      if (srvRecActive && srvRecInitiatorId === msg.initiatorId) return;
+      srvRecInitiatorId = msg.initiatorId;
+      srvRecInitiatorName = msg.initiatorName;
+      showSrvRecConsentDialog(msg.initiatorName);
+    }
+
+    function respondToSrvRecConsent(accepted) {
+      removeSrvRecConsentDialog();
+      broadcastData({
+        type: 'srv_rec_consent_response',
+        accepted,
+        responderId: localIdentity,
+        responderName: getDisplayName(room.localParticipant),
+      });
+      if (!accepted) resetSrvRecState();
+    }
+
+    function handleSrvRecConsentResponse(participant, msg) {
+      if (srvRecInitiatorId !== localIdentity) return;
+      if (!srvRecConsentPending) return;
+
+      const identity = participant.identity;
+      if (srvRecConsentResponses.has(identity)) {
+        srvRecConsentResponses.set(identity, {
+          name: msg.responderName || getDisplayName(participant),
+          accepted: msg.accepted,
+        });
+      }
+      showSrvRecConsentStatusUI();
+
+      if (!msg.accepted) {
+        srvRecConsentPending = false;
+        removeSrvRecConsentStatusUI();
+        broadcastData({ type: 'srv_rec_denied', initiatorId: localIdentity, declinedBy: msg.responderName });
+        showNotification(`${msg.responderName} отклонил запись на сервер`, 'error');
+        resetSrvRecState();
+        return;
+      }
+
+      checkAllSrvRecConsented();
+    }
+
+    function checkAllSrvRecConsented() {
+      if (!srvRecConsentPending) return;
+      const all = Array.from(srvRecConsentResponses.values());
+      if (all.length === 0) return;
+      if (all.every(r => r.accepted === true)) {
+        srvRecConsentPending = false;
+        srvRecApproved = true;
+        removeSrvRecConsentStatusUI();
+        startServerRecording();
+        broadcastData({ type: 'srv_rec_approved', initiatorId: localIdentity, initiatorName: srvRecInitiatorName });
+        showNotification('Все согласились. Запись на сервер началась.', 'success');
+      }
+    }
+
+    async function startServerRecording() {
+      if (!room || srvRecActive) return;
       try {
-        if (!transcriptionActive) {
-          // Start transcription — no consent needed
-          const res = await fetch(`${API_BASE}/voice/rooms/${roomName}/recorder/start`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ withAi: true }),
-          });
-          if (res.ok) {
-            transcriptionActive = true;
-            transcriptionInitiatorId = localIdentity;
-            transcriptionInitiatorName = getDisplayName(room.localParticipant);
-            broadcastData({
-              type: 'transcription_status',
-              active: true,
-              initiatorId: localIdentity,
-              initiatorName: transcriptionInitiatorName,
-            });
-            updateTranscriptionUI();
-            showNotification('Протоколирование начато', 'success');
-          } else {
-            console.warn('[TRANSCRIPT] Start failed');
-            showNotification('Не удалось начать протоколирование', 'error');
-          }
-        } else {
-          // Only initiator can stop
-          if (transcriptionInitiatorId !== localIdentity) {
-            showNotification('Только инициатор может остановить протоколирование', 'info');
-            btn.disabled = false;
-            return;
-          }
-          const res = await fetch(`${API_BASE}/voice/rooms/${roomName}/recorder/stop`, { method: 'POST' });
-          if (res.ok) {
-            transcriptionActive = false;
-            transcriptionInitiatorId = null;
-            broadcastData({ type: 'transcription_status', active: false, initiatorId: localIdentity });
-            updateTranscriptionUI();
-            showNotification('Протоколирование завершено', 'success');
-          }
-        }
-      } catch (e) {
-        console.error('[TRANSCRIPT] Error:', e);
-        showNotification('Ошибка протоколирования', 'error');
-      } finally {
-        btn.disabled = false;
+        const res = await fetch(`${API_BASE}/voice/rooms/${room.name}/recorder/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ withAi: false }),
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        srvRecActive = true;
+        updateSrvRecUI();
+        updateControlButtons();
+      } catch (err) {
+        console.error('[SRV-REC] Start failed:', err);
+        showNotification('Не удалось начать запись на сервере', 'error');
+        resetSrvRecState();
       }
     }
 
-    function handleTranscriptionStatus(msg) {
-      transcriptionActive = msg.active;
-      if (msg.active) {
-        transcriptionInitiatorId = msg.initiatorId;
-        transcriptionInitiatorName = msg.initiatorName || '';
-      } else {
-        transcriptionInitiatorId = null;
-        transcriptionInitiatorName = '';
+    async function stopServerRecording() {
+      if (!srvRecActive) return;
+      try {
+        await fetch(`${API_BASE}/voice/rooms/${room.name}/recorder/stop`, { method: 'POST' });
+        showNotification('Запись на сервере сохранена', 'success');
+      } catch (err) {
+        console.error('[SRV-REC] Stop failed:', err);
       }
-      updateTranscriptionUI();
-      rerenderAllParticipants();
     }
 
-    function updateTranscriptionUI() {
+    function endServerRecordingSession() {
+      if (srvRecInitiatorId !== localIdentity) return;
+      if (srvRecActive) stopServerRecording();
+      if (srvRecConsentPending) removeSrvRecConsentStatusUI();
+      broadcastData({ type: 'srv_rec_ended', initiatorId: localIdentity });
+      resetSrvRecState();
+    }
+
+    function handleSrvRecApproved(msg) {
+      if (msg.initiatorId === localIdentity) return;
+      srvRecActive = true;
+      srvRecInitiatorId = msg.initiatorId;
+      srvRecInitiatorName = msg.initiatorName || '';
+      removeSrvRecConsentDialog();
+      updateSrvRecUI();
+      updateControlButtons();
+      showNotification('Запись на сервер началась', 'info');
+    }
+
+    function handleSrvRecDenied(msg) {
+      if (msg.initiatorId !== localIdentity) {
+        showNotification(`${msg.declinedBy || 'Участник'} отклонил запись на сервер`, 'error');
+      }
+      removeSrvRecConsentDialog();
+      resetSrvRecState();
+    }
+
+    function handleSrvRecEnded(msg) {
+      if (srvRecActive && srvRecInitiatorId !== localIdentity) {
+        showNotification('Запись на сервере завершена', 'info');
+      }
+      resetSrvRecState();
+    }
+
+    function resetSrvRecState() {
+      srvRecActive = false;
+      srvRecInitiatorId = null;
+      srvRecInitiatorName = '';
+      srvRecConsentPending = false;
+      srvRecApproved = false;
+      srvRecConsentResponses.clear();
+      updateSrvRecUI();
+      updateControlButtons();
+    }
+
+    function updateSrvRecUI() {
       const indicator = document.getElementById('transcript-indicator');
       const banner = document.getElementById('transcript-banner');
       const bannerText = document.getElementById('transcript-banner-text');
-
-      if (transcriptionActive) {
+      if (srvRecActive) {
         indicator.classList.add('active');
-        if (transcriptionInitiatorName) {
-          bannerText.textContent = `${transcriptionInitiatorName} ведёт протоколирование`;
-        } else {
-          bannerText.textContent = 'Протоколирование';
-        }
+        bannerText.textContent = srvRecInitiatorName
+          ? `${srvRecInitiatorName} ведёт запись на сервере`
+          : 'Запись на сервере';
         banner.classList.add('active');
       } else {
         indicator.classList.remove('active');
         banner.classList.remove('active');
       }
-      updateControlButtons();
+    }
+
+    function showSrvRecConsentDialog(initiatorName) {
+      removeSrvRecConsentDialog();
+      const overlay = document.createElement('div');
+      overlay.className = 'consent-overlay';
+      overlay.id = 'srv-rec-consent-overlay';
+      overlay.innerHTML = `
+        <div class="consent-dialog">
+          <div class="consent-icon rec">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:28px;height:28px">
+              <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4.03 3-9 3S3 13.66 3 12"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/>
+            </svg>
+          </div>
+          <div class="consent-title">Запрос записи на сервер</div>
+          <div class="consent-text">
+            <strong>${escapeHtml(initiatorName)}</strong> хочет начать запись встречи на сервере.<br>
+            Ваш голос и видео будут записаны.
+          </div>
+          <div class="consent-buttons">
+            <button class="consent-btn accept" onclick="respondToSrvRecConsent(true)">Согласен</button>
+            <button class="consent-btn decline" onclick="respondToSrvRecConsent(false)">Отклонить</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+    }
+
+    function removeSrvRecConsentDialog() {
+      const el = document.getElementById('srv-rec-consent-overlay');
+      if (el) el.remove();
+    }
+
+    function showSrvRecConsentStatusUI() {
+      let el = document.getElementById('srv-rec-consent-status');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'srv-rec-consent-status';
+        el.className = 'consent-status';
+        document.querySelector('.controls').prepend(el);
+      }
+      const all = Array.from(srvRecConsentResponses.entries());
+      el.innerHTML = `
+        <div class="consent-status-title">Ожидание согласия (запись на сервер)</div>
+        <div class="consent-participants">
+          ${all.map(([, r]) => `
+            <div class="consent-participant">
+              <span>${escapeHtml(r.name)}</span>
+              <span class="status ${r.accepted === null ? 'waiting' : r.accepted ? 'accepted' : 'declined'}">
+                ${r.accepted === null ? 'ожидает' : r.accepted ? '✓' : '✗'}
+              </span>
+            </div>
+          `).join('')}
+        </div>
+        <button class="consent-cancel-btn" onclick="endServerRecordingSession()">Отменить</button>
+      `;
+    }
+
+    function removeSrvRecConsentStatusUI() {
+      const el = document.getElementById('srv-rec-consent-status');
+      if (el) el.remove();
     }
 
     // ── Shared helpers ──
@@ -2303,7 +2494,7 @@
       const list = document.getElementById('translator-lang-list');
       if (!list) return;
       const q = (filter || '').toLowerCase().trim();
-      const filtered = q ? translatorLangs.filter(l => l.name.toLowerCase().includes(q) || l.code.toLowerCase().includes(q)) : translatorLangs;
+      const filtered = (q ? translatorLangs.filter(l => l.name.toLowerCase().includes(q) || l.code.toLowerCase().includes(q)) : [...translatorLangs]).sort((a, b) => a.name.localeCompare(b.name));
       let html = '';
       filtered.forEach(l => {
         const isActive = translatorLang === l.code;
@@ -2313,12 +2504,6 @@
         </div>`;
       });
       if (!filtered.length) html = '<div style="padding:8px 14px;color:var(--text-2);font-size:13px">Не найдено</div>';
-      html += `<div style="padding:8px 12px;border-top:1px solid var(--border);margin-top:4px">
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--text);font-size:13px">
-          <input type="checkbox" id="translator-toggle" ${translatorEnabled ? 'checked' : ''} onchange="toggleTranslatorSwitch(this.checked)" style="width:16px;height:16px;accent-color:var(--primary)">
-          Переводчик ${translatorEnabled ? 'включён' : 'выключен'}
-        </label>
-      </div>`;
       list.innerHTML = html;
     }
 
@@ -2350,6 +2535,18 @@
     }
 
     async function selectTranslatorLang(lang) {
+      // Click on already-selected lang → disable translator
+      if (translatorLang === lang && translatorEnabled) {
+        translatorEnabled = false;
+        translatorLang = '';
+        renderTranslatorLangList();
+        updateTranslatorUI();
+        updateTranslationTrackSubscription();
+        await stopTranslatorAgent();
+        closeAllPopups();
+        return;
+      }
+
       translatorLang = lang;
       const wasEnabled = translatorEnabled;
       translatorEnabled = true;
@@ -2379,6 +2576,15 @@
         await setServerLang(translatorLang);
       } catch (e) {
         console.error('[TRANSLATOR] Start failed:', e);
+      }
+    }
+
+    async function stopTranslatorAgent() {
+      if (!room) return;
+      try {
+        await fetch(`${API_BASE}/voice/rooms/${room.name}/translator/public/stop`, { method: 'POST' });
+      } catch (e) {
+        console.error('[TRANSLATOR] Stop failed:', e);
       }
     }
 
