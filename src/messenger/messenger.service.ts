@@ -887,6 +887,47 @@ export class MessengerService {
     return reactions;
   }
 
+
+  // ─── Message search ───
+
+  async searchMessages(query: string, userId: string) {
+    if (!query || query.length < 2) return [];
+    const conversations = await this.prisma.conversation.findMany({
+      where: { participants: { some: { userId } } },
+      select: { id: true },
+    });
+    const convIds = conversations.map(c => c.id);
+    const messages = await this.prisma.message.findMany({
+      where: {
+        conversationId: { in: convIds },
+        content: { contains: query, mode: "insensitive" },
+        deletedAt: null,
+      },
+      orderBy: { sentAt: "desc" },
+      take: 50,
+      select: {
+        id: true,
+        content: true,
+        sentAt: true,
+        conversationId: true,
+        senderId: true,
+      },
+    });
+    // Enrich with sender names and conversation info
+    const userIds = [...new Set(messages.map(m => m.senderId))];
+    const users = await this.prisma.user.findMany({
+      where: { id: { in: userIds } },
+      select: { id: true, username: true, profile: { select: { firstName: true, lastName: true } } },
+    });
+    const userMap: Record<string, string> = {};
+    for (const u of users) {
+      userMap[u.id] = [u.profile?.firstName, u.profile?.lastName].filter(Boolean).join(" ") || u.username || "";
+    }
+    return messages.map(m => ({
+      ...m,
+      senderName: userMap[m.senderId] || "",
+    }));
+  }
   // ─── Contact Aliases ───
 
   async getContactAliases(ownerId: string) {

@@ -316,6 +316,13 @@ export class MessengerController {
     return this.service.removeContactAlias(user.sub, targetId);
   }
 
+  // ─── Message search ───
+
+  @Get("messages/search")
+  searchMessages(@Query("q") q: string, @CurrentUser() user: any) {
+    return this.service.searchMessages(q, user.sub);
+  }
+
   // ─── User search ───
 
   @Get('users/search')
