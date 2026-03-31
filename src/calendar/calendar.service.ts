@@ -18,7 +18,7 @@ export class CalendarService {
     return this.prisma.calendarEvent.findMany({
       where: { startAt: { gte: startDate, lte: endDate }, OR: [{ userId }, { invites: { some: { userId, status: { in: ["ACCEPTED", "MAYBE"] } } } }] },
       orderBy: { startAt: 'asc' },
-      include: { invites: { include: { user: { select: { id: true, username: true, profile: { select: { firstName: true, lastName: true, avatarUrl: true } } } } } } },
+      include: { user: { select: { id: true, username: true, profile: { select: { firstName: true, lastName: true, avatarUrl: true } } } }, invites: { include: { user: { select: { id: true, username: true, profile: { select: { firstName: true, lastName: true, avatarUrl: true } } } } } } },
     });
   }
 
@@ -123,9 +123,30 @@ export class CalendarService {
   }
 
   async remove(userId: string, id: string) {
-    const event = await this.prisma.calendarEvent.findUnique({ where: { id } });
+    const event = await this.prisma.calendarEvent.findUnique({
+      where: { id },
+      include: { invites: { include: { user: { select: { id: true, fcmToken: true } } } } },
+    });
     if (!event) throw new NotFoundException('Event not found');
     if (event.userId !== userId) throw new ForbiddenException();
+
+    // Notify all invited participants about cancellation
+    const creator = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { profile: { select: { firstName: true, lastName: true } } },
+    });
+    const creatorName = [creator?.profile?.firstName, creator?.profile?.lastName].filter(Boolean).join(' ') || 'User';
+    for (const inv of (event as any).invites || []) {
+      if (inv.user?.fcmToken) {
+        this.fcmService.sendCalendarInvite(
+          inv.user.fcmToken,
+          'Встреча отменена',
+          creatorName + ' отменил: ' + event.title,
+          id,
+        ).catch(() => {});
+      }
+    }
+
     return this.prisma.calendarEvent.delete({ where: { id } });
   }
 
