@@ -853,4 +853,35 @@ export class VoiceService {
     return { id: updated.id, status: 'done' };
   }
 
+
+  // ─── Hold Music ───
+
+  async startHoldMusic(roomName: string) {
+    try {
+      const res = await fetch(AI_AGENT_URL + '/hold-music/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomName }),
+      });
+      return await res.json();
+    } catch (e) {
+      console.error('Failed to start hold music:', e);
+      return { error: 'Hold music agent unavailable' };
+    }
+  }
+
+  async stopHoldMusic(roomName: string) {
+    try {
+      const res = await fetch(AI_AGENT_URL + '/hold-music/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomName }),
+      });
+      return await res.json();
+    } catch (e) {
+      console.error('Failed to stop hold music:', e);
+      return { error: 'Hold music agent unavailable' };
+    }
+  }
+
 }

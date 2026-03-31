@@ -25,7 +25,7 @@ import configuration from './config/configuration';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({
+    ConfigModule.forRoot({ envFilePath: ".env",
       isGlobal: true,
       load: [configuration],
     }),

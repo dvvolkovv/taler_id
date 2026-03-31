@@ -170,6 +170,22 @@ export class CalendarService {
 
   // ─── Invites ───
 
+  private async notifyCalendarParticipants(eventId: string, excludeUserId?: string) {
+    const event = await this.prisma.calendarEvent.findUnique({
+      where: { id: eventId },
+      include: { user: { select: { id: true, fcmToken: true } }, invites: { include: { user: { select: { id: true, fcmToken: true } } } } },
+    });
+    if (!event) return;
+    const tokens = new Set<string>();
+    if (event.user?.fcmToken && event.userId !== excludeUserId) tokens.add(event.user.fcmToken);
+    for (const inv of event.invites || []) {
+      if (inv.user?.fcmToken && inv.userId !== excludeUserId) tokens.add(inv.user.fcmToken);
+    }
+    for (const t of tokens) {
+      this.fcmService.sendCalendarUpdated(t).catch(() => {});
+    }
+  }
+
   async getMyInvites(userId: string) {
     return this.prisma.calendarInvite.findMany({
       where: { userId, status: 'PENDING' },
@@ -190,6 +206,7 @@ export class CalendarService {
       const token = await this.prisma.user.findUnique({ where: { id: event.userId }, select: { fcmToken: true } });
       if (token?.fcmToken) this.fcmService.sendNewMessage(token.fcmToken, 'Принято', name + ' принял(а): ' + event.title, '').catch(() => {});
     }
+    this.notifyCalendarParticipants(invite.eventId, userId);
     return { ok: true };
   }
 
@@ -204,6 +221,7 @@ export class CalendarService {
       const token = await this.prisma.user.findUnique({ where: { id: event.userId }, select: { fcmToken: true } });
       if (token?.fcmToken) this.fcmService.sendNewMessage(token.fcmToken, 'Возможно', name + ' возможно придёт: ' + event.title, '').catch(() => {});
     }
+    this.notifyCalendarParticipants(invite.eventId, userId);
     return { ok: true };
   }
 
@@ -218,6 +236,7 @@ export class CalendarService {
       const token = await this.prisma.user.findUnique({ where: { id: event.userId }, select: { fcmToken: true } });
       if (token?.fcmToken) this.fcmService.sendNewMessage(token.fcmToken, 'Отклонено', name + ' отклонил(а): ' + event.title, '').catch(() => {});
     }
+    this.notifyCalendarParticipants(invite.eventId, userId);
     return { ok: true };
   }
 

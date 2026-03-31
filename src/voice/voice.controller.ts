@@ -268,4 +268,17 @@ export class VoiceController {
   async transcribeRecording(@Param("id") id: string) {
     return this.service.transcribeExistingRecording(id);
   }
+  // ─── Hold Music ───
+
+  @Post("rooms/:roomName/hold-music/start")
+  @UseGuards(JwtAuthGuard)
+  startHoldMusic(@Param("roomName") roomName: string) {
+    return this.service.startHoldMusic(roomName);
+  }
+
+  @Post("rooms/:roomName/hold-music/stop")
+  @UseGuards(JwtAuthGuard)
+  stopHoldMusic(@Param("roomName") roomName: string) {
+    return this.service.stopHoldMusic(roomName);
+  }
 }

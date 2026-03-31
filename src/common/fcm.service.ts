@@ -161,6 +161,18 @@ export class FcmService {
     }
   }
 
+  async sendCalendarUpdated(fcmToken: string): Promise<void> {
+    if (!this.initialized || !fcmToken) return;
+    try {
+      await admin.messaging().send({
+        token: fcmToken,
+        data: { type: 'calendar_updated' },
+        android: { priority: 'high' as const },
+        apns: { payload: { aps: { 'content-available': 1 } }, headers: { 'apns-push-type': 'background', 'apns-priority': '5' } },
+      });
+    } catch (e: any) {}
+  }
+
   async sendContactRequest(fcmToken: string, fromName: string): Promise<void> {
     if (!this.initialized || !fcmToken) return;
     try {
