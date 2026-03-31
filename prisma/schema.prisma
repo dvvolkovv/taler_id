@@ -469,6 +469,7 @@ enum InviteStatus {
   PENDING
   ACCEPTED
   DECLINED
+  MAYBE
 }
 
 // ─── Contact Aliases ───
