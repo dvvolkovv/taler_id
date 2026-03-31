@@ -130,6 +130,37 @@ export class FcmService {
     }
   }
 
+
+  async sendCalendarInvite(fcmToken: string, title: string, body: string, eventId: string): Promise<void> {
+    if (!this.initialized || !fcmToken) return;
+    try {
+      await admin.messaging().send({
+        token: fcmToken,
+        data: { type: 'calendar_invite', eventId },
+        notification: { title, body },
+        android: { priority: 'high' as const },
+        apns: { payload: { aps: { sound: 'default' } } },
+      });
+    } catch (e: any) {
+      this.logger.error('FCM sendCalendarInvite error:', e);
+    }
+  }
+
+  async sendCalendarReminder(fcmToken: string, title: string, body: string, eventId: string): Promise<void> {
+    if (!this.initialized || !fcmToken) return;
+    try {
+      await admin.messaging().send({
+        token: fcmToken,
+        data: { type: 'calendar_reminder', eventId },
+        notification: { title, body },
+        android: { priority: 'high' as const },
+        apns: { payload: { aps: { sound: 'default' } } },
+      });
+    } catch (e: any) {
+      this.logger.error('FCM sendCalendarReminder error:', e);
+    }
+  }
+
   async sendContactRequest(fcmToken: string, fromName: string): Promise<void> {
     if (!this.initialized || !fcmToken) return;
     try {

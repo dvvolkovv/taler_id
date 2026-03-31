@@ -16,7 +16,7 @@ export class CalendarService {
     const startDate = from ? new Date(from) : new Date();
     const endDate = to ? new Date(to) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
     return this.prisma.calendarEvent.findMany({
-      where: { userId, startAt: { gte: startDate, lte: endDate } },
+      where: { startAt: { gte: startDate, lte: endDate }, OR: [{ userId }, { invites: { some: { userId, status: { in: ["ACCEPTED", "MAYBE"] } } } }] },
       orderBy: { startAt: 'asc' },
       include: { invites: { include: { user: { select: { id: true, username: true, profile: { select: { firstName: true, lastName: true, avatarUrl: true } } } } } } },
     });
@@ -32,7 +32,7 @@ export class CalendarService {
   async create(userId: string, data: {
     title: string; description?: string; type: string;
     startAt: string; endAt?: string; allDay?: boolean;
-    reminderAt?: string; contactIds?: string[]; createdBy?: string;
+    reminderAt?: string; contactIds?: string[]; createdBy?: string; displayTime?: string;
   }) {
     const event = await this.prisma.calendarEvent.create({
       data: {
@@ -65,12 +65,12 @@ export class CalendarService {
         include: { profile: { select: { firstName: true, lastName: true } } },
       });
       const creatorName = [creator?.profile?.firstName, creator?.profile?.lastName].filter(Boolean).join(' ') || 'Пользователь';
-      const startFormatted = new Date(data.startAt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+      const startFormatted = data.displayTime || new Date(data.startAt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 
       for (const contactId of data.contactIds) {
         const user = await this.prisma.user.findUnique({ where: { id: contactId }, select: { fcmToken: true } });
         if (user?.fcmToken) {
-          this.fcmService.sendNewMessage(user.fcmToken, 'Приглашение на встречу', creatorName + ' приглашает: ' + data.title + ' (' + startFormatted + ')', '').catch(() => {});
+          this.fcmService.sendCalendarInvite(user.fcmToken, 'Приглашение на встречу', creatorName + ' приглашает: ' + data.title + ' (' + startFormatted + ')', event.id).catch(() => {});
         }
       }
     }
@@ -91,7 +91,35 @@ export class CalendarService {
     if (data.allDay !== undefined) updateData.allDay = data.allDay;
     if (data.reminderAt !== undefined) { updateData.reminderAt = new Date(data.reminderAt); updateData.reminderSent = false; }
     if (data.contactIds !== undefined) updateData.contactIds = data.contactIds;
-    return this.prisma.calendarEvent.update({ where: { id }, data: updateData });
+    const updated = await this.prisma.calendarEvent.update({ where: { id }, data: updateData });
+
+    // Create invites for new contactIds
+    if (data.contactIds && data.contactIds.length > 0) {
+      for (const contactId of data.contactIds) {
+        await this.prisma.calendarInvite.upsert({
+          where: { eventId_userId: { eventId: id, userId: contactId } },
+          create: { eventId: id, userId: contactId, status: 'PENDING' },
+          update: {},
+        });
+      }
+      // Send push invites for new participants
+      const creator = await this.prisma.user.findUnique({
+        where: { id: userId },
+        include: { profile: { select: { firstName: true, lastName: true } } },
+      });
+      const creatorName = [creator?.profile?.firstName, creator?.profile?.lastName].filter(Boolean).join(' ') || 'User';
+      for (const contactId of data.contactIds) {
+        const existing = await this.prisma.calendarInvite.findUnique({ where: { eventId_userId: { eventId: id, userId: contactId } } });
+        if (existing && existing.status === 'PENDING') {
+          const user = await this.prisma.user.findUnique({ where: { id: contactId }, select: { fcmToken: true } });
+          if (user?.fcmToken) {
+            this.fcmService.sendNewMessage(user.fcmToken, 'Приглашение на встречу', creatorName + ' приглашает: ' + event.title, '').catch(() => {});
+          }
+        }
+      }
+    }
+
+    return updated;
   }
 
   async remove(userId: string, id: string) {
@@ -110,7 +138,7 @@ export class CalendarService {
     for (const event of pending) {
       try {
         if (event.user?.fcmToken) {
-          await this.fcmService.sendNewMessage(event.user.fcmToken, 'Напоминание', event.title, '');
+          await this.fcmService.sendCalendarReminder(event.user.fcmToken, 'Напоминание', event.title, event.id);
         }
         await this.prisma.calendarEvent.update({ where: { id: event.id }, data: { reminderSent: true } });
       } catch (e) {
@@ -144,7 +172,21 @@ export class CalendarService {
     return { ok: true };
   }
 
-  async declineInvite(inviteId: string, userId: string) {
+  async maybeInvite(inviteId: string, userId: string) {
+    const invite = await this.prisma.calendarInvite.findUnique({ where: { id: inviteId } });
+    if (!invite || invite.userId !== userId) throw new NotFoundException();
+    await this.prisma.calendarInvite.update({ where: { id: inviteId }, data: { status: 'MAYBE' } });
+    const event = await this.prisma.calendarEvent.findUnique({ where: { id: invite.eventId } });
+    if (event) {
+      const responder = await this.prisma.user.findUnique({ where: { id: userId }, include: { profile: { select: { firstName: true, lastName: true } } } });
+      const name = [responder?.profile?.firstName, responder?.profile?.lastName].filter(Boolean).join(' ') || 'Участник';
+      const token = await this.prisma.user.findUnique({ where: { id: event.userId }, select: { fcmToken: true } });
+      if (token?.fcmToken) this.fcmService.sendNewMessage(token.fcmToken, 'Возможно', name + ' возможно придёт: ' + event.title, '').catch(() => {});
+    }
+    return { ok: true };
+  }
+
+    async declineInvite(inviteId: string, userId: string) {
     const invite = await this.prisma.calendarInvite.findUnique({ where: { id: inviteId } });
     if (!invite || invite.userId !== userId) throw new NotFoundException();
     await this.prisma.calendarInvite.update({ where: { id: inviteId }, data: { status: 'DECLINED' } });
