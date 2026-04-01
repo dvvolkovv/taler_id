@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, ForbiddenException, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { FcmService } from '../common/fcm.service';
 
@@ -115,7 +116,7 @@ export class CalendarService {
         allDay: data.allDay ?? false,
         reminderAt: data.reminderAt ? new Date(data.reminderAt) : null,
         displayTime: data.displayTime ?? null,
-        recurrence: data.recurrence ?? null,
+        recurrence: data.recurrence ?? Prisma.DbNull,
         contactIds: data.contactIds ?? [],
         createdBy: data.createdBy ?? 'MANUAL',
       },
@@ -163,7 +164,7 @@ export class CalendarService {
     if (data.allDay !== undefined) updateData.allDay = data.allDay;
     if (data.reminderAt !== undefined) { updateData.reminderAt = new Date(data.reminderAt); updateData.reminderSent = false; }
     if (data.displayTime !== undefined) updateData.displayTime = data.displayTime;
-    if (data.recurrence !== undefined) updateData.recurrence = data.recurrence ?? null;
+    if (data.recurrence !== undefined) updateData.recurrence = data.recurrence ?? Prisma.DbNull;
     if (data.contactIds !== undefined) updateData.contactIds = data.contactIds;
     const updated = await this.prisma.calendarEvent.update({ where: { id }, data: updateData });
 
