@@ -432,6 +432,7 @@ model CalendarEvent {
   allDay       Boolean           @default(false)
   reminderAt   DateTime?
   reminderSent Boolean           @default(false)
+  displayTime  String?
   contactIds   String[]
   createdBy    String            @default("MANUAL")
   createdAt    DateTime          @default(now())

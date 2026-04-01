@@ -44,6 +44,7 @@ export class CalendarService {
         endAt: data.endAt ? new Date(data.endAt) : null,
         allDay: data.allDay ?? false,
         reminderAt: data.reminderAt ? new Date(data.reminderAt) : null,
+        displayTime: data.displayTime ?? null,
         contactIds: data.contactIds ?? [],
         createdBy: data.createdBy ?? 'MANUAL',
       },
@@ -90,6 +91,7 @@ export class CalendarService {
     if (data.endAt !== undefined) updateData.endAt = new Date(data.endAt);
     if (data.allDay !== undefined) updateData.allDay = data.allDay;
     if (data.reminderAt !== undefined) { updateData.reminderAt = new Date(data.reminderAt); updateData.reminderSent = false; }
+    if (data.displayTime !== undefined) updateData.displayTime = data.displayTime;
     if (data.contactIds !== undefined) updateData.contactIds = data.contactIds;
     const updated = await this.prisma.calendarEvent.update({ where: { id }, data: updateData });
 
@@ -159,7 +161,8 @@ export class CalendarService {
     for (const event of pending) {
       try {
         if (event.user?.fcmToken) {
-          await this.fcmService.sendCalendarReminder(event.user.fcmToken, 'Напоминание', event.title, event.id);
+          const body = event.displayTime ? `${event.title} — ${event.displayTime}` : event.title;
+          await this.fcmService.sendCalendarReminder(event.user.fcmToken, 'Напоминание', body, event.id);
         }
         await this.prisma.calendarEvent.update({ where: { id: event.id }, data: { reminderSent: true } });
       } catch (e) {
