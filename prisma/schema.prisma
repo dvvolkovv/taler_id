@@ -433,6 +433,7 @@ model CalendarEvent {
   reminderAt   DateTime?
   reminderSent Boolean           @default(false)
   displayTime  String?
+  recurrence   Json?
   contactIds   String[]
   createdBy    String            @default("MANUAL")
   createdAt    DateTime          @default(now())

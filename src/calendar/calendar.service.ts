@@ -15,11 +15,80 @@ export class CalendarService {
   async findByRange(userId: string, from?: string, to?: string) {
     const startDate = from ? new Date(from) : new Date();
     const endDate = to ? new Date(to) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-    return this.prisma.calendarEvent.findMany({
-      where: { startAt: { gte: startDate, lte: endDate }, OR: [{ userId }, { invites: { some: { userId, status: { in: ["ACCEPTED", "MAYBE"] } } } }] },
+
+    const include = {
+      user: { select: { id: true, username: true, profile: { select: { firstName: true, lastName: true, avatarUrl: true } } } },
+      invites: { include: { user: { select: { id: true, username: true, profile: { select: { firstName: true, lastName: true, avatarUrl: true } } } } } },
+    };
+
+    // Fetch: non-recurring events in range + all recurring events that started before endDate
+    const events = await this.prisma.calendarEvent.findMany({
+      where: {
+        OR: [{ userId }, { invites: { some: { userId, status: { in: ['ACCEPTED', 'MAYBE'] } } } }],
+        startAt: { lte: endDate },
+      },
       orderBy: { startAt: 'asc' },
-      include: { user: { select: { id: true, username: true, profile: { select: { firstName: true, lastName: true, avatarUrl: true } } } }, invites: { include: { user: { select: { id: true, username: true, profile: { select: { firstName: true, lastName: true, avatarUrl: true } } } } } } },
+      include,
     });
+
+    const result: any[] = [];
+    for (const event of events) {
+      if ((event as any).recurrence) {
+        const occurrences = this.expandRecurrence(event, startDate, endDate);
+        result.push(...occurrences);
+      } else if (event.startAt >= startDate) {
+        result.push(event);
+      }
+    }
+
+    return result.sort((a: any, b: any) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime());
+  }
+
+  private expandRecurrence(event: any, from: Date, to: Date): any[] {
+    const rec = event.recurrence as any;
+    if (!rec?.frequency) return event.startAt >= from && event.startAt <= to ? [event] : [];
+
+    const frequency: string = rec.frequency;
+    const interval: number = rec.interval || 1;
+    const recEnd: Date | null = rec.endAt ? new Date(rec.endAt) : null;
+    const duration: number = event.endAt ? new Date(event.endAt).getTime() - new Date(event.startAt).getTime() : 0;
+
+    const occurrences: any[] = [];
+    let current = new Date(event.startAt);
+
+    // Advance to first occurrence on or after `from`
+    let safety = 0;
+    while (current < from && safety < 10000) {
+      current = this.advanceDate(current, frequency, interval);
+      if (recEnd && current > recEnd) return occurrences;
+      safety++;
+    }
+
+    // Collect occurrences within [from, to]
+    safety = 0;
+    while (current <= to && safety < 500) {
+      if (recEnd && current > recEnd) break;
+      occurrences.push({
+        ...event,
+        startAt: new Date(current),
+        endAt: event.endAt ? new Date(current.getTime() + duration) : null,
+      });
+      current = this.advanceDate(current, frequency, interval);
+      safety++;
+    }
+
+    return occurrences;
+  }
+
+  private advanceDate(date: Date, frequency: string, interval: number): Date {
+    const d = new Date(date);
+    switch (frequency) {
+      case 'daily':   d.setDate(d.getDate() + interval); break;
+      case 'weekly':  d.setDate(d.getDate() + 7 * interval); break;
+      case 'monthly': d.setMonth(d.getMonth() + interval); break;
+      case 'yearly':  d.setFullYear(d.getFullYear() + interval); break;
+    }
+    return d;
   }
 
   async findOne(userId: string, id: string) {
@@ -33,6 +102,7 @@ export class CalendarService {
     title: string; description?: string; type: string;
     startAt: string; endAt?: string; allDay?: boolean;
     reminderAt?: string; contactIds?: string[]; createdBy?: string; displayTime?: string;
+    recurrence?: { frequency: string; interval?: number; endAt?: string } | null;
   }) {
     const event = await this.prisma.calendarEvent.create({
       data: {
@@ -45,6 +115,7 @@ export class CalendarService {
         allDay: data.allDay ?? false,
         reminderAt: data.reminderAt ? new Date(data.reminderAt) : null,
         displayTime: data.displayTime ?? null,
+        recurrence: data.recurrence ?? null,
         contactIds: data.contactIds ?? [],
         createdBy: data.createdBy ?? 'MANUAL',
       },
@@ -92,6 +163,7 @@ export class CalendarService {
     if (data.allDay !== undefined) updateData.allDay = data.allDay;
     if (data.reminderAt !== undefined) { updateData.reminderAt = new Date(data.reminderAt); updateData.reminderSent = false; }
     if (data.displayTime !== undefined) updateData.displayTime = data.displayTime;
+    if (data.recurrence !== undefined) updateData.recurrence = data.recurrence ?? null;
     if (data.contactIds !== undefined) updateData.contactIds = data.contactIds;
     const updated = await this.prisma.calendarEvent.update({ where: { id }, data: updateData });
 
