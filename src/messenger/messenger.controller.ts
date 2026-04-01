@@ -63,6 +63,9 @@ export class MessengerController {
 
   @Post('conversations')
   async create(@Body('participantId') participantId: string, @CurrentUser() user: any) {
+    // Check if either user has blocked the other
+    const isBlocked = await this.service.isBlockedBy(user.sub, participantId);
+    if (isBlocked) throw new ForbiddenException('Нет доступа');
     // Check if there's an existing conversation (bypass contact check)
     // or if they have an accepted contact
     const hasContact = await this.service.hasContactWith(user.sub, participantId);
@@ -314,6 +317,29 @@ export class MessengerController {
   @Delete("contacts/aliases/:targetId")
   removeAlias(@CurrentUser() user: any, @Param("targetId") targetId: string) {
     return this.service.removeContactAlias(user.sub, targetId);
+  }
+
+
+  // ─── Contact delete & block ───
+
+  @Delete('contacts/:userId')
+  deleteContact(@CurrentUser() user: any, @Param('userId') userId: string) {
+    return this.service.deleteContact(user.sub, userId);
+  }
+
+  @Post('contacts/:userId/block')
+  blockUser(@CurrentUser() user: any, @Param('userId') userId: string) {
+    return this.service.blockUser(user.sub, userId);
+  }
+
+  @Delete('contacts/:userId/block')
+  unblockUser(@CurrentUser() user: any, @Param('userId') userId: string) {
+    return this.service.unblockUser(user.sub, userId);
+  }
+
+  @Get('contacts/:userId/block')
+  isBlocked(@CurrentUser() user: any, @Param('userId') userId: string) {
+    return this.service.isBlockedBy(user.sub, userId).then(blocked => ({ blocked }));
   }
 
   // ─── Message search ───

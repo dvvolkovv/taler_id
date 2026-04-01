@@ -72,6 +72,28 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
         thumbnailMediumUrl: payload.thumbnailMediumUrl,
         thumbnailLargeUrl: payload.thumbnailLargeUrl,
       } : undefined;
+      // For DIRECT conversations, check contact/block status BEFORE saving message
+      const convType = await this.service.getConversationType(payload.conversationId);
+      if (convType === 'DIRECT') {
+        const allParticipants = await this.service.getParticipants(payload.conversationId);
+        const otherParticipant = allParticipants.find(p => p.userId !== client.data.userId);
+        if (otherParticipant) {
+          // Check if sender is blocked by recipient
+          const blocked = await this.prisma.blockedUser.findFirst({
+            where: { blockerId: otherParticipant.userId, blockedId: client.data.userId },
+          });
+          if (blocked) {
+            client.emit('error', { message: 'Вы заблокированы этим пользователем' });
+            return;
+          }
+          // Check if still contacts
+          const stillContacts = await this.service.hasContactWith(client.data.userId, otherParticipant.userId);
+          if (!stillContacts) {
+            client.emit('error', { message: 'Пользователь удалил вас из контактов' });
+            return;
+          }
+        }
+      }
       const msg = await this.service.createMessage(
         payload.conversationId,
         client.data.userId,
@@ -84,6 +106,11 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
       const participants = await this.service.getParticipants(payload.conversationId);
       for (const p of participants) {
         if (p.userId === client.data.userId) continue;
+        // Skip delivery if recipient has blocked sender
+        const isBlocked = await this.prisma.blockedUser.findFirst({
+          where: { blockerId: p.userId, blockedId: client.data.userId },
+        });
+        if (isBlocked) continue;
         this.server.to(`user:${p.userId}`).emit('new_message', enrichedMsg);
         const socketsInConv = await this.server.in(payload.conversationId).fetchSockets();
         const recipientInConv = socketsInConv.some(s => s.data.userId === p.userId);
@@ -197,17 +224,7 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
       return; // No inviteeId and no conversationId — nothing to do
     }
 
-    // Add callees to CallLog so missed calls appear in their history
-    try {
-      const log = await this.prisma.callLog.findUnique({ where: { roomName: payload.roomName } });
-      if (log) {
-        const allIds = new Set([...log.participantIds, ...calleeIds]);
-        await this.prisma.callLog.update({
-          where: { roomName: payload.roomName },
-          data: { participantIds: [...allIds] },
-        });
-      }
-    } catch (_) {}
+    // CallLog will be updated per-callee after passing block/contact checks
 
     // For group calls, emit group_call_started to all participants
     if (isGroup && hasConversation) {
@@ -223,6 +240,27 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
     }
 
     for (const calleeId of calleeIds) {
+      // Skip if callee has blocked the caller
+      const callBlocked = await this.prisma.blockedUser.findFirst({
+        where: { blockerId: calleeId, blockedId: client.data.userId },
+      });
+      if (callBlocked) continue;
+      // For DIRECT calls, skip if not contacts
+      if (!isGroup) {
+        const areContacts = await this.service.hasContactWith(client.data.userId, calleeId);
+        if (!areContacts) continue;
+      }
+      // Add callee to CallLog ONLY after passing all checks
+      try {
+        const log = await this.prisma.callLog.findUnique({ where: { roomName: payload.roomName } });
+        if (log && !log.participantIds.includes(calleeId)) {
+          await this.prisma.callLog.update({
+            where: { roomName: payload.roomName },
+            data: { participantIds: [...log.participantIds, calleeId] },
+          });
+        }
+      } catch (_) {}
+
       // Check mute before sending push (but still send socket event for banner)
       const muted = hasConversation
         ? await this.service.isParticipantMuted(payload.conversationId, calleeId)
@@ -313,9 +351,39 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
       // and ONLY to non-initiators (callees who missed the call).
       // Also skip if endedAt already set (another call_ended already processed).
       if (!wasAnswered && !callLog?.endedAt && initiatorId && p.userId !== initiatorId) {
+        // Skip missed call notification if callee blocked the initiator or not contacts
+        const calleeBlockedInitiator = await this.prisma.blockedUser.findFirst({
+          where: { blockerId: p.userId, blockedId: initiatorId },
+        });
+        if (calleeBlockedInitiator) continue;
+        if (!isGroup) {
+          const areContacts = await this.service.hasContactWith(initiatorId, p.userId);
+          if (!areContacts) continue;
+        }
         const token = await this.service.getFcmToken(p.userId);
         if (token) {
           this.fcmService.sendCallCancelled(token, payload.roomName, callerName).catch(() => {});
+        }
+        // Create system message "Missed call" in the conversation
+        if (payload.conversationId) {
+          try {
+            const missedMsg = await this.prisma.message.create({
+              data: {
+                conversationId: payload.conversationId,
+                senderId: initiatorId,
+                content: '📞 Пропущенный звонок',
+                isSystem: true,
+              },
+            });
+            // conversation lastMessage updated by message creation trigger
+            // Emit to conversation so it appears in real-time
+            this.server.to(payload.conversationId).emit('new_message', {
+              ...missedMsg,
+              sender: { id: initiatorId, username: callerName, profile: null },
+            });
+          } catch (e) {
+            this.logger.error('Failed to create missed call message:', e);
+          }
         }
       }
     }

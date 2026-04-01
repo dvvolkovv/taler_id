@@ -665,6 +665,12 @@ export class MessengerService {
   async sendContactRequest(senderId: string, receiverId: string) {
     if (senderId === receiverId) throw new BadRequestException('Cannot send request to yourself');
 
+    // Check if receiver has blocked sender
+    const blocked = await this.prisma.blockedUser.findFirst({
+      where: { blockerId: receiverId, blockedId: senderId },
+    });
+    if (blocked) throw new ForbiddenException('Не удалось отправить запрос');
+
     // Check if there's already an accepted contact or existing conversation
     const existing = await this.prisma.contactRequest.findUnique({
       where: { senderId_receiverId: { senderId, receiverId } },
@@ -827,23 +833,29 @@ export class MessengerService {
     return !!contact;
   }
 
-  async getContactStatus(myId: string, targetId: string): Promise<{ isContact: boolean; pendingRequest: 'sent' | 'received' | null; requestId: string | null }> {
-    const req = await this.prisma.contactRequest.findFirst({
-      where: {
-        OR: [
-          { senderId: myId, receiverId: targetId },
-          { senderId: targetId, receiverId: myId },
-        ],
-      },
-      orderBy: { createdAt: 'desc' },
-    });
-    if (!req) return { isContact: false, pendingRequest: null, requestId: null };
-    if (req.status === 'ACCEPTED') return { isContact: true, pendingRequest: null, requestId: null };
+  async getContactStatus(myId: string, targetId: string): Promise<{ isContact: boolean; pendingRequest: 'sent' | 'received' | null; requestId: string | null; isBlocked: boolean; iBlockedThem: boolean }> {
+    const [req, block, iBlock] = await Promise.all([
+      this.prisma.contactRequest.findFirst({
+        where: {
+          OR: [
+            { senderId: myId, receiverId: targetId },
+            { senderId: targetId, receiverId: myId },
+          ],
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.blockedUser.findFirst({ where: { blockerId: targetId, blockedId: myId } }),
+      this.prisma.blockedUser.findFirst({ where: { blockerId: myId, blockedId: targetId } }),
+    ]);
+    const isBlocked = !!block;
+    const iBlockedThem = !!iBlock;
+    if (!req) return { isContact: false, pendingRequest: null, requestId: null, isBlocked, iBlockedThem };
+    if (req.status === 'ACCEPTED') return { isContact: true, pendingRequest: null, requestId: null, isBlocked, iBlockedThem };
     if (req.status === 'PENDING') {
       const dir: 'sent' | 'received' = req.senderId === myId ? 'sent' : 'received';
-      return { isContact: false, pendingRequest: dir, requestId: req.id };
+      return { isContact: false, pendingRequest: dir, requestId: req.id, isBlocked, iBlockedThem };
     }
-    return { isContact: false, pendingRequest: null, requestId: null };
+    return { isContact: false, pendingRequest: null, requestId: null, isBlocked, iBlockedThem };
   }
 
   // ─── Reactions ───
@@ -949,5 +961,67 @@ export class MessengerService {
       });
     } catch (_) {}
     return { ok: true };
+  }
+
+  async deleteContact(myId: string, targetId: string) {
+    await this.prisma.contactRequest.deleteMany({
+      where: {
+        OR: [
+          { senderId: myId, receiverId: targetId },
+          { senderId: targetId, receiverId: myId },
+        ],
+      },
+    });
+    return { ok: true };
+  }
+
+  async blockUser(myId: string, targetId: string) {
+    // Delete contact relationship first
+    await this.deleteContact(myId, targetId);
+    // Create block record
+    try {
+      await this.prisma.blockedUser.create({
+        data: { blockerId: myId, blockedId: targetId },
+      });
+    } catch (_) {}
+    return { ok: true };
+  }
+
+  async unblockUser(myId: string, targetId: string) {
+    await this.prisma.blockedUser.deleteMany({
+      where: { blockerId: myId, blockedId: targetId },
+    });
+    // Restore contact relationship so they don't need to re-add each other
+    const existing = await this.prisma.contactRequest.findFirst({
+      where: {
+        OR: [
+          { senderId: myId, receiverId: targetId },
+          { senderId: targetId, receiverId: myId },
+        ],
+      },
+    });
+    if (!existing) {
+      await this.prisma.contactRequest.create({
+        data: { senderId: myId, receiverId: targetId, status: 'ACCEPTED' },
+      });
+    } else if (existing.status !== 'ACCEPTED') {
+      await this.prisma.contactRequest.update({
+        where: { id: existing.id },
+        data: { status: 'ACCEPTED' },
+      });
+    }
+    return { ok: true };
+  }
+
+  async isBlockedBy(myId: string, targetId: string): Promise<boolean> {
+    const block = await this.prisma.blockedUser.findFirst({
+      where: {
+        OR: [
+          { blockerId: myId, blockedId: targetId },
+          { blockerId: targetId, blockedId: myId },
+        ],
+      },
+    });
+    return !!block;
   }
 }
