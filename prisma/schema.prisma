@@ -180,6 +180,10 @@ model Conversation {
   description  String?
   createdById  String?
   updatedAt    DateTime  @updatedAt
+  slowMode      Boolean   @default(false)
+  invitePolicy  String    @default("all")
+  autoDeleteDays Int?
+  topicsEnabled Boolean   @default(false)
   participants ConversationParticipant[]
   messages     Message[]
 }
