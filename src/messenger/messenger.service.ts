@@ -647,6 +647,91 @@ export class MessengerService {
 
 
 
+
+
+  // ─── Polls ───
+
+  async createPoll(conversationId: string, senderId: string, question: string, options: string[], isAnonymous = false, isMultiple = false) {
+    await this.assertParticipant(conversationId, senderId);
+    if (options.length < 2 || options.length > 10) throw new BadRequestException("2-10 options required");
+
+    const msg = await this.prisma.message.create({
+      data: {
+        conversationId,
+        senderId,
+        content: "[POLL]" + JSON.stringify({ question }),
+        fileType: "poll",
+      },
+    });
+
+    const poll = await this.prisma.poll.create({
+      data: {
+        messageId: msg.id,
+        question,
+        isAnonymous,
+        isMultiple,
+        options: {
+          create: options.map((text, i) => ({ text, position: i })),
+        },
+      },
+      include: { options: { include: { votes: true } } },
+    });
+
+    return { message: msg, poll };
+  }
+
+  async votePoll(optionId: string, userId: string) {
+    const option = await this.prisma.pollOption.findUnique({
+      where: { id: optionId },
+      include: { poll: true },
+    });
+    if (!option) throw new NotFoundException("Option not found");
+
+    // Check if already voted on this option
+    const existing = await this.prisma.pollVote.findUnique({
+      where: { optionId_userId: { optionId, userId } },
+    });
+
+    if (existing) {
+      // Unvote
+      await this.prisma.pollVote.delete({ where: { id: existing.id } });
+    } else {
+      // If not multiple choice, remove previous votes on other options
+      if (!option.poll.isMultiple) {
+        const allOptions = await this.prisma.pollOption.findMany({ where: { pollId: option.pollId } });
+        await this.prisma.pollVote.deleteMany({
+          where: { optionId: { in: allOptions.map(o => o.id) }, userId },
+        });
+      }
+      await this.prisma.pollVote.create({ data: { optionId, userId } });
+    }
+
+    return this.getPollData(option.pollId);
+  }
+
+  async getPollData(pollId: string) {
+    return this.prisma.poll.findUnique({
+      where: { id: pollId },
+      include: {
+        options: {
+          include: { votes: { select: { userId: true } } },
+          orderBy: { position: "asc" },
+        },
+      },
+    });
+  }
+
+  async getPollByMessageId(messageId: string) {
+    return this.prisma.poll.findUnique({
+      where: { messageId },
+      include: {
+        options: {
+          include: { votes: { select: { userId: true } } },
+          orderBy: { position: "asc" },
+        },
+      },
+    });
+  }
   // ─── Threads ───
 
   async getThreadReplies(messageId: string) {

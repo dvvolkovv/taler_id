@@ -764,6 +764,39 @@ export class MessengerController {
   }
 
 
+
+  // ─── Polls ───
+
+  @Post("conversations/:id/poll")
+  async createPoll(
+    @Param("id") id: string,
+    @Body("question") question: string,
+    @Body("options") options: string[],
+    @Body("isAnonymous") isAnonymous: boolean,
+    @Body("isMultiple") isMultiple: boolean,
+    @CurrentUser() user: any,
+  ) {
+    const result = await this.service.createPoll(id, user.sub, question, options, isAnonymous, isMultiple);
+    // Emit to conversation via gateway
+    this.gateway.server.to(id).emit("new_message", {
+      ...result.message,
+      senderName: await this.service.getUserDisplayName(user.sub),
+      reactions: [],
+      poll: result.poll,
+    });
+    return result;
+  }
+
+  @Post("polls/:optionId/vote")
+  async votePoll(@Param("optionId") optionId: string, @CurrentUser() user: any) {
+    return this.service.votePoll(optionId, user.sub);
+  }
+
+  @Get("messages/:messageId/poll")
+  async getPoll(@Param("messageId") messageId: string) {
+    return this.service.getPollByMessageId(messageId);
+  }
+
   // ─── Threads ───
 
   @Get("conversations/:convId/messages/:msgId/thread")

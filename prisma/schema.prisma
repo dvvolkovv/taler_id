@@ -225,6 +225,7 @@ model Message {
   deletedAt     DateTime?
   hiddenFor     MessageHidden[]
   reactions     MessageReaction[]
+  poll          Poll?
   editedAt       DateTime?
   fileRecordId   String?
   threadParentId String?
@@ -396,6 +397,40 @@ model ProfileSection {
   @@index([userId])
 }
 
+
+
+model Poll {
+  id             String       @id @default(uuid())
+  messageId      String       @unique
+  question       String
+  isAnonymous    Boolean      @default(false)
+  isMultiple     Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+  options        PollOption[]
+  message        Message      @relation(fields: [messageId], references: [id], onDelete: Cascade)
+}
+
+model PollOption {
+  id       String     @id @default(uuid())
+  pollId   String
+  text     String
+  position Int        @default(0)
+  votes    PollVote[]
+  poll     Poll       @relation(fields: [pollId], references: [id], onDelete: Cascade)
+
+  @@index([pollId])
+}
+
+model PollVote {
+  id       String     @id @default(uuid())
+  optionId String
+  userId   String
+  votedAt  DateTime   @default(now())
+  option   PollOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+
+  @@unique([optionId, userId])
+  @@index([optionId])
+}
 
 model Topic {
   id             String   @id @default(uuid())
