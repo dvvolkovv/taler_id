@@ -762,4 +762,27 @@ export class MessengerController {
     await this.gateway.endCallFromHttp(user.sub, conversationId, roomName);
     return { ok: true };
   }
+
+  // ─── Topics ───
+
+  @Get("conversations/:id/topics")
+  async getTopics(@Param("id") id: string) {
+    return this.service.getTopics(id);
+  }
+
+  @Post("conversations/:id/topics")
+  async createTopic(
+    @Param("id") id: string,
+    @Body("title") title: string,
+    @Body("icon") icon: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.createTopic(id, user.sub, title, icon);
+  }
+
+  @Delete("topics/:topicId")
+  async deleteTopic(@Param("topicId") topicId: string, @CurrentUser() user: any) {
+    await this.service.deleteTopic(topicId, user.sub);
+    return { ok: true };
+  }
 }

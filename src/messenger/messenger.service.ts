@@ -640,6 +640,31 @@ export class MessengerService {
     return log?.roomName ?? null;
   }
 
+
+
+  // ─── Topics ───
+
+  async getTopics(conversationId: string) {
+    return this.prisma.topic.findMany({
+      where: { conversationId },
+      orderBy: { createdAt: "asc" },
+    });
+  }
+
+  async createTopic(conversationId: string, userId: string, title: string, icon?: string) {
+    const conv = await this._getConversationOrThrow(conversationId);
+    if (conv.type !== "GROUP") throw new BadRequestException("Topics only for groups");
+    return this.prisma.topic.create({
+      data: { conversationId, title, icon: icon || "💬", createdBy: userId },
+    });
+  }
+
+  async deleteTopic(topicId: string, userId: string) {
+    const topic = await this.prisma.topic.findUnique({ where: { id: topicId } });
+    if (!topic) throw new NotFoundException("Topic not found");
+    await this.assertGroupRole(topic.conversationId, userId, ["OWNER", "ADMIN"]);
+    await this.prisma.topic.delete({ where: { id: topicId } });
+  }
   async getConversationType(conversationId: string): Promise<string | null> {
     const conv = await this.prisma.conversation.findUnique({
       where: { id: conversationId },

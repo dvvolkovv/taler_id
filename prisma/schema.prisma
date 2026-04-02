@@ -186,6 +186,7 @@ model Conversation {
   topicsEnabled Boolean   @default(false)
   participants ConversationParticipant[]
   messages     Message[]
+  topics       Topic[]
 }
 
 model ConversationParticipant {
@@ -226,6 +227,7 @@ model Message {
   editedAt       DateTime?
   fileRecordId   String?
   threadParentId String?
+  topicId        String?
   fileRecord     FileRecord? @relation(fields: [fileRecordId], references: [id])
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sender         User         @relation(fields: [senderId], references: [id])
@@ -391,6 +393,20 @@ model ProfileSection {
 
   @@unique([userId, type])
   @@index([userId])
+}
+
+
+model Topic {
+  id             String   @id @default(uuid())
+  conversationId String
+  title          String
+  icon           String   @default("💬")
+  createdBy      String
+  createdAt      DateTime @default(now())
+  lastMessageAt  DateTime?
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
 }
 
 model MessageReaction {
