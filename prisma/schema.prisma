@@ -21,6 +21,7 @@ model User {
   username             String?               @unique
   fcmToken             String?
   voipToken            String?
+  lastSeen             DateTime?
   assistantTranscripts AssistantTranscript[]
   auditLogs            AuditLog[]
   kycRecord            KycRecord?

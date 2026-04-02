@@ -212,7 +212,8 @@ export class MessengerService {
       select: {
         id: true,
         username: true,
-        profile: { select: { firstName: true, lastName: true, avatarUrl: true } },
+        lastSeen: true,
+        profile: { select: { firstName: true, lastName: true, avatarUrl: true, status: true } },
       },
     });
     const userMap = Object.fromEntries(users.map((u) => [u.id, u]));
@@ -327,6 +328,8 @@ export class MessengerService {
       otherUserId: otherParticipant?.userId ?? null,
       otherUserName,
       otherUserAvatar: otherUser?.profile?.avatarUrl ?? null,
+      otherUserStatus: otherUser?.profile?.status ?? null,
+      otherUserLastSeen: otherUser?.lastSeen ?? null,
       isMuted: myParticipant?.isMuted ?? false,
       mutedUntil: myParticipant?.mutedUntil ?? null,
       activeCallRoomName: activeCallMap?.[conv.id] ?? null,

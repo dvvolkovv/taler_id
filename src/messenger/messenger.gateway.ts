@@ -47,7 +47,14 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
     }
   }
 
-  handleDisconnect(client: Socket) {}
+  handleDisconnect(client: Socket) {
+    if (client.data.userId) {
+      this.prisma.user.update({
+        where: { id: client.data.userId },
+        data: { lastSeen: new Date() },
+      }).catch(() => {});
+    }
+  }
 
   @SubscribeMessage('join')
   async handleJoin(client: Socket, payload: { conversationId: string }) {
