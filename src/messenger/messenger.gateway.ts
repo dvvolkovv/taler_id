@@ -61,7 +61,7 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
   async handleMessage(client: Socket, payload: {
     conversationId: string; content: string;
     fileUrl?: string; fileName?: string; fileSize?: number; fileType?: string;
-    s3Key?: string; thumbnailSmallUrl?: string; thumbnailMediumUrl?: string; thumbnailLargeUrl?: string;
+    s3Key?: string; thumbnailSmallUrl?: string; thumbnailMediumUrl?: string; thumbnailLargeUrl?: string; silent?: boolean;
   }) {
     try {
       const fileData = payload.fileUrl ? {
@@ -121,7 +121,7 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
           this.server.to(`user:${client.data.userId}`).emit('message_updated', { id: msg.id, isDelivered: true });
         }
         this.logger.log(`FCM: recipientId=${p.userId} online=${isOnline} inConv=${recipientInConv} → push=${!recipientInConv}`);
-        if (!recipientInConv) {
+        if (!recipientInConv && !payload.silent) {
           const muted = await this.service.isParticipantMuted(payload.conversationId, p.userId);
           if (muted) {
             this.logger.log(`FCM skipped for ${p.userId}: conversation muted`);
