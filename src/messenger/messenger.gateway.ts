@@ -4,6 +4,8 @@ import {
   SubscribeMessage,
   OnGatewayConnection,
   OnGatewayDisconnect,
+  ConnectedSocket,
+  MessageBody,
 } from '@nestjs/websockets';
 import { Logger } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
@@ -531,5 +533,26 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
         });
       }
     }
+  }
+
+  @SubscribeMessage("thread_reply")
+  async handleThreadReply(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: { conversationId: string; threadParentId: string; content: string },
+  ) {
+    const msg = await this.service.sendThreadReply(
+      payload.conversationId,
+      client.data.userId,
+      payload.content,
+      payload.threadParentId,
+    );
+    const senderName = await this.service.getUserDisplayName(client.data.userId);
+    const count = await this.service.getThreadCount(payload.threadParentId);
+    this.server.to(payload.conversationId).emit("new_thread_reply", {
+      ...msg,
+      senderName,
+      threadParentId: payload.threadParentId,
+      threadReplyCount: count,
+    });
   }
 }

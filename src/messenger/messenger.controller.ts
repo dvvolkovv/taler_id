@@ -763,6 +763,31 @@ export class MessengerController {
     return { ok: true };
   }
 
+
+  // ─── Threads ───
+
+  @Get("conversations/:convId/messages/:msgId/thread")
+  async getThread(@Param("convId") convId: string, @Param("msgId") msgId: string) {
+    const replies = await this.service.getThreadReplies(msgId);
+    return replies.map(r => ({
+      ...r,
+      senderName: r.sender?.profile?.firstName
+        ? r.sender.profile.firstName + (r.sender.profile.lastName ? " " + r.sender.profile.lastName : "")
+        : r.sender?.username || "User",
+      senderAvatar: r.sender?.profile?.avatarUrl || null,
+    }));
+  }
+
+  @Post("conversations/:convId/messages/:msgId/thread")
+  async sendThreadReply(
+    @Param("convId") convId: string,
+    @Param("msgId") msgId: string,
+    @Body("content") content: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.sendThreadReply(convId, user.sub, content, msgId);
+  }
+
   // ─── Topics ───
 
   @Get("conversations/:id/topics")

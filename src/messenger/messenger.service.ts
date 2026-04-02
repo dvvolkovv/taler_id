@@ -642,6 +642,42 @@ export class MessengerService {
 
 
 
+
+
+  // ─── Threads ───
+
+  async getThreadReplies(messageId: string) {
+    return this.prisma.message.findMany({
+      where: { threadParentId: messageId, deletedAt: null },
+      orderBy: { sentAt: "asc" },
+      include: { sender: { select: { id: true, username: true, profile: { select: { firstName: true, lastName: true, avatarUrl: true } } } } },
+    });
+  }
+
+  async getThreadCount(messageId: string): Promise<number> {
+    return this.prisma.message.count({
+      where: { threadParentId: messageId, deletedAt: null },
+    });
+  }
+
+  async sendThreadReply(conversationId: string, senderId: string, content: string, threadParentId: string, fileData?: any) {
+    const parent = await this.prisma.message.findUnique({ where: { id: threadParentId } });
+    if (!parent) throw new NotFoundException("Parent message not found");
+    if (parent.conversationId !== conversationId) throw new BadRequestException("Message not in this conversation");
+    const msg = await this.prisma.message.create({
+      data: {
+        conversationId,
+        senderId,
+        content,
+        threadParentId,
+        fileUrl: fileData?.fileUrl,
+        fileName: fileData?.fileName,
+        fileSize: fileData?.fileSize,
+        fileType: fileData?.fileType,
+      },
+    });
+    return msg;
+  }
   // ─── Topics ───
 
   async getTopics(conversationId: string) {
