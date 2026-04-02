@@ -34,6 +34,7 @@ export class ProfileService {
       kycStatus: kyc?.status || "UNVERIFIED",
       createdAt: user?.createdAt,
       username: user?.username ?? null,
+      status: profile.status ?? null,
     };
   }
 
@@ -84,6 +85,7 @@ export class ProfileService {
         postalCode: dto.postalCode,
         preferredCurrency: dto.preferredCurrency,
         language: dto.language,
+        status: dto.status,
       },
       create: {
         userId,
@@ -95,6 +97,7 @@ export class ProfileService {
         postalCode: dto.postalCode,
         preferredCurrency: dto.preferredCurrency,
         language: dto.language,
+        status: dto.status,
       },
     });
   }

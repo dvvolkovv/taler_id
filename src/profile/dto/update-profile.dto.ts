@@ -44,6 +44,10 @@ export class UpdateProfileDto {
   @IsString()
   @IsOptional()
   voipToken?: string;
+
+  @IsString()
+  @IsOptional()
+  status?: string;
 }
 
 export class LinkWalletDto {

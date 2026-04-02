@@ -48,6 +48,7 @@ model Profile {
   avatarUrl         String?
   preferredCurrency String?
   language          String     @default("en")
+  status            String?
   createdAt         DateTime   @default(now())
   updatedAt         DateTime   @updatedAt
   personalRoomCode  String?    @unique
@@ -220,6 +221,7 @@ model Message {
   reactions     MessageReaction[]
   editedAt       DateTime?
   fileRecordId   String?
+  threadParentId String?
   fileRecord     FileRecord? @relation(fields: [fileRecordId], references: [id])
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sender         User         @relation(fields: [senderId], references: [id])
