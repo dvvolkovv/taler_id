@@ -283,11 +283,13 @@ enum GroupRole {
   OWNER
   ADMIN
   MEMBER
+  SUBSCRIBER
 }
 
 enum ConvType {
   DIRECT
   GROUP
+  CHANNEL
 }
 
 model CallLog {

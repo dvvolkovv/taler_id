@@ -765,6 +765,29 @@ export class MessengerController {
 
 
 
+
+  // ─── Channels ───
+
+  @Post("channels")
+  async createChannel(
+    @Body("name") name: string,
+    @Body("description") description: string,
+    @Body("avatarUrl") avatarUrl: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.createChannel(user.sub, name, description, avatarUrl);
+  }
+
+  @Post("channels/:id/subscribe")
+  async subscribe(@Param("id") id: string, @CurrentUser() user: any) {
+    return this.service.subscribeToChannel(id, user.sub);
+  }
+
+  @Delete("channels/:id/subscribe")
+  async unsubscribe(@Param("id") id: string, @CurrentUser() user: any) {
+    return this.service.unsubscribeFromChannel(id, user.sub);
+  }
+
   // ─── Polls ───
 
   @Post("conversations/:id/poll")

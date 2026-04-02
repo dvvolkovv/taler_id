@@ -82,8 +82,8 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
         thumbnailLargeUrl: payload.thumbnailLargeUrl,
       } : undefined;
       // For DIRECT conversations, check contact/block status BEFORE saving message
-      const convType = await this.service.getConversationType(payload.conversationId);
-      if (convType === 'DIRECT') {
+      const msgConvType = await this.service.getConversationType(payload.conversationId);
+      if (msgConvType === 'DIRECT') {
         const allParticipants = await this.service.getParticipants(payload.conversationId);
         const otherParticipant = allParticipants.find(p => p.userId !== client.data.userId);
         if (otherParticipant) {
@@ -102,6 +102,10 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
             return;
           }
         }
+      }
+      // Check channel permissions
+      if (msgConvType === "CHANNEL") {
+        await this.service.assertCanPostInChannel(payload.conversationId, client.data.userId);
       }
       const msg = await this.service.createMessage(
         payload.conversationId,
@@ -309,8 +313,8 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
   @SubscribeMessage('call_ended')
   async handleCallEnded(client: Socket, payload: { conversationId: string; roomName: string }) {
     this.logger.log(`[call_ended] from=${client.data.userId} room=${payload.roomName} conv=${payload.conversationId}`);
-    const convType = await this.service.getConversationType(payload.conversationId);
-    const isGroup = convType === 'GROUP';
+    const msgConvType = await this.service.getConversationType(payload.conversationId);
+    const isGroup = msgConvType === 'GROUP';
 
     const participants = await this.service.getParticipants(payload.conversationId);
 

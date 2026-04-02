@@ -649,6 +649,58 @@ export class MessengerService {
 
 
 
+
+
+  // ─── Channels ───
+
+  async createChannel(creatorId: string, name: string, description?: string, avatarUrl?: string) {
+    const conv = await this.prisma.conversation.create({
+      data: {
+        type: "CHANNEL",
+        name,
+        description,
+        avatarUrl,
+        createdById: creatorId,
+        participants: {
+          create: { userId: creatorId, role: "OWNER" },
+        },
+      },
+    });
+    return conv;
+  }
+
+  async subscribeToChannel(channelId: string, userId: string) {
+    const conv = await this._getConversationOrThrow(channelId);
+    if (conv.type !== "CHANNEL") throw new BadRequestException("Not a channel");
+    const existing = await this.prisma.conversationParticipant.findUnique({
+      where: { conversationId_userId: { conversationId: channelId, userId } },
+    });
+    if (existing) throw new BadRequestException("Already subscribed");
+    await this.prisma.conversationParticipant.create({
+      data: { conversationId: channelId, userId, role: "SUBSCRIBER" },
+    });
+    return { ok: true };
+  }
+
+  async unsubscribeFromChannel(channelId: string, userId: string) {
+    const conv = await this._getConversationOrThrow(channelId);
+    if (conv.type !== "CHANNEL") throw new BadRequestException("Not a channel");
+    await this.prisma.conversationParticipant.delete({
+      where: { conversationId_userId: { conversationId: channelId, userId } },
+    });
+    return { ok: true };
+  }
+
+  async assertCanPostInChannel(conversationId: string, userId: string) {
+    const conv = await this._getConversationOrThrow(conversationId);
+    if (conv.type !== "CHANNEL") return; // not a channel, anyone can post
+    const participant = await this.prisma.conversationParticipant.findUnique({
+      where: { conversationId_userId: { conversationId, userId } },
+    });
+    if (!participant || (participant.role !== "OWNER" && participant.role !== "ADMIN")) {
+      throw new ForbiddenException("Only admins can post in channels");
+    }
+  }
   // ─── Polls ───
 
   async createPoll(conversationId: string, senderId: string, question: string, options: string[], isAnonymous = false, isMultiple = false) {
