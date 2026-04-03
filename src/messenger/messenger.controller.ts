@@ -188,6 +188,10 @@ export class MessengerController {
       name: dto.name,
       avatarUrl: dto.avatarUrl,
       description: dto.description,
+      slowMode: dto.slowMode,
+      topicsEnabled: dto.topicsEnabled,
+      autoDeleteDays: dto.autoDeleteDays,
+      invitePolicy: dto.invitePolicy,
     });
     return result;
   }
