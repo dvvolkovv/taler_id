@@ -655,6 +655,25 @@ export class MessengerService {
 
 
 
+
+
+  // ─── Saved Messages ───
+
+  async getOrCreateSavedChat(userId: string): Promise<string> {
+    const existing = await this.prisma.conversation.findFirst({
+      where: { type: "SAVED", participants: { some: { userId } } },
+    });
+    if (existing) return existing.id;
+    const conv = await this.prisma.conversation.create({
+      data: {
+        type: "SAVED",
+        name: "Избранное",
+        createdById: userId,
+        participants: { create: { userId, role: "OWNER" } },
+      },
+    });
+    return conv.id;
+  }
   // ─── Channels ───
 
   async createChannel(creatorId: string, name: string, description?: string, avatarUrl?: string) {

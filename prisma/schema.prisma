@@ -290,6 +290,7 @@ enum ConvType {
   DIRECT
   GROUP
   CHANNEL
+  SAVED
 }
 
 model CallLog {

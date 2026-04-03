@@ -770,6 +770,15 @@ export class MessengerController {
 
 
 
+
+  // ─── Saved Messages ───
+
+  @Post("saved")
+  async getOrCreateSaved(@CurrentUser() user: any) {
+    const convId = await this.service.getOrCreateSavedChat(user.sub);
+    return { conversationId: convId };
+  }
+
   // ─── Channels ───
 
   @Post("channels")
