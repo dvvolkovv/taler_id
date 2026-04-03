@@ -333,6 +333,10 @@ export class MessengerService {
       isMuted: myParticipant?.isMuted ?? false,
       mutedUntil: myParticipant?.mutedUntil ?? null,
       activeCallRoomName: activeCallMap?.[conv.id] ?? null,
+      slowMode: conv.slowMode ?? false,
+      topicsEnabled: conv.topicsEnabled ?? false,
+      autoDeleteDays: conv.autoDeleteDays ?? null,
+      invitePolicy: conv.invitePolicy ?? "all",
     };
   }
 
