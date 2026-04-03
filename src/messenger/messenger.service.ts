@@ -418,8 +418,8 @@ export class MessengerService {
   async createMessage(conversationId: string, senderId: string, content: string, fileData?: {
     fileUrl?: string; fileName?: string; fileSize?: number; fileType?: string;
     s3Key?: string; thumbnailSmallUrl?: string; thumbnailMediumUrl?: string; thumbnailLargeUrl?: string;
-  }) {
-    return this.prisma.message.create({ data: { conversationId, senderId, content, ...fileData } });
+  }, topicId?: string) {
+    return this.prisma.message.create({ data: { conversationId, senderId, content, ...fileData, ...(topicId ? { topicId } : {}) } });
   }
 
   async assertParticipant(conversationId: string, userId: string) {
@@ -844,10 +844,41 @@ export class MessengerService {
   // ─── Topics ───
 
   async getTopics(conversationId: string) {
-    return this.prisma.topic.findMany({
+    const topics = await this.prisma.topic.findMany({
       where: { conversationId },
       orderBy: { createdAt: "asc" },
     });
+    const enriched = await Promise.all(topics.map(async (topic) => {
+      const lastMsg = await this.prisma.message.findFirst({
+        where: { topicId: topic.id, deletedAt: null },
+        orderBy: { sentAt: "desc" },
+        include: {
+          sender: { select: { username: true, profile: { select: { firstName: true, lastName: true } } } },
+        },
+      });
+      let lastMessageContent: string | null = null;
+      if (lastMsg) {
+        if (lastMsg.fileType === 'image') lastMessageContent = '🖼 Фото';
+        else if (lastMsg.fileType === 'video') lastMessageContent = '🎥 Видео';
+        else if (lastMsg.fileType === 'audio') lastMessageContent = '🎵 Голосовое';
+        else if (lastMsg.fileType === 'video_note') lastMessageContent = '📹 Видеосообщение';
+        else lastMessageContent = lastMsg.content;
+      }
+      const senderProfile = (lastMsg as any)?.sender?.profile;
+      const senderName = senderProfile
+        ? ([senderProfile.firstName, senderProfile.lastName].filter(Boolean).join(' ').trim() || (lastMsg as any)?.sender?.username)
+        : ((lastMsg as any)?.sender?.username ?? null);
+      return {
+        ...topic,
+        lastMessageContent,
+        lastMessageAt: lastMsg?.sentAt ?? null,
+        lastMessageSenderId: lastMsg?.senderId ?? null,
+        lastMessageSenderName: senderName ?? null,
+        lastMessageIsDelivered: lastMsg?.isDelivered ?? false,
+        lastMessageIsRead: lastMsg?.isRead ?? false,
+      };
+    }));
+    return enriched;
   }
 
   async createTopic(conversationId: string, userId: string, title: string, icon?: string) {

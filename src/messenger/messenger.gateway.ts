@@ -71,6 +71,7 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
     conversationId: string; content: string;
     fileUrl?: string; fileName?: string; fileSize?: number; fileType?: string;
     s3Key?: string; thumbnailSmallUrl?: string; thumbnailMediumUrl?: string; thumbnailLargeUrl?: string; silent?: boolean;
+    topicId?: string;
   }) {
     try {
       const fileData = payload.fileUrl ? {
@@ -112,6 +113,7 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
         client.data.userId,
         payload.content,
         fileData,
+        payload.topicId,
       );
       const senderName = await this.service.getUserDisplayName(client.data.userId);
       const enrichedMsg = { ...msg, senderName, reactions: [] };
