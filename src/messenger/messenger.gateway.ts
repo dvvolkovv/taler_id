@@ -16,6 +16,7 @@ import { ApnsService } from '../common/apns.service';
 import * as jwt from 'jsonwebtoken';
 import * as fs from 'fs';
 import { PrismaService } from '../prisma/prisma.service';
+import { RedisService } from '../redis/redis.service';
 
 @WebSocketGateway({ namespace: '/messenger', cors: { origin: '*' } })
 export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnect {
@@ -30,6 +31,7 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
     private readonly fcmService: FcmService,
     private readonly apnsService: ApnsService,
     private readonly prisma: PrismaService,
+    private readonly redis: RedisService,
   ) {
     const publicKeyPath = this.configService.get<string>('jwt.publicKeyPath') ?? '';
     this.publicKey = fs.readFileSync(publicKeyPath, 'utf8');
@@ -71,9 +73,19 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
     conversationId: string; content: string;
     fileUrl?: string; fileName?: string; fileSize?: number; fileType?: string;
     s3Key?: string; thumbnailSmallUrl?: string; thumbnailMediumUrl?: string; thumbnailLargeUrl?: string; silent?: boolean;
-    topicId?: string;
+    topicId?: string; clientTempId?: string;
   }) {
     try {
+      // Idempotency: skip duplicate messages sent during reconnects
+      if (payload.clientTempId) {
+        const dedupKey = `msg:dedup:${client.data.userId}:${payload.clientTempId}`;
+        const alreadySent = await this.redis.get(dedupKey);
+        if (alreadySent) {
+          this.logger.log(`[handleMessage] Duplicate clientTempId=${payload.clientTempId}, skipping`);
+          return;
+        }
+        await this.redis.setEx(dedupKey, 120, '1');
+      }
       const fileData = payload.fileUrl ? {
         fileUrl: payload.fileUrl, fileName: payload.fileName,
         fileSize: payload.fileSize, fileType: payload.fileType,
@@ -143,10 +155,23 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
           } else {
             const fcmToken = await this.service.getFcmToken(p.userId);
             if (fcmToken) {
+              const pushText = (() => {
+                const c = payload.content ?? '';
+                if (c.startsWith('[CONTACT]')) return '📇 Контакт';
+                if (c.startsWith('[POLL]')) return '📊 Опрос';
+                if (payload.fileUrl) {
+                  const ft = payload.fileType ?? '';
+                  if (ft === 'image') return '🖼 Фото';
+                  if (ft === 'video') return '🎥 Видео';
+                  if (ft === 'audio') return '🎵 Аудио';
+                  return '📎 Файл';
+                }
+                return c;
+              })();
               this.fcmService.sendNewMessage(
                 fcmToken,
                 senderName,
-                payload.content,
+                pushText,
                 payload.conversationId,
               ).then(() => this.logger.log(`FCM sent to ${p.userId}`))
                .catch(e => this.logger.error(`FCM failed for ${p.userId}:`, e));
