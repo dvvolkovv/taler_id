@@ -503,7 +503,34 @@ export class MessengerController {
   ) {
     if (!key) throw new ForbiddenException('key is required');
     try {
-      const { stream, contentType, contentLength } = await this.fileStorage.getObject(key);
+      const { stream, contentType: rawType, contentLength } = await this.fileStorage.getObject(key);
+      // S3 returns application/octet-stream for files without extension.
+      // Derive MIME from the key so iOS AVPlayer can handle the stream.
+      let contentType = rawType;
+      if (!rawType || rawType === "application/octet-stream") {
+        const ext = key.split(".").pop()?.toLowerCase() ?? "";
+        const mimeMap: Record<string, string> = {
+          mp4: "video/mp4", mov: "video/quicktime", m4a: "audio/mp4",
+          mp3: "audio/mpeg", jpg: "image/jpeg", jpeg: "image/jpeg",
+          png: "image/png", gif: "image/gif", webp: "image/webp",
+          webm: "video/webm", avi: "video/x-msvideo", pdf: "application/pdf",
+        };
+        if (mimeMap[ext]) contentType = mimeMap[ext];
+      }
+      // Last resort: look up the Message that references this key
+      // and map its fileType field to a MIME.
+      if (contentType === "application/octet-stream") {
+        try {
+          const msg = await this.service.findMessageByFileKey(key);
+          if (msg?.fileType) {
+            const ftMap: Record<string, string> = {
+              video: "video/mp4", video_note: "video/mp4",
+              image: "image/jpeg", audio: "audio/mpeg",
+            };
+            if (ftMap[msg.fileType]) contentType = ftMap[msg.fileType];
+          }
+        } catch {}
+      }
       const etag = `"${createHash('md5').update(key).digest('hex')}"`;
       // Return 304 if client has cached version
       if (res.req.headers['if-none-match'] === etag) {

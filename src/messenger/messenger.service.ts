@@ -1283,4 +1283,18 @@ export class MessengerService {
     });
     return !!block;
   }
+
+  /** Find a Message row by the S3 key stored in its fileUrl query parameter. */
+  async findMessageByFileKey(key: string) {
+    // The fileUrl looks like .../download?key=<encoded-key>
+    return this.prisma.message.findFirst({
+      where: {
+        OR: [
+          { s3Key: key },
+          { fileUrl: { contains: encodeURIComponent(key) } },
+        ],
+      },
+      select: { fileType: true },
+    });
+  }
 }
