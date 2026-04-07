@@ -559,7 +559,6 @@
           <div id="creator-avatar" style="width:40px;height:40px;border-radius:50%;overflow:hidden;flex-shrink:0;border:1.5px solid var(--border-s)"></div>
           <div id="creator-name" style="font-size:15px;font-weight:600;color:var(--text)"></div>
         </div>
-        <div style="font-size:12px;color:var(--text-2);margin-top:6px">Голосовая комната</div>
       </div>
       <div class="room-title" id="room-title-text"></div>
       <div class="input-wrap">
@@ -585,6 +584,7 @@
         <div class="icon-fallback"><img src="/room/icon.png" alt="Taler ID"></div>
         <video class="icon-video" loop muted playsinline></video>
       </div>
+      <div id="header-creator" style="display:none;width:28px;height:28px;border-radius:50%;overflow:hidden;flex-shrink:0;border:1.5px solid var(--border-s)"></div>
       <div class="call-header-title" id="call-room-name">Голосовая комната</div>
       <div class="rec-indicator" id="rec-indicator">
         <div class="rec-dot"></div>
@@ -904,14 +904,22 @@
             avatarEl.textContent = ini;
           }
           infoEl.style.display = 'block';
-          // Add creator to call header
-          const headerIcon = document.querySelector('.call-header-icon');
-          if (headerIcon && cAvatar) {
-            const img = document.createElement('img');
-            img.src = cAvatar;
-            img.style.cssText = 'width:100%;height:100%;object-fit:cover;position:absolute;inset:0;z-index:1';
-            headerIcon.appendChild(img);
+          // Add creator avatar + name to call header
+          const hCreator = document.getElementById('header-creator');
+          if (cAvatar) {
+            hCreator.innerHTML = '<img src="' + cAvatar + '" style="width:100%;height:100%;object-fit:cover">';
+          } else {
+            const ini2 = cName.split(' ').map(w => w[0]).join('').toUpperCase().slice(0,2);
+            hCreator.style.background = 'linear-gradient(135deg, var(--primary), var(--primary-dk))';
+            hCreator.style.display = 'flex';
+            hCreator.style.alignItems = 'center';
+            hCreator.style.justifyContent = 'center';
+            hCreator.style.fontSize = '11px';
+            hCreator.style.fontWeight = '700';
+            hCreator.style.color = '#fff';
+            hCreator.textContent = ini2;
           }
+          hCreator.style.display = 'block';
           document.getElementById('call-room-name').textContent = cName;
         }
 
