@@ -45,7 +45,7 @@ a{color:var(--primary);text-decoration:none}
 .page{display:none;flex-direction:column;height:100%;overflow:hidden}
 .page.active{display:flex}
 .auth-page{justify-content:center;align-items:center;padding:24px}
-.auth-card{width:100%;max-width:380px;background:var(--card);border-radius:16px;padding:40px 28px;border:1px solid var(--border-50)}
+.auth-card{width:100%;max-width:380px;background:var(--card);border-radius:20px;padding:40px 28px;border:1px solid var(--border-30);box-shadow:0 8px 32px rgba(0,0,0,0.2),0 0 0 1px rgba(34,197,94,0.05)}
 
 /* ── App Bar ── */
 .app-bar{height:56px;min-height:56px;background:var(--surface);display:flex;align-items:center;padding:0 16px;gap:12px;z-index:5}
@@ -61,6 +61,7 @@ a{color:var(--primary);text-decoration:none}
 .bottom-nav{height:60px;min-height:60px;background:var(--surface);display:flex;z-index:10;border-top:1px solid var(--border-50)}
 .nav-item{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;border:none;background:none;color:var(--text-secondary);cursor:pointer;font-size:11px;font-weight:500;padding:4px 0;transition:color .15s}
 .nav-item.active{color:var(--primary)}
+.nav-item.active::after{content:'';display:block;width:4px;height:4px;background:var(--primary);border-radius:50%;margin-top:2px}
 .nav-item svg{width:24px;height:24px}
 
 /* ── Typography ── */
@@ -73,8 +74,8 @@ a{color:var(--primary);text-decoration:none}
 /* ── Buttons ── */
 .btn{width:100%;height:52px;border:none;border-radius:12px;font-size:16px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:opacity .15s}
 .btn:disabled{opacity:0.5;cursor:not-allowed}
-.btn-primary{background:var(--primary);color:#000}
-.btn-primary:hover:not(:disabled){background:var(--primary-dark)}
+.btn-primary{background:linear-gradient(135deg,var(--primary),var(--primary-dark));color:#000;box-shadow:0 4px 12px rgba(34,197,94,0.25)}
+.btn-primary:hover:not(:disabled){opacity:0.9;box-shadow:0 6px 20px rgba(34,197,94,0.35)}
 .btn-outline{background:transparent;border:2px solid var(--border);color:var(--text-primary)}
 .btn-outline:hover:not(:disabled){border-color:var(--text-secondary)}
 .btn-danger-outline{background:transparent;border:2px solid var(--error);color:var(--error)}
@@ -84,7 +85,7 @@ a{color:var(--primary);text-decoration:none}
 .btn svg{width:18px;height:18px;flex-shrink:0}
 
 /* ── Cards ── */
-.app-card{background:var(--card);border-radius:16px;padding:16px;border:1px solid var(--border-50);margin-bottom:12px}
+.app-card{background:var(--card);border-radius:16px;padding:16px;border:1px solid var(--border-30);margin-bottom:12px;box-shadow:0 2px 8px rgba(0,0,0,0.08)}
 
 /* ── Badges ── */
 .badge{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:20px;font-size:12px;font-weight:600;white-space:nowrap}
@@ -97,7 +98,7 @@ a{color:var(--primary);text-decoration:none}
 /* ── Form ── */
 .form-group{margin-bottom:16px}
 .form-label{display:block;font-size:13px;font-weight:500;color:var(--text-secondary);margin-bottom:6px}
-.form-input{width:100%;padding:12px 16px;background:var(--surface);border:1px solid var(--border);border-radius:10px;font-size:15px;color:var(--text-primary);outline:none;transition:border-color .2s}
+.form-input{width:100%;padding:12px 16px;background:var(--surface);border:1px solid var(--border-30);border-radius:14px;font-size:15px;color:var(--text-primary);outline:none;transition:border-color .2s,box-shadow .2s}
 .form-input:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(34,197,94,0.1)}
 .form-input::placeholder{color:var(--text-secondary);opacity:0.6}
 select.form-input{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394A3B8' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 14px center;padding-right:36px}
@@ -111,7 +112,7 @@ input[type="date"]{color-scheme:dark}
 .info-value{font-size:14px;font-weight:500;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px;text-align:right}
 
 /* ── Icon Box ── */
-.icon-box{width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.icon-box{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
 .icon-box svg{width:18px;height:18px}
 
 /* ── Nav Tile ── */
@@ -134,22 +135,24 @@ input[type="date"]{color-scheme:dark}
 
 /* ── Avatar ── */
 .avatar{border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0}
-.avatar-lg{width:64px;height:64px;font-size:24px}
+.avatar-lg{width:80px;height:80px;font-size:28px}
 .avatar-md{width:44px;height:44px;font-size:16px}
 .avatar-sm{width:32px;height:32px;font-size:13px}
 
 /* ── Profile Header ── */
-.profile-header{display:flex;align-items:center;gap:16px;margin-bottom:20px}
-.profile-header-info{min-width:0;flex:1}
-.profile-header-name{font-size:20px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.profile-header-email{font-size:14px;color:var(--text-secondary);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.profile-header{display:flex;flex-direction:column;align-items:center;gap:12px;margin-bottom:20px;padding:8px 0}
+.profile-header-info{text-align:center;min-width:0;width:100%}
+.profile-header-name{font-size:22px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.profile-header-email{font-size:13px;color:var(--text-secondary);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.avatar-gradient{background:linear-gradient(135deg,rgba(34,197,94,0.3),rgba(34,197,94,0.1))}
 
 /* ── KYC Status Circle ── */
 .kyc-circle{width:80px;height:80px;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 16px}
 .kyc-circle svg{width:40px;height:40px}
 
 /* ── Session Card ── */
-.session-card{display:flex;align-items:center;gap:12px;padding:12px;background:var(--card);border-radius:12px;border:1px solid var(--border-50);margin-bottom:8px}
+.session-card{display:flex;align-items:center;gap:12px;padding:14px;background:var(--card);border-radius:16px;border:1px solid var(--border-30);margin-bottom:8px;transition:border-color .15s}
+.session-card.current{border-color:rgba(34,197,94,0.3);box-shadow:0 0 12px rgba(34,197,94,0.06)}
 .session-card-info{flex:1;min-width:0}
 .session-card-device{font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .session-card-meta{font-size:12px;color:var(--text-secondary);margin-top:2px}
@@ -157,8 +160,8 @@ input[type="date"]{color-scheme:dark}
 .session-card-close svg{width:16px;height:16px}
 
 /* ── Tenant Card ── */
-.tenant-card{display:flex;align-items:center;gap:12px;padding:14px;background:var(--card);border-radius:12px;border:1px solid var(--border-50);margin-bottom:8px;cursor:pointer;transition:border-color .15s}
-.tenant-card:hover{border-color:var(--text-secondary)}
+.tenant-card{display:flex;align-items:center;gap:12px;padding:14px;background:var(--card);border-radius:16px;border:1px solid var(--border-30);margin-bottom:8px;cursor:pointer;transition:border-color .15s,box-shadow .15s}
+.tenant-card:hover{border-color:rgba(34,197,94,0.3);box-shadow:0 2px 12px rgba(34,197,94,0.06)}
 .tenant-card-info{flex:1;min-width:0}
 .tenant-card-name{font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tenant-card-role{font-size:12px;color:var(--text-secondary);margin-top:2px}
@@ -173,7 +176,7 @@ input[type="date"]{color-scheme:dark}
 .member-actions select{background:var(--surface);color:var(--text-primary);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px;outline:none}
 
 /* ── Chat ── */
-.chat-fab{position:absolute;z-index:20;right:16px;bottom:76px;width:56px;height:56px;border-radius:50%;background:var(--primary);color:#000;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 16px rgba(34,197,94,0.3);transition:transform .15s}
+.chat-fab{position:absolute;z-index:20;right:16px;bottom:76px;width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,var(--primary),var(--primary-dark));color:#000;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 20px rgba(34,197,94,0.35);transition:transform .15s}
 .chat-fab:hover{transform:scale(1.05)}
 .chat-fab svg{width:28px;height:28px}
 .chat-panel{position:absolute;inset:0;z-index:30;background:var(--background);display:none;flex-direction:column}
@@ -204,7 +207,7 @@ input[type="date"]{color-scheme:dark}
 .modal-overlay{position:fixed;inset:0;z-index:50;display:none;align-items:center;justify-content:center;padding:24px}
 .modal-overlay.open{display:flex}
 .modal-backdrop{position:absolute;inset:0;background:rgba(0,0,0,0.6)}
-.modal-box{position:relative;background:var(--card);border-radius:16px;padding:24px;width:100%;max-width:340px;border:1px solid var(--border-50)}
+.modal-box{position:relative;background:var(--card);border-radius:20px;padding:28px;width:100%;max-width:340px;border:1px solid var(--border-30);box-shadow:0 12px 40px rgba(0,0,0,0.3)}
 .modal-title{font-size:18px;font-weight:600;margin-bottom:8px}
 .modal-body{font-size:14px;color:var(--text-secondary);margin-bottom:20px;line-height:1.5}
 .modal-actions{display:flex;gap:8px;justify-content:flex-end}
@@ -214,7 +217,7 @@ input[type="date"]{color-scheme:dark}
 .sheet-overlay{position:fixed;inset:0;z-index:40;display:none}
 .sheet-overlay.open{display:block}
 .sheet-backdrop{position:absolute;inset:0;background:rgba(0,0,0,0.5)}
-.sheet-content{position:absolute;bottom:0;left:0;right:0;background:var(--card);border-radius:20px 20px 0 0;padding:24px;max-height:80vh;overflow-y:auto;transform:translateY(100%);transition:transform .25s ease-out}
+.sheet-content{position:absolute;bottom:0;left:0;right:0;background:var(--card);border-radius:20px 20px 0 0;padding:24px;max-height:80vh;overflow-y:auto;transform:translateY(100%);transition:transform .25s ease-out;border:1px solid var(--border-30);border-bottom:none;box-shadow:0 -8px 32px rgba(0,0,0,0.25)}
 .sheet-overlay.open .sheet-content{transform:translateY(0)}
 .sheet-handle{width:36px;height:4px;background:var(--border);border-radius:2px;margin:0 auto 16px}
 .sheet-title{font-size:18px;font-weight:600;margin-bottom:16px}
@@ -584,7 +587,7 @@ function renderBottomNav() {
    ══════════════════════════════════════════════════════════════════ */
 function renderLogin() {
   document.getElementById('page-login').innerHTML = `<div class="auth-card">
-    <div class="text-center mb-24"><div class="h1" style="color:var(--primary)">Taler ID</div><p class="subtitle">Sign in to your account</p></div>
+    <div class="text-center mb-24"><div class="h1" style="background:linear-gradient(135deg,#4ade80,#22d3ee);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">Taler ID</div><p class="subtitle">Sign in to your account</p></div>
     <div id="login-error" style="display:none;background:var(--error-15);border:1px solid rgba(239,68,68,0.3);color:var(--error);padding:12px;border-radius:10px;font-size:14px;margin-bottom:16px"></div>
     <div class="form-group"><label class="form-label">Email</label><input class="form-input" id="login-email" type="email" placeholder="you@example.com" autocomplete="email"></div>
     <div class="form-group"><label class="form-label">Password</label><input class="form-input" id="login-password" type="password" placeholder="••••••••" autocomplete="current-password"></div>
@@ -600,7 +603,7 @@ function renderLogin() {
 
 function renderRegister() {
   document.getElementById('page-register').innerHTML = `<div class="auth-card">
-    <div class="text-center mb-24"><div class="h1" style="color:var(--primary)">Taler ID</div><p class="subtitle">Create your identity</p></div>
+    <div class="text-center mb-24"><div class="h1" style="background:linear-gradient(135deg,#4ade80,#22d3ee);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">Taler ID</div><p class="subtitle">Create your identity</p></div>
     <div id="reg-error" style="display:none;background:var(--error-15);border:1px solid rgba(239,68,68,0.3);color:var(--error);padding:12px;border-radius:10px;font-size:14px;margin-bottom:16px"></div>
     <div class="form-group"><label class="form-label">Email</label><input class="form-input" id="reg-email" type="email" placeholder="you@example.com" autocomplete="email"></div>
     <div class="form-group"><label class="form-label">Password <span style="color:var(--text-secondary);font-weight:400">(min 8 chars)</span></label><input class="form-input" id="reg-password" type="password" placeholder="••••••••" autocomplete="new-password"></div>
@@ -616,7 +619,7 @@ function renderRegister() {
 
 function render2FA() {
   document.getElementById('page-2fa').innerHTML = `<div class="auth-card">
-    <div class="text-center mb-24"><div class="h1" style="color:var(--primary)">Two-Factor Auth</div><p class="subtitle">Enter the code from your authenticator app</p></div>
+    <div class="text-center mb-24"><div class="h1" style="background:linear-gradient(135deg,#4ade80,#22d3ee);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">Two-Factor Auth</div><p class="subtitle">Enter the code from your authenticator app</p></div>
     <div id="twofa-error" style="display:none;background:var(--error-15);border:1px solid rgba(239,68,68,0.3);color:var(--error);padding:12px;border-radius:10px;font-size:14px;margin-bottom:16px"></div>
     <div class="form-group"><label class="form-label">Authentication Code</label><input class="form-input otp-input" id="twofa-code" type="text" placeholder="000000" maxlength="6" autocomplete="one-time-code"></div>
     <button class="btn btn-primary" id="twofa-btn">Verify</button>
@@ -691,23 +694,31 @@ async function renderProfile() {
   const p = S.profile;
   const name = [p.firstName, p.lastName].filter(Boolean).join(' ') || p.email || 'User';
   const kycStatus = (p.kycStatus || 'UNVERIFIED').toUpperCase();
+  const avatarHtml = p.avatarUrl
+    ? `<img src="${esc(p.avatarUrl)}" style="width:80px;height:80px;border-radius:50%;object-fit:cover">`
+    : `<div class="avatar avatar-lg avatar-gradient" style="color:var(--primary)">${initials(name)}</div>`;
 
   c.innerHTML = `
     <div class="app-card">
       <div class="profile-header">
-        <div class="avatar avatar-lg" style="background:var(--primary-15);color:var(--primary)">${initials(name)}</div>
+        ${avatarHtml}
         <div class="profile-header-info">
           <div class="profile-header-name">${esc(name)}</div>
           <div class="profile-header-email">${esc(p.email||'')}</div>
         </div>
-        ${statusBadge(kycStatus)}
+        <div style="margin-top:4px">${statusBadge(kycStatus)}</div>
       </div>
     </div>
+    ${p.username ? `<div class="app-card" style="padding:12px 16px;display:flex;align-items:center;gap:12px">
+      <div class="icon-box" style="background:var(--primary-15);color:var(--primary)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"/></svg></div>
+      <span style="font-size:14px;color:var(--text-secondary)">@${esc(p.username)}</span>
+    </div>` : ''}
     <div class="section-header mt-16">Personal Information</div>
     <div class="app-card">
       <div class="info-row"><span class="info-label">Phone</span><span class="info-value">${esc(p.phone||'—')}</span></div>
       <div class="info-row"><span class="info-label">Country</span><span class="info-value">${esc(p.country||'—')}</span></div>
       <div class="info-row"><span class="info-label">Date of Birth</span><span class="info-value">${formatDate(p.dateOfBirth)}</span></div>
+      ${p.status ? `<div class="info-row"><span class="info-label">Status</span><span class="info-value">${esc(p.status)}</span></div>` : ''}
     </div>`;
 }
 
@@ -857,7 +868,7 @@ async function renderOrgs() {
     S.tenants.forEach(t => {
       const kybStatus = (t.kybStatus||'UNVERIFIED').toUpperCase();
       html += `<div class="tenant-card" data-tid="${t.id}" data-role="${t.role||''}">
-        <div class="avatar avatar-md" style="background:var(--primary-15);color:var(--primary);border-radius:10px">${initials(t.name)}</div>
+        <div class="avatar avatar-md avatar-gradient" style="color:var(--primary);border-radius:12px">${initials(t.name)}</div>
         <div class="tenant-card-info"><div class="tenant-card-name">${esc(t.name)}</div><div class="tenant-card-role">${roleBadge(t.role)}</div></div>
         ${statusBadge(kybStatus)}
       </div>`;
@@ -1092,7 +1103,7 @@ function renderSettings() {
     </div>
 
     <button class="btn btn-danger-outline mt-16" id="set-logout">${I.logout} Sign Out</button>
-    <p class="text-center mt-16 subtitle" style="font-size:12px">Taler ID v1.0.0</p>`;
+    <p class="text-center mt-16 subtitle" style="font-size:12px">Taler ID v1.0.49</p>`;
 
   document.getElementById('set-password').onclick = showChangePasswordSheet;
   document.getElementById('set-sessions').onclick = () => pushSubScreen('sessions');
@@ -1184,13 +1195,13 @@ async function renderSessions() {
   let html = '';
   S.sessions.forEach(s => {
     const ua = parseUA(s.deviceInfo);
-    html += `<div class="session-card">
-      <div class="icon-box" style="background:${s.isCurrent?'var(--primary-15)':'var(--border-30)'};color:${s.isCurrent?'var(--primary)':'var(--text-secondary)'}">${I[ua.icon]||I.devices}</div>
+    html += `<div class="session-card${s.isCurrent?' current':''}">
+      <div class="icon-box" style="background:${s.isCurrent?'var(--primary-15)':'var(--border-30)'};color:${s.isCurrent?'var(--primary)':'var(--text-secondary)'};border-radius:12px">${I[ua.icon]||I.devices}</div>
       <div class="session-card-info">
-        <div class="session-card-device">${esc(ua.name)}${s.isCurrent?' <span class="badge badge-green" style="font-size:10px;padding:2px 6px">Current</span>':''}</div>
+        <div class="session-card-device" style="font-weight:600">${esc(ua.name)}${s.isCurrent?' <span class="badge badge-green" style="font-size:10px;padding:2px 8px"><span style="display:inline-block;width:6px;height:6px;background:#22C55E;border-radius:50%;margin-right:4px"></span>Current</span>':''}</div>
         <div class="session-card-meta">${esc(s.ipAddress||'')} · ${timeAgo(s.createdAt)}</div>
       </div>
-      ${s.isCurrent?'':`<button class="session-card-close" data-sid="${s.id}">${I.close}</button>`}
+      ${s.isCurrent?'':`<button class="session-card-close" data-sid="${s.id}" style="border-radius:10px">${I.close}</button>`}
     </div>`;
   });
   html += `<button class="btn btn-danger-outline mt-16" id="revoke-all">Sign Out All Devices</button>`;

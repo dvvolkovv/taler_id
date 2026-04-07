@@ -6,61 +6,67 @@
   <title>Taler ID — Authorization</title>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
-      background: radial-gradient(ellipse at 50% 30%, rgba(22,163,74,0.08) 0%, transparent 60%), #0d1117;
-      color: #e0e0e0; min-height: 100vh;
+      background: radial-gradient(ellipse at 50% 30%, rgba(22,163,74,0.06) 0%, transparent 60%), #0F0F1A;
+      color: #E2E8F0; min-height: 100vh;
       display: flex; align-items: center; justify-content: center;
+      padding: 20px;
     }
     .card {
-      background: #161b22; border: 1px solid #22C55E33; border-radius: 16px;
-      padding: 40px; width: 400px; box-shadow: 0 8px 32px rgba(34,197,94,0.10);
+      background: #252538; border: 1px solid rgba(51,65,85,0.3); border-radius: 20px;
+      padding: 40px; width: 100%; max-width: 400px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.2), 0 0 0 1px rgba(34,197,94,0.05);
     }
     h2 {
       background: linear-gradient(135deg, #4ade80, #22d3ee);
       -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
       margin-bottom: 8px; text-align: center; font-size: 1.4rem;
     }
-    .subtitle { text-align: center; color: #8b949e; font-size: 0.875rem; margin-bottom: 24px; }
+    .subtitle { text-align: center; color: #94A3B8; font-size: 0.875rem; margin-bottom: 24px; }
     .client-info {
       display: flex; align-items: center; gap: 12px;
-      background: #0d1117; border-radius: 10px; padding: 14px; margin-bottom: 20px;
+      background: #1E1E2E; border-radius: 14px; padding: 16px; margin-bottom: 20px;
+      border: 1px solid rgba(51,65,85,0.3);
     }
     .client-logo {
-      width: 48px; height: 48px; border-radius: 10px; background: #22C55E22;
-      display: flex; align-items: center; justify-content: center; font-size: 1.4rem;
+      width: 48px; height: 48px; border-radius: 12px;
+      background: linear-gradient(135deg, rgba(34,197,94,0.3), rgba(34,197,94,0.1));
+      display: flex; align-items: center; justify-content: center; font-size: 1.4rem; color: #22C55E;
     }
     .client-name { font-weight: 600; font-size: 1rem; }
-    .client-desc { color: #8b949e; font-size: 0.8rem; }
+    .client-desc { color: #94A3B8; font-size: 0.8rem; }
     .scopes { margin-bottom: 24px; }
-    .scopes h3 { font-size: 0.875rem; color: #8b949e; margin-bottom: 10px; }
+    .scopes h3 { font-size: 0.8rem; color: #94A3B8; margin-bottom: 10px; font-weight: 600; letter-spacing: 0.3px; }
     .scope-item {
-      display: flex; align-items: center; gap: 10px;
-      padding: 10px 12px; background: #0d1117; border-radius: 8px; margin-bottom: 6px;
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 14px; background: #1E1E2E; border-radius: 12px; margin-bottom: 6px;
+      border: 1px solid rgba(51,65,85,0.2);
     }
-    .scope-icon { color: #4ade80; font-size: 1rem; }
+    .scope-icon { color: #4ade80; font-size: 1rem; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: rgba(34,197,94,0.1); border-radius: 8px; }
     .scope-name { font-weight: 500; font-size: 0.9rem; }
-    .scope-desc { color: #8b949e; font-size: 0.75rem; }
+    .scope-desc { color: #94A3B8; font-size: 0.75rem; }
     .actions { display: flex; gap: 10px; margin-top: 24px; }
     .btn {
-      flex: 1; padding: 12px; border: none; border-radius: 10px; font-weight: 600;
+      flex: 1; padding: 14px; border: none; border-radius: 14px; font-weight: 600;
       font-size: 0.95rem; cursor: pointer; transition: all 0.2s;
     }
-    .btn-deny { background: #21262d; color: #f87171; border: 1px solid #f8717133; }
-    .btn-deny:hover { background: #f8717122; }
-    .btn-allow { background: linear-gradient(135deg, #22c55e, #16a34a); color: #fff; }
-    .btn-allow:hover { opacity: 0.9; }
-    /* Login form */
+    .btn-deny { background: #1E1E2E; color: #f87171; border: 1px solid rgba(248,113,113,0.2); }
+    .btn-deny:hover { background: rgba(248,113,113,0.08); }
+    .btn-allow { background: linear-gradient(135deg, #22c55e, #16a34a); color: #fff; box-shadow: 0 4px 12px rgba(34,197,94,0.25); }
+    .btn-allow:hover { opacity: 0.9; box-shadow: 0 6px 20px rgba(34,197,94,0.35); }
     .form-group { margin-bottom: 16px; }
-    .form-group label { display: block; font-size: 0.8rem; color: #8b949e; margin-bottom: 6px; }
+    .form-group label { display: block; font-size: 0.8rem; color: #94A3B8; margin-bottom: 6px; font-weight: 500; }
     .form-group input {
-      width: 100%; padding: 10px 14px; background: #0d1117; border: 1px solid #30363d;
-      border-radius: 8px; color: #e0e0e0; font-size: 0.95rem; outline: none;
+      width: 100%; padding: 12px 16px; background: #1E1E2E; border: 1px solid rgba(51,65,85,0.3);
+      border-radius: 14px; color: #E2E8F0; font-size: 0.95rem; outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
     }
-    .form-group input:focus { border-color: #22C55E; }
+    .form-group input:focus { border-color: #22C55E; box-shadow: 0 0 0 3px rgba(34,197,94,0.1); }
+    .form-group input::placeholder { color: #94A3B8; opacity: 0.5; }
     .error { color: #f87171; font-size: 0.8rem; text-align: center; margin-top: 10px; }
-    .loading { text-align: center; color: #8b949e; padding: 40px 0; }
+    .loading { text-align: center; color: #94A3B8; padding: 40px 0; }
     .hidden { display: none; }
   </style>
 </head>
