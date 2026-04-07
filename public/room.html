@@ -549,17 +549,18 @@
     </div>
 
     <div id="step-join" class="step">
-      <div id="creator-info" style="display:none;margin-bottom:24px">
-        <div id="creator-avatar" style="width:72px;height:72px;border-radius:50%;margin:0 auto 12px;overflow:hidden;box-shadow:0 0 20px var(--glow);border:2px solid var(--border-s)">
-        </div>
-        <div id="creator-name" style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:4px"></div>
-        <div style="font-size:12px;color:var(--text-2)">Голосовая комната</div>
-      </div>
-      <div id="join-app-icon" class="app-icon">
+      <div class="app-icon">
         <div class="icon-fallback"><img src="/room/icon.png" alt="Taler ID"></div>
         <video class="icon-video" loop muted playsinline></video>
       </div>
-      <div id="join-app-name" class="app-name">Taler ID</div>
+      <div class="app-name">Taler ID</div>
+      <div id="creator-info" style="display:none;margin:20px 0 8px;display:none">
+        <div style="display:flex;align-items:center;justify-content:center;gap:10px">
+          <div id="creator-avatar" style="width:40px;height:40px;border-radius:50%;overflow:hidden;flex-shrink:0;border:1.5px solid var(--border-s)"></div>
+          <div id="creator-name" style="font-size:15px;font-weight:600;color:var(--text)"></div>
+        </div>
+        <div style="font-size:12px;color:var(--text-2);margin-top:6px">Голосовая комната</div>
+      </div>
       <div class="room-title" id="room-title-text"></div>
       <div class="input-wrap">
         <input type="text" id="guest-name" placeholder="Ваше имя" maxlength="40" autocomplete="name">
@@ -897,17 +898,21 @@
             avatarEl.style.display = 'flex';
             avatarEl.style.alignItems = 'center';
             avatarEl.style.justifyContent = 'center';
-            avatarEl.style.fontSize = '24px';
+            avatarEl.style.fontSize = '16px';
             avatarEl.style.fontWeight = '700';
             avatarEl.style.color = '#fff';
             avatarEl.textContent = ini;
           }
           infoEl.style.display = 'block';
-          // Hide app icon + name when creator is shown
-          document.getElementById('join-app-icon').style.display = 'none';
-          document.getElementById('join-app-name').style.display = 'none';
-          // Also update header with creator info
-          document.getElementById('call-room-name').textContent = roomTitle || (cName + ' — комната');
+          // Add creator to call header
+          const headerIcon = document.querySelector('.call-header-icon');
+          if (headerIcon && cAvatar) {
+            const img = document.createElement('img');
+            img.src = cAvatar;
+            img.style.cssText = 'width:100%;height:100%;object-fit:cover;position:absolute;inset:0;z-index:1';
+            headerIcon.appendChild(img);
+          }
+          document.getElementById('call-room-name').textContent = cName;
         }
 
         showStep('step-join');
