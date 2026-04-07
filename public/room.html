@@ -549,11 +549,17 @@
     </div>
 
     <div id="step-join" class="step">
-      <div class="app-icon">
+      <div id="creator-info" style="display:none;margin-bottom:24px">
+        <div id="creator-avatar" style="width:72px;height:72px;border-radius:50%;margin:0 auto 12px;overflow:hidden;box-shadow:0 0 20px var(--glow);border:2px solid var(--border-s)">
+        </div>
+        <div id="creator-name" style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:4px"></div>
+        <div style="font-size:12px;color:var(--text-2)">Голосовая комната</div>
+      </div>
+      <div id="join-app-icon" class="app-icon">
         <div class="icon-fallback"><img src="/room/icon.png" alt="Taler ID"></div>
         <video class="icon-video" loop muted playsinline></video>
       </div>
-      <div class="app-name">Taler ID</div>
+      <div id="join-app-name" class="app-name">Taler ID</div>
       <div class="room-title" id="room-title-text"></div>
       <div class="input-wrap">
         <input type="text" id="guest-name" placeholder="Ваше имя" maxlength="40" autocomplete="name">
@@ -874,6 +880,36 @@
         roomTitle = data.title || 'Голосовая комната';
         document.getElementById('room-title-text').textContent = roomTitle;
         document.getElementById('call-room-name').textContent = roomTitle;
+
+        // Show creator info if available
+        const cName = data.creatorName;
+        const cAvatar = data.creatorAvatar;
+        if (cName) {
+          const infoEl = document.getElementById('creator-info');
+          const avatarEl = document.getElementById('creator-avatar');
+          const nameEl = document.getElementById('creator-name');
+          nameEl.textContent = cName;
+          if (cAvatar) {
+            avatarEl.innerHTML = '<img src="' + cAvatar + '" style="width:100%;height:100%;object-fit:cover">';
+          } else {
+            const ini = cName.split(' ').map(w => w[0]).join('').toUpperCase().slice(0,2);
+            avatarEl.style.background = 'linear-gradient(135deg, var(--primary), var(--primary-dk))';
+            avatarEl.style.display = 'flex';
+            avatarEl.style.alignItems = 'center';
+            avatarEl.style.justifyContent = 'center';
+            avatarEl.style.fontSize = '24px';
+            avatarEl.style.fontWeight = '700';
+            avatarEl.style.color = '#fff';
+            avatarEl.textContent = ini;
+          }
+          infoEl.style.display = 'block';
+          // Hide app icon + name when creator is shown
+          document.getElementById('join-app-icon').style.display = 'none';
+          document.getElementById('join-app-name').style.display = 'none';
+          // Also update header with creator info
+          document.getElementById('call-room-name').textContent = roomTitle || (cName + ' — комната');
+        }
+
         showStep('step-join');
         document.getElementById('guest-name').focus();
       } catch (e) {
