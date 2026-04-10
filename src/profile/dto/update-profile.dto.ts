@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsDateString, IsIn, Matches } from 'class-validator';
+import { IsString, IsOptional, IsDateString, IsIn, Matches, IsBoolean, IsInt, Min, Max, MaxLength } from 'class-validator';
 
 export class UpdateProfileDto {
   @IsString()
@@ -44,6 +44,26 @@ export class UpdateProfileDto {
   @IsString()
   @IsOptional()
   voipToken?: string;
+
+  @IsBoolean()
+  @IsOptional()
+  aiTwinEnabled?: boolean;
+
+  @IsInt()
+  @Min(15)
+  @Max(60)
+  @IsOptional()
+  aiTwinTimeoutSeconds?: number;
+
+  @IsString()
+  @MaxLength(2000)
+  @IsOptional()
+  aiTwinPrompt?: string;
+
+  @IsString()
+  @MaxLength(100)
+  @IsOptional()
+  aiTwinVoiceId?: string;
 }
 
 export class LinkWalletDto {

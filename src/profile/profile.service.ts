@@ -84,6 +84,10 @@ export class ProfileService {
         postalCode: dto.postalCode,
         preferredCurrency: dto.preferredCurrency,
         language: dto.language,
+        aiTwinEnabled: dto.aiTwinEnabled,
+        aiTwinTimeoutSeconds: dto.aiTwinTimeoutSeconds,
+        aiTwinPrompt: dto.aiTwinPrompt,
+        aiTwinVoiceId: dto.aiTwinVoiceId,
       },
       create: {
         userId,
@@ -95,6 +99,10 @@ export class ProfileService {
         postalCode: dto.postalCode,
         preferredCurrency: dto.preferredCurrency,
         language: dto.language,
+        aiTwinEnabled: dto.aiTwinEnabled,
+        aiTwinTimeoutSeconds: dto.aiTwinTimeoutSeconds,
+        aiTwinPrompt: dto.aiTwinPrompt,
+        aiTwinVoiceId: dto.aiTwinVoiceId,
       },
     });
   }
