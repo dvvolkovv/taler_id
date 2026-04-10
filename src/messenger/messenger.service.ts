@@ -148,7 +148,7 @@ export class MessengerService {
     return { userId: targetUserId, newRole };
   }
 
-  async updateGroupInfo(conversationId: string, requesterId: string, data: { name?: string; avatarUrl?: string; description?: string }) {
+  async updateGroupInfo(conversationId: string, requesterId: string, data: { name?: string; avatarUrl?: string; description?: string; slowMode?: boolean; invitePolicy?: string; autoDeleteDays?: number | null; topicsEnabled?: boolean }) {
     const conv = await this._getConversationOrThrow(conversationId);
     if (conv.type !== 'GROUP') throw new BadRequestException('Not a group conversation');
     await this.assertGroupRole(conversationId, requesterId, ['OWNER', 'ADMIN']);
@@ -156,6 +156,10 @@ export class MessengerService {
     if (data.name !== undefined) update.name = data.name.trim();
     if (data.avatarUrl !== undefined) update.avatarUrl = data.avatarUrl;
     if (data.description !== undefined) update.description = data.description;
+    if (data.slowMode !== undefined) update.slowMode = data.slowMode;
+    if (data.invitePolicy !== undefined) update.invitePolicy = data.invitePolicy;
+    if (data.autoDeleteDays !== undefined) update.autoDeleteDays = data.autoDeleteDays;
+    if (data.topicsEnabled !== undefined) update.topicsEnabled = data.topicsEnabled;
     if (Object.keys(update).length === 0) return conv;
     return this.prisma.conversation.update({
       where: { id: conversationId },
@@ -208,7 +212,8 @@ export class MessengerService {
       select: {
         id: true,
         username: true,
-        profile: { select: { firstName: true, lastName: true, avatarUrl: true } },
+        lastSeen: true,
+        profile: { select: { firstName: true, lastName: true, avatarUrl: true, status: true } },
       },
     });
     const userMap = Object.fromEntries(users.map((u) => [u.id, u]));
@@ -323,9 +328,15 @@ export class MessengerService {
       otherUserId: otherParticipant?.userId ?? null,
       otherUserName,
       otherUserAvatar: otherUser?.profile?.avatarUrl ?? null,
+      otherUserStatus: otherUser?.profile?.status ?? null,
+      otherUserLastSeen: otherUser?.lastSeen ?? null,
       isMuted: myParticipant?.isMuted ?? false,
       mutedUntil: myParticipant?.mutedUntil ?? null,
       activeCallRoomName: activeCallMap?.[conv.id] ?? null,
+      slowMode: conv.slowMode ?? false,
+      topicsEnabled: conv.topicsEnabled ?? false,
+      autoDeleteDays: conv.autoDeleteDays ?? null,
+      invitePolicy: conv.invitePolicy ?? "all",
     };
   }
 
@@ -407,8 +418,8 @@ export class MessengerService {
   async createMessage(conversationId: string, senderId: string, content: string, fileData?: {
     fileUrl?: string; fileName?: string; fileSize?: number; fileType?: string;
     s3Key?: string; thumbnailSmallUrl?: string; thumbnailMediumUrl?: string; thumbnailLargeUrl?: string;
-  }) {
-    return this.prisma.message.create({ data: { conversationId, senderId, content, ...fileData } });
+  }, topicId?: string) {
+    return this.prisma.message.create({ data: { conversationId, senderId, content, ...fileData, ...(topicId ? { topicId } : {}) } });
   }
 
   async assertParticipant(conversationId: string, userId: string) {
@@ -636,6 +647,254 @@ export class MessengerService {
     return log?.roomName ?? null;
   }
 
+
+
+
+
+
+
+
+
+
+
+  // ─── Saved Messages ───
+
+  async getOrCreateSavedChat(userId: string): Promise<string> {
+    const existing = await this.prisma.conversation.findFirst({
+      where: { type: "SAVED", participants: { some: { userId } } },
+    });
+    if (existing) return existing.id;
+    const conv = await this.prisma.conversation.create({
+      data: {
+        type: "SAVED",
+        name: "Избранное",
+        createdById: userId,
+        participants: { create: { userId, role: "OWNER" } },
+      },
+    });
+    return conv.id;
+  }
+  // ─── Channels ───
+
+  async createChannel(creatorId: string, name: string, description?: string, avatarUrl?: string) {
+    const conv = await this.prisma.conversation.create({
+      data: {
+        type: "CHANNEL",
+        name,
+        description,
+        avatarUrl,
+        createdById: creatorId,
+        participants: {
+          create: { userId: creatorId, role: "OWNER" },
+        },
+      },
+    });
+    return conv;
+  }
+
+  async subscribeToChannel(channelId: string, userId: string) {
+    const conv = await this._getConversationOrThrow(channelId);
+    if (conv.type !== "CHANNEL") throw new BadRequestException("Not a channel");
+    const existing = await this.prisma.conversationParticipant.findUnique({
+      where: { conversationId_userId: { conversationId: channelId, userId } },
+    });
+    if (existing) throw new BadRequestException("Already subscribed");
+    await this.prisma.conversationParticipant.create({
+      data: { conversationId: channelId, userId, role: "SUBSCRIBER" },
+    });
+    return { ok: true };
+  }
+
+  async unsubscribeFromChannel(channelId: string, userId: string) {
+    const conv = await this._getConversationOrThrow(channelId);
+    if (conv.type !== "CHANNEL") throw new BadRequestException("Not a channel");
+    await this.prisma.conversationParticipant.delete({
+      where: { conversationId_userId: { conversationId: channelId, userId } },
+    });
+    return { ok: true };
+  }
+
+  async assertCanPostInChannel(conversationId: string, userId: string) {
+    const conv = await this._getConversationOrThrow(conversationId);
+    if (conv.type !== "CHANNEL") return; // not a channel, anyone can post
+    const participant = await this.prisma.conversationParticipant.findUnique({
+      where: { conversationId_userId: { conversationId, userId } },
+    });
+    if (!participant || (participant.role !== "OWNER" && participant.role !== "ADMIN")) {
+      throw new ForbiddenException("Only admins can post in channels");
+    }
+  }
+  // ─── Polls ───
+
+  async createPoll(conversationId: string, senderId: string, question: string, options: string[], isAnonymous = false, isMultiple = false) {
+    await this.assertParticipant(conversationId, senderId);
+    if (options.length < 2 || options.length > 10) throw new BadRequestException("2-10 options required");
+
+    const msg = await this.prisma.message.create({
+      data: {
+        conversationId,
+        senderId,
+        content: "[POLL]" + JSON.stringify({ question }),
+        fileType: "poll",
+      },
+    });
+
+    const poll = await this.prisma.poll.create({
+      data: {
+        messageId: msg.id,
+        question,
+        isAnonymous,
+        isMultiple,
+        options: {
+          create: options.map((text, i) => ({ text, position: i })),
+        },
+      },
+      include: { options: { include: { votes: true } } },
+    });
+
+    return { message: msg, poll };
+  }
+
+  async votePoll(optionId: string, userId: string) {
+    const option = await this.prisma.pollOption.findUnique({
+      where: { id: optionId },
+      include: { poll: true },
+    });
+    if (!option) throw new NotFoundException("Option not found");
+
+    // Check if already voted on this option
+    const existing = await this.prisma.pollVote.findUnique({
+      where: { optionId_userId: { optionId, userId } },
+    });
+
+    if (existing) {
+      // Unvote
+      await this.prisma.pollVote.delete({ where: { id: existing.id } });
+    } else {
+      // If not multiple choice, remove previous votes on other options
+      if (!option.poll.isMultiple) {
+        const allOptions = await this.prisma.pollOption.findMany({ where: { pollId: option.pollId } });
+        await this.prisma.pollVote.deleteMany({
+          where: { optionId: { in: allOptions.map(o => o.id) }, userId },
+        });
+      }
+      await this.prisma.pollVote.create({ data: { optionId, userId } });
+    }
+
+    return this.getPollData(option.pollId);
+  }
+
+  async getPollData(pollId: string) {
+    return this.prisma.poll.findUnique({
+      where: { id: pollId },
+      include: {
+        options: {
+          include: { votes: { select: { userId: true } } },
+          orderBy: { position: "asc" },
+        },
+      },
+    });
+  }
+
+  async getPollByMessageId(messageId: string) {
+    return this.prisma.poll.findUnique({
+      where: { messageId },
+      include: {
+        options: {
+          include: { votes: { select: { userId: true } } },
+          orderBy: { position: "asc" },
+        },
+      },
+    });
+  }
+  // ─── Threads ───
+
+  async getThreadReplies(messageId: string) {
+    return this.prisma.message.findMany({
+      where: { threadParentId: messageId, deletedAt: null },
+      orderBy: { sentAt: "asc" },
+      include: { sender: { select: { id: true, username: true, profile: { select: { firstName: true, lastName: true, avatarUrl: true } } } } },
+    });
+  }
+
+  async getThreadCount(messageId: string): Promise<number> {
+    return this.prisma.message.count({
+      where: { threadParentId: messageId, deletedAt: null },
+    });
+  }
+
+  async sendThreadReply(conversationId: string, senderId: string, content: string, threadParentId: string, fileData?: any) {
+    const parent = await this.prisma.message.findUnique({ where: { id: threadParentId } });
+    if (!parent) throw new NotFoundException("Parent message not found");
+    if (parent.conversationId !== conversationId) throw new BadRequestException("Message not in this conversation");
+    const msg = await this.prisma.message.create({
+      data: {
+        conversationId,
+        senderId,
+        content,
+        threadParentId,
+        fileUrl: fileData?.fileUrl,
+        fileName: fileData?.fileName,
+        fileSize: fileData?.fileSize,
+        fileType: fileData?.fileType,
+      },
+    });
+    return msg;
+  }
+  // ─── Topics ───
+
+  async getTopics(conversationId: string) {
+    const topics = await this.prisma.topic.findMany({
+      where: { conversationId },
+      orderBy: { createdAt: "asc" },
+    });
+    const enriched = await Promise.all(topics.map(async (topic) => {
+      const lastMsg = await this.prisma.message.findFirst({
+        where: { topicId: topic.id, deletedAt: null },
+        orderBy: { sentAt: "desc" },
+        include: {
+          sender: { select: { username: true, profile: { select: { firstName: true, lastName: true } } } },
+        },
+      });
+      let lastMessageContent: string | null = null;
+      if (lastMsg) {
+        if (lastMsg.fileType === 'image') lastMessageContent = '🖼 Фото';
+        else if (lastMsg.fileType === 'video') lastMessageContent = '🎥 Видео';
+        else if (lastMsg.fileType === 'audio') lastMessageContent = '🎵 Голосовое';
+        else if (lastMsg.fileType === 'video_note') lastMessageContent = '📹 Видеосообщение';
+        else lastMessageContent = lastMsg.content;
+      }
+      const senderProfile = (lastMsg as any)?.sender?.profile;
+      const senderName = senderProfile
+        ? ([senderProfile.firstName, senderProfile.lastName].filter(Boolean).join(' ').trim() || (lastMsg as any)?.sender?.username)
+        : ((lastMsg as any)?.sender?.username ?? null);
+      return {
+        ...topic,
+        lastMessageContent,
+        lastMessageAt: lastMsg?.sentAt ?? null,
+        lastMessageSenderId: lastMsg?.senderId ?? null,
+        lastMessageSenderName: senderName ?? null,
+        lastMessageIsDelivered: lastMsg?.isDelivered ?? false,
+        lastMessageIsRead: lastMsg?.isRead ?? false,
+      };
+    }));
+    return enriched;
+  }
+
+  async createTopic(conversationId: string, userId: string, title: string, icon?: string) {
+    const conv = await this._getConversationOrThrow(conversationId);
+    if (conv.type !== "GROUP") throw new BadRequestException("Topics only for groups");
+    return this.prisma.topic.create({
+      data: { conversationId, title, icon: icon || "💬", createdBy: userId },
+    });
+  }
+
+  async deleteTopic(topicId: string, userId: string) {
+    const topic = await this.prisma.topic.findUnique({ where: { id: topicId } });
+    if (!topic) throw new NotFoundException("Topic not found");
+    await this.assertGroupRole(topic.conversationId, userId, ["OWNER", "ADMIN"]);
+    await this.prisma.topic.delete({ where: { id: topicId } });
+  }
   async getConversationType(conversationId: string): Promise<string | null> {
     const conv = await this.prisma.conversation.findUnique({
       where: { id: conversationId },
@@ -1023,5 +1282,19 @@ export class MessengerService {
       },
     });
     return !!block;
+  }
+
+  /** Find a Message row by the S3 key stored in its fileUrl query parameter. */
+  async findMessageByFileKey(key: string) {
+    // The fileUrl looks like .../download?key=<encoded-key>
+    return this.prisma.message.findFirst({
+      where: {
+        OR: [
+          { s3Key: key },
+          { fileUrl: { contains: encodeURIComponent(key) } },
+        ],
+      },
+      select: { fileType: true },
+    });
   }
 }

@@ -4,6 +4,8 @@ import {
   SubscribeMessage,
   OnGatewayConnection,
   OnGatewayDisconnect,
+  ConnectedSocket,
+  MessageBody,
 } from '@nestjs/websockets';
 import { Logger } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
@@ -14,6 +16,7 @@ import { ApnsService } from '../common/apns.service';
 import * as jwt from 'jsonwebtoken';
 import * as fs from 'fs';
 import { PrismaService } from '../prisma/prisma.service';
+import { RedisService } from '../redis/redis.service';
 
 @WebSocketGateway({ namespace: '/messenger', cors: { origin: '*' } })
 export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnect {
@@ -28,6 +31,7 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
     private readonly fcmService: FcmService,
     private readonly apnsService: ApnsService,
     private readonly prisma: PrismaService,
+    private readonly redis: RedisService,
   ) {
     const publicKeyPath = this.configService.get<string>('jwt.publicKeyPath') ?? '';
     this.publicKey = fs.readFileSync(publicKeyPath, 'utf8');
@@ -45,7 +49,14 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
     }
   }
 
-  handleDisconnect(client: Socket) {}
+  handleDisconnect(client: Socket) {
+    if (client.data.userId) {
+      this.prisma.user.update({
+        where: { id: client.data.userId },
+        data: { lastSeen: new Date() },
+      }).catch(() => {});
+    }
+  }
 
   @SubscribeMessage('join')
   async handleJoin(client: Socket, payload: { conversationId: string }) {
@@ -61,9 +72,20 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
   async handleMessage(client: Socket, payload: {
     conversationId: string; content: string;
     fileUrl?: string; fileName?: string; fileSize?: number; fileType?: string;
-    s3Key?: string; thumbnailSmallUrl?: string; thumbnailMediumUrl?: string; thumbnailLargeUrl?: string;
+    s3Key?: string; thumbnailSmallUrl?: string; thumbnailMediumUrl?: string; thumbnailLargeUrl?: string; silent?: boolean;
+    topicId?: string; clientTempId?: string;
   }) {
     try {
+      // Idempotency: skip duplicate messages sent during reconnects
+      if (payload.clientTempId) {
+        const dedupKey = `msg:dedup:${client.data.userId}:${payload.clientTempId}`;
+        const alreadySent = await this.redis.get(dedupKey);
+        if (alreadySent) {
+          this.logger.log(`[handleMessage] Duplicate clientTempId=${payload.clientTempId}, skipping`);
+          return;
+        }
+        await this.redis.setEx(dedupKey, 120, '1');
+      }
       const fileData = payload.fileUrl ? {
         fileUrl: payload.fileUrl, fileName: payload.fileName,
         fileSize: payload.fileSize, fileType: payload.fileType,
@@ -73,8 +95,8 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
         thumbnailLargeUrl: payload.thumbnailLargeUrl,
       } : undefined;
       // For DIRECT conversations, check contact/block status BEFORE saving message
-      const convType = await this.service.getConversationType(payload.conversationId);
-      if (convType === 'DIRECT') {
+      const msgConvType = await this.service.getConversationType(payload.conversationId);
+      if (msgConvType === 'DIRECT') {
         const allParticipants = await this.service.getParticipants(payload.conversationId);
         const otherParticipant = allParticipants.find(p => p.userId !== client.data.userId);
         if (otherParticipant) {
@@ -94,11 +116,16 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
           }
         }
       }
+      // Check channel permissions
+      if (msgConvType === "CHANNEL") {
+        await this.service.assertCanPostInChannel(payload.conversationId, client.data.userId);
+      }
       const msg = await this.service.createMessage(
         payload.conversationId,
         client.data.userId,
         payload.content,
         fileData,
+        payload.topicId,
       );
       const senderName = await this.service.getUserDisplayName(client.data.userId);
       const enrichedMsg = { ...msg, senderName, reactions: [] };
@@ -121,17 +148,30 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
           this.server.to(`user:${client.data.userId}`).emit('message_updated', { id: msg.id, isDelivered: true });
         }
         this.logger.log(`FCM: recipientId=${p.userId} online=${isOnline} inConv=${recipientInConv} → push=${!recipientInConv}`);
-        if (!recipientInConv) {
+        if (!recipientInConv && !payload.silent) {
           const muted = await this.service.isParticipantMuted(payload.conversationId, p.userId);
           if (muted) {
             this.logger.log(`FCM skipped for ${p.userId}: conversation muted`);
           } else {
             const fcmToken = await this.service.getFcmToken(p.userId);
             if (fcmToken) {
+              const pushText = (() => {
+                const c = payload.content ?? '';
+                if (c.startsWith('[CONTACT]')) return '📇 Контакт';
+                if (c.startsWith('[POLL]')) return '📊 Опрос';
+                if (payload.fileUrl) {
+                  const ft = payload.fileType ?? '';
+                  if (ft === 'image') return '🖼 Фото';
+                  if (ft === 'video') return '🎥 Видео';
+                  if (ft === 'audio') return '🎵 Аудио';
+                  return '📎 Файл';
+                }
+                return c;
+              })();
               this.fcmService.sendNewMessage(
                 fcmToken,
                 senderName,
-                payload.content,
+                pushText,
                 payload.conversationId,
               ).then(() => this.logger.log(`FCM sent to ${p.userId}`))
                .catch(e => this.logger.error(`FCM failed for ${p.userId}:`, e));
@@ -300,8 +340,8 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
   @SubscribeMessage('call_ended')
   async handleCallEnded(client: Socket, payload: { conversationId: string; roomName: string }) {
     this.logger.log(`[call_ended] from=${client.data.userId} room=${payload.roomName} conv=${payload.conversationId}`);
-    const convType = await this.service.getConversationType(payload.conversationId);
-    const isGroup = convType === 'GROUP';
+    const msgConvType = await this.service.getConversationType(payload.conversationId);
+    const isGroup = msgConvType === 'GROUP';
 
     const participants = await this.service.getParticipants(payload.conversationId);
 
@@ -531,5 +571,26 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
         });
       }
     }
+  }
+
+  @SubscribeMessage("thread_reply")
+  async handleThreadReply(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: { conversationId: string; threadParentId: string; content: string },
+  ) {
+    const msg = await this.service.sendThreadReply(
+      payload.conversationId,
+      client.data.userId,
+      payload.content,
+      payload.threadParentId,
+    );
+    const senderName = await this.service.getUserDisplayName(client.data.userId);
+    const count = await this.service.getThreadCount(payload.threadParentId);
+    this.server.to(payload.conversationId).emit("new_thread_reply", {
+      ...msg,
+      senderName,
+      threadParentId: payload.threadParentId,
+      threadReplyCount: count,
+    });
   }
 }

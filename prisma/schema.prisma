@@ -21,6 +21,7 @@ model User {
   username             String?               @unique
   fcmToken             String?
   voipToken            String?
+  lastSeen             DateTime?
   assistantTranscripts AssistantTranscript[]
   auditLogs            AuditLog[]
   kycRecord            KycRecord?
@@ -48,6 +49,7 @@ model Profile {
   avatarUrl         String?
   preferredCurrency String?
   language          String     @default("en")
+  status            String?
   createdAt         DateTime   @default(now())
   updatedAt         DateTime   @updatedAt
   personalRoomCode  String?    @unique
@@ -183,8 +185,13 @@ model Conversation {
   description  String?
   createdById  String?
   updatedAt    DateTime  @updatedAt
+  slowMode      Boolean   @default(false)
+  invitePolicy  String    @default("all")
+  autoDeleteDays Int?
+  topicsEnabled Boolean   @default(false)
   participants ConversationParticipant[]
   messages     Message[]
+  topics       Topic[]
 }
 
 model ConversationParticipant {
@@ -222,8 +229,11 @@ model Message {
   deletedAt     DateTime?
   hiddenFor     MessageHidden[]
   reactions     MessageReaction[]
+  poll          Poll?
   editedAt       DateTime?
   fileRecordId   String?
+  threadParentId String?
+  topicId        String?
   fileRecord     FileRecord? @relation(fields: [fileRecordId], references: [id])
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sender         User         @relation(fields: [senderId], references: [id])
@@ -277,11 +287,14 @@ enum GroupRole {
   OWNER
   ADMIN
   MEMBER
+  SUBSCRIBER
 }
 
 enum ConvType {
   DIRECT
   GROUP
+  CHANNEL
+  SAVED
 }
 
 model CallLog {
@@ -389,6 +402,54 @@ model ProfileSection {
 
   @@unique([userId, type])
   @@index([userId])
+}
+
+
+
+model Poll {
+  id             String       @id @default(uuid())
+  messageId      String       @unique
+  question       String
+  isAnonymous    Boolean      @default(false)
+  isMultiple     Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+  options        PollOption[]
+  message        Message      @relation(fields: [messageId], references: [id], onDelete: Cascade)
+}
+
+model PollOption {
+  id       String     @id @default(uuid())
+  pollId   String
+  text     String
+  position Int        @default(0)
+  votes    PollVote[]
+  poll     Poll       @relation(fields: [pollId], references: [id], onDelete: Cascade)
+
+  @@index([pollId])
+}
+
+model PollVote {
+  id       String     @id @default(uuid())
+  optionId String
+  userId   String
+  votedAt  DateTime   @default(now())
+  option   PollOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+
+  @@unique([optionId, userId])
+  @@index([optionId])
+}
+
+model Topic {
+  id             String   @id @default(uuid())
+  conversationId String
+  title          String
+  icon           String   @default("💬")
+  createdBy      String
+  createdAt      DateTime @default(now())
+  lastMessageAt  DateTime?
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
 }
 
 model MessageReaction {

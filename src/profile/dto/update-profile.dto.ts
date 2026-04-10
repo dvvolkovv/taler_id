@@ -45,6 +45,10 @@ export class UpdateProfileDto {
   @IsOptional()
   voipToken?: string;
 
+  @IsString()
+  @IsOptional()
+  status?: string;
+
   @IsBoolean()
   @IsOptional()
   aiTwinEnabled?: boolean;

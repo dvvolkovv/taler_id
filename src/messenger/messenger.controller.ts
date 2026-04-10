@@ -188,6 +188,10 @@ export class MessengerController {
       name: dto.name,
       avatarUrl: dto.avatarUrl,
       description: dto.description,
+      slowMode: dto.slowMode,
+      topicsEnabled: dto.topicsEnabled,
+      autoDeleteDays: dto.autoDeleteDays,
+      invitePolicy: dto.invitePolicy,
     });
     return result;
   }
@@ -499,7 +503,34 @@ export class MessengerController {
   ) {
     if (!key) throw new ForbiddenException('key is required');
     try {
-      const { stream, contentType, contentLength } = await this.fileStorage.getObject(key);
+      const { stream, contentType: rawType, contentLength } = await this.fileStorage.getObject(key);
+      // S3 returns application/octet-stream for files without extension.
+      // Derive MIME from the key so iOS AVPlayer can handle the stream.
+      let contentType = rawType;
+      if (!rawType || rawType === "application/octet-stream") {
+        const ext = key.split(".").pop()?.toLowerCase() ?? "";
+        const mimeMap: Record<string, string> = {
+          mp4: "video/mp4", mov: "video/quicktime", m4a: "audio/mp4",
+          mp3: "audio/mpeg", jpg: "image/jpeg", jpeg: "image/jpeg",
+          png: "image/png", gif: "image/gif", webp: "image/webp",
+          webm: "video/webm", avi: "video/x-msvideo", pdf: "application/pdf",
+        };
+        if (mimeMap[ext]) contentType = mimeMap[ext];
+      }
+      // Last resort: look up the Message that references this key
+      // and map its fileType field to a MIME.
+      if (contentType === "application/octet-stream") {
+        try {
+          const msg = await this.service.findMessageByFileKey(key);
+          if (msg?.fileType) {
+            const ftMap: Record<string, string> = {
+              video: "video/mp4", video_note: "video/mp4",
+              image: "image/jpeg", audio: "audio/mpeg",
+            };
+            if (ftMap[msg.fileType]) contentType = ftMap[msg.fileType];
+          }
+        } catch {}
+      }
       const etag = `"${createHash('md5').update(key).digest('hex')}"`;
       // Return 304 if client has cached version
       if (res.req.headers['if-none-match'] === etag) {
@@ -760,6 +791,119 @@ export class MessengerController {
     @CurrentUser() user: any,
   ) {
     await this.gateway.endCallFromHttp(user.sub, conversationId, roomName);
+    return { ok: true };
+  }
+
+
+
+
+
+  // ─── Saved Messages ───
+
+  @Post("saved")
+  async getOrCreateSaved(@CurrentUser() user: any) {
+    const convId = await this.service.getOrCreateSavedChat(user.sub);
+    return { conversationId: convId };
+  }
+
+  // ─── Channels ───
+
+  @Post("channels")
+  async createChannel(
+    @Body("name") name: string,
+    @Body("description") description: string,
+    @Body("avatarUrl") avatarUrl: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.createChannel(user.sub, name, description, avatarUrl);
+  }
+
+  @Post("channels/:id/subscribe")
+  async subscribe(@Param("id") id: string, @CurrentUser() user: any) {
+    return this.service.subscribeToChannel(id, user.sub);
+  }
+
+  @Delete("channels/:id/subscribe")
+  async unsubscribe(@Param("id") id: string, @CurrentUser() user: any) {
+    return this.service.unsubscribeFromChannel(id, user.sub);
+  }
+
+  // ─── Polls ───
+
+  @Post("conversations/:id/poll")
+  async createPoll(
+    @Param("id") id: string,
+    @Body("question") question: string,
+    @Body("options") options: string[],
+    @Body("isAnonymous") isAnonymous: boolean,
+    @Body("isMultiple") isMultiple: boolean,
+    @CurrentUser() user: any,
+  ) {
+    const result = await this.service.createPoll(id, user.sub, question, options, isAnonymous, isMultiple);
+    // Emit to conversation via gateway
+    this.gateway.server.to(id).emit("new_message", {
+      ...result.message,
+      senderName: await this.service.getUserDisplayName(user.sub),
+      reactions: [],
+      poll: result.poll,
+    });
+    return result;
+  }
+
+  @Post("polls/:optionId/vote")
+  async votePoll(@Param("optionId") optionId: string, @CurrentUser() user: any) {
+    return this.service.votePoll(optionId, user.sub);
+  }
+
+  @Get("messages/:messageId/poll")
+  async getPoll(@Param("messageId") messageId: string) {
+    return this.service.getPollByMessageId(messageId);
+  }
+
+  // ─── Threads ───
+
+  @Get("conversations/:convId/messages/:msgId/thread")
+  async getThread(@Param("convId") convId: string, @Param("msgId") msgId: string) {
+    const replies = await this.service.getThreadReplies(msgId);
+    return replies.map(r => ({
+      ...r,
+      senderName: r.sender?.profile?.firstName
+        ? r.sender.profile.firstName + (r.sender.profile.lastName ? " " + r.sender.profile.lastName : "")
+        : r.sender?.username || "User",
+      senderAvatar: r.sender?.profile?.avatarUrl || null,
+    }));
+  }
+
+  @Post("conversations/:convId/messages/:msgId/thread")
+  async sendThreadReply(
+    @Param("convId") convId: string,
+    @Param("msgId") msgId: string,
+    @Body("content") content: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.sendThreadReply(convId, user.sub, content, msgId);
+  }
+
+  // ─── Topics ───
+
+  @Get("conversations/:id/topics")
+  async getTopics(@Param("id") id: string) {
+    return this.service.getTopics(id);
+  }
+
+  @Post("conversations/:id/topics")
+  async createTopic(
+    @Param("id") id: string,
+    @Body("title") title: string,
+    @Body("icon") icon: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.createTopic(id, user.sub, title, icon);
+  }
+
+  @Delete("topics/:topicId")
+  async deleteTopic(@Param("topicId") topicId: string, @CurrentUser() user: any) {
+    await this.service.deleteTopic(topicId, user.sub);
     return { ok: true };
   }
 }

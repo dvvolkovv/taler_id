@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { RedisModule } from '../redis/redis.module';
 import { ConfigModule } from '@nestjs/config';
 import { MessengerController } from './messenger.controller';
 import { MessengerGateway } from './messenger.gateway';
@@ -10,7 +11,7 @@ import { ThumbnailService } from '../common/thumbnail.service';
 import { VideoTranscodeService } from '../common/video-transcode.service';
 
 @Module({
-  imports: [ConfigModule],
+  imports: [ConfigModule, RedisModule],
   controllers: [MessengerController],
   providers: [MessengerService, MessengerGateway, FcmService, ApnsService, FileStorageService, ThumbnailService, VideoTranscodeService],
 })

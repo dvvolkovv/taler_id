@@ -389,7 +389,7 @@ async function bootstrap() {
       return;
     }
     wss.handleUpgrade(req, socket, head, (clientWs) => {
-      const model = url.searchParams.get('model') ?? 'gpt-4o-realtime-preview';
+      const model = url.searchParams.get('model') ?? 'gpt-realtime-mini';
       const openaiWs = new WebSocket(
         'wss://api.openai.com/v1/realtime?model=' + model,
         { headers: { Authorization: 'Bearer ' + process.env.OPENAI_API_KEY, 'OpenAI-Beta': 'realtime=v1' } }
