@@ -96,6 +96,21 @@ export class AiTwinService implements OnModuleInit, OnModuleDestroy {
     payload: { roomName: string; calleeId: string },
   ) => void = () => {};
 
+  // Tell the human callee's device to dismiss their ringing banner / CallKit
+  // UI once the AI twin has taken over the call. Otherwise they still see
+  // the incoming call and tapping "Answer" would try to join a room that's
+  // already in AI twin mode, and tapping "Decline" would broadcast
+  // call_ended to everyone.
+  private emitCancelIncomingToCallee: (
+    calleeUserId: string,
+    payload: { roomName: string; reason: string },
+  ) => void = () => {};
+
+  private sendCancelPushToCallee: (
+    calleeUserId: string,
+    roomName: string,
+  ) => Promise<void> = async () => {};
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
@@ -104,9 +119,13 @@ export class AiTwinService implements OnModuleInit, OnModuleDestroy {
   registerEmitters(
     emitOffer: typeof this.emitOffer,
     emitJoined: typeof this.emitJoined,
+    emitCancelIncomingToCallee: typeof this.emitCancelIncomingToCallee,
+    sendCancelPushToCallee: typeof this.sendCancelPushToCallee,
   ) {
     this.emitOffer = emitOffer;
     this.emitJoined = emitJoined;
+    this.emitCancelIncomingToCallee = emitCancelIncomingToCallee;
+    this.sendCancelPushToCallee = sendCancelPushToCallee;
   }
 
   async onModuleInit() {
@@ -313,6 +332,22 @@ export class AiTwinService implements OnModuleInit, OnModuleDestroy {
       calleeId: payload.calleeId,
     });
 
+    // Dismiss the ringing banner / CallKit UI on the human callee's device.
+    // They can still see the call in their history, but should no longer
+    // be able to accidentally answer or decline — the AI twin is handling
+    // this conversation now. We do both:
+    //   - Socket event (fast, for users with an open app)
+    //   - FCM cancel push (for users whose app is backgrounded/locked)
+    this.emitCancelIncomingToCallee(payload.calleeId, {
+      roomName,
+      reason: 'ai_twin_accepted',
+    });
+    this.sendCancelPushToCallee(payload.calleeId, roomName).catch((e) =>
+      this.logger.warn(
+        `[acceptOffer] sendCancelPushToCallee failed: ${(e as Error).message}`,
+      ),
+    );
+
     // Clean up the stash so duplicate clicks can't re-dispatch.
     await client.del(`ai_twin:offered:${roomName}`);
 
@@ -322,6 +357,41 @@ export class AiTwinService implements OnModuleInit, OnModuleDestroy {
   /** Called when caller dismisses the offer ("Wait for human answer"). */
   async declineOffer(roomName: string): Promise<void> {
     await this.redis.getClient().del(`ai_twin:offered:${roomName}`);
+  }
+
+  /**
+   * Called when the human callee (or anyone else) joins a room that already
+   * has an AI twin agent in it. The agent should step aside — the human is
+   * back. Finds any participant whose identity starts with "agent-" and kicks
+   * them out of the room.
+   */
+  async takeoverCall(roomName: string): Promise<boolean> {
+    try {
+      const participants = await this.rooms.listParticipants(roomName);
+      const agents = participants.filter(
+        (p) => p.identity && p.identity.startsWith('agent-'),
+      );
+      if (agents.length === 0) return false;
+      for (const agent of agents) {
+        this.logger.log(
+          `[takeoverCall] removing agent ${agent.identity} from room=${roomName}`,
+        );
+        await this.rooms.removeParticipant(roomName, agent.identity);
+      }
+      // Mark CallLog — the call transitioned from AI-answered to human-answered.
+      try {
+        await this.prisma.callLog.update({
+          where: { roomName },
+          data: { withAi: false },
+        });
+      } catch (_) {}
+      return true;
+    } catch (e) {
+      this.logger.warn(
+        `[takeoverCall] failed for room=${roomName}: ${(e as Error).message}`,
+      );
+      return false;
+    }
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────

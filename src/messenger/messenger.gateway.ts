@@ -51,6 +51,37 @@ export class MessengerGateway
       (targetUserId, payload) => {
         this.server.to(`user:${targetUserId}`).emit('call_ai_twin_joined', payload);
       },
+      (calleeUserId, payload) => {
+        // AI twin took over — tell the human callee to dismiss their banner.
+        this.server
+          .to(`user:${calleeUserId}`)
+          .emit('call_ai_twin_cancelled', payload);
+      },
+      async (calleeUserId, roomName) => {
+        // FCM cancel push so the banner disappears even if the app is
+        // backgrounded. Re-use the existing missed-call cancellation path.
+        try {
+          const fcmToken = await this.service.getFcmToken(calleeUserId);
+          if (fcmToken) {
+            await this.fcmService.sendCallCancelled(
+              fcmToken,
+              roomName,
+              'AI Twin',
+            );
+          }
+          const voipToken = await this.service.getVoipToken(calleeUserId);
+          if (voipToken) {
+            // VoIP cancel for iOS — the APNs service doesn't have a dedicated
+            // cancel endpoint, so we just log it. iOS client will fall back
+            // to the socket event above when it reconnects.
+            this.logger.log(
+              `[AiTwin] skipping VoIP cancel for ${calleeUserId} — socket event will handle it`,
+            );
+          }
+        } catch (e) {
+          this.logger.warn(`[AiTwin] FCM cancel failed: ${(e as Error).message}`);
+        }
+      },
     );
   }
 
@@ -520,6 +551,31 @@ export class MessengerGateway
     this.logger.log(`[call_answered] from=${client.data.userId} room=${payload.roomName} conv=${payload.conversationId}`);
     // Human callee picked up — cancel any pending AI twin fallback.
     this.aiTwin.cancelPending(payload.roomName).catch(() => {});
+    // If the AI twin had already taken over, kick it out so the human can
+    // take the call. Runs async — takeover completes in ~100ms and the human
+    // join happens in parallel via the standard LiveKit connect flow.
+    this.aiTwin
+      .takeoverCall(payload.roomName)
+      .then(async (tookOver) => {
+        if (!tookOver) return;
+        this.logger.log(
+          `[call_answered] AI twin removed from room=${payload.roomName} — human taking over`,
+        );
+        // Tell the caller's UI that the AI badge should come down. Look up
+        // the initiator from CallLog — the caller isn't the socket client
+        // sending call_answered (that's the callee).
+        try {
+          const log = await this.prisma.callLog.findUnique({
+            where: { roomName: payload.roomName },
+          });
+          if (log?.initiatorId) {
+            this.server
+              .to(`user:${log.initiatorId}`)
+              .emit('call_ai_twin_left', { roomName: payload.roomName });
+          }
+        } catch (_) {}
+      })
+      .catch(() => {});
     try {
       // Mark answeredAt in CallLog (first answer wins)
       try {
