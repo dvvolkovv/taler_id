@@ -21,7 +21,11 @@ export class VoiceController {
     @Headers("authorization") authHeader: string,
   ) {
     const userToken = authHeader ? authHeader.replace("Bearer ", "") : undefined;
-    const includeAi = withAi === undefined ? true : withAi;
+    // Default to NO ai assistant for regular person-to-person calls. Clients
+    // that actually want the gpt-realtime assistant in the room (assistant
+    // screen, etc.) already pass withAi:true explicitly. This prevents the
+    // old livekit-ai-agent from colliding with the new ai-twin-agent.
+    const includeAi = withAi === true;
     return this.service.createRoom(user.sub, includeAi, userToken, conversationId);
   }
 
