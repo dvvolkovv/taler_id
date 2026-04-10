@@ -96,21 +96,6 @@ export class AiTwinService implements OnModuleInit, OnModuleDestroy {
     payload: { roomName: string; calleeId: string },
   ) => void = () => {};
 
-  // Tell the human callee's device to dismiss their ringing banner / CallKit
-  // UI once the AI twin has taken over the call. Otherwise they still see
-  // the incoming call and tapping "Answer" would try to join a room that's
-  // already in AI twin mode, and tapping "Decline" would broadcast
-  // call_ended to everyone.
-  private emitCancelIncomingToCallee: (
-    calleeUserId: string,
-    payload: { roomName: string; reason: string },
-  ) => void = () => {};
-
-  private sendCancelPushToCallee: (
-    calleeUserId: string,
-    roomName: string,
-  ) => Promise<void> = async () => {};
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
@@ -119,13 +104,9 @@ export class AiTwinService implements OnModuleInit, OnModuleDestroy {
   registerEmitters(
     emitOffer: typeof this.emitOffer,
     emitJoined: typeof this.emitJoined,
-    emitCancelIncomingToCallee: typeof this.emitCancelIncomingToCallee,
-    sendCancelPushToCallee: typeof this.sendCancelPushToCallee,
   ) {
     this.emitOffer = emitOffer;
     this.emitJoined = emitJoined;
-    this.emitCancelIncomingToCallee = emitCancelIncomingToCallee;
-    this.sendCancelPushToCallee = sendCancelPushToCallee;
   }
 
   async onModuleInit() {
@@ -332,21 +313,11 @@ export class AiTwinService implements OnModuleInit, OnModuleDestroy {
       calleeId: payload.calleeId,
     });
 
-    // Dismiss the ringing banner / CallKit UI on the human callee's device.
-    // They can still see the call in their history, but should no longer
-    // be able to accidentally answer or decline — the AI twin is handling
-    // this conversation now. We do both:
-    //   - Socket event (fast, for users with an open app)
-    //   - FCM cancel push (for users whose app is backgrounded/locked)
-    this.emitCancelIncomingToCallee(payload.calleeId, {
-      roomName,
-      reason: 'ai_twin_accepted',
-    });
-    this.sendCancelPushToCallee(payload.calleeId, roomName).catch((e) =>
-      this.logger.warn(
-        `[acceptOffer] sendCancelPushToCallee failed: ${(e as Error).message}`,
-      ),
-    );
+    // NOTE: we deliberately do NOT dismiss the callee's ringing banner.
+    // The human owner should always be able to grab the call from their
+    // AI twin by tapping "Answer" — handleCallAnswered on the backend
+    // will call takeoverCall() to kick the agent out and let the human
+    // take over. Suppressing the banner would remove that escape hatch.
 
     // Clean up the stash so duplicate clicks can't re-dispatch.
     await client.del(`ai_twin:offered:${roomName}`);
