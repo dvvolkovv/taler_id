@@ -13,4 +13,9 @@ export class AssistantController {
   saveTranscript(@CurrentUser() user: any, @Body() dto: SaveTranscriptDto) {
     return this.assistantService.saveTranscript(user.sub, dto.messages);
   }
+
+  @Post('web-search')
+  async webSearch(@Body() body: { query: string }) {
+    return this.assistantService.webSearch(body.query);
+  }
 }
