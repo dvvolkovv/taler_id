@@ -308,6 +308,11 @@ model CallLog {
   durationSec    Int?
   withAi         Boolean   @default(false)
   conversationId String?
+  // Filled in by ai-twin-agent after a call where the AI twin answered.
+  // aiTwinTranscript: JSON array of {role, text, timestamp} turns.
+  // aiTwinSummary:    short Russian summary generated via GPT-4o.
+  aiTwinTranscript Json?
+  aiTwinSummary    String? @db.Text
   meetingSummary MeetingSummary?
 }
 

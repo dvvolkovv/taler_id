@@ -1,4 +1,4 @@
-import { Body, Controller, Post, Get, Delete, Param, Query, UseGuards, Headers, UseInterceptors, UploadedFile } from "@nestjs/common";
+import { Body, Controller, Post, Get, Delete, Param, Query, UseGuards, Headers, UseInterceptors, UploadedFile, HttpException, HttpStatus } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
 import { VoiceService } from "./voice.service";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
@@ -122,6 +122,46 @@ export class VoiceController {
     @CurrentUser() user: any,
   ) {
     return this.service.getCallDetail(id, user.sub);
+  }
+
+  /**
+   * Called by the Python ai-twin-agent after a call session with the AI
+   * voice twin ends. Saves the full transcript + GPT-generated summary
+   * onto the CallLog so the owner can see what the caller wanted while
+   * they were away.
+   *
+   * Protected by a shared secret header instead of JWT because the
+   * agent isn't a human user. The secret lives in AI_TWIN_CALLBACK_SECRET
+   * on both the backend and the agent .env.
+   */
+  @Post("ai-twin/callback")
+  async aiTwinCallback(
+    @Headers("x-ai-twin-secret") secret: string,
+    @Body() body: {
+      roomName: string;
+      transcript: unknown;
+      summary: string;
+    },
+  ) {
+    const expected = process.env.AI_TWIN_CALLBACK_SECRET;
+    if (!expected) {
+      throw new HttpException(
+        "AI twin callback not configured on server",
+        HttpStatus.SERVICE_UNAVAILABLE,
+      );
+    }
+    if (!secret || secret !== expected) {
+      throw new HttpException("Invalid secret", HttpStatus.UNAUTHORIZED);
+    }
+    if (!body?.roomName) {
+      throw new HttpException("roomName required", HttpStatus.BAD_REQUEST);
+    }
+    await this.service.saveAiTwinCallData(
+      body.roomName,
+      body.transcript ?? null,
+      body.summary ?? "",
+    );
+    return { ok: true };
   }
 
   // ─── Meeting Recorder (no auth — protected by roomName UUID) ───

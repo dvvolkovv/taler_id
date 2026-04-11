@@ -111,11 +111,42 @@ export class VoiceService {
         endedAt: log.endedAt,
         durationSec: log.durationSec,
         withAi: log.withAi,
+        aiTwinSummary: log.aiTwinSummary ?? null,
+        aiTwinTranscript: log.aiTwinTranscript ?? null,
         meetingSummary: log.meetingSummary ? { id: log.meetingSummary.id, summary: log.meetingSummary.summary, recordingUrl: log.meetingSummary.recordingUrl } : null,
         participants,
       };
     }));
     return result;
+  }
+
+  /**
+   * Called by the Python ai-twin-agent after a call session ends. Stores the
+   * full transcript + GPT-generated summary on the CallLog so the owner of
+   * the twin can see what was said while they were away.
+   */
+  async saveAiTwinCallData(
+    roomName: string,
+    transcript: unknown,
+    summary: string,
+  ): Promise<void> {
+    try {
+      await this.prisma.callLog.update({
+        where: { roomName },
+        data: {
+          aiTwinTranscript: transcript as any,
+          aiTwinSummary: summary,
+        },
+      });
+      console.log(
+        `[saveAiTwinCallData] saved transcript+summary for room=${roomName}`,
+      );
+    } catch (e) {
+      console.warn(
+        `[saveAiTwinCallData] failed for room=${roomName}:`,
+        (e as Error).message,
+      );
+    }
   }
 
 
@@ -144,6 +175,8 @@ export class VoiceService {
       endedAt: log.endedAt,
       durationSec: log.durationSec,
       withAi: log.withAi,
+      aiTwinSummary: log.aiTwinSummary ?? null,
+      aiTwinTranscript: log.aiTwinTranscript ?? null,
       participants,
       summary: log.meetingSummary ? {
         id: log.meetingSummary.id,
