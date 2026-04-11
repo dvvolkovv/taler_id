@@ -7,10 +7,11 @@ import {
   ConnectedSocket,
   MessageBody,
 } from '@nestjs/websockets';
-import { Logger } from '@nestjs/common';
+import { Logger, OnModuleInit } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { ConfigService } from '@nestjs/config';
 import { MessengerService } from './messenger.service';
+import { AiTwinService } from './ai-twin.service';
 import { FcmService } from '../common/fcm.service';
 import { ApnsService } from '../common/apns.service';
 import * as jwt from 'jsonwebtoken';
@@ -19,7 +20,9 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 
 @WebSocketGateway({ namespace: '/messenger', cors: { origin: '*' } })
-export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class MessengerGateway
+  implements OnGatewayConnection, OnGatewayDisconnect, OnModuleInit
+{
   @WebSocketServer() server: Server;
   private readonly logger = new Logger(MessengerGateway.name);
 
@@ -32,9 +35,23 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
     private readonly apnsService: ApnsService,
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
+    private readonly aiTwin: AiTwinService,
   ) {
     const publicKeyPath = this.configService.get<string>('jwt.publicKeyPath') ?? '';
     this.publicKey = fs.readFileSync(publicKeyPath, 'utf8');
+  }
+
+  onModuleInit() {
+    // Wire AiTwinService so it can emit Socket.io events back to the right
+    // users without holding a reference to the Server object itself.
+    this.aiTwin.registerEmitters(
+      (callerId, payload) => {
+        this.server.to(`user:${callerId}`).emit('call_ai_twin_offer', payload);
+      },
+      (targetUserId, payload) => {
+        this.server.to(`user:${targetUserId}`).emit('call_ai_twin_joined', payload);
+      },
+    );
   }
 
   async handleConnection(client: Socket) {
@@ -316,6 +333,51 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
         ...(payload.e2eeKey ? { e2eeKey: payload.e2eeKey } : {}),
       });
 
+      // If the callee has AI twin enabled, schedule a fallback so that if
+      // they don't answer within N seconds the caller gets offered the
+      // option to leave a message with their voice twin. Only for 1:1 calls
+      // — group calls don't make sense for an AI twin.
+      if (!isGroup) {
+        try {
+          const calleeProfile = await this.prisma.profile.findUnique({
+            where: { userId: calleeId },
+            select: {
+              aiTwinEnabled: true,
+              aiTwinTimeoutSeconds: true,
+              aiTwinPrompt: true,
+              aiTwinVoiceId: true,
+              firstName: true,
+              lastName: true,
+            },
+          });
+          if (calleeProfile?.aiTwinEnabled) {
+            const calleeName = [
+              calleeProfile.firstName,
+              calleeProfile.lastName,
+            ]
+              .filter(Boolean)
+              .join(' ')
+              .trim();
+            await this.aiTwin.schedulePending({
+              roomName: payload.roomName,
+              callerId: client.data.userId,
+              calleeId,
+              conversationId: payload.conversationId,
+              prompt: (calleeProfile.aiTwinPrompt ?? '').trim(),
+              voiceId:
+                calleeProfile.aiTwinVoiceId ||
+                process.env.DEFAULT_AI_TWIN_VOICE_ID ||
+                'KHq0FLdHpP6d1h5s1sce',
+              calleeName: calleeName || 'пользователь',
+              callerName: fromUserName || 'звонящий',
+              timeoutSeconds: calleeProfile.aiTwinTimeoutSeconds || 30,
+            });
+          }
+        } catch (e) {
+          this.logger.warn(`AI twin schedule failed: ${(e as Error).message}`);
+        }
+      }
+
       if (!muted) {
         const calleeToken = await this.service.getFcmToken(calleeId);
         this.logger.log(`[call_invite] calleeId=${calleeId} fcmToken=${calleeToken ? "YES(" + calleeToken.substring(0,20) + "...)" : "NULL"}`);
@@ -340,6 +402,8 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
   @SubscribeMessage('call_ended')
   async handleCallEnded(client: Socket, payload: { conversationId: string; roomName: string }) {
     this.logger.log(`[call_ended] from=${client.data.userId} room=${payload.roomName} conv=${payload.conversationId}`);
+    // Cancel any pending AI twin fallback — the call is over.
+    this.aiTwin.cancelPending(payload.roomName).catch(() => {});
     const msgConvType = await this.service.getConversationType(payload.conversationId);
     const isGroup = msgConvType === 'GROUP';
 
@@ -454,6 +518,33 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
   @SubscribeMessage('call_answered')
   async handleCallAnswered(client: Socket, payload: { conversationId: string; roomName: string }) {
     this.logger.log(`[call_answered] from=${client.data.userId} room=${payload.roomName} conv=${payload.conversationId}`);
+    // Human callee picked up — cancel any pending AI twin fallback.
+    this.aiTwin.cancelPending(payload.roomName).catch(() => {});
+    // If the AI twin had already taken over, kick it out so the human can
+    // take the call. Runs async — takeover completes in ~100ms and the human
+    // join happens in parallel via the standard LiveKit connect flow.
+    this.aiTwin
+      .takeoverCall(payload.roomName)
+      .then(async (tookOver) => {
+        if (!tookOver) return;
+        this.logger.log(
+          `[call_answered] AI twin removed from room=${payload.roomName} — human taking over`,
+        );
+        // Tell the caller's UI that the AI badge should come down. Look up
+        // the initiator from CallLog — the caller isn't the socket client
+        // sending call_answered (that's the callee).
+        try {
+          const log = await this.prisma.callLog.findUnique({
+            where: { roomName: payload.roomName },
+          });
+          if (log?.initiatorId) {
+            this.server
+              .to(`user:${log.initiatorId}`)
+              .emit('call_ai_twin_left', { roomName: payload.roomName });
+          }
+        } catch (_) {}
+      })
+      .catch(() => {});
     try {
       // Mark answeredAt in CallLog (first answer wins)
       try {
@@ -472,6 +563,36 @@ export class MessengerGateway implements OnGatewayConnection, OnGatewayDisconnec
         });
       }
     } catch (e) {}
+  }
+
+  @SubscribeMessage('call_ai_twin_accepted')
+  async handleAiTwinAccepted(
+    client: Socket,
+    payload: { roomName: string },
+  ) {
+    this.logger.log(
+      `[call_ai_twin_accepted] caller=${client.data.userId} room=${payload.roomName}`,
+    );
+    const result = await this.aiTwin.acceptOffer(
+      payload.roomName,
+      client.data.userId,
+    );
+    if (!result.ok) {
+      client.emit('error', {
+        message: `AI twin offer rejected: ${result.reason}`,
+      });
+    }
+  }
+
+  @SubscribeMessage('call_ai_twin_declined')
+  async handleAiTwinDeclined(
+    client: Socket,
+    payload: { roomName: string },
+  ) {
+    this.logger.log(
+      `[call_ai_twin_declined] caller=${client.data.userId} room=${payload.roomName}`,
+    );
+    await this.aiTwin.declineOffer(payload.roomName);
   }
 
 

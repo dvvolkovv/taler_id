@@ -86,6 +86,10 @@ export class ProfileService {
         preferredCurrency: dto.preferredCurrency,
         language: dto.language,
         status: dto.status,
+        aiTwinEnabled: dto.aiTwinEnabled,
+        aiTwinTimeoutSeconds: dto.aiTwinTimeoutSeconds,
+        aiTwinPrompt: dto.aiTwinPrompt,
+        aiTwinVoiceId: dto.aiTwinVoiceId,
       },
       create: {
         userId,
@@ -98,6 +102,10 @@ export class ProfileService {
         preferredCurrency: dto.preferredCurrency,
         language: dto.language,
         status: dto.status,
+        aiTwinEnabled: dto.aiTwinEnabled,
+        aiTwinTimeoutSeconds: dto.aiTwinTimeoutSeconds,
+        aiTwinPrompt: dto.aiTwinPrompt,
+        aiTwinVoiceId: dto.aiTwinVoiceId,
       },
     });
   }
