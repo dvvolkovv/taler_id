@@ -5,6 +5,7 @@ import { MessengerController } from './messenger.controller';
 import { MessengerGateway } from './messenger.gateway';
 import { MessengerService } from './messenger.service';
 import { AiTwinService } from './ai-twin.service';
+import { AiAnalystService } from '../ai-analyst/ai-analyst.service';
 import { FcmService } from '../common/fcm.service';
 import { ApnsService } from '../common/apns.service';
 import { FileStorageService } from '../common/file-storage.service';
@@ -18,6 +19,7 @@ import { VideoTranscodeService } from '../common/video-transcode.service';
     MessengerService,
     MessengerGateway,
     AiTwinService,
+    AiAnalystService,
     FcmService,
     ApnsService,
     FileStorageService,

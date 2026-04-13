@@ -418,8 +418,8 @@ export class MessengerService {
   async createMessage(conversationId: string, senderId: string, content: string, fileData?: {
     fileUrl?: string; fileName?: string; fileSize?: number; fileType?: string;
     s3Key?: string; thumbnailSmallUrl?: string; thumbnailMediumUrl?: string; thumbnailLargeUrl?: string;
-  }, topicId?: string) {
-    return this.prisma.message.create({ data: { conversationId, senderId, content, ...fileData, ...(topicId ? { topicId } : {}) } });
+  }, topicId?: string, isSystem?: boolean) {
+    return this.prisma.message.create({ data: { conversationId, senderId, content, ...fileData, ...(topicId ? { topicId } : {}), ...(isSystem ? { isSystem } : {}) } });
   }
 
   async assertParticipant(conversationId: string, userId: string) {
@@ -674,6 +674,24 @@ export class MessengerService {
     });
     return conv.id;
   }
+  // ─── AI Analyst ───
+
+  async getOrCreateAiAnalystChat(userId: string): Promise<string> {
+    const existing = await this.prisma.conversation.findFirst({
+      where: { type: 'AI_ANALYST', participants: { some: { userId } } },
+    });
+    if (existing) return existing.id;
+    const conv = await this.prisma.conversation.create({
+      data: {
+        type: 'AI_ANALYST',
+        name: 'AI Аналитик',
+        createdById: userId,
+        participants: { create: { userId, role: 'OWNER' } },
+      },
+    });
+    return conv.id;
+  }
+
   // ─── Channels ───
 
   async createChannel(creatorId: string, name: string, description?: string, avatarUrl?: string) {

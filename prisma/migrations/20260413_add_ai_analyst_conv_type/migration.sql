@@ -1,0 +1,2 @@
+-- AlterEnum: add AI_ANALYST to ConvType
+ALTER TYPE "ConvType" ADD VALUE IF NOT EXISTS 'AI_ANALYST';

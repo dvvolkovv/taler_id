@@ -295,6 +295,7 @@ enum ConvType {
   GROUP
   CHANNEL
   SAVED
+  AI_ANALYST
 }
 
 model CallLog {

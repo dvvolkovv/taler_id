@@ -806,6 +806,14 @@ export class MessengerController {
     return { conversationId: convId };
   }
 
+  // ─── AI Analyst ───
+
+  @Post("ai-analyst")
+  async getOrCreateAiAnalyst(@CurrentUser() user: any) {
+    const convId = await this.service.getOrCreateAiAnalystChat(user.sub);
+    return { conversationId: convId };
+  }
+
   // ─── Channels ───
 
   @Post("channels")

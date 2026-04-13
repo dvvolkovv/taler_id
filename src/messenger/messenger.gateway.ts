@@ -12,6 +12,7 @@ import { Server, Socket } from 'socket.io';
 import { ConfigService } from '@nestjs/config';
 import { MessengerService } from './messenger.service';
 import { AiTwinService } from './ai-twin.service';
+import { AiAnalystService } from '../ai-analyst/ai-analyst.service';
 import { FcmService } from '../common/fcm.service';
 import { ApnsService } from '../common/apns.service';
 import * as jwt from 'jsonwebtoken';
@@ -36,6 +37,7 @@ export class MessengerGateway
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
     private readonly aiTwin: AiTwinService,
+    private readonly aiAnalyst: AiAnalystService,
   ) {
     const publicKeyPath = this.configService.get<string>('jwt.publicKeyPath') ?? '';
     this.publicKey = fs.readFileSync(publicKeyPath, 'utf8');
@@ -147,6 +149,21 @@ export class MessengerGateway
       const senderName = await this.service.getUserDisplayName(client.data.userId);
       const enrichedMsg = { ...msg, senderName, reactions: [] };
       this.server.to(payload.conversationId).emit('new_message', enrichedMsg);
+
+      // AI Analyst: dispatch user message to Claude Worker asynchronously.
+      // The response will appear as a new system message in the same chat.
+      if (msgConvType === 'AI_ANALYST') {
+        this._dispatchToAnalyst(
+          client.data.userId,
+          payload.conversationId,
+          payload.content,
+          payload.fileUrl ? [{ url: payload.fileUrl, name: payload.fileName || 'file' }] : [],
+        );
+        // No push notifications or delivery tracking for AI_ANALYST — the
+        // user is the only participant. Skip the rest of the handler.
+        return;
+      }
+
       const participants = await this.service.getParticipants(payload.conversationId);
       for (const p of participants) {
         if (p.userId === client.data.userId) continue;
@@ -713,5 +730,95 @@ export class MessengerGateway
       threadParentId: payload.threadParentId,
       threadReplyCount: count,
     });
+  }
+
+  // ─── AI Analyst dispatch ──────────────────────────────────────
+
+  /**
+   * Fire-and-forget: sends the user's message to the Claude Worker,
+   * streams chunks back as `analyst_chunk` events, and creates the
+   * final response as a system message in the conversation.
+   */
+  private _dispatchToAnalyst(
+    userId: string,
+    conversationId: string,
+    messageText: string,
+    fileUrls: { url: string; name: string }[],
+  ) {
+    // Emit "typing" indicator immediately
+    this.server.to(`user:${userId}`).emit('analyst_thinking', {
+      conversationId,
+    });
+
+    this.aiAnalyst
+      .submitTask({
+        userId,
+        conversationId,
+        messageText,
+        fileUrls: fileUrls.length > 0 ? fileUrls : undefined,
+        onChunk: (text) => {
+          this.server.to(`user:${userId}`).emit('analyst_chunk', {
+            conversationId,
+            text,
+          });
+        },
+        onTool: (tool, input) => {
+          this.server.to(`user:${userId}`).emit('analyst_tool', {
+            conversationId,
+            tool,
+            input,
+          });
+        },
+      })
+      .then(async ({ text, outputFiles }) => {
+        // Create the bot response as a system message
+        let content = text;
+        if (outputFiles.length > 0) {
+          const fileList = outputFiles
+            .map((f: any) => `📎 [${f.name}](http://5.101.115.184:3033${f.url})`)
+            .join('\n');
+          content += '\n\n' + fileList;
+        }
+        const botMsg = await this.service.createMessage(
+          conversationId,
+          userId, // senderId is the user (system message flag differentiates)
+          content,
+          undefined,
+          undefined,
+          true, // isSystem = true → marks it as bot response
+        );
+        this.server.to(`user:${userId}`).emit('new_message', {
+          ...botMsg,
+          senderName: 'AI Аналитик',
+          isSystem: true,
+        });
+        this.server.to(`user:${userId}`).emit('analyst_done', {
+          conversationId,
+        });
+      })
+      .catch((e) => {
+        this.logger.error(`[AI Analyst] dispatch failed: ${(e as Error).message}`);
+        // Send error as a system message so the user sees it in the chat
+        this.service
+          .createMessage(
+            conversationId,
+            userId,
+            `❌ Ошибка анализа: ${(e as Error).message}`,
+            undefined,
+            undefined,
+            true,
+          )
+          .then((errMsg) => {
+            this.server.to(`user:${userId}`).emit('new_message', {
+              ...errMsg,
+              senderName: 'AI Аналитик',
+              isSystem: true,
+            });
+            this.server.to(`user:${userId}`).emit('analyst_done', {
+              conversationId,
+            });
+          })
+          .catch(() => {});
+      });
   }
 }
