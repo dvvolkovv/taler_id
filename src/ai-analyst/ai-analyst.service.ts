@@ -162,13 +162,13 @@ export class AiAnalystService {
         conversationId: conv.id,
         isSystem: true, // bot messages are stored as isSystem
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { sentAt: 'desc' },
     });
     if (!msg) return null;
 
     return {
       text: msg.content || '',
-      createdAt: msg.createdAt.toISOString(),
+      createdAt: msg.sentAt.toISOString(),
     };
   }
 }
