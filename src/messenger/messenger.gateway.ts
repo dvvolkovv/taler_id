@@ -153,11 +153,36 @@ export class MessengerGateway
       // AI Analyst: dispatch user message to Claude Worker asynchronously.
       // The response will appear as a new system message in the same chat.
       if (msgConvType === 'AI_ANALYST') {
+        // Collect files from recent user messages (current + last few) so
+        // that when the user sends 2 files as separate messages then types
+        // a question, Claude sees all the files, not just the last one.
+        const recentFiles: { url: string; name: string }[] = [];
+        try {
+          const recent = await this.prisma.message.findMany({
+            where: {
+              conversationId: payload.conversationId,
+              isSystem: false,
+              fileUrl: { not: null },
+            },
+            orderBy: { sentAt: 'desc' },
+            take: 10,
+            select: { fileUrl: true, fileName: true },
+          });
+          for (const m of recent) {
+            if (m.fileUrl) {
+              recentFiles.push({ url: m.fileUrl, name: m.fileName || 'file' });
+            }
+          }
+        } catch (_) {}
+        // Also include the current message's file if any
+        if (payload.fileUrl && !recentFiles.some(f => f.url === payload.fileUrl)) {
+          recentFiles.unshift({ url: payload.fileUrl, name: payload.fileName || 'file' });
+        }
         this._dispatchToAnalyst(
           client.data.userId,
           payload.conversationId,
           payload.content,
-          payload.fileUrl ? [{ url: payload.fileUrl, name: payload.fileName || 'file' }] : [],
+          recentFiles,
         );
         // No push notifications or delivery tracking for AI_ANALYST — the
         // user is the only participant. Skip the rest of the handler.
