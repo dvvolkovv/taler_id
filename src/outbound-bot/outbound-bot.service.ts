@@ -414,7 +414,16 @@ export class OutboundBotService {
     campaignId: string, userId: string, conversationId: string, topicId: string,
     taskText: string, fileUrls?: { url: string; name: string }[],
   ) {
-    const prompt = `Ты — AI-ассистент для обзвона бизнесов. Задача:\n\n"${taskText}"\n\nНайди подходящие компании. Для каждой: name, phone (+7XXXXXXXXXX), address, relevance.\nСоставь план обзвона.\n\nВАЖНО: Ответ ТОЛЬКО JSON:\n{"businesses":[{"name":"...","phone":"+7...","address":"...","relevance":"..."}],"callPlan":[{"businessName":"...","phone":"+7...","questionsToAsk":["..."]}],"summary":"..."}`;
+    const prompt = `Ты — AI-ассистент для обзвона бизнесов. Задача:\n\n"${taskText}"\n\nНайди подходящие компании. Для каждой: name, phone (+7XXXXXXXXXX), address, relevance.
+
+КРИТИЧЕСКИ ВАЖНО при поиске:
+- Ищи ТОЛЬКО компании, которые РЕАЛЬНО занимаются нужной деятельностью.
+- НЕ включай компании с похожими названиями, но другим профилем (парикмахерские, кафе, магазины одежды и т.д.).
+- Проверь, что компания действительно продаёт/предоставляет то, что нужно в задаче.
+- Лучше найти 3-4 точно подходящих, чем 10 сомнительных.
+- Телефоны должны быть реальными, действующими номерами компании.
+
+Составь план обзвона.\n\nВАЖНО: Ответ ТОЛЬКО JSON:\n{"businesses":[{"name":"...","phone":"+7...","address":"...","relevance":"почему эта компания подходит"}],"callPlan":[{"businessName":"...","phone":"+7...","questionsToAsk":["..."]}],"summary":"..."}`;
 
     const planResponse = await this.askClaude(prompt, `outbound-${campaignId}`);
     this.logger.log(`Claude response: ${planResponse.length} chars`);
