@@ -2,13 +2,14 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { SipService } from './sip.service';
-import { AgentDispatchClient, RoomServiceClient } from 'livekit-server-sdk';
+import { AgentDispatchClient, RoomServiceClient, AccessToken } from 'livekit-server-sdk';
 import { v4 as uuidv4 } from 'uuid';
 
 const CLAUDE_WORKER_URL = process.env.CLAUDE_WORKER_URL || 'http://5.101.115.184:3033';
 const LK_HOST = process.env.LIVEKIT_HOST || 'http://localhost:7880';
 const LK_API_KEY = process.env.LIVEKIT_API_KEY || 'lkdevkey';
 const LK_API_SECRET = process.env.LIVEKIT_API_SECRET || 'lkSecret2024TalerID';
+const LK_WS_URL = process.env.LIVEKIT_WS_URL || 'wss://staging.id.taler.tirol/livekit/';
 const OUTBOUND_AGENT_NAME = 'outbound-call-agent';
 const BACKEND_URL = process.env.BACKEND_URL || 'https://staging.id.taler.tirol';
 const AI_AGENT_URL = process.env.AI_AGENT_URL || 'http://localhost:3100';
@@ -20,6 +21,8 @@ export class OutboundBotService {
   private readonly rooms = new RoomServiceClient(LK_HOST, LK_API_KEY, LK_API_SECRET);
   private readonly dispatcher = new AgentDispatchClient(LK_HOST, LK_API_KEY, LK_API_SECRET);
   private emitToUser: ((target: string, event: string, data: any) => void) | null = null;
+  // Track active call rooms for listen-in
+  private activeCallRooms = new Map<string, { roomName: string; businessName: string; campaignId: string }>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -81,7 +84,6 @@ export class OutboundBotService {
       );
     } catch (e) {
       this.logger.warn(`Claude clarify failed: ${(e as Error).message}`);
-      // Fallback to static message
       await this.postBotMessage(conversationId, topic.id,
         `Отлично! Задача: **${title}**\n\n` +
         `Расскажите подробнее:\n` +
@@ -145,8 +147,8 @@ export class OutboundBotService {
     const lower = text.toLowerCase().trim();
 
     if (['достаточно', 'стоп', 'хватит', 'stop', 'enough'].includes(lower)) {
-      // Pause the campaign, don't set to 'done' yet — user can resume
       await this.prisma.outboundCampaign.update({ where: { id: campaign.id }, data: { status: 'paused' } });
+      await this.updateTopicIcon(topicId, 'paused');
       await this.postBotMessage(conversationId, topicId,
         '⏸ Обзвон приостановлен.\n\n' +
         'Хотите получить сводку по имеющимся результатам или продолжить?\n\n' +
@@ -154,10 +156,9 @@ export class OutboundBotService {
       );
     } else if (['продолжить обзвон', 'продолжить', 'дальше', 'continue'].includes(lower)) {
       if (campaign.status === 'paused') {
-        // Resume: set back to calling and restart from next uncompleted call
         await this.prisma.outboundCampaign.update({ where: { id: campaign.id }, data: { status: 'calling' } });
+        await this.updateTopicIcon(topicId, 'calling');
         await this.postBotMessage(conversationId, topicId, '▶️ Продолжаю обзвон...');
-        // Restart execution from remaining calls
         this.resumeCalls(campaign.id, userId, conversationId, topicId).catch(e => {
           this.logger.error(`Resume calls failed: ${e.message}`);
           this.postStatus(conversationId, topicId, `❌ Ошибка: ${e.message}`).catch(() => {});
@@ -167,6 +168,18 @@ export class OutboundBotService {
       }
     } else if (['сводка', 'итоги', 'результаты', 'summary'].includes(lower)) {
       await this.analyzeResults(campaign.id, userId, conversationId, topicId);
+    } else if (lower === 'слушать' || lower === 'listen') {
+      // User wants to listen in on active call
+      const activeRoom = this.activeCallRooms.get(campaign.id);
+      if (activeRoom) {
+        const token = await this.generateListenToken(userId, activeRoom.roomName);
+        await this.postBotMessage(conversationId, topicId,
+          `🎧 Подключаюсь к звонку с **${activeRoom.businessName}**...\n\n` +
+          `[LISTEN:${activeRoom.roomName}:${token}]`
+        );
+      } else {
+        await this.postBotMessage(conversationId, topicId, '❌ Сейчас нет активного звонка.');
+      }
     }
   }
 
@@ -198,7 +211,7 @@ export class OutboundBotService {
       // Check if campaign was paused again
       const check = await this.prisma.outboundCampaign.findUnique({ where: { id: campaignId } });
       if (!check || check.status !== 'calling') {
-        this.logger.log(`[resume] Campaign ${campaignId} no longer calling, stopping`);
+        this.logger.log(`[resume] Campaign ${campaignId} status=${check?.status}, stopping`);
         return;
       }
 
@@ -206,16 +219,26 @@ export class OutboundBotService {
         const totalDone = campaign.calls.filter(c => ['completed', 'failed', 'no_answer'].includes(c.status)).length;
         await this.executeCall(campaignId, userId, conversationId, topicId, remaining[i], totalDone + i, calls.length);
 
+        // Check if paused during the call
+        const afterCall = await this.prisma.outboundCampaign.findUnique({ where: { id: campaignId } });
+        if (!afterCall || afterCall.status !== 'calling') {
+          this.logger.log(`[resume] Campaign paused after call, stopping`);
+          return;
+        }
+
         // After each call, ask to continue (if not last)
         if (i < remaining.length - 1) {
           await this.postBotMessage(conversationId, topicId,
             `✅ Завершено. Продолжить?\n\n[ACTION:Продолжить обзвон][ACTION:Достаточно]`
           );
-          // Wait for user decision (up to 2 min, then auto-continue)
           const decided = await this.waitForCampaignStatus(campaignId, 120000);
           if (decided === 'paused' || decided === 'done') return;
         }
       } catch (e) {
+        if ((e as Error).message === 'CAMPAIGN_PAUSED') {
+          this.logger.log(`[resume] Campaign paused during call`);
+          return;
+        }
         await this.postBotMessage(conversationId, topicId, `❌ ${remaining[i].businessName}: ${(e as Error).message}`);
       }
     }
@@ -231,10 +254,35 @@ export class OutboundBotService {
       if (!campaign) return 'done';
       if (campaign.status === 'paused') return 'paused';
       if (campaign.status === 'done') return 'done';
-      if (campaign.status === 'calling') return 'calling'; // user said continue
+      if (campaign.status === 'calling') return 'calling';
       await new Promise(r => setTimeout(r, 2000));
     }
     return 'calling'; // timeout — auto-continue
+  }
+
+  // ── Generate listen-in token for user ──
+
+  async generateListenToken(userId: string, roomName: string): Promise<string> {
+    const token = new AccessToken(LK_API_KEY, LK_API_SECRET, {
+      identity: `listener-${userId}`,
+      name: 'Слушатель',
+    });
+    token.addGrant({
+      room: roomName,
+      roomJoin: true,
+      canPublish: false,  // listen only
+      canSubscribe: true,
+    });
+    return await token.toJwt();
+  }
+
+  // ── Get active call for a campaign (for REST endpoint) ──
+
+  async getActiveCall(campaignId: string, userId: string) {
+    const activeRoom = this.activeCallRooms.get(campaignId);
+    if (!activeRoom) return null;
+    const token = await this.generateListenToken(userId, activeRoom.roomName);
+    return { roomName: activeRoom.roomName, businessName: activeRoom.businessName, token, wsUrl: LK_WS_URL };
   }
 
   // ── Gathering phase: collect details with AI clarifying questions ──
@@ -247,11 +295,9 @@ export class OutboundBotService {
     const startWords = ['ищи', 'начинай', 'поехали', 'старт', 'start', 'search'];
     const isStartCommand = startWords.includes(lower);
 
-    // Skip empty messages (file uploads with no text)
     if (lower.length === 0) return;
 
     if (isStartCommand) {
-      // Don't start if no details provided yet (only title)
       const taskLines = (campaign.taskText || '').split('\n').filter((l: string) => l.trim().length > 0);
       if (taskLines.length <= 1) {
         await this.postBotMessage(conversationId, topicId,
@@ -260,7 +306,7 @@ export class OutboundBotService {
       }
       await this.prisma.outboundCampaign.update({ where: { id: campaign.id }, data: { status: 'planning' } });
       await this.updateTopicIcon(topicId, 'planning');
-      // Typing indicator — cycles through phases
+
       const phases = ['🔍 Ищу...', '🌐 Ищу варианты...', '📊 Анализирую...', '📋 Составляю план...', '🔍 Проверяю контакты...', '🤔 Формирую вопросы...'];
       let phaseIdx = 0;
       const emitTyping = (text: string) => {
@@ -287,11 +333,9 @@ export class OutboundBotService {
         this.postStatus(conversationId, topicId, `❌ Ошибка: ${e.message}`).catch(() => {});
       });
     } else {
-      // Accumulate details
       const updated = (campaign.taskText || '') + '\n' + text;
       await this.prisma.outboundCampaign.update({ where: { id: campaign.id }, data: { taskText: updated } });
 
-      // Ask Claude for follow-up questions based on accumulated info
       const followUpPrompt = `Пользователь собирается обзвонить компании. Вот что он уже рассказал:
 
 "${updated}"
@@ -304,7 +348,6 @@ export class OutboundBotService {
 
 Формат: короткий, дружелюбный, по делу.`;
 
-      // Show typing while Claude thinks
       if (this.emitToUser) {
         this.emitToUser(conversationId, 'typing', {
           conversationId, topicId,
@@ -440,15 +483,22 @@ export class OutboundBotService {
   private async executeCalls(campaignId: string, userId: string, conversationId: string, topicId: string, callPlan: any) {
     const calls = callPlan?.callPlan || [];
     for (let i = 0; i < calls.length; i++) {
-      // Check if campaign was paused/stopped
+      // Check if campaign was paused/stopped before starting next call
       const check = await this.prisma.outboundCampaign.findUnique({ where: { id: campaignId } });
-      if (!check || !['calling'].includes(check.status)) {
+      if (!check || check.status !== 'calling') {
         this.logger.log(`[calls] Campaign ${campaignId} status=${check?.status}, stopping`);
         return;
       }
 
       try {
         await this.executeCall(campaignId, userId, conversationId, topicId, calls[i], i, calls.length);
+
+        // Check if paused during the call
+        const afterCall = await this.prisma.outboundCampaign.findUnique({ where: { id: campaignId } });
+        if (!afterCall || afterCall.status !== 'calling') {
+          this.logger.log(`[calls] Campaign paused/stopped after call, exiting loop`);
+          return;
+        }
 
         // After each completed call (except last), ask user
         if (i < calls.length - 1) {
@@ -459,11 +509,14 @@ export class OutboundBotService {
             `✅ Завершено ${completedCalls} из ${calls.length} звонков.\n\n` +
             `Продолжить или достаточно?\n\n[ACTION:Продолжить обзвон][ACTION:Достаточно]`
           );
-          // Wait for user decision (up to 2 min, then auto-continue)
           const decided = await this.waitForCampaignStatus(campaignId, 120000);
           if (decided === 'paused' || decided === 'done') return;
         }
       } catch (e) {
+        if ((e as Error).message === 'CAMPAIGN_PAUSED') {
+          this.logger.log(`[calls] Campaign paused during call ${i}`);
+          return;
+        }
         await this.postBotMessage(conversationId, topicId, `❌ ${calls[i].businessName}: ${(e as Error).message}`);
       }
     }
@@ -498,7 +551,10 @@ export class OutboundBotService {
     if (this.sip.isConfigured()) await this.sip.dialOutbound(roomName, testPhone);
     else this.logger.warn(`SIP not configured — agent in room ${roomName}`);
 
-    // Start recorder after SIP connects (delay to let participants join)
+    // Track active call for listen-in
+    this.activeCallRooms.set(campaignId, { roomName, businessName: spec.businessName, campaignId });
+
+    // Start recorder after SIP connects
     setTimeout(async () => {
       try {
         await fetch(`${AI_AGENT_URL}/record`, {
@@ -513,21 +569,40 @@ export class OutboundBotService {
     }, 5000);
 
     await this.prisma.outboundCall.update({ where: { id: call.id }, data: { status: 'in_progress' } });
-    await this.postStatus(conversationId, topicId, `📞 Звоню (${idx + 1}/${total}): ${spec.businessName}...`);
+    await this.postBotMessage(conversationId, topicId,
+      `📞 Звоню (${idx + 1}/${total}): **${spec.businessName}**...\n\n[ACTION:Слушать]`
+    );
 
-    // Wait for callback (max 7 min)
+    // Wait for callback (max 7 min), but also check if campaign was paused
     const start = Date.now();
     while (Date.now() - start < 420000) {
       const u = await this.prisma.outboundCall.findUnique({ where: { id: call.id } });
       if (u && ['completed', 'failed', 'no_answer'].includes(u.status)) break;
+
+      // Check if campaign was paused by user
+      const camp = await this.prisma.outboundCampaign.findUnique({ where: { id: campaignId } });
+      if (camp && camp.status === 'paused') {
+        this.logger.log(`[call] Campaign paused during call ${call.id}, stopping call`);
+        // Clean up: remove from active rooms
+        this.activeCallRooms.delete(campaignId);
+        // Mark call as failed
+        await this.prisma.outboundCall.update({ where: { id: call.id }, data: { status: 'failed', endedAt: new Date() } });
+        // Delete room to end SIP
+        try { await this.rooms.deleteRoom(roomName); } catch {}
+        throw new Error('CAMPAIGN_PAUSED');
+      }
+
       await new Promise(r => setTimeout(r, 3000));
     }
+
+    // Clean up active room tracking
+    this.activeCallRooms.delete(campaignId);
 
     const final_ = await this.prisma.outboundCall.findUnique({ where: { id: call.id } });
     if (final_?.status === 'completed') {
       const recLink = final_.recordingUrl ? `\n\n🎧 [Запись звонка](${final_.recordingUrl})` : '';
       await this.postBotMessage(conversationId, topicId, `✅ **${spec.businessName}** (${final_.durationSec || 0}с)\n\n${final_.summary || ''}${recLink}`);
-    } else {
+    } else if (final_?.status !== 'failed') {
       await this.postStatus(conversationId, topicId, `⏳ ${spec.businessName}: ${final_?.status || 'timeout'}`);
     }
   }
@@ -576,50 +651,51 @@ export class OutboundBotService {
     });
     this.logger.log(`Call ${data.callId} completed: ${data.durationSec}s`);
 
-    // Stop recorder and wait for recording to be processed
+    // Stop recorder and get recording URL (async, don't block)
     if (call.roomName) {
-      this.stopRecorderAndGetUrl(call.id, call.roomName).catch(e => {
+      this.stopRecorderAndGetUrl(call.id, call.roomName, data.campaignId).catch(e => {
         this.logger.warn(`[recorder] Failed to stop/get URL: ${(e as Error).message}`);
       });
     }
 
-    // Post result to chat
+    // Post result to chat immediately (recording link will come later)
     const campaign = await this.prisma.outboundCampaign.findUnique({ where: { id: data.campaignId } });
     if (campaign) {
-      const recordingLink = data.recordingUrl ? `\n\n🎧 [Запись звонка](${data.recordingUrl})` : '';
       await this.postBotMessage(
         campaign.conversationId,
         campaign.topicId,
-        `✅ **${call.businessName}** (${data.durationSec}с)\n\n${data.summary || 'Нет summary'}${recordingLink}`,
+        `✅ **${call.businessName}** (${data.durationSec}с)\n\n${data.summary || 'Нет summary'}`,
       );
     }
 
-    // Delete room to force-end SIP call
+    // Delete room AFTER a delay to let recorder process the audio
     if (call.roomName) {
-      try {
-        await this.rooms.deleteRoom(call.roomName);
-        this.logger.log(`[hangup] Room ${call.roomName} deleted`);
-      } catch (e) {
-        this.logger.warn(`[hangup] Failed to delete room: ${(e as Error).message}`);
-      }
+      const roomName = call.roomName;
+      setTimeout(async () => {
+        try {
+          await this.rooms.deleteRoom(roomName);
+          this.logger.log(`[hangup] Room ${roomName} deleted (delayed)`);
+        } catch (e) {
+          this.logger.warn(`[hangup] Failed to delete room: ${(e as Error).message}`);
+        }
+      }, 15000); // 15 sec delay for recorder to finish
     }
   }
 
   // ── Stop recorder and retrieve recording URL ──
 
-  private async stopRecorderAndGetUrl(callId: string, roomName: string) {
+  private async stopRecorderAndGetUrl(callId: string, roomName: string, campaignId: string) {
     try {
       // Stop the recorder
-      await fetch(`${AI_AGENT_URL}/stop-record`, {
+      const stopRes = await fetch(`${AI_AGENT_URL}/stop-record`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ roomName }),
       });
-      this.logger.log(`[recorder] Stopped for ${roomName}`);
+      this.logger.log(`[recorder] Stop request for ${roomName}: ${stopRes.status}`);
 
-      // Wait for processing (recorder uploads to S3, then saves to MeetingSummary)
-      // Poll MeetingSummary for recordingUrl
-      for (let attempt = 0; attempt < 30; attempt++) {
+      // Wait for processing — poll MeetingSummary for recordingUrl
+      for (let attempt = 0; attempt < 40; attempt++) {
         await new Promise(r => setTimeout(r, 3000));
         const summary = await this.prisma.meetingSummary.findFirst({
           where: { roomName },
@@ -632,7 +708,7 @@ export class OutboundBotService {
           });
           this.logger.log(`[recorder] Got recording URL for call ${callId}: ${summary.recordingUrl}`);
 
-          // Update the chat message with recording link
+          // Post recording link to chat
           const call = await this.prisma.outboundCall.findUnique({
             where: { id: callId },
             include: { campaign: true },
@@ -647,7 +723,7 @@ export class OutboundBotService {
           return;
         }
       }
-      this.logger.warn(`[recorder] No recording URL found after 90s for room ${roomName}`);
+      this.logger.warn(`[recorder] No recording URL found after 120s for room ${roomName}`);
     } catch (e) {
       this.logger.warn(`[recorder] Error: ${(e as Error).message}`);
     }
