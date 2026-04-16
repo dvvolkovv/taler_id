@@ -63,7 +63,32 @@ export class OutboundBotService {
     });
     await this.updateTopicIcon(topic.id, 'gathering');
 
-    // Ask Claude for clarifying questions based on the task title
+    this.logger.log(`Created task: topic=${topic.id} campaign=${campaign.id}`);
+
+    // Return immediately — Claude will think asynchronously
+    // Show typing indicator while Claude generates clarifying questions
+    if (this.emitToUser) {
+      this.emitToUser(conversationId, 'typing', {
+        conversationId, topicId: topic.id,
+        userId: BOT_SENDER_ID, userName: 'AI Обзвон',
+        isTyping: true, typingText: '🤔 Анализирую задачу...',
+      });
+    }
+
+    const topicId = topic.id;
+    const campaignId = campaign.id;
+
+    // Ask Claude asynchronously — result comes via Socket.IO
+    this.generateClarifyingQuestions(campaignId, conversationId, topicId, title).catch(e => {
+      this.logger.error(`Clarify questions failed: ${(e as Error).message}`);
+    });
+
+    return { conversationId, topicId, campaignId };
+  }
+
+  // ── Generate clarifying questions asynchronously ──
+
+  private async generateClarifyingQuestions(campaignId: string, conversationId: string, topicId: string, title: string) {
     const clarifyPrompt = `Пользователь хочет обзвонить компании. Задача: "${title}"
 
 Задай 2-3 уточняющих вопроса, чтобы лучше понять:
@@ -78,13 +103,17 @@ export class OutboundBotService {
 Формат: дружелюбный, короткий. В конце напиши "Когда будете готовы — нажмите Ищи".`;
 
     try {
-      const questions = await this.askClaude(clarifyPrompt, `outbound-gather-${campaign.id}`);
-      await this.postBotMessage(conversationId, topic.id,
-        `${questions}\n\n[ACTION:Ищи]`
-      );
+      const questions = await this.askClaude(clarifyPrompt, `outbound-gather-${campaignId}`);
+      if (this.emitToUser) {
+        this.emitToUser(conversationId, 'typing', { conversationId, topicId, userId: BOT_SENDER_ID, isTyping: false });
+      }
+      await this.postBotMessage(conversationId, topicId, `${questions}\n\n[ACTION:Ищи]`);
     } catch (e) {
+      if (this.emitToUser) {
+        this.emitToUser(conversationId, 'typing', { conversationId, topicId, userId: BOT_SENDER_ID, isTyping: false });
+      }
       this.logger.warn(`Claude clarify failed: ${(e as Error).message}`);
-      await this.postBotMessage(conversationId, topic.id,
+      await this.postBotMessage(conversationId, topicId,
         `Отлично! Задача: **${title}**\n\n` +
         `Расскажите подробнее:\n` +
         `- Что именно нужно?\n` +
@@ -94,9 +123,6 @@ export class OutboundBotService {
         `Когда будете готовы — нажмите **"Ищи"**.\n\n[ACTION:Ищи]`
       );
     }
-
-    this.logger.log(`Created task: topic=${topic.id} campaign=${campaign.id}`);
-    return { conversationId, topicId: topic.id, campaignId: campaign.id };
   }
 
   // ── Handle user message in AI_OUTBOUND conversation ──
@@ -164,21 +190,44 @@ export class OutboundBotService {
           this.postStatus(conversationId, topicId, `❌ Ошибка: ${e.message}`).catch(() => {});
         });
       } else {
-        await this.postBotMessage(conversationId, topicId, '▶️ Обзвон уже идёт...');
+        // Status is 'calling' — clear waiting flag so executeCalls loop continues
+        await this.redis.del(`outbound:waiting:${campaign.id}`);
+        await this.postBotMessage(conversationId, topicId, '▶️ Продолжаю...');
       }
     } else if (['сводка', 'итоги', 'результаты', 'summary'].includes(lower)) {
       await this.analyzeResults(campaign.id, userId, conversationId, topicId);
-    } else if (lower === 'слушать' || lower === 'listen') {
-      // User wants to listen in on active call
+    } else if (lower.includes("слушать") || lower === "listen") {
+      // User wants to listen in — handled via REST endpoint GET /campaigns/:id/listen
       const activeRoom = this.activeCallRooms.get(campaign.id);
       if (activeRoom) {
-        const token = await this.generateListenToken(userId, activeRoom.roomName);
         await this.postBotMessage(conversationId, topicId,
-          `🎧 Подключаюсь к звонку с **${activeRoom.businessName}**...\n\n` +
-          `[LISTEN:${activeRoom.roomName}:${token}]`
+          `🎧 Подключение к звонку с **${activeRoom.businessName}**...`
         );
+        // Emit special event for mobile to connect
+        if (this.emitToUser) {
+          const token = await this.generateListenToken(userId, activeRoom.roomName);
+          this.emitToUser(conversationId, 'outbound_listen', {
+            roomName: activeRoom.roomName,
+            businessName: activeRoom.businessName,
+            token,
+            wsUrl: LK_WS_URL,
+          });
+        }
       } else {
-        await this.postBotMessage(conversationId, topicId, '❌ Сейчас нет активного звонка.');
+        // No active call — show last recording if available
+        const lastCall = await this.prisma.outboundCall.findFirst({
+          where: { campaignId: campaign.id, status: 'completed', recordingUrl: { not: null } },
+          orderBy: { createdAt: 'desc' },
+        });
+        if (lastCall?.recordingUrl) {
+          // Recording was already auto-posted by stopRecorderAndGetUrl
+          await this.postBotMessage(conversationId, topicId,
+            `🎧 Запись звонка с **${lastCall.businessName}** уже в чате ⬆️`
+          );
+
+        } else {
+          await this.postBotMessage(conversationId, topicId, '❌ Сейчас нет активного звонка и записи.');
+        }
       }
     }
   }
@@ -247,16 +296,23 @@ export class OutboundBotService {
 
   // ── Wait for campaign status change (polling with timeout) ──
 
+  // Waits for user to press Continue or Enough after a call completes.
+  // Before calling, set a Redis flag; handleCallingFeedback clears it on "continue".
   private async waitForCampaignStatus(campaignId: string, timeoutMs: number): Promise<string> {
+    const key = `outbound:waiting:${campaignId}`;
+    await this.redis.setEx(key, Math.ceil(timeoutMs / 1000), '1');
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       const campaign = await this.prisma.outboundCampaign.findUnique({ where: { id: campaignId } });
       if (!campaign) return 'done';
-      if (campaign.status === 'paused') return 'paused';
-      if (campaign.status === 'done') return 'done';
-      if (campaign.status === 'calling') return 'calling';
+      if (campaign.status === 'paused') { await this.redis.del(key); return 'paused'; }
+      if (campaign.status === 'done') { await this.redis.del(key); return 'done'; }
+      // Check if "continue" was pressed (flag cleared)
+      const waiting = await this.redis.get(key);
+      if (!waiting) return 'calling';
       await new Promise(r => setTimeout(r, 2000));
     }
+    await this.redis.del(key);
     return 'calling'; // timeout — auto-continue
   }
 
@@ -555,9 +611,7 @@ export class OutboundBotService {
 
     await this.dispatcher.createDispatch(roomName, OUTBOUND_AGENT_NAME, { metadata });
 
-    // TEST MODE: all calls go to Dmitry's phone
-    const testPhone = '+79030169187';
-    if (this.sip.isConfigured()) await this.sip.dialOutbound(roomName, testPhone);
+    if (this.sip.isConfigured()) await this.sip.dialOutbound(roomName, spec.phone);
     else this.logger.warn(`SIP not configured — agent in room ${roomName}`);
 
     // Track active call for listen-in
@@ -579,7 +633,7 @@ export class OutboundBotService {
 
     await this.prisma.outboundCall.update({ where: { id: call.id }, data: { status: 'in_progress' } });
     await this.postBotMessage(conversationId, topicId,
-      `📞 Звоню (${idx + 1}/${total}): **${spec.businessName}**...\n\n[ACTION:Слушать]`
+      `📞 Звоню (${idx + 1}/${total}): **${spec.businessName}**...\n\n[ACTION:🎧 Слушать]`
     );
 
     // Wait for callback (max 7 min), but also check if campaign was paused
@@ -607,11 +661,10 @@ export class OutboundBotService {
     // Clean up active room tracking
     this.activeCallRooms.delete(campaignId);
 
+    // Don't post result here — handleCallCallback already posts it
+    // (including goal detection and recording link later)
     const final_ = await this.prisma.outboundCall.findUnique({ where: { id: call.id } });
-    if (final_?.status === 'completed') {
-      const recLink = final_.recordingUrl ? `\n\n🎧 [Запись звонка](${final_.recordingUrl})` : '';
-      await this.postBotMessage(conversationId, topicId, `✅ **${spec.businessName}** (${final_.durationSec || 0}с)\n\n${final_.summary || ''}${recLink}`);
-    } else if (final_?.status !== 'failed') {
+    if (!final_ || !['completed', 'failed', 'no_answer'].includes(final_.status)) {
       await this.postStatus(conversationId, topicId, `⏳ ${spec.businessName}: ${final_?.status || 'timeout'}`);
     }
   }
@@ -667,27 +720,48 @@ export class OutboundBotService {
       });
     }
 
+    // Check if goal was achieved (booking confirmed, etc.)
+    const goalAchieved = data.summary && /GOAL_ACHIEVED:\s*да/i.test(data.summary);
+    // Clean up GOAL_ACHIEVED line from displayed summary
+    const cleanSummary = (data.summary || '').replace(/\n?GOAL_ACHIEVED:\s*(да|нет).*/i, '').trim();
+
     // Post result to chat immediately (recording link will come later)
     const campaign = await this.prisma.outboundCampaign.findUnique({ where: { id: data.campaignId } });
     if (campaign) {
-      await this.postBotMessage(
-        campaign.conversationId,
-        campaign.topicId,
-        `✅ **${call.businessName}** (${data.durationSec}с)\n\n${data.summary || 'Нет summary'}`,
-      );
+      if (goalAchieved) {
+        await this.postBotMessage(
+          campaign.conversationId,
+          campaign.topicId,
+          `🎉 **${call.businessName}** — цель достигнута! (${data.durationSec}с)\n\n${cleanSummary}`,
+        );
+        // Pause campaign — goal achieved, ask user if they want to continue
+        await this.prisma.outboundCampaign.update({ where: { id: data.campaignId }, data: { status: 'paused' } });
+        await this.updateTopicIcon(campaign.topicId, 'paused');
+        await this.postBotMessage(
+          campaign.conversationId,
+          campaign.topicId,
+          '✅ **Цель достигнута!** Продолжить обзвон или достаточно?\n\n[ACTION:Продолжить обзвон][ACTION:Сводка]',
+        );
+      } else {
+        await this.postBotMessage(
+          campaign.conversationId,
+          campaign.topicId,
+          `✅ **${call.businessName}** (${data.durationSec}с)\n\n${cleanSummary}`,
+        );
+      }
     }
 
-    // Delete room AFTER a delay to let recorder process the audio
+    // Delete room quickly to hang up SIP call (recorder processes from local PCM files)
     if (call.roomName) {
       const roomName = call.roomName;
       setTimeout(async () => {
         try {
           await this.rooms.deleteRoom(roomName);
-          this.logger.log(`[hangup] Room ${roomName} deleted (delayed)`);
+          this.logger.log(`[hangup] Room ${roomName} deleted`);
         } catch (e) {
           this.logger.warn(`[hangup] Failed to delete room: ${(e as Error).message}`);
         }
-      }, 15000); // 15 sec delay for recorder to finish
+      }, 2000); // 2s — enough for recorder to get stop signal
     }
   }
 
@@ -710,12 +784,14 @@ export class OutboundBotService {
           where: { roomName },
         });
         if (summary?.recordingUrl) {
+          // Decode %2F → / so flutter_markdown doesn't double-encode it
+          const decodedUrl = decodeURIComponent(summary.recordingUrl);
           // Update OutboundCall with recording URL
           await this.prisma.outboundCall.update({
             where: { id: callId },
-            data: { recordingUrl: summary.recordingUrl },
+            data: { recordingUrl: decodedUrl },
           });
-          this.logger.log(`[recorder] Got recording URL for call ${callId}: ${summary.recordingUrl}`);
+          this.logger.log(`[recorder] Got recording URL for call ${callId}: ${decodedUrl}`);
 
           // Post recording link to chat
           const call = await this.prisma.outboundCall.findUnique({
@@ -726,7 +802,7 @@ export class OutboundBotService {
             await this.postBotMessage(
               call.campaign.conversationId,
               call.campaign.topicId,
-              `🎧 Запись звонка с **${call.businessName}** готова:\n${summary.recordingUrl}`,
+              `🎧 **Запись: ${call.businessName}**\n[▶ Слушать / Скачать](${decodedUrl})`,
             );
           }
           return;
@@ -747,7 +823,11 @@ export class OutboundBotService {
     };
     const icon = icons[status] || '📞';
     try {
-      await this.prisma.topic.update({ where: { id: topicId }, data: { icon } });
+      const topic = await this.prisma.topic.update({ where: { id: topicId }, data: { icon } });
+      // Notify mobile so topics list refreshes immediately
+      if (this.emitToUser && topic.conversationId) {
+        this.emitToUser(topic.conversationId, 'topic_updated', { topicId, icon, status });
+      }
     } catch {}
   }
 
