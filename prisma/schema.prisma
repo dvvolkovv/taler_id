@@ -296,6 +296,7 @@ enum ConvType {
   CHANNEL
   SAVED
   AI_ANALYST
+  AI_OUTBOUND
 }
 
 model CallLog {
@@ -584,4 +585,42 @@ model BlockedUser {
   @@unique([blockerId, blockedId])
   @@index([blockerId])
   @@index([blockedId])
+}
+
+// ─── Outbound Calling Bot ───
+
+model OutboundCampaign {
+  id             String   @id @default(uuid())
+  userId         String
+  conversationId String
+  topicId        String
+  status         String   @default("planning")  // planning | calling | analyzing | done | failed
+  taskText       String
+  callPlan       Json?
+  summary        Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  calls          OutboundCall[]
+
+  @@index([userId])
+  @@index([topicId])
+}
+
+model OutboundCall {
+  id           String    @id @default(uuid())
+  campaignId   String
+  roomName     String?   @unique
+  businessName String
+  phoneNumber  String
+  status       String    @default("pending")  // pending | dialing | in_progress | completed | failed | no_answer
+  transcript   Json?
+  summary      String?
+  recordingUrl String?
+  durationSec  Int?
+  startedAt    DateTime?
+  endedAt      DateTime?
+  createdAt    DateTime  @default(now())
+  campaign     OutboundCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId])
 }

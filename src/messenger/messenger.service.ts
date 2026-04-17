@@ -340,11 +340,12 @@ export class MessengerService {
     };
   }
 
-  async getMessages(conversationId: string, userId: string, cursor?: string, limit = 30) {
+  async getMessages(conversationId: string, userId: string, cursor?: string, limit = 30, topicId?: string) {
     await this.assertParticipant(conversationId, userId);
     const messages = await this.prisma.message.findMany({
       where: {
         conversationId,
+        ...(topicId ? { topicId } : {}),
         deletedAt: null,
         NOT: { hiddenFor: { some: { userId } } },
       },

@@ -21,6 +21,7 @@ import { ProfileSectionsModule } from "./profile-sections/profile-sections.modul
 import { NotesModule } from "./notes/notes.module";
 import { CalendarModule } from "./calendar/calendar.module";
 import { AiAnalystModule } from "./ai-analyst/ai-analyst.module";
+import { OutboundBotModule } from "./outbound-bot/outbound-bot.module";
 import { ScheduleModule } from "@nestjs/schedule";
 import configuration from './config/configuration';
 
@@ -77,6 +78,7 @@ import configuration from './config/configuration';
     NotesModule,
     CalendarModule,
     AiAnalystModule,
+    OutboundBotModule,
   ],
   controllers: [AppController],
   providers: [

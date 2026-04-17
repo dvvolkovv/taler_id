@@ -1,7 +1,7 @@
 import {
   Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, UseGuards,
   UseInterceptors, UploadedFile, ForbiddenException, Logger,
-  Res, StreamableFile, NotFoundException,
+  Res, Req, StreamableFile, NotFoundException,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -89,9 +89,10 @@ export class MessengerController {
     @Param('id') id: string,
     @Query('cursor') cursor: string,
     @Query('limit') limit: string,
+    @Query('topicId') topicId: string,
     @CurrentUser() user: any,
   ) {
-    return this.service.getMessages(id, user.sub, cursor, limit ? +limit : 30);
+    return this.service.getMessages(id, user.sub, cursor, limit ? +limit : 30, topicId);
   }
 
   @Get('conversations/:id/media')
@@ -100,6 +101,7 @@ export class MessengerController {
     @Query('type') type: string,
     @Query('cursor') cursor: string,
     @Query('limit') limit: string,
+    @Query('topicId') topicId: string,
     @CurrentUser() user: any,
   ) {
     return this.service.getSharedMedia(id, user.sub, type, cursor, limit ? +limit : 50);
@@ -371,6 +373,7 @@ export class MessengerController {
     }),
   )
   async uploadFile(@UploadedFile() file: Express.Multer.File) {
+    if (!file) { throw new Error("No file uploaded"); }
     const ext = extname(file.originalname);
     const s3Key = `files/${uuidv4()}${ext}`;
 
