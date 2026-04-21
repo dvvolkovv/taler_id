@@ -22,6 +22,7 @@ import { NotesModule } from "./notes/notes.module";
 import { CalendarModule } from "./calendar/calendar.module";
 import { AiAnalystModule } from "./ai-analyst/ai-analyst.module";
 import { OutboundBotModule } from "./outbound-bot/outbound-bot.module";
+import { DeviceKeysModule } from "./device-keys/device-keys.module";
 import { ScheduleModule } from "@nestjs/schedule";
 import configuration from './config/configuration';
 
@@ -79,6 +80,7 @@ import configuration from './config/configuration';
     CalendarModule,
     AiAnalystModule,
     OutboundBotModule,
+    DeviceKeysModule,
   ],
   controllers: [AppController],
   providers: [
