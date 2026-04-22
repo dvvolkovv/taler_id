@@ -91,6 +91,7 @@ describe('DeviceKeys (e2e)', () => {
     expect(Array.isArray(res.body)).toBe(true);
     expect(res.body.length).toBeGreaterThanOrEqual(1);
     expect(res.body[0].devicePk).toBe('a'.repeat(64));
+    expect(res.body[0].userPk).toBe('c'.repeat(64));
   });
 
   it('POST /profile/device-keys/:id/revoke — revokes own key', async () => {
