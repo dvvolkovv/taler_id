@@ -93,6 +93,116 @@ describe('DeviceKeysService', () => {
       expect(result.devicePk).toBe(validDto.devicePk);
       expect(result.revokedAt).toBeNull();
     });
+
+    it('extracts userPk from certificate JSON and persists it', async () => {
+      const validUntil = Date.now() + 30 * 86_400_000;
+      const userPk = 'c'.repeat(64);
+      const certJson = JSON.stringify({
+        algorithm: 'X25519',
+        devicePk: 'a'.repeat(64),
+        userId: 'user-1',
+        userPk,
+        validUntilEpochMs: validUntil,
+      });
+      prisma.deviceKey.create.mockResolvedValue({
+        id: 'dk-2',
+        userId: 'user-1',
+        devicePk: 'a'.repeat(64),
+        userPk,
+        algorithm: 'X25519',
+        validUntil: new Date(validUntil),
+        certificate: certJson,
+        signature: 'f'.repeat(128),
+        revokedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      } as any);
+
+      const result = await service.register('user-1', {
+        devicePk: 'a'.repeat(64),
+        algorithm: 'X25519',
+        validUntilEpochMs: validUntil,
+        signature: 'f'.repeat(128),
+        certificate: certJson,
+      });
+
+      expect(prisma.deviceKey.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          userId: 'user-1',
+          devicePk: 'a'.repeat(64),
+          userPk,
+          algorithm: 'X25519',
+        }),
+      });
+      expect(result.userPk).toBe(userPk);
+    });
+
+    it('tolerates cert without userPk (Phase 1b compat)', async () => {
+      const validUntil = Date.now() + 30 * 86_400_000;
+      const certJson = JSON.stringify({
+        algorithm: 'X25519',
+        devicePk: 'a'.repeat(64),
+        userId: 'user-1',
+        validUntilEpochMs: validUntil,
+      });
+      prisma.deviceKey.create.mockResolvedValue({
+        id: 'dk-3',
+        userId: 'user-1',
+        devicePk: 'a'.repeat(64),
+        userPk: null,
+        algorithm: 'X25519',
+        validUntil: new Date(validUntil),
+        certificate: certJson,
+        signature: 'f'.repeat(128),
+        revokedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      } as any);
+
+      const result = await service.register('user-1', {
+        devicePk: 'a'.repeat(64),
+        algorithm: 'X25519',
+        validUntilEpochMs: validUntil,
+        signature: 'f'.repeat(128),
+        certificate: certJson,
+      });
+
+      expect(prisma.deviceKey.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          userPk: null,
+        }),
+      });
+      expect(result.userPk).toBeNull();
+    });
+
+    it('tolerates malformed cert JSON (stores userPk=null)', async () => {
+      const validUntil = Date.now() + 30 * 86_400_000;
+      prisma.deviceKey.create.mockResolvedValue({
+        id: 'dk-4',
+        userId: 'user-1',
+        devicePk: 'a'.repeat(64),
+        userPk: null,
+        algorithm: 'X25519',
+        validUntil: new Date(validUntil),
+        certificate: 'not-json',
+        signature: 'f'.repeat(128),
+        revokedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      } as any);
+
+      await service.register('user-1', {
+        devicePk: 'a'.repeat(64),
+        algorithm: 'X25519',
+        validUntilEpochMs: validUntil,
+        signature: 'f'.repeat(128),
+        certificate: 'not-json',
+      });
+
+      expect(prisma.deviceKey.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ userPk: null }),
+      });
+    });
   });
 
   describe('listForContact', () => {

@@ -31,10 +31,13 @@ export class DeviceKeysService {
       throw new BadRequestException('validUntilEpochMs is in the past');
     }
 
+    const userPk = this.extractUserPk(dto.certificate);
+
     const record = await this.prisma.deviceKey.create({
       data: {
         userId,
         devicePk: dto.devicePk.toLowerCase(),
+        userPk,
         algorithm: SUPPORTED_ALG,
         validUntil: new Date(dto.validUntilEpochMs),
         certificate: dto.certificate,
@@ -92,11 +95,30 @@ export class DeviceKeysService {
     return this.toResponseDto(updated);
   }
 
+  /**
+   * Extract the `userPk` field from a cert JSON string.
+   *
+   * Returns lowercase hex if present and string-typed, otherwise `null`.
+   * Malformed JSON returns `null` (Phase 1b backward compat — the legacy
+   * cert has no userPk and the backend stored it as-is without parsing).
+   */
+  private extractUserPk(certificateJson: string): string | null {
+    try {
+      const parsed = JSON.parse(certificateJson);
+      const v = parsed?.userPk;
+      if (typeof v !== 'string') return null;
+      return v.toLowerCase();
+    } catch {
+      return null;
+    }
+  }
+
   private toResponseDto(row: any): DeviceKeyResponseDto {
     return {
       id: row.id,
       userId: row.userId,
       devicePk: row.devicePk,
+      userPk: row.userPk ?? null,
       algorithm: row.algorithm,
       validUntil: (row.validUntil as Date).toISOString(),
       certificate: row.certificate,
