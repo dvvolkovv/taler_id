@@ -41,6 +41,7 @@ model DeviceKey {
   id          String    @id @default(uuid())
   userId      String
   devicePk    String    @unique  // hex-encoded 32-byte X25519 public key
+  userPk      String?             // hex 64 chars, Ed25519 UserIdentityKey
   algorithm   String    @default("X25519")
   validUntil  DateTime
   certificate String    @db.Text  // full JSON self-signed cert (for clients to verify)
@@ -53,6 +54,7 @@ model DeviceKey {
 
   @@index([userId])
   @@index([userId, revokedAt])
+  @@index([userPk])
 }
 
 model Profile {
