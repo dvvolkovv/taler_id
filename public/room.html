@@ -800,6 +800,7 @@
     let consentPending = false;         // initiator waiting for responses
     let consentResponses = new Map();   // identity → { name, accepted: true/false/null }
     let recordingApproved = false;      // all consented, recording active
+    let recordingConsentRespondedTo = null; // initiatorId we've already answered for this session
 
     // ── Server recording state ──
     let srvRecActive = false;
@@ -808,6 +809,7 @@
     let srvRecConsentPending = false;
     let srvRecConsentResponses = new Map();
     let srvRecApproved = false;
+    let srvRecConsentRespondedTo = null; // initiatorId we've already answered for this session
 
     // ── Translator state ──
     let translatorEnabled = false;
@@ -1200,6 +1202,9 @@
         await room.connect(getLivekitUrl(), token);
         // Unblock audio playback immediately while user gesture is still active
         room.startAudio().catch(() => {});
+        // Safari + Chrome: when the tab becomes hidden the browser can suspend the AudioContext
+        // and/or mute local mic/camera tracks. When we come back we must re-assert them.
+        setupVisibilityRecovery();
         const micOpts = currentMicId ? { deviceId: currentMicId } : undefined;
         // Enable only microphone on join; camera will be offered via prompt
         camEnabled = false;
@@ -1221,6 +1226,38 @@
     }
 
     function getLivekitUrl() { return `wss://${location.hostname}/livekit/`; }
+
+    let _visibilityHandlerInstalled = false;
+    function setupVisibilityRecovery() {
+      if (_visibilityHandlerInstalled) return;
+      _visibilityHandlerInstalled = true;
+      document.addEventListener('visibilitychange', async () => {
+        if (document.hidden || !room) return;
+        // Tab came back into focus. Safari aggressively suspends audio playback and
+        // mutes local MediaStreamTracks while hidden. Re-assert every user-facing
+        // state so the user doesn't have to toggle mic/cam manually.
+        try { await room.startAudio(); } catch (_) {}
+        try {
+          if (micEnabled) {
+            const micOpts = currentMicId ? { deviceId: currentMicId } : undefined;
+            await room.localParticipant.setMicrophoneEnabled(true, micOpts);
+          }
+        } catch (e) { console.warn('[VIS] mic recovery failed:', e); }
+        try {
+          if (camEnabled) {
+            const camOpts = currentCamId ? { deviceId: currentCamId } : undefined;
+            await room.localParticipant.setCameraEnabled(true, camOpts);
+          }
+        } catch (e) { console.warn('[VIS] cam recovery failed:', e); }
+        try { rerenderAllParticipants(); } catch (_) {}
+      });
+      // Chrome on Windows sometimes surfaces a silent track-ended when the OS
+      // steals the device. Expose it as a notification so the user knows to retry.
+      window.addEventListener('focus', () => {
+        if (!room) return;
+        try { room.startAudio(); } catch (_) {}
+      });
+    }
 
     function getDisplayName(participant) {
       const name = participant.name;
@@ -1543,17 +1580,24 @@
       updateControlButtons();
     }
 
-    function toggleMic() {
+    async function toggleMic() {
       if (!room) return;
-      micEnabled = !micEnabled;
-      room.localParticipant.setMicrophoneEnabled(micEnabled);
+      const next = !micEnabled;
+      try {
+        const micOpts = next && currentMicId ? { deviceId: currentMicId } : undefined;
+        await room.localParticipant.setMicrophoneEnabled(next, micOpts);
+        micEnabled = next;
+      } catch (e) {
+        console.warn('[MIC] toggle failed:', e);
+        showNotification('Не удалось переключить микрофон', 'error');
+      }
       updateControlButtons();
     }
 
     async function toggleCam() {
       if (!room) return;
-      camEnabled = !camEnabled;
-      if (!camEnabled && bgProcessor) {
+      const next = !camEnabled;
+      if (!next && bgProcessor) {
         // Remove background processor before disabling camera
         const { Track } = LivekitClient;
         const camPub = room.localParticipant.getTrackPublication(Track.Source.Camera);
@@ -1564,7 +1608,17 @@
         bgEffect = 'none';
         updateBgButton();
       }
-      await room.localParticipant.setCameraEnabled(camEnabled);
+      if (next) {
+        const ok = await enableCameraWithRetry();
+        camEnabled = ok;
+      } else {
+        try {
+          await room.localParticipant.setCameraEnabled(false);
+          camEnabled = false;
+        } catch (e) {
+          console.warn('[CAM] disable failed:', e);
+        }
+      }
       updateControlButtons();
     }
 
@@ -1803,6 +1857,10 @@
       if (msg.initiatorId === localIdentity) return;
       // Regular request while already recording from same initiator — skip (dedup)
       if (isRecording && recordingInitiatorId === msg.initiatorId && !msg.recordingActive) return;
+      // We already responded to this initiator in the current session — skip retries
+      if (recordingConsentRespondedTo === msg.initiatorId) return;
+      // Dialog already open for this initiator — skip re-render flicker
+      if (document.getElementById('consent-dialog-overlay') && recordingInitiatorId === msg.initiatorId) return;
       recordingInitiatorId = msg.initiatorId;
       recordingInitiatorName = msg.initiatorName;
       showConsentDialog(msg.initiatorName, msg.recordingActive);
@@ -1906,6 +1964,7 @@
       consentPending = false;
       recordingApproved = false;
       consentResponses.clear();
+      recordingConsentRespondedTo = null;
       updateControlButtons();
       updateRecordingBanner();
     }
@@ -1951,6 +2010,9 @@
       const isActiveRec = overlay && overlay.dataset.recordingActive === '1';
       removeConsentDialog();
       if (!room) return;
+
+      // Remember we answered this initiator — subsequent retry requests must not re-open dialog
+      recordingConsentRespondedTo = recordingInitiatorId;
 
       broadcastData({
         type: 'recording_consent_response',
@@ -2057,6 +2119,10 @@
       if (msg.initiatorId === localIdentity) return;
       // Dedup: skip regular request if server recording already active from same initiator
       if (srvRecActive && srvRecInitiatorId === msg.initiatorId && !msg.recordingActive) return;
+      // We already responded to this initiator in the current session — skip retries
+      if (srvRecConsentRespondedTo === msg.initiatorId) return;
+      // Dialog already open for this initiator — skip re-render flicker
+      if (document.getElementById('srv-rec-consent-overlay') && srvRecInitiatorId === msg.initiatorId) return;
       srvRecInitiatorId = msg.initiatorId;
       srvRecInitiatorName = msg.initiatorName;
       showSrvRecConsentDialog(msg.initiatorName, msg.recordingActive);
@@ -2067,6 +2133,8 @@
       const overlay = document.getElementById('srv-rec-consent-overlay');
       const isActiveRec = overlay && overlay.dataset.recordingActive === '1';
       removeSrvRecConsentDialog();
+      // Remember we answered this initiator — subsequent retry requests must not re-open dialog
+      srvRecConsentRespondedTo = srvRecInitiatorId;
       broadcastData({
         type: 'srv_rec_consent_response',
         accepted,
@@ -2191,6 +2259,8 @@
       srvRecConsentPending = false;
       srvRecApproved = false;
       srvRecConsentResponses.clear();
+      srvRecConsentRespondedTo = null;
+      removeSrvRecConsentStatusUI();
       updateSrvRecUI();
       updateControlButtons();
     }
@@ -2250,7 +2320,9 @@
         el = document.createElement('div');
         el.id = 'srv-rec-consent-status';
         el.className = 'consent-status';
-        document.querySelector('.controls').prepend(el);
+        // Must attach to body — .controls has backdrop-filter which creates a
+        // containing block, breaking `position: fixed` inside it.
+        document.body.appendChild(el);
       }
       const all = Array.from(srvRecConsentResponses.entries());
       el.innerHTML = `
@@ -2940,15 +3012,60 @@
       const el = document.getElementById('cam-prompt');
       if (el) el.remove();
       if (!room) return;
-      try {
-        const camOpts = currentCamId ? { deviceId: currentCamId } : undefined;
-        await room.localParticipant.setCameraEnabled(true, camOpts);
+      const ok = await enableCameraWithRetry();
+      if (ok) {
         camEnabled = true;
         updateControlButtons();
         renderParticipant(room.localParticipant);
-      } catch (e) {
-        console.warn('[CAM] Failed to enable camera:', e);
       }
+    }
+
+    // Robust camera enable — handles the common Chrome/Windows failure where
+    // the LiveKit SDK default `facingMode: 'user'` cannot be satisfied by a USB
+    // webcam. Tries (1) the probed deviceId, (2) the first enumerated videoinput,
+    // (3) no constraints (SDK default). Surfaces the last error to the user.
+    async function enableCameraWithRetry() {
+      if (!room) return false;
+      const lp = room.localParticipant;
+      const attempts = [];
+      if (currentCamId) {
+        attempts.push({ deviceId: currentCamId, resolution: { width: 1280, height: 720 } });
+      }
+      // Try enumeration as a second source of device ids (e.g. if the initial
+      // getUserMedia probe was denied before permission was granted).
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const cams = devices.filter(d => d.kind === 'videoinput' && d.deviceId);
+        for (const d of cams) {
+          if (d.deviceId === currentCamId) continue;
+          attempts.push({ deviceId: d.deviceId, resolution: { width: 1280, height: 720 } });
+        }
+      } catch (_) {}
+      // Final fallback — let the SDK pick defaults.
+      attempts.push(undefined);
+
+      let lastErr = null;
+      for (const opts of attempts) {
+        try {
+          await lp.setCameraEnabled(true, opts);
+          // Success — remember the deviceId we ended up with for future toggles.
+          try {
+            const pub = lp.getTrackPublication(LivekitClient.Track.Source.Camera);
+            const settings = pub && pub.track && pub.track.mediaStreamTrack && pub.track.mediaStreamTrack.getSettings();
+            if (settings && settings.deviceId) currentCamId = settings.deviceId;
+          } catch (_) {}
+          return true;
+        } catch (e) {
+          lastErr = e;
+          console.warn('[CAM] enable attempt failed with opts', opts, e);
+          // Make sure track is fully stopped before the next attempt —
+          // otherwise Chrome can keep the device busy.
+          try { await lp.setCameraEnabled(false); } catch (_) {}
+        }
+      }
+      const msg = (lastErr && (lastErr.message || lastErr.name)) || 'неизвестная ошибка';
+      showNotification('Не удалось включить камеру: ' + msg, 'error');
+      return false;
     }
 
     function dismissCameraPrompt() {
