@@ -119,7 +119,7 @@ export class MessengerGateway
           this.logger.log(`[handleMessage] Duplicate clientTempId=${payload.clientTempId}, skipping`);
           return;
         }
-        await this.redis.setEx(dedupKey, 120, '1');
+        await this.redis.setEx(dedupKey, 3600, '1');
       }
       const fileData = payload.fileUrl ? {
         fileUrl: payload.fileUrl, fileName: payload.fileName,
