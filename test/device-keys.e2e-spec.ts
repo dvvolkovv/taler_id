@@ -51,18 +51,23 @@ describe('DeviceKeys (e2e)', () => {
     await app.close();
   });
 
-  const sampleDto = (devicePk: string) => ({
-    devicePk,
-    algorithm: 'X25519',
-    validUntilEpochMs: Date.now() + 30 * 86_400_000,
-    signature: 'f'.repeat(128),
-    certificate: JSON.stringify({
-      algorithm: 'X25519',
+  const sampleDto = (devicePk: string) => {
+    const validUntil = Date.now() + 30 * 86_400_000;
+    const userPk = 'c'.repeat(64);
+    return {
       devicePk,
-      userId: 'placeholder',
-      validUntilEpochMs: Date.now() + 30 * 86_400_000,
-    }),
-  });
+      algorithm: 'X25519',
+      validUntilEpochMs: validUntil,
+      signature: 'f'.repeat(128),
+      certificate: JSON.stringify({
+        algorithm: 'X25519',
+        devicePk,
+        userId: 'placeholder',
+        userPk,
+        validUntilEpochMs: validUntil,
+      }),
+    };
+  };
 
   it('POST /profile/device-keys — registers a key (201)', async () => {
     const res = await request(app.getHttpServer())
@@ -74,6 +79,7 @@ describe('DeviceKeys (e2e)', () => {
     expect(res.body.devicePk).toBe('a'.repeat(64));
     expect(res.body.revokedAt).toBeNull();
     expect(res.body.userId).toBe(user1Id);
+    expect(res.body.userPk).toBe('c'.repeat(64));
   });
 
   it('GET /profile/contacts/:userId/keys — returns registered key', async () => {
