@@ -705,20 +705,28 @@ export class OutboundBotService {
     // Voximplant needs ~10-30s to finalize the recording after call ends
     for (let attempt = 0; attempt < 30; attempt++) {
       await new Promise(r => setTimeout(r, 5000));
-      const url = await this.vox.getCallRecording(voxCallSessionHistoryId);
-      if (url) {
-        await this.prisma.outboundCall.update({ where: { id: callId }, data: { recordingUrl: url } });
-        const call = await this.prisma.outboundCall.findUnique({ where: { id: callId }, include: { campaign: true } });
-        if (call?.campaign) {
-          await this.postBotMessage(
-            call.campaign.conversationId,
-            call.campaign.topicId,
-            `🎧 **Запись: ${call.businessName}**\n[▶ Слушать / Скачать](${url})`,
-          );
-        }
-        this.logger.log(`[recording] Got URL for call ${callId}: ${url}`);
-        return;
+      const voxUrl = await this.vox.getCallRecording(voxCallSessionHistoryId);
+      if (!voxUrl) continue;
+
+      // Voximplant URL requires auth; download to our /var/www/recordings/ and serve publicly
+      const RECORDINGS_DIR = process.env.RECORDINGS_DIR || '/var/www/recordings';
+      const RECORDINGS_BASE_URL = process.env.RECORDINGS_BASE_URL || 'https://id.taler.tirol/recordings';
+      const filename = `outbound-${callId}.mp3`;
+      const localPath = `${RECORDINGS_DIR}/${filename}`;
+      const ok = await this.vox.downloadRecording(voxUrl, localPath);
+      const publicUrl = ok ? `${RECORDINGS_BASE_URL}/${filename}` : voxUrl;
+
+      await this.prisma.outboundCall.update({ where: { id: callId }, data: { recordingUrl: publicUrl } });
+      const call = await this.prisma.outboundCall.findUnique({ where: { id: callId }, include: { campaign: true } });
+      if (call?.campaign) {
+        await this.postBotMessage(
+          call.campaign.conversationId,
+          call.campaign.topicId,
+          `🎧 **Запись: ${call.businessName}**\n[▶ Слушать / Скачать](${publicUrl})`,
+        );
       }
+      this.logger.log(`[recording] Saved call ${callId}: ${publicUrl}`);
+      return;
     }
     this.logger.warn(`[recording] No URL found after 150s for call ${callId}`);
   }
