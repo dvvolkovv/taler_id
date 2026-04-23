@@ -379,6 +379,38 @@ export class AuthService {
     return { valid: true, resetToken };
   }
 
+  async changePassword(
+    userId: string,
+    currentPassword: string,
+    newPassword: string,
+    ip: string,
+    userAgent: string,
+  ) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user?.passwordHash) throw new UnauthorizedException('User not found');
+
+    const isValid = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!isValid) {
+      await this.auditLog(userId, 'PASSWORD_CHANGE_FAILED', ip, userAgent, { reason: 'wrong_current_password' });
+      throw new UnauthorizedException('Invalid current password');
+    }
+
+    if (currentPassword === newPassword) {
+      throw new BadRequestException('New password must differ from current');
+    }
+
+    const bcryptRounds = this.configService.get<number>('security.bcryptRounds') ?? 12;
+    const passwordHash = await bcrypt.hash(newPassword, bcryptRounds);
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash },
+    });
+
+    await this.auditLog(userId, 'PASSWORD_CHANGED', ip, userAgent);
+    return { changed: true };
+  }
+
   async resetPassword(resetToken: string, newPassword: string) {
     let payload: any;
     try {
