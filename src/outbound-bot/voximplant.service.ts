@@ -6,6 +6,7 @@ const VOX_API_KEY = process.env.VOX_API_KEY || '';
 const VOX_APPLICATION_ID = process.env.VOX_APPLICATION_ID || '';
 const VOX_RULE_ID = process.env.VOX_RULE_ID || '';
 const VOX_CALLER_ID = process.env.VOX_CALLER_ID || '';
+const VOX_VOICE_TURN_URL = process.env.VOX_VOICE_TURN_URL || 'https://staging.id.taler.tirol/voice-turn';
 
 export interface VoximplantCallParams {
   phone: string;
@@ -39,6 +40,7 @@ export class VoximplantService {
         phone: params.phone,
         callerID: VOX_CALLER_ID,
         sessionId: params.sessionId,
+        voiceTurnUrl: VOX_VOICE_TURN_URL,
         metadata: params.metadata,
       }),
     });
