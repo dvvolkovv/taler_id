@@ -83,4 +83,29 @@ export class VoximplantService {
       return null;
     }
   }
+
+  /**
+   * Download a Voximplant recording (auth via query string) and save to local path.
+   * Returns true on success.
+   */
+  async downloadRecording(voxUrl: string, localPath: string): Promise<boolean> {
+    if (!this.isConfigured()) return false;
+    const sep = voxUrl.includes('?') ? '&' : '?';
+    const authedUrl = `${voxUrl}${sep}account_id=${VOX_ACCOUNT_ID}&api_key=${VOX_API_KEY}`;
+    try {
+      const resp = await fetch(authedUrl);
+      if (!resp.ok) {
+        this.logger.warn(`[Vox] download failed: ${resp.status} ${resp.statusText}`);
+        return false;
+      }
+      const buf = Buffer.from(await resp.arrayBuffer());
+      const fs = await import('fs/promises');
+      await fs.writeFile(localPath, buf);
+      this.logger.log(`[Vox] recording saved: ${localPath} (${buf.length} bytes)`);
+      return true;
+    } catch (e) {
+      this.logger.warn(`[Vox] downloadRecording failed: ${(e as Error).message}`);
+      return false;
+    }
+  }
 }
