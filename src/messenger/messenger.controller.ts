@@ -853,6 +853,24 @@ export class MessengerController {
     return this.service.deleteChannel(id, user.sub);
   }
 
+  @Post("channels/:id/post")
+  async postToChannel(
+    @Param("id") id: string,
+    @Body("content") content: string,
+    @CurrentUser() user: any,
+  ) {
+    const result = await this.service.postToChannel(id, user.sub, content);
+    const full = await this.service.getMessageById(result.messageId);
+    if (full) {
+      this.gateway.server.to(id).emit("new_message", {
+        ...full,
+        senderName: await this.service.getUserDisplayName(user.sub),
+        reactions: [],
+      });
+    }
+    return result;
+  }
+
   @Post("channels")
   async createChannel(
     @Body("name") name: string,
