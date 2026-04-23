@@ -840,7 +840,7 @@ export class MessengerService {
       throw new BadRequestException("Content exceeds 4000 characters");
     }
     const msg = await this.createMessage(channelId, userId, content);
-    return { messageId: msg.id, createdAt: msg.createdAt };
+    return { messageId: msg.id, createdAt: msg.sentAt };
   }
 
   async getMessageById(messageId: string) {
