@@ -2,22 +2,34 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { VoximplantService } from './voximplant.service';
+import { SipService } from './sip.service';
+import { AgentDispatchClient, RoomServiceClient } from 'livekit-server-sdk';
 import { v4 as uuidv4 } from 'uuid';
 
 const CLAUDE_WORKER_URL = process.env.CLAUDE_WORKER_URL || 'http://5.101.115.184:3033';
 const BOT_SENDER_ID = 'ai-outbound-bot';
 
+// OUTBOUND_MODE=voximplant (default, Yandex TTS) or livekit (SIPNET + ElevenLabs streaming)
+const OUTBOUND_MODE = process.env.OUTBOUND_MODE || 'voximplant';
+const OUTBOUND_AGENT_NAME = 'outbound-call-agent';
+const LK_HOST = process.env.LIVEKIT_HOST_OUTBOUND || 'https://ru.id.taler.tirol';
+const LK_API_KEY = process.env.LIVEKIT_API_KEY_OUTBOUND || 'devkey278c50b6c7ef4dab';
+const LK_API_SECRET = process.env.LIVEKIT_API_SECRET_OUTBOUND || '71658877e5b5f568313c7394c57a566ee6acd66ccf8e3f900237ac88d7e649e7';
+const BACKEND_URL = process.env.BACKEND_URL || 'https://staging.id.taler.tirol';
+
 @Injectable()
 export class OutboundBotService {
   private readonly logger = new Logger(OutboundBotService.name);
+  private readonly rooms = new RoomServiceClient(LK_HOST, LK_API_KEY, LK_API_SECRET);
+  private readonly dispatcher = new AgentDispatchClient(LK_HOST, LK_API_KEY, LK_API_SECRET);
   private emitToUser: ((target: string, event: string, data: any) => void) | null = null;
-  // Track active calls for UI (voice-turn session id)
   private activeCalls = new Map<string, { sessionId: string; businessName: string; campaignId: string }>();
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
     private readonly vox: VoximplantService,
+    private readonly sip: SipService,
   ) {}
 
   registerEmitter(fn: (target: string, event: string, data: any) => void) {
@@ -556,29 +568,43 @@ export class OutboundBotService {
     const ownerName = [profile?.firstName, profile?.lastName].filter(Boolean).join(' ') || 'клиент';
     const agentPrompt = (campaign?.callPlan as any)?.agentPrompt || '';
 
-    const result = await this.vox.startOutboundCall({
-      phone: spec.phone,
-      sessionId,
-      metadata: {
-        businessName: spec.businessName,
-        phoneNumber: spec.phone,
+    if (OUTBOUND_MODE === 'livekit') {
+      // livekit-agents pipeline: LiveKit room + dispatch agent + SIPNET PSTN
+      await this.rooms.createRoom({ name: sessionId, emptyTimeout: 300, maxParticipants: 5 });
+      const metadata = JSON.stringify({
+        businessName: spec.businessName, phoneNumber: spec.phone,
         questionsToAsk: spec.questionsToAsk,
-        taskContext: campaign?.taskText || '',
-        campaignId,
-        callId: call.id,
-        ownerName,
-        agentPrompt,
-      },
-    });
-
-    await this.prisma.outboundCall.update({
-      where: { id: call.id },
-      data: {
-        status: 'in_progress',
-        // Store Voximplant session id in transcript JSON for later recording lookup
-        transcript: { voxCallSessionHistoryId: result.callSessionHistoryId } as any,
-      },
-    });
+        taskContext: campaign?.taskText || '', campaignId, callId: call.id,
+        ownerName, agentPrompt,
+        callbackUrl: `${BACKEND_URL}/outbound-bot/call-callback`,
+      });
+      await this.dispatcher.createDispatch(sessionId, OUTBOUND_AGENT_NAME, { metadata });
+      await this.sip.dialOutbound(sessionId, spec.phone);
+      await this.prisma.outboundCall.update({ where: { id: call.id }, data: { status: 'in_progress' } });
+    } else {
+      // voximplant mode (PSTN + Yandex TTS + voice-turn)
+      const result = await this.vox.startOutboundCall({
+        phone: spec.phone,
+        sessionId,
+        metadata: {
+          businessName: spec.businessName,
+          phoneNumber: spec.phone,
+          questionsToAsk: spec.questionsToAsk,
+          taskContext: campaign?.taskText || '',
+          campaignId,
+          callId: call.id,
+          ownerName,
+          agentPrompt,
+        },
+      });
+      await this.prisma.outboundCall.update({
+        where: { id: call.id },
+        data: {
+          status: 'in_progress',
+          transcript: { voxCallSessionHistoryId: result.callSessionHistoryId } as any,
+        },
+      });
+    }
 
     this.activeCalls.set(campaignId, { sessionId, businessName: spec.businessName, campaignId });
     await this.postBotMessage(conversationId, topicId,

@@ -4,11 +4,12 @@ import { RedisModule } from '../redis/redis.module';
 import { OutboundBotController } from './outbound-bot.controller';
 import { OutboundBotService } from './outbound-bot.service';
 import { VoximplantService } from './voximplant.service';
+import { SipService } from './sip.service';
 
 @Module({
   imports: [ConfigModule, RedisModule],
   controllers: [OutboundBotController],
-  providers: [OutboundBotService, VoximplantService],
+  providers: [OutboundBotService, VoximplantService, SipService],
   exports: [OutboundBotService],
 })
 export class OutboundBotModule {}
