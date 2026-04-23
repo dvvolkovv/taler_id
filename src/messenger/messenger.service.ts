@@ -717,16 +717,23 @@ export class MessengerService {
     const existing = await this.prisma.conversationParticipant.findUnique({
       where: { conversationId_userId: { conversationId: channelId, userId } },
     });
-    if (existing) throw new BadRequestException("Already subscribed");
+    if (existing) return { ok: true, alreadySubscribed: true };
     await this.prisma.conversationParticipant.create({
       data: { conversationId: channelId, userId, role: "SUBSCRIBER" },
     });
-    return { ok: true };
+    return { ok: true, alreadySubscribed: false };
   }
 
   async unsubscribeFromChannel(channelId: string, userId: string) {
     const conv = await this._getConversationOrThrow(channelId);
     if (conv.type !== "CHANNEL") throw new BadRequestException("Not a channel");
+    const existing = await this.prisma.conversationParticipant.findUnique({
+      where: { conversationId_userId: { conversationId: channelId, userId } },
+    });
+    if (!existing) throw new BadRequestException("Not subscribed");
+    if (existing.role === "OWNER") {
+      throw new BadRequestException("Owner cannot unsubscribe, delete channel instead");
+    }
     await this.prisma.conversationParticipant.delete({
       where: { conversationId_userId: { conversationId: channelId, userId } },
     });
