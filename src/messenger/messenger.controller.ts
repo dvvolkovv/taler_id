@@ -839,6 +839,15 @@ export class MessengerController {
     return this.service.getChannelDetails(id, user.sub);
   }
 
+  @Patch("channels/:id")
+  async updateChannel(
+    @Param("id") id: string,
+    @Body() body: { name?: string; description?: string; avatarUrl?: string },
+    @CurrentUser() user: any,
+  ) {
+    return this.service.updateChannel(id, user.sub, body);
+  }
+
   @Post("channels")
   async createChannel(
     @Body("name") name: string,
