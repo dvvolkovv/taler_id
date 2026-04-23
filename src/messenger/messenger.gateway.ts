@@ -111,15 +111,23 @@ export class MessengerGateway
     topicId?: string; clientTempId?: string;
   }) {
     try {
-      // Idempotency: skip duplicate messages sent during reconnects
+      // Idempotency: skip duplicate messages sent during reconnects.
+      // On duplicate we still MUST tell the sender we have their message —
+      // otherwise the client's persistent pending queue retries forever.
       if (payload.clientTempId) {
         const dedupKey = `msg:dedup:${client.data.userId}:${payload.clientTempId}`;
         const alreadySent = await this.redis.get(dedupKey);
         if (alreadySent) {
-          this.logger.log(`[handleMessage] Duplicate clientTempId=${payload.clientTempId}, skipping`);
+          this.logger.log(`[handleMessage] Duplicate clientTempId=${payload.clientTempId}, ack-only`);
+          client.emit('message_acked', {
+            clientTempId: payload.clientTempId,
+            messageId: alreadySent !== '1' ? alreadySent : undefined,
+          });
           return;
         }
-        await this.redis.setEx(dedupKey, 3600, '1');
+        // Store for 24h so reconnect storms across app restarts are caught.
+        // Value will be overwritten with real messageId after insert.
+        await this.redis.setEx(dedupKey, 86400, '1');
       }
       const fileData = payload.fileUrl ? {
         fileUrl: payload.fileUrl, fileName: payload.fileName,
@@ -164,6 +172,22 @@ export class MessengerGateway
       );
       const senderName = await this.service.getUserDisplayName(client.data.userId);
       const enrichedMsg = { ...msg, senderName, reactions: [] };
+      // Update dedup key with real messageId so future duplicate retries can
+      // receive the server-side id (useful for clients that lost the original
+      // new_message broadcast).
+      if (payload.clientTempId) {
+        const dedupKey = `msg:dedup:${client.data.userId}:${payload.clientTempId}`;
+        await this.redis.setEx(dedupKey, 86400, msg.id);
+      }
+      // Explicit ack to sender with mapping clientTempId → messageId so the
+      // sender reliably clears its pending queue even if it misses the
+      // broadcast below (e.g. socket reconnect race).
+      if (payload.clientTempId) {
+        client.emit('message_acked', {
+          clientTempId: payload.clientTempId,
+          messageId: msg.id,
+        });
+      }
       this.server.to(payload.conversationId).emit('new_message', enrichedMsg);
 
       // AI Analyst: dispatch user message to Claude Worker asynchronously.
