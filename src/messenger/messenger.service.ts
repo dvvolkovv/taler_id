@@ -750,6 +750,34 @@ export class MessengerService {
       throw new ForbiddenException("Only admins can post in channels");
     }
   }
+
+  async listChannels(userId: string, q?: string, limit = 20, offset = 0) {
+    const take = Math.min(Math.max(limit, 1), 50);
+    const where: any = { type: "CHANNEL" };
+    if (q && q.trim().length > 0) {
+      where.name = { contains: q.trim(), mode: "insensitive" };
+    }
+    const rows = await this.prisma.conversation.findMany({
+      where,
+      include: {
+        participants: { select: { userId: true } },
+        _count: { select: { participants: true } },
+      },
+      orderBy: [{ updatedAt: "desc" }],
+      take,
+      skip: offset,
+    });
+    return rows
+      .map(r => ({
+        id: r.id,
+        name: r.name,
+        description: r.description,
+        avatarUrl: r.avatarUrl,
+        subscribersCount: r._count.participants,
+        isSubscribed: r.participants.some(p => p.userId === userId),
+      }))
+      .sort((a, b) => b.subscribersCount - a.subscribersCount);
+  }
   // ─── Polls ───
 
   async createPoll(conversationId: string, senderId: string, question: string, options: string[], isAnonymous = false, isMultiple = false) {

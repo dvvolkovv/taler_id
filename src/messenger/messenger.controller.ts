@@ -819,6 +819,21 @@ export class MessengerController {
 
   // ─── Channels ───
 
+  @Get("channels")
+  async listChannels(
+    @Query("q") q: string | undefined,
+    @Query("limit") limit: string | undefined,
+    @Query("offset") offset: string | undefined,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.listChannels(
+      user.sub,
+      q,
+      limit ? parseInt(limit, 10) : 20,
+      offset ? parseInt(offset, 10) : 0,
+    );
+  }
+
   @Post("channels")
   async createChannel(
     @Body("name") name: string,
