@@ -239,6 +239,7 @@ export class MessengerService {
       where: { participants: { some: { userId } } },
       include: {
         participants: true,
+        _count: { select: { participants: true } },
         messages: { where: { deletedAt: null, NOT: { hiddenFor: { some: { userId } } } }, orderBy: { sentAt: 'desc' }, take: 1 },
       },
       orderBy: { createdAt: 'desc' },
@@ -337,6 +338,9 @@ export class MessengerService {
       topicsEnabled: conv.topicsEnabled ?? false,
       autoDeleteDays: conv.autoDeleteDays ?? null,
       invitePolicy: conv.invitePolicy ?? "all",
+      // CHANNEL-specific metadata (undefined for non-channels so JSON omits the fields)
+      subscribersCount: conv.type === 'CHANNEL' ? (conv._count?.participants ?? conv.participants.length) : undefined,
+      isSubscribed: conv.type === 'CHANNEL' ? (!!myParticipant) : undefined,
     };
   }
 
