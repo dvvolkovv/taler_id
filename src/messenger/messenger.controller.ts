@@ -834,6 +834,11 @@ export class MessengerController {
     );
   }
 
+  @Get("channels/:id")
+  async getChannelDetails(@Param("id") id: string, @CurrentUser() user: any) {
+    return this.service.getChannelDetails(id, user.sub);
+  }
+
   @Post("channels")
   async createChannel(
     @Body("name") name: string,

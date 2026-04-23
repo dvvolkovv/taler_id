@@ -778,6 +778,28 @@ export class MessengerService {
       }))
       .sort((a, b) => b.subscribersCount - a.subscribersCount);
   }
+
+  async getChannelDetails(channelId: string, userId: string) {
+    const conv = await this.prisma.conversation.findUnique({
+      where: { id: channelId },
+      include: {
+        participants: true,
+        _count: { select: { participants: true } },
+      },
+    });
+    if (!conv) throw new NotFoundException("Channel not found");
+    if (conv.type !== "CHANNEL") throw new BadRequestException("Not a channel");
+    const me = conv.participants.find(p => p.userId === userId);
+    return {
+      id: conv.id,
+      name: conv.name,
+      description: conv.description,
+      avatarUrl: conv.avatarUrl,
+      subscribersCount: conv._count.participants,
+      isSubscribed: !!me,
+      myRole: me ? me.role : null,
+    };
+  }
   // ─── Polls ───
 
   async createPoll(conversationId: string, senderId: string, question: string, options: string[], isAnonymous = false, isMultiple = false) {
