@@ -830,6 +830,22 @@ export class MessengerService {
     await this.prisma.conversation.delete({ where: { id: channelId } });
     return { ok: true };
   }
+
+  async postToChannel(channelId: string, userId: string, content: string) {
+    await this.assertCanPostInChannel(channelId, userId);
+    if (!content || content.trim().length === 0) {
+      throw new BadRequestException("Content is empty");
+    }
+    if (content.length > 4000) {
+      throw new BadRequestException("Content exceeds 4000 characters");
+    }
+    const msg = await this.createMessage(channelId, userId, content);
+    return { messageId: msg.id, createdAt: msg.createdAt };
+  }
+
+  async getMessageById(messageId: string) {
+    return this.prisma.message.findUnique({ where: { id: messageId } });
+  }
   // ─── Polls ───
 
   async createPoll(conversationId: string, senderId: string, question: string, options: string[], isAnonymous = false, isMultiple = false) {
