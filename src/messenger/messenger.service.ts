@@ -800,6 +800,23 @@ export class MessengerService {
       myRole: me ? me.role : null,
     };
   }
+
+  async updateChannel(channelId: string, userId: string, patch: { name?: string; description?: string; avatarUrl?: string }) {
+    const conv = await this._getConversationOrThrow(channelId);
+    if (conv.type !== "CHANNEL") throw new BadRequestException("Not a channel");
+    const me = await this.prisma.conversationParticipant.findUnique({
+      where: { conversationId_userId: { conversationId: channelId, userId } },
+    });
+    if (!me || (me.role !== "OWNER" && me.role !== "ADMIN")) {
+      throw new ForbiddenException("Only channel admins can edit");
+    }
+    const data: any = {};
+    if (patch.name !== undefined) data.name = patch.name;
+    if (patch.description !== undefined) data.description = patch.description;
+    if (patch.avatarUrl !== undefined) data.avatarUrl = patch.avatarUrl;
+    await this.prisma.conversation.update({ where: { id: channelId }, data });
+    return this.getChannelDetails(channelId, userId);
+  }
   // ─── Polls ───
 
   async createPoll(conversationId: string, senderId: string, question: string, options: string[], isAnonymous = false, isMultiple = false) {
