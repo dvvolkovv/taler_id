@@ -817,6 +817,19 @@ export class MessengerService {
     await this.prisma.conversation.update({ where: { id: channelId }, data });
     return this.getChannelDetails(channelId, userId);
   }
+
+  async deleteChannel(channelId: string, userId: string) {
+    const conv = await this._getConversationOrThrow(channelId);
+    if (conv.type !== "CHANNEL") throw new BadRequestException("Not a channel");
+    const me = await this.prisma.conversationParticipant.findUnique({
+      where: { conversationId_userId: { conversationId: channelId, userId } },
+    });
+    if (!me || me.role !== "OWNER") {
+      throw new ForbiddenException("Only the owner can delete the channel");
+    }
+    await this.prisma.conversation.delete({ where: { id: channelId } });
+    return { ok: true };
+  }
   // ─── Polls ───
 
   async createPoll(conversationId: string, senderId: string, question: string, options: string[], isAnonymous = false, isMultiple = false) {

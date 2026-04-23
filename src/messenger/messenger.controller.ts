@@ -848,6 +848,11 @@ export class MessengerController {
     return this.service.updateChannel(id, user.sub, body);
   }
 
+  @Delete("channels/:id")
+  async deleteChannel(@Param("id") id: string, @CurrentUser() user: any) {
+    return this.service.deleteChannel(id, user.sub);
+  }
+
   @Post("channels")
   async createChannel(
     @Body("name") name: string,
