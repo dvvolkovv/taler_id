@@ -44,3 +44,6 @@ prisma/schema.prisma.bak
 
 # Scripts
 create_admin.js
+
+# Worktrees (isolated feature branches)
+.worktrees/
