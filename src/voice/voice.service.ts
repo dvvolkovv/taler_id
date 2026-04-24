@@ -6,6 +6,9 @@ import * as bcrypt from "bcrypt";
 import { PrismaService } from "../prisma/prisma.service";
 
 import { FileStorageService } from "../common/file-storage.service";
+import { GatingService } from "../billing/services/gating.service";
+import { MeteringService } from "../billing/services/metering.service";
+import { FEATURE_KEYS } from "../billing/constants/feature-keys";
 
 const LK_HOST = process.env.LIVEKIT_HOST || "http://localhost:7880";
 const LK_API_KEY = process.env.LIVEKIT_API_KEY || "lkdevkey";
@@ -21,6 +24,8 @@ export class VoiceService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly fileStorage: FileStorageService,
+    private readonly gating: GatingService,
+    private readonly metering: MeteringService,
   ) {}
 
   async createRoom(initiatorId: string, withAi = false, userToken?: string, conversationId?: string) {
@@ -193,24 +198,61 @@ export class VoiceService {
 
   async createVoiceSession(userId: string) {
     if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY not configured on server");
-    const response = await fetch("https://api.openai.com/v1/realtime/sessions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "gpt-realtime-mini",
-        voice: "marin",
-        instructions: "Ты — голосовой ассистент Taler ID. Помогай пользователям с их цифровой идентификацией, статусом KYC-верификации и данными профиля. Будь краток и полезен. Отвечай на русском языке. Ты можешь использовать инструменты для чтения или обновления профиля пользователя.",
-      }),
-    });
-    if (!response.ok) {
-      const err = await response.text();
-      throw new Error(`OpenAI session error ${response.status}: ${err}`);
+
+    // Billing pre-check: feature toggle + minReserve balance. Throws
+    // FeatureDisabledException (→403) or InsufficientFundsException (→402),
+    // mapped by BillingExceptionFilter on the controller.
+    const billingSession = await this.gating.startSession(userId, FEATURE_KEYS.VOICE_ASSISTANT);
+
+    try {
+      const response = await fetch("https://api.openai.com/v1/realtime/sessions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${OPENAI_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "gpt-realtime-mini",
+          voice: "marin",
+          instructions: "Ты — голосовой ассистент Taler ID. Помогай пользователям с их цифровой идентификацией, статусом KYC-верификации и данными профиля. Будь краток и полезен. Отвечай на русском языке. Ты можешь использовать инструменты для чтения или обновления профиля пользователя.",
+        }),
+      });
+      if (!response.ok) {
+        const err = await response.text();
+        throw new Error(`OpenAI session error ${response.status}: ${err}`);
+      }
+      const data = await response.json() as any;
+      return {
+        clientSecret: data.client_secret.value as string,
+        billingSessionId: billingSession.id,
+      };
+    } catch (err) {
+      // Roll back the billing session so we don't leak an 'active' AiSession
+      // whose OpenAI counterpart never existed.
+      await this.gating.endSession(billingSession.id, 'failed').catch(() => {});
+      throw err;
     }
-    const data = await response.json() as any;
-    return { clientSecret: data.client_secret.value as string };
+  }
+
+  /**
+   * Client-initiated close of a voice_assistant session. Reports the actual
+   * duration (for final adjustment debit) and marks the AiSession completed.
+   * Report failures are swallowed — MeteringService.tick (cron) has already
+   * been draining the balance at ~1-minute granularity, so the final debit
+   * is only an adjustment. Ending the session must always succeed.
+   */
+  async closeVoiceSession(
+    userId: string,
+    sessionId: string,
+    durationSec: number,
+  ): Promise<void> {
+    const durationMin = Math.max(0, durationSec) / 60;
+    try {
+      await this.metering.reportUsage(sessionId, durationMin, 'client');
+    } catch {
+      // Fall through — session close must be idempotent from the client's view.
+    }
+    await this.gating.endSession(sessionId, 'completed');
   }
 
   // ─── Public rooms ───

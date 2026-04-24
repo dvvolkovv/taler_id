@@ -1,9 +1,10 @@
-import { Body, Controller, Post, Get, Delete, Param, Query, UseGuards, Headers, UseInterceptors, UploadedFile, HttpException, HttpStatus } from "@nestjs/common";
+import { Body, Controller, Post, Get, Delete, Param, Query, UseGuards, UseFilters, Headers, UseInterceptors, UploadedFile, HttpException, HttpStatus } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
 import { VoiceService } from "./voice.service";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { FileStorageService } from "../common/file-storage.service";
+import { BillingExceptionFilter } from "../billing/filters/billing-exception.filter";
 
 @Controller("voice")
 export class VoiceController {
@@ -96,8 +97,23 @@ export class VoiceController {
 
   @Post("session")
   @UseGuards(JwtAuthGuard)
+  @UseFilters(BillingExceptionFilter)
   createVoiceSession(@CurrentUser() user: any) {
     return this.service.createVoiceSession(user.sub);
+  }
+
+  @Post("session/:sessionId/close")
+  @UseGuards(JwtAuthGuard)
+  @UseFilters(BillingExceptionFilter)
+  async closeVoiceSession(
+    @CurrentUser() user: any,
+    @Param("sessionId") sessionId: string,
+    @Body() body: { durationSec: number },
+  ) {
+    const userId = user.sub ?? user.id;
+    const durationSec = typeof body?.durationSec === "number" ? body.durationSec : 0;
+    await this.service.closeVoiceSession(userId, sessionId, durationSec);
+    return { ok: true };
   }
 
   @Get("call-history")
