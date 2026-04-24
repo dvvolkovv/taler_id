@@ -86,7 +86,8 @@ describe('GatingService', () => {
     ledger.getBalance.mockResolvedValue(1_000_000n);
     prisma.aiSession.create.mockResolvedValue({ id: 's2' });
 
-    await expect(service.startSession('u1', 'web_search')).resolves.toBeDefined();
+    const s = await service.startSession('u1', 'web_search');
+    expect(s.id).toBe('s2');
   });
 
   it('skips both gates when billingEnforced=false but still creates session', async () => {
@@ -98,6 +99,17 @@ describe('GatingService', () => {
 
     const s = await service.startSession('u1', 'voice_assistant');
     expect(s.id).toBe('s3');
+  });
+
+  it('allows session when balance exactly equals minReserve (boundary)', async () => {
+    pricing.getConfig.mockResolvedValue(baseConfig);
+    prisma.userFeatureToggle.findUnique.mockResolvedValue({ enabled: true });
+    pricing.getMinReservePlanck.mockResolvedValue(26_000_000n);
+    ledger.getBalance.mockResolvedValue(26_000_000n); // exactly equal
+    prisma.aiSession.create.mockResolvedValue({ id: 'sBoundary' });
+
+    const s = await service.startSession('u1', 'voice_assistant');
+    expect(s.id).toBe('sBoundary');
   });
 
   it('endSession marks completed', async () => {

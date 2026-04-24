@@ -23,12 +23,12 @@ export class GatingService {
     contextRef?: string,
   ): Promise<{ id: string }> {
     const cfg = await this.pricing.getConfig();
-    const enforced = (cfg as unknown as { billingEnforced: boolean }).billingEnforced;
+    const enforced = cfg.billingEnforced;
 
     const toggle = await this.prisma.userFeatureToggle.findUnique({
       where: { userId_featureKey: { userId, featureKey } },
     });
-    const toggleEnabled = toggle === null ? true : toggle.enabled;
+    const toggleEnabled = toggle?.enabled ?? true;
 
     if (!toggleEnabled) {
       if (enforced) throw new FeatureDisabledException(featureKey);
