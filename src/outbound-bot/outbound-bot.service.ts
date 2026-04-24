@@ -20,6 +20,20 @@ const BACKEND_URL = process.env.BACKEND_URL || 'https://staging.id.taler.tirol';
 const AI_AGENT_URL = process.env.AI_AGENT_URL || 'http://localhost:3100';
 const BOT_SENDER_ID = 'ai-outbound-bot';
 
+class BillingInsufficientError extends Error {
+  constructor() {
+    super('billing insufficient');
+    this.name = 'BillingInsufficientError';
+  }
+}
+
+class BillingFeatureDisabledError extends Error {
+  constructor() {
+    super('billing feature disabled');
+    this.name = 'BillingFeatureDisabledError';
+  }
+}
+
 @Injectable()
 export class OutboundBotService {
   private readonly logger = new Logger(OutboundBotService.name);
@@ -299,13 +313,17 @@ export class OutboundBotService {
           this.logger.log(`[resume] Campaign paused during call`);
           return;
         }
-        if ((e as Error).message === 'BILLING_INSUFFICIENT') {
-          await this.prisma.outboundCampaign.update({
-            where: { id: campaignId }, data: { status: 'paused' },
-          });
-          await this.updateTopicIcon(topicId, 'paused');
-          await this.postBotMessage(conversationId, topicId,
-            '⏸ Кампания приостановлена — недостаточно средств на балансе. Пополните баланс и нажмите "Продолжить".\n\n[ACTION:Продолжить обзвон]',
+        if (e instanceof BillingInsufficientError) {
+          await this.pauseCampaignForBilling(
+            { id: campaignId, topicId, conversationId },
+            'insufficient_funds',
+          );
+          return;
+        }
+        if (e instanceof BillingFeatureDisabledError) {
+          await this.pauseCampaignForBilling(
+            { id: campaignId, topicId, conversationId },
+            'feature_disabled',
           );
           return;
         }
@@ -603,16 +621,17 @@ export class OutboundBotService {
           this.logger.log(`[calls] Campaign paused during call ${i}`);
           return;
         }
-        if ((e as Error).message === 'BILLING_INSUFFICIENT') {
-          // Pause the campaign — the owner needs to top up before we can
-          // spend any more of their balance. Post a system message so the
-          // user sees why things stopped.
-          await this.prisma.outboundCampaign.update({
-            where: { id: campaignId }, data: { status: 'paused' },
-          });
-          await this.updateTopicIcon(topicId, 'paused');
-          await this.postBotMessage(conversationId, topicId,
-            '⏸ Кампания приостановлена — недостаточно средств на балансе. Пополните баланс и нажмите "Продолжить".\n\n[ACTION:Продолжить обзвон]',
+        if (e instanceof BillingInsufficientError) {
+          await this.pauseCampaignForBilling(
+            { id: campaignId, topicId, conversationId },
+            'insufficient_funds',
+          );
+          return;
+        }
+        if (e instanceof BillingFeatureDisabledError) {
+          await this.pauseCampaignForBilling(
+            { id: campaignId, topicId, conversationId },
+            'feature_disabled',
           );
           return;
         }
@@ -656,7 +675,8 @@ export class OutboundBotService {
         this.logger.warn(
           `[billing] outbound call skipped for user=${userId} campaign=${campaignId}: ${err.message}`,
         );
-        throw new Error('BILLING_INSUFFICIENT');
+        if (err instanceof InsufficientFundsException) throw new BillingInsufficientError();
+        throw new BillingFeatureDisabledError();
       }
       throw err;
     }
@@ -886,6 +906,25 @@ export class OutboundBotService {
     } catch (e) {
       this.logger.warn(`[recorder] Error: ${(e as Error).message}`);
     }
+  }
+
+  // ── Pause campaign on billing failure (shared by executeCalls / resumeCalls) ──
+
+  private async pauseCampaignForBilling(
+    campaign: { id: string; topicId: string; conversationId: string },
+    reason: 'insufficient_funds' | 'feature_disabled',
+  ): Promise<void> {
+    await this.prisma.outboundCampaign.update({
+      where: { id: campaign.id },
+      data: { status: 'paused' },
+    });
+    await this.updateTopicIcon(campaign.topicId, 'paused');
+
+    const messageText = reason === 'insufficient_funds'
+      ? '⏸ Кампания приостановлена — недостаточно средств на балансе. Пополните баланс и нажмите "Продолжить".\n\n[ACTION:Продолжить обзвон]'
+      : '⏸ Кампания приостановлена — функция обзвона отключена в настройках.\n\n[ACTION:Открыть настройки AI]';
+
+    await this.postBotMessage(campaign.conversationId, campaign.topicId, messageText);
   }
 
   // ── Topic icon by campaign status ──
