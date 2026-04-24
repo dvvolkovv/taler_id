@@ -778,6 +778,16 @@ export class MessengerGateway
     this.server.to(`user:${userId}`).emit(event, data);
   }
 
+  /** Get user's preferred language from their profile. Defaults to 'en'. */
+  private async getUserLang(userId: string): Promise<'ru' | 'en'> {
+    const profile = await this.prisma.profile.findUnique({
+      where: { userId },
+      select: { language: true },
+    });
+    const lang = profile?.language;
+    return lang === 'ru' ? 'ru' : 'en';
+  }
+
   /** HTTP fallback for call_ended (used by mobile app as backup) */
   async endCallFromHttp(userId: string, conversationId: string, roomName: string) {
     await this.handleCallEnded({ data: { userId } } as any, { conversationId, roomName });
