@@ -363,8 +363,9 @@ export class VoiceController {
 
   @Post("recordings/:id/transcribe")
   @UseGuards(JwtAuthGuard)
-  async transcribeRecording(@Param("id") id: string) {
-    return this.service.transcribeExistingRecording(id);
+  @UseFilters(BillingExceptionFilter)
+  async transcribeRecording(@Param("id") id: string, @CurrentUser() user: any) {
+    return this.service.transcribeExistingRecording(user.sub, id);
   }
   // ─── Hold Music ───
 
