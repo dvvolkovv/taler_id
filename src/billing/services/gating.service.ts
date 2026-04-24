@@ -60,10 +60,14 @@ export class GatingService {
 
     // Notify all of this user's sockets that an AI session just became active.
     // Mobile can use this to show a "session live" indicator or close any pre-session modal.
-    this.gateway.emitToUser(userId, 'ai_session_started', {
-      sessionId: session.id,
-      featureKey,
-    });
+    try {
+      this.gateway.emitToUser(userId, 'ai_session_started', {
+        sessionId: session.id,
+        featureKey,
+      });
+    } catch (err) {
+      this.log.warn(`emitToUser ai_session_started failed for ${userId}: ${String(err)}`);
+    }
 
     return session;
   }
@@ -77,11 +81,17 @@ export class GatingService {
     // Only emit ai_session_terminated for non-completed ends. Normal completion
     // is handled by the client-initiated flow and needs no push.
     if (reason !== 'completed') {
-      this.gateway.emitToUser(session.userId, 'ai_session_terminated', {
-        sessionId,
-        reason: reason === 'terminated_no_funds' ? 'no_funds' : 'failed',
-        featureKey: session.featureKey,
-      });
+      try {
+        this.gateway.emitToUser(session.userId, 'ai_session_terminated', {
+          sessionId,
+          reason: reason === 'terminated_no_funds' ? 'no_funds' : 'failed',
+          featureKey: session.featureKey,
+        });
+      } catch (err) {
+        this.log.warn(
+          `emitToUser ai_session_terminated failed for ${session.userId}: ${String(err)}`,
+        );
+      }
     }
   }
 }

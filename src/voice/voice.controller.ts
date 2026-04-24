@@ -194,16 +194,18 @@ export class VoiceController {
     // status to 'completed'. If the session was already ended by takeoverCall
     // (human picked up mid-call), reportUsage still works — it does not
     // require an active session.
+    const MAX_UNITS_PER_REPORT = 24 * 60; // mirror ReportUsageDto cap on /metering/report
     if (
       body.billingSessionId &&
       typeof body.units === "number" &&
       Number.isFinite(body.units) &&
       body.units >= 0
     ) {
+      const safeUnits = Math.min(body.units, MAX_UNITS_PER_REPORT);
       try {
         await this.metering.reportUsage(
           body.billingSessionId,
-          body.units,
+          safeUnits,
           "ai-twin-agent",
         );
       } catch (_) {

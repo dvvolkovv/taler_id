@@ -90,12 +90,18 @@ export class MeteringService {
           this.lowBalanceWarnedSessions.delete(s.id);
           if (cfg.billingEnforced) {
             await this.gating.endSession(s.id, 'terminated_no_funds');
-            this.gateway.emitToUser(s.userId, 'ai_session_terminated', {
-              sessionId: s.id,
-              reason: 'no_funds',
-              featureKey: s.featureKey,
-              contextRef: s.contextRef,
-            });
+            try {
+              this.gateway.emitToUser(s.userId, 'ai_session_terminated', {
+                sessionId: s.id,
+                reason: 'no_funds',
+                featureKey: s.featureKey,
+                contextRef: s.contextRef,
+              });
+            } catch (err) {
+              this.log.warn(
+                `emitToUser ai_session_terminated failed for ${s.userId}: ${String(err)}`,
+              );
+            }
           } else {
             this.log.warn(`[dry-run] would terminate ${s.id} for ${s.userId} — continuing`);
           }
@@ -120,11 +126,17 @@ export class MeteringService {
     const wasWarned = this.lowBalanceWarnedSessions.has(s.id);
 
     if (inWindow && !wasWarned) {
-      this.gateway.emitToUser(s.userId, 'billing_low_balance_warning', {
-        sessionId: s.id,
-        balancePlanck: balance.toString(),
-        minReservePlanck: minReserve.toString(),
-      });
+      try {
+        this.gateway.emitToUser(s.userId, 'billing_low_balance_warning', {
+          sessionId: s.id,
+          balancePlanck: balance.toString(),
+          minReservePlanck: minReserve.toString(),
+        });
+      } catch (err) {
+        this.log.warn(
+          `emitToUser billing_low_balance_warning failed for ${s.userId}: ${String(err)}`,
+        );
+      }
       this.lowBalanceWarnedSessions.add(s.id);
     } else if (!inWindow) {
       // User topped up above 3× OR dropped below minReserve — clear so we can warn again

@@ -681,26 +681,29 @@ export class OutboundBotService {
       throw err;
     }
 
-    await this.rooms.createRoom({ name: roomName, emptyTimeout: 300, maxParticipants: 5 });
-    const campaign = await this.prisma.outboundCampaign.findUnique({ where: { id: campaignId } });
-    const profile = await this.prisma.profile.findUnique({ where: { userId } });
-    const ownerName = [profile?.firstName, profile?.lastName].filter(Boolean).join(' ') || 'клиент';
-    const agentPrompt = (campaign?.callPlan as any)?.agentPrompt || '';
-    const metadata = JSON.stringify({
-      businessName: spec.businessName, phoneNumber: spec.phone, questionsToAsk: spec.questionsToAsk,
-      taskContext: campaign?.taskText || '', campaignId, callId: call.id,
-      ownerName, agentPrompt,
-      // Agent echoes this back in the callback so MeteringService can book
-      // the authoritative debit based on actual duration.
-      billingSessionId,
-      callbackUrl: `${BACKEND_URL}/outbound-bot/call-callback`,
-    });
-
+    // Widen the try scope to cover every pre-dispatch operation. If any of
+    // rooms.createRoom / findUnique lookups / dispatcher.createDispatch throws,
+    // we must release the billing session we just opened — otherwise the cron
+    // would keep draining the owner's wallet for a call that never actually
+    // dispatched.
     try {
+      await this.rooms.createRoom({ name: roomName, emptyTimeout: 300, maxParticipants: 5 });
+      const campaign = await this.prisma.outboundCampaign.findUnique({ where: { id: campaignId } });
+      const profile = await this.prisma.profile.findUnique({ where: { userId } });
+      const ownerName = [profile?.firstName, profile?.lastName].filter(Boolean).join(' ') || 'клиент';
+      const agentPrompt = (campaign?.callPlan as any)?.agentPrompt || '';
+      const metadata = JSON.stringify({
+        businessName: spec.businessName, phoneNumber: spec.phone, questionsToAsk: spec.questionsToAsk,
+        taskContext: campaign?.taskText || '', campaignId, callId: call.id,
+        ownerName, agentPrompt,
+        // Agent echoes this back in the callback so MeteringService can book
+        // the authoritative debit based on actual duration.
+        billingSessionId,
+        callbackUrl: `${BACKEND_URL}/outbound-bot/call-callback`,
+      });
+
       await this.dispatcher.createDispatch(roomName, OUTBOUND_AGENT_NAME, { metadata });
     } catch (e) {
-      // Release the billing session we just opened — otherwise the cron would
-      // keep draining the owner's wallet for a call that never actually dispatched.
       await this.gating.endSession(billingSessionId, 'failed').catch(() => {});
       throw e;
     }
