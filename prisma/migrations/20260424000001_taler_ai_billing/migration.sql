@@ -119,17 +119,31 @@ CREATE INDEX "AiSession_contextRef_idx" ON "AiSession"("contextRef");
 CREATE INDEX "UsageLog_userId_createdAt_idx" ON "UsageLog"("userId", "createdAt");
 
 -- AddForeignKey
-ALTER TABLE "UserWallet" ADD CONSTRAINT "UserWallet_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "UserWallet" ADD CONSTRAINT "UserWallet_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "BillingTransaction" ADD CONSTRAINT "BillingTransaction_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "AiSession" ADD CONSTRAINT "AiSession_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "BillingTransaction" ADD CONSTRAINT "BillingTransaction_sessionId_fkey" FOREIGN KEY ("sessionId") REFERENCES "AiSession"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "AiSession" ADD CONSTRAINT "AiSession_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "UsageLog" ADD CONSTRAINT "UsageLog_sessionId_fkey" FOREIGN KEY ("sessionId") REFERENCES "AiSession"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- Enforce BillingConfig singleton invariant at the DB level.
+ALTER TABLE "BillingConfig" ADD CONSTRAINT "BillingConfig_singleton_check" CHECK (id = 'singleton');
 
 -- Seed pricebook (costs in USD, planck = 10⁻¹² TAL)
--- At rate 1 TAL = $11,700, voice_assistant $0.30/min = 25.6M planck/min,
--- so minReservePlanck ≈ 60s of usage at the configured markup.
+-- At rate 1 TAL = $11,700, voice_assistant post-markup = $0.15 × 2.0 = $0.30/min
+-- ≈ 25.6M planck/min. minReservePlanck sized per-feature:
+--   voice_assistant / ai_twin: ~60s reserve
+--   outbound_call:             ~60s reserve (at higher $0.40/min post-markup)
+--   web_search:                ~1 request ahead
+--   whisper_transcribe:        ~5 min typical call recording length
+--   meeting_summary:           ~2K tokens typical one-shot summary
 INSERT INTO "AiPricebook" (id, "featureKey", unit, "costUsdPerUnit", "markupMultiplier", "minReservePlanck", "updatedAt") VALUES
   ('pb_voice_assistant',    'voice_assistant',    'minute',    0.15,  2.0, 26000000, NOW()),
   ('pb_web_search',         'web_search',         'request',   0.005, 2.0,  1000000, NOW()),

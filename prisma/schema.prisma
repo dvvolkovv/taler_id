@@ -629,7 +629,7 @@ model OutboundCall {
 // ─── Taler AI Billing ───
 
 model AiPricebook {
-  id               String   @id @default(cuid())
+  id               String   @id @default(uuid())
   featureKey       String   @unique
   unit             String
   costUsdPerUnit   Decimal  @db.Decimal(12, 8)
@@ -649,7 +649,7 @@ model BillingConfig {
 
 model UserWallet {
   userId           String   @id
-  user             User     @relation(fields: [userId], references: [id])
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   custodialAddress String   @unique
   custodialKeyEnc  String
   balancePlanck    BigInt   @default(0)
@@ -675,34 +675,39 @@ enum TxStatus {
 }
 
 model BillingTransaction {
-  id           String   @id @default(cuid())
+  id           String     @id @default(uuid())
   userId       String
-  user         User     @relation(fields: [userId], references: [id])
+  /// Immutable audit ledger: blocks user hard-delete by design.
+  /// On GDPR/compliance deletes, archive+anonymize rows manually.
+  user         User       @relation(fields: [userId], references: [id])
   type         TxType
-  status       TxStatus @default(COMPLETED)
+  status       TxStatus   @default(COMPLETED)
   amountPlanck BigInt
   featureKey   String?
-  sessionId    String?  @db.Uuid
+  sessionId    String?    @db.Uuid
+  session      AiSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
   chainTxHash  String?
   metadata     Json?
-  createdAt    DateTime @default(now())
+  createdAt    DateTime   @default(now())
 
   @@index([userId, createdAt])
   @@index([sessionId])
 }
 
 model AiSession {
-  id               String    @id @default(uuid()) @db.Uuid
+  id               String               @id @default(uuid()) @db.Uuid
   userId           String
-  user             User      @relation(fields: [userId], references: [id])
+  user             User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
   featureKey       String
   contextRef       String?
-  status           String    @default("active")
-  startedAt        DateTime  @default(now())
-  lastMeteredAt    DateTime  @default(now())
+  status           String               @default("active")
+  startedAt        DateTime             @default(now())
+  lastMeteredAt    DateTime             @default(now())
   endedAt          DateTime?
-  totalSpentPlanck BigInt    @default(0)
+  totalSpentPlanck BigInt               @default(0)
   metadata         Json?
+  transactions     BillingTransaction[]
+  usageLogs        UsageLog[]
 
   @@index([userId, status])
   @@index([contextRef])
@@ -718,14 +723,15 @@ model UserFeatureToggle {
 }
 
 model UsageLog {
-  id         String   @id @default(cuid())
+  id         String     @id @default(uuid())
   userId     String
-  sessionId  String?  @db.Uuid
+  sessionId  String?    @db.Uuid
+  session    AiSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
   featureKey String
   unit       String
-  units      Decimal  @db.Decimal(14, 4)
+  units      Decimal    @db.Decimal(14, 4)
   reporter   String
-  createdAt  DateTime @default(now())
+  createdAt  DateTime   @default(now())
 
   @@index([userId, createdAt])
 }
