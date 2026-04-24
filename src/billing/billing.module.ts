@@ -7,6 +7,8 @@ import { LedgerService } from './services/ledger.service';
 import { GatingService } from './services/gating.service';
 import { MeteringService } from './services/metering.service';
 import { BillingController } from './controllers/billing.controller';
+import { MeteringController } from './controllers/metering.controller';
+import { MeteringSecretGuard } from './guards/metering-secret.guard';
 
 @Module({
   imports: [PrismaModule, ScheduleModule.forRoot(), forwardRef(() => BlockchainModule)],
@@ -15,6 +17,7 @@ import { BillingController } from './controllers/billing.controller';
     LedgerService,
     GatingService,
     MeteringService,
+    MeteringSecretGuard,
     // Stub MESSENGER_GATEWAY until Task 11 wires the real MessengerGateway.
     // Task 11 will override this with `{ provide: 'MESSENGER_GATEWAY', useExisting: MessengerGateway }`
     // inside MessengerModule's providers (re-exported back into BillingModule via forwardRef).
@@ -27,7 +30,7 @@ import { BillingController } from './controllers/billing.controller';
       },
     },
   ],
-  controllers: [BillingController],
+  controllers: [BillingController, MeteringController],
   exports: [PricingService, LedgerService, GatingService, MeteringService],
 })
 export class BillingModule {}
