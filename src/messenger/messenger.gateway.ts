@@ -42,7 +42,7 @@ export class MessengerGateway
     private readonly outboundBot: OutboundBotService,
   ) {
     const publicKeyPath = this.configService.get<string>('jwt.publicKeyPath') ?? '';
-    this.publicKey = fs.readFileSync(publicKeyPath, 'utf8');
+    this.publicKey = publicKeyPath ? fs.readFileSync(publicKeyPath, 'utf8') : '';
   }
 
   onModuleInit() {
