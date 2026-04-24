@@ -3,6 +3,16 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { InsufficientFundsException } from '../exceptions/insufficient-funds.exception';
 import type { TxType, Prisma } from '@prisma/client';
 
+/**
+ * Double-entry ledger. All balance changes go through credit/debit/refund,
+ * each wrapped in a $transaction with row-level locking on UserWallet (and
+ * BillingTransaction for refunds) to serialize concurrent access.
+ *
+ * Relies on PostgreSQL's default READ COMMITTED isolation level — FOR UPDATE
+ * acquires a row lock and the subsequent read sees the freshly committed
+ * state. If the service is ever moved to RepeatableRead, concurrent debits
+ * will produce serialization failures that callers must retry.
+ */
 @Injectable()
 export class LedgerService {
   constructor(private readonly prisma: PrismaService) {}
@@ -18,6 +28,9 @@ export class LedgerService {
 
     return this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT 1 FROM "UserWallet" WHERE "userId" = ${userId} FOR UPDATE`;
+
+      const wallet = await tx.userWallet.findUnique({ where: { userId } });
+      if (!wallet) throw new NotFoundException(`no wallet for user ${userId}`);
 
       await tx.userWallet.update({
         where: { userId },
@@ -82,6 +95,9 @@ export class LedgerService {
 
   async refund(originalTxId: string, reason: string): Promise<{ id: string }> {
     return this.prisma.$transaction(async (tx) => {
+      // Lock the original transaction row BEFORE reading status, to serialize concurrent refund attempts.
+      // BillingTransaction.id is TEXT (cuid/uuid), so no ::uuid cast needed.
+      await tx.$executeRaw`SELECT 1 FROM "BillingTransaction" WHERE id = ${originalTxId} FOR UPDATE`;
       const orig = await tx.billingTransaction.findUnique({ where: { id: originalTxId } });
       if (!orig) throw new NotFoundException(`transaction ${originalTxId} not found`);
       if (orig.status === 'REVERSED') throw new Error(`transaction ${originalTxId} already reversed`);

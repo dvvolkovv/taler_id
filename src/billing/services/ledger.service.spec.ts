@@ -1,4 +1,5 @@
 import { Test } from '@nestjs/testing';
+import { NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { LedgerService } from './ledger.service';
 import { InsufficientFundsException } from '../exceptions/insufficient-funds.exception';
@@ -126,5 +127,63 @@ describe('LedgerService', () => {
         }),
       }),
     );
+  });
+
+  it('credit throws on zero or negative amount', async () => {
+    await expect(service.credit('u1', 0n, 'TOPUP_STUB')).rejects.toThrow(
+      /credit amount must be > 0/,
+    );
+    await expect(service.credit('u1', -5n, 'TOPUP_STUB')).rejects.toThrow(
+      /credit amount must be > 0/,
+    );
+    expect(prisma._walletUpdate).not.toHaveBeenCalled();
+  });
+
+  it('debit throws on zero or negative amount', async () => {
+    await expect(service.debit('u1', 0n, 'SPEND')).rejects.toThrow(
+      /debit amount must be > 0/,
+    );
+    await expect(service.debit('u1', -5n, 'SPEND')).rejects.toThrow(
+      /debit amount must be > 0/,
+    );
+    expect(prisma._walletUpdate).not.toHaveBeenCalled();
+  });
+
+  it('debit throws NotFoundException when wallet is missing', async () => {
+    prisma._walletFindUnique.mockResolvedValue(null);
+
+    await expect(service.debit('u1', 100n, 'SPEND')).rejects.toThrow(NotFoundException);
+    expect(prisma._walletUpdate).not.toHaveBeenCalled();
+    expect(prisma._txCreate).not.toHaveBeenCalled();
+  });
+
+  it('credit throws NotFoundException when wallet is missing', async () => {
+    prisma._walletFindUnique.mockResolvedValue(null);
+
+    await expect(service.credit('u1', 100n, 'TOPUP_STUB')).rejects.toThrow(NotFoundException);
+    expect(prisma._walletUpdate).not.toHaveBeenCalled();
+    expect(prisma._txCreate).not.toHaveBeenCalled();
+  });
+
+  it('refund throws NotFoundException when original tx missing', async () => {
+    prisma._txFindUnique.mockResolvedValue(null);
+
+    await expect(service.refund('nonexistent', 'reason')).rejects.toThrow(NotFoundException);
+    expect(prisma._walletUpdate).not.toHaveBeenCalled();
+    expect(prisma._txCreate).not.toHaveBeenCalled();
+  });
+
+  it('refund throws when original tx is already REVERSED', async () => {
+    prisma._txFindUnique.mockResolvedValue({
+      id: 'txOrig',
+      userId: 'u1',
+      type: 'SPEND',
+      amountPlanck: 500n,
+      status: 'REVERSED',
+    });
+
+    await expect(service.refund('txOrig', 'reason')).rejects.toThrow(/already reversed/);
+    expect(prisma._walletUpdate).not.toHaveBeenCalled();
+    expect(prisma._txCreate).not.toHaveBeenCalled();
   });
 });

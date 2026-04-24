@@ -16,7 +16,7 @@ export class BillingExceptionFilter
         featureKey: exception.featureKey,
         requiredPlanck: exception.requiredPlanck.toString(),
         availablePlanck: exception.availablePlanck.toString(),
-        suggestedPackage: exception.suggestedPackage ?? 'starter',
+        suggestedPackage: exception.suggestedPackage,
       });
       return;
     }
