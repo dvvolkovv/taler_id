@@ -88,8 +88,64 @@ describe('PricingService', () => {
       featureKey: 'voice_assistant',
       minReservePlanck: 26000000n,
     } as any);
-    prisma.billingConfig.findUnique.mockResolvedValue({ talUsdRate: '11700' });
 
     expect(await service.getMinReservePlanck('voice_assistant')).toBe(26000000n);
+  });
+
+  it('returns 0n for units=0', async () => {
+    prisma.aiPricebook.findUnique.mockResolvedValue({
+      featureKey: 'voice_assistant',
+      unit: 'minute',
+      costUsdPerUnit: '0.15',
+      markupMultiplier: '2.0',
+      minReservePlanck: 26000000n,
+    });
+    prisma.billingConfig.findUnique.mockResolvedValue({
+      id: 'singleton',
+      talUsdRate: '11700',
+    });
+
+    const planck = await service.calculatePlanckCost('voice_assistant', 0);
+    expect(planck).toBe(0n);
+  });
+
+  it('throws NotFoundException when billing config is missing', async () => {
+    prisma.aiPricebook.findUnique.mockResolvedValue({
+      featureKey: 'voice_assistant',
+      unit: 'minute',
+      costUsdPerUnit: '0.15',
+      markupMultiplier: '2.0',
+      minReservePlanck: 26000000n,
+    });
+    prisma.billingConfig.findUnique.mockResolvedValue(null);
+
+    await expect(
+      service.calculatePlanckCost('voice_assistant', 1),
+    ).rejects.toThrow(/billing config not seeded/i);
+  });
+
+  it('refetches pricebook after 60s TTL expires', async () => {
+    jest.useFakeTimers();
+    const now = new Date('2026-04-24T10:00:00Z');
+    jest.setSystemTime(now);
+
+    prisma.aiPricebook.findUnique.mockResolvedValue({
+      featureKey: 'voice_assistant',
+      unit: 'minute',
+      costUsdPerUnit: '0.15',
+      markupMultiplier: '2.0',
+      minReservePlanck: 26000000n,
+    });
+    prisma.billingConfig.findUnique.mockResolvedValue({ talUsdRate: '11700' });
+
+    await service.calculatePlanckCost('voice_assistant', 1);
+    expect(prisma.aiPricebook.findUnique).toHaveBeenCalledTimes(1);
+
+    jest.setSystemTime(new Date(now.getTime() + 60_001));
+
+    await service.calculatePlanckCost('voice_assistant', 1);
+    expect(prisma.aiPricebook.findUnique).toHaveBeenCalledTimes(2);
+
+    jest.useRealTimers();
   });
 });
