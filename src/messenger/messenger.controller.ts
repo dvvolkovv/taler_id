@@ -819,6 +819,58 @@ export class MessengerController {
 
   // ─── Channels ───
 
+  @Get("channels")
+  async listChannels(
+    @Query("q") q: string | undefined,
+    @Query("limit") limit: string | undefined,
+    @Query("offset") offset: string | undefined,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.listChannels(
+      user.sub,
+      q,
+      limit ? parseInt(limit, 10) : 20,
+      offset ? parseInt(offset, 10) : 0,
+    );
+  }
+
+  @Get("channels/:id")
+  async getChannelDetails(@Param("id") id: string, @CurrentUser() user: any) {
+    return this.service.getChannelDetails(id, user.sub);
+  }
+
+  @Patch("channels/:id")
+  async updateChannel(
+    @Param("id") id: string,
+    @Body() body: { name?: string; description?: string; avatarUrl?: string },
+    @CurrentUser() user: any,
+  ) {
+    return this.service.updateChannel(id, user.sub, body);
+  }
+
+  @Delete("channels/:id")
+  async deleteChannel(@Param("id") id: string, @CurrentUser() user: any) {
+    return this.service.deleteChannel(id, user.sub);
+  }
+
+  @Post("channels/:id/post")
+  async postToChannel(
+    @Param("id") id: string,
+    @Body("content") content: string,
+    @CurrentUser() user: any,
+  ) {
+    const result = await this.service.postToChannel(id, user.sub, content);
+    const full = await this.service.getMessageById(result.messageId);
+    if (full) {
+      this.gateway.server.to(id).emit("new_message", {
+        ...full,
+        senderName: await this.service.getUserDisplayName(user.sub),
+        reactions: [],
+      });
+    }
+    return result;
+  }
+
   @Post("channels")
   async createChannel(
     @Body("name") name: string,

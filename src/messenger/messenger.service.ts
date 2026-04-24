@@ -239,6 +239,7 @@ export class MessengerService {
       where: { participants: { some: { userId } } },
       include: {
         participants: true,
+        _count: { select: { participants: true } },
         messages: { where: { deletedAt: null, NOT: { hiddenFor: { some: { userId } } } }, orderBy: { sentAt: 'desc' }, take: 1 },
       },
       orderBy: { createdAt: 'desc' },
@@ -337,6 +338,9 @@ export class MessengerService {
       topicsEnabled: conv.topicsEnabled ?? false,
       autoDeleteDays: conv.autoDeleteDays ?? null,
       invitePolicy: conv.invitePolicy ?? "all",
+      // CHANNEL-specific metadata (undefined for non-channels so JSON omits the fields)
+      subscribersCount: conv.type === 'CHANNEL' ? (conv._count?.participants ?? conv.participants.length) : undefined,
+      isSubscribed: conv.type === 'CHANNEL' ? (!!myParticipant) : undefined,
     };
   }
 
@@ -717,16 +721,23 @@ export class MessengerService {
     const existing = await this.prisma.conversationParticipant.findUnique({
       where: { conversationId_userId: { conversationId: channelId, userId } },
     });
-    if (existing) throw new BadRequestException("Already subscribed");
+    if (existing) return { ok: true, alreadySubscribed: true };
     await this.prisma.conversationParticipant.create({
       data: { conversationId: channelId, userId, role: "SUBSCRIBER" },
     });
-    return { ok: true };
+    return { ok: true, alreadySubscribed: false };
   }
 
   async unsubscribeFromChannel(channelId: string, userId: string) {
     const conv = await this._getConversationOrThrow(channelId);
     if (conv.type !== "CHANNEL") throw new BadRequestException("Not a channel");
+    const existing = await this.prisma.conversationParticipant.findUnique({
+      where: { conversationId_userId: { conversationId: channelId, userId } },
+    });
+    if (!existing) throw new BadRequestException("Not subscribed");
+    if (existing.role === "OWNER") {
+      throw new BadRequestException("Owner cannot unsubscribe, delete channel instead");
+    }
     await this.prisma.conversationParticipant.delete({
       where: { conversationId_userId: { conversationId: channelId, userId } },
     });
@@ -742,6 +753,102 @@ export class MessengerService {
     if (!participant || (participant.role !== "OWNER" && participant.role !== "ADMIN")) {
       throw new ForbiddenException("Only admins can post in channels");
     }
+  }
+
+  async listChannels(userId: string, q?: string, limit = 20, offset = 0) {
+    const take = Math.min(Math.max(limit, 1), 50);
+    const where: any = { type: "CHANNEL" };
+    if (q && q.trim().length > 0) {
+      where.name = { contains: q.trim(), mode: "insensitive" };
+    }
+    const rows = await this.prisma.conversation.findMany({
+      where,
+      include: {
+        participants: { select: { userId: true } },
+        _count: { select: { participants: true } },
+      },
+      orderBy: [{ updatedAt: "desc" }],
+      take,
+      skip: offset,
+    });
+    return rows
+      .map(r => ({
+        id: r.id,
+        name: r.name,
+        description: r.description,
+        avatarUrl: r.avatarUrl,
+        subscribersCount: r._count.participants,
+        isSubscribed: r.participants.some(p => p.userId === userId),
+      }))
+      .sort((a, b) => b.subscribersCount - a.subscribersCount);
+  }
+
+  async getChannelDetails(channelId: string, userId: string) {
+    const conv = await this.prisma.conversation.findUnique({
+      where: { id: channelId },
+      include: {
+        participants: true,
+        _count: { select: { participants: true } },
+      },
+    });
+    if (!conv) throw new NotFoundException("Channel not found");
+    if (conv.type !== "CHANNEL") throw new BadRequestException("Not a channel");
+    const me = conv.participants.find(p => p.userId === userId);
+    return {
+      id: conv.id,
+      name: conv.name,
+      description: conv.description,
+      avatarUrl: conv.avatarUrl,
+      subscribersCount: conv._count.participants,
+      isSubscribed: !!me,
+      myRole: me ? me.role : null,
+    };
+  }
+
+  async updateChannel(channelId: string, userId: string, patch: { name?: string; description?: string; avatarUrl?: string }) {
+    const conv = await this._getConversationOrThrow(channelId);
+    if (conv.type !== "CHANNEL") throw new BadRequestException("Not a channel");
+    const me = await this.prisma.conversationParticipant.findUnique({
+      where: { conversationId_userId: { conversationId: channelId, userId } },
+    });
+    if (!me || (me.role !== "OWNER" && me.role !== "ADMIN")) {
+      throw new ForbiddenException("Only channel admins can edit");
+    }
+    const data: any = {};
+    if (patch.name !== undefined) data.name = patch.name;
+    if (patch.description !== undefined) data.description = patch.description;
+    if (patch.avatarUrl !== undefined) data.avatarUrl = patch.avatarUrl;
+    await this.prisma.conversation.update({ where: { id: channelId }, data });
+    return this.getChannelDetails(channelId, userId);
+  }
+
+  async deleteChannel(channelId: string, userId: string) {
+    const conv = await this._getConversationOrThrow(channelId);
+    if (conv.type !== "CHANNEL") throw new BadRequestException("Not a channel");
+    const me = await this.prisma.conversationParticipant.findUnique({
+      where: { conversationId_userId: { conversationId: channelId, userId } },
+    });
+    if (!me || me.role !== "OWNER") {
+      throw new ForbiddenException("Only the owner can delete the channel");
+    }
+    await this.prisma.conversation.delete({ where: { id: channelId } });
+    return { ok: true };
+  }
+
+  async postToChannel(channelId: string, userId: string, content: string) {
+    await this.assertCanPostInChannel(channelId, userId);
+    if (!content || content.trim().length === 0) {
+      throw new BadRequestException("Content is empty");
+    }
+    if (content.length > 4000) {
+      throw new BadRequestException("Content exceeds 4000 characters");
+    }
+    const msg = await this.createMessage(channelId, userId, content);
+    return { messageId: msg.id, createdAt: msg.sentAt };
+  }
+
+  async getMessageById(messageId: string) {
+    return this.prisma.message.findUnique({ where: { id: messageId } });
   }
   // ─── Polls ───
 

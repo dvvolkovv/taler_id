@@ -1,19 +1,21 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
+import { VoximplantService } from './voximplant.service';
 import { SipService } from './sip.service';
-import { AgentDispatchClient, RoomServiceClient, AccessToken } from 'livekit-server-sdk';
+import { AgentDispatchClient, RoomServiceClient } from 'livekit-server-sdk';
 import { v4 as uuidv4 } from 'uuid';
 
 const CLAUDE_WORKER_URL = process.env.CLAUDE_WORKER_URL || 'http://5.101.115.184:3033';
-const LK_HOST = process.env.LIVEKIT_HOST || 'http://localhost:7880';
-const LK_API_KEY = process.env.LIVEKIT_API_KEY || 'lkdevkey';
-const LK_API_SECRET = process.env.LIVEKIT_API_SECRET || 'lkSecret2024TalerID';
-const LK_WS_URL = process.env.LIVEKIT_WS_URL || 'wss://staging.id.taler.tirol/livekit/';
-const OUTBOUND_AGENT_NAME = 'outbound-call-agent';
-const BACKEND_URL = process.env.BACKEND_URL || 'https://staging.id.taler.tirol';
-const AI_AGENT_URL = process.env.AI_AGENT_URL || 'http://localhost:3100';
 const BOT_SENDER_ID = 'ai-outbound-bot';
+
+// OUTBOUND_MODE=voximplant (default, Yandex TTS) or livekit (SIPNET + ElevenLabs streaming)
+const OUTBOUND_MODE = process.env.OUTBOUND_MODE || 'voximplant';
+const OUTBOUND_AGENT_NAME = 'outbound-call-agent';
+const LK_HOST = process.env.LIVEKIT_HOST_OUTBOUND || 'https://ru.id.taler.tirol';
+const LK_API_KEY = process.env.LIVEKIT_API_KEY_OUTBOUND || 'devkey278c50b6c7ef4dab';
+const LK_API_SECRET = process.env.LIVEKIT_API_SECRET_OUTBOUND || '71658877e5b5f568313c7394c57a566ee6acd66ccf8e3f900237ac88d7e649e7';
+const BACKEND_URL = process.env.BACKEND_URL || 'https://staging.id.taler.tirol';
 
 @Injectable()
 export class OutboundBotService {
@@ -21,12 +23,12 @@ export class OutboundBotService {
   private readonly rooms = new RoomServiceClient(LK_HOST, LK_API_KEY, LK_API_SECRET);
   private readonly dispatcher = new AgentDispatchClient(LK_HOST, LK_API_KEY, LK_API_SECRET);
   private emitToUser: ((target: string, event: string, data: any) => void) | null = null;
-  // Track active call rooms for listen-in
-  private activeCallRooms = new Map<string, { roomName: string; businessName: string; campaignId: string }>();
+  private activeCalls = new Map<string, { sessionId: string; businessName: string; campaignId: string }>();
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
+    private readonly vox: VoximplantService,
     private readonly sip: SipService,
   ) {}
 
@@ -197,37 +199,17 @@ export class OutboundBotService {
     } else if (['сводка', 'итоги', 'результаты', 'summary'].includes(lower)) {
       await this.analyzeResults(campaign.id, userId, conversationId, topicId);
     } else if (lower.includes("слушать") || lower === "listen") {
-      // User wants to listen in — handled via REST endpoint GET /campaigns/:id/listen
-      const activeRoom = this.activeCallRooms.get(campaign.id);
-      if (activeRoom) {
+      // Listen-in is not supported with Voximplant. Show last recording if available.
+      const lastCall = await this.prisma.outboundCall.findFirst({
+        where: { campaignId: campaign.id, status: 'completed', recordingUrl: { not: null } },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (lastCall?.recordingUrl) {
         await this.postBotMessage(conversationId, topicId,
-          `🎧 Подключение к звонку с **${activeRoom.businessName}**...`
+          `🎧 Запись звонка с **${lastCall.businessName}** уже в чате ⬆️`
         );
-        // Emit special event for mobile to connect
-        if (this.emitToUser) {
-          const token = await this.generateListenToken(userId, activeRoom.roomName);
-          this.emitToUser(conversationId, 'outbound_listen', {
-            roomName: activeRoom.roomName,
-            businessName: activeRoom.businessName,
-            token,
-            wsUrl: LK_WS_URL,
-          });
-        }
       } else {
-        // No active call — show last recording if available
-        const lastCall = await this.prisma.outboundCall.findFirst({
-          where: { campaignId: campaign.id, status: 'completed', recordingUrl: { not: null } },
-          orderBy: { createdAt: 'desc' },
-        });
-        if (lastCall?.recordingUrl) {
-          // Recording was already auto-posted by stopRecorderAndGetUrl
-          await this.postBotMessage(conversationId, topicId,
-            `🎧 Запись звонка с **${lastCall.businessName}** уже в чате ⬆️`
-          );
-
-        } else {
-          await this.postBotMessage(conversationId, topicId, '❌ Сейчас нет активного звонка и записи.');
-        }
+        await this.postBotMessage(conversationId, topicId, '❌ Запись появится после завершения звонка.');
       }
     }
   }
@@ -316,29 +298,13 @@ export class OutboundBotService {
     return 'calling'; // timeout — auto-continue
   }
 
-  // ── Generate listen-in token for user ──
-
-  async generateListenToken(userId: string, roomName: string): Promise<string> {
-    const token = new AccessToken(LK_API_KEY, LK_API_SECRET, {
-      identity: `listener-${userId}`,
-      name: 'Слушатель',
-    });
-    token.addGrant({
-      room: roomName,
-      roomJoin: true,
-      canPublish: false,  // listen only
-      canSubscribe: true,
-    });
-    return await token.toJwt();
-  }
-
   // ── Get active call for a campaign (for REST endpoint) ──
+  // Note: listen-in is no longer supported via LiveKit (calls go through Voximplant).
 
-  async getActiveCall(campaignId: string, userId: string) {
-    const activeRoom = this.activeCallRooms.get(campaignId);
-    if (!activeRoom) return null;
-    const token = await this.generateListenToken(userId, activeRoom.roomName);
-    return { roomName: activeRoom.roomName, businessName: activeRoom.businessName, token, wsUrl: LK_WS_URL };
+  async getActiveCall(campaignId: string, _userId: string) {
+    const active = this.activeCalls.get(campaignId);
+    if (!active) return null;
+    return { sessionId: active.sessionId, businessName: active.businessName };
   }
 
   // ── Gathering phase: collect details with AI clarifying questions ──
@@ -592,77 +558,78 @@ export class OutboundBotService {
     campaignId: string, userId: string, conversationId: string, topicId: string,
     spec: { businessName: string; phone: string; questionsToAsk: string[] }, idx: number, total: number,
   ) {
-    const roomName = `outbound-${uuidv4()}`;
+    const sessionId = `outbound-${uuidv4()}`;
     const call = await this.prisma.outboundCall.create({
-      data: { campaignId, roomName, businessName: spec.businessName, phoneNumber: spec.phone, status: 'dialing', startedAt: new Date() },
+      data: { campaignId, roomName: sessionId, businessName: spec.businessName, phoneNumber: spec.phone, status: 'dialing', startedAt: new Date() },
     });
 
-    await this.rooms.createRoom({ name: roomName, emptyTimeout: 300, maxParticipants: 5 });
     const campaign = await this.prisma.outboundCampaign.findUnique({ where: { id: campaignId } });
     const profile = await this.prisma.profile.findUnique({ where: { userId } });
     const ownerName = [profile?.firstName, profile?.lastName].filter(Boolean).join(' ') || 'клиент';
     const agentPrompt = (campaign?.callPlan as any)?.agentPrompt || '';
-    const metadata = JSON.stringify({
-      businessName: spec.businessName, phoneNumber: spec.phone, questionsToAsk: spec.questionsToAsk,
-      taskContext: campaign?.taskText || '', campaignId, callId: call.id,
-      ownerName, agentPrompt,
-      callbackUrl: `${BACKEND_URL}/outbound-bot/call-callback`,
-    });
 
-    await this.dispatcher.createDispatch(roomName, OUTBOUND_AGENT_NAME, { metadata });
+    if (OUTBOUND_MODE === 'livekit') {
+      // livekit-agents pipeline: LiveKit room + dispatch agent + SIPNET PSTN
+      await this.rooms.createRoom({ name: sessionId, emptyTimeout: 300, maxParticipants: 5 });
+      const metadata = JSON.stringify({
+        businessName: spec.businessName, phoneNumber: spec.phone,
+        questionsToAsk: spec.questionsToAsk,
+        taskContext: campaign?.taskText || '', campaignId, callId: call.id,
+        ownerName, agentPrompt,
+        callbackUrl: `${BACKEND_URL}/outbound-bot/call-callback`,
+      });
+      await this.dispatcher.createDispatch(sessionId, OUTBOUND_AGENT_NAME, { metadata });
+      await this.sip.dialOutbound(sessionId, spec.phone);
+      await this.prisma.outboundCall.update({ where: { id: call.id }, data: { status: 'in_progress' } });
+    } else {
+      // voximplant mode (PSTN + Yandex TTS + voice-turn)
+      const result = await this.vox.startOutboundCall({
+        phone: spec.phone,
+        sessionId,
+        metadata: {
+          businessName: spec.businessName,
+          phoneNumber: spec.phone,
+          questionsToAsk: spec.questionsToAsk,
+          taskContext: campaign?.taskText || '',
+          campaignId,
+          callId: call.id,
+          ownerName,
+          agentPrompt,
+        },
+      });
+      await this.prisma.outboundCall.update({
+        where: { id: call.id },
+        data: {
+          status: 'in_progress',
+          transcript: { voxCallSessionHistoryId: result.callSessionHistoryId } as any,
+        },
+      });
+    }
 
-    if (this.sip.isConfigured()) await this.sip.dialOutbound(roomName, spec.phone);
-    else this.logger.warn(`SIP not configured — agent in room ${roomName}`);
-
-    // Track active call for listen-in
-    this.activeCallRooms.set(campaignId, { roomName, businessName: spec.businessName, campaignId });
-
-    // Start recorder after SIP connects
-    setTimeout(async () => {
-      try {
-        await fetch(`${AI_AGENT_URL}/record`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ roomName, withAi: false }),
-        });
-        this.logger.log(`[Recorder] started for room ${roomName}`);
-      } catch (e) {
-        this.logger.warn(`[Recorder] failed to start: ${(e as Error).message}`);
-      }
-    }, 5000);
-
-    await this.prisma.outboundCall.update({ where: { id: call.id }, data: { status: 'in_progress' } });
+    this.activeCalls.set(campaignId, { sessionId, businessName: spec.businessName, campaignId });
     await this.postBotMessage(conversationId, topicId,
-      `📞 Звоню (${idx + 1}/${total}): **${spec.businessName}**...\n\n[ACTION:🎧 Слушать]`
+      `📞 Звоню (${idx + 1}/${total}): **${spec.businessName}**...`
     );
 
-    // Wait for callback (max 7 min), but also check if campaign was paused
+    // Wait for voice-turn callback (max 7 min), check campaign pause
     const start = Date.now();
     while (Date.now() - start < 420000) {
       const u = await this.prisma.outboundCall.findUnique({ where: { id: call.id } });
       if (u && ['completed', 'failed', 'no_answer'].includes(u.status)) break;
 
-      // Check if campaign was paused by user
       const camp = await this.prisma.outboundCampaign.findUnique({ where: { id: campaignId } });
       if (camp && camp.status === 'paused') {
-        this.logger.log(`[call] Campaign paused during call ${call.id}, stopping call`);
-        // Clean up: remove from active rooms
-        this.activeCallRooms.delete(campaignId);
-        // Mark call as failed
+        this.logger.log(`[call] Campaign paused during call ${call.id}`);
+        this.activeCalls.delete(campaignId);
         await this.prisma.outboundCall.update({ where: { id: call.id }, data: { status: 'failed', endedAt: new Date() } });
-        // Delete room to end SIP
-        try { await this.rooms.deleteRoom(roomName); } catch {}
         throw new Error('CAMPAIGN_PAUSED');
       }
 
       await new Promise(r => setTimeout(r, 3000));
     }
 
-    // Clean up active room tracking
-    this.activeCallRooms.delete(campaignId);
+    this.activeCalls.delete(campaignId);
 
-    // Don't post result here — handleCallCallback already posts it
-    // (including goal detection and recording link later)
     const final_ = await this.prisma.outboundCall.findUnique({ where: { id: call.id } });
     if (!final_ || !['completed', 'failed', 'no_answer'].includes(final_.status)) {
       await this.postStatus(conversationId, topicId, `⏳ ${spec.businessName}: ${final_?.status || 'timeout'}`);
@@ -701,31 +668,38 @@ export class OutboundBotService {
     await this.postBotMessage(conversationId, topicId, `📊 **Сводка:**\n\n${analysis || 'Нет данных.'}`);
   }
 
-  // ── Call callback from Python agent ──
+  // ── Call callback from voice-turn service ──
 
   async handleCallCallback(data: {
     callId: string; campaignId: string; transcript: any; summary: string;
     durationSec: number; status: string; recordingUrl?: string;
   }) {
+    const existing = await this.prisma.outboundCall.findUnique({ where: { id: data.callId } });
+    const voxId = (existing?.transcript as any)?.voxCallSessionHistoryId;
+
     const call = await this.prisma.outboundCall.update({
       where: { id: data.callId },
-      data: { transcript: data.transcript, summary: data.summary, durationSec: data.durationSec, status: data.status || 'completed', recordingUrl: data.recordingUrl, endedAt: new Date() },
+      data: {
+        transcript: { ...(data.transcript || {}), voxCallSessionHistoryId: voxId },
+        summary: data.summary,
+        durationSec: data.durationSec,
+        status: data.status || 'completed',
+        recordingUrl: data.recordingUrl,
+        endedAt: new Date(),
+      },
     });
     this.logger.log(`Call ${data.callId} completed: ${data.durationSec}s`);
 
-    // Stop recorder and get recording URL (async, don't block)
-    if (call.roomName) {
-      this.stopRecorderAndGetUrl(call.id, call.roomName, data.campaignId).catch(e => {
-        this.logger.warn(`[recorder] Failed to stop/get URL: ${(e as Error).message}`);
+    // Fetch recording from Voximplant (async, don't block)
+    if (voxId) {
+      this.fetchVoxRecording(call.id, voxId, data.campaignId).catch(e => {
+        this.logger.warn(`[recording] Failed to fetch: ${(e as Error).message}`);
       });
     }
 
-    // Check if goal was achieved (booking confirmed, etc.)
     const goalAchieved = data.summary && /GOAL_ACHIEVED:\s*да/i.test(data.summary);
-    // Clean up GOAL_ACHIEVED line from displayed summary
     const cleanSummary = (data.summary || '').replace(/\n?GOAL_ACHIEVED:\s*(да|нет).*/i, '').trim();
 
-    // Post result to chat immediately (recording link will come later)
     const campaign = await this.prisma.outboundCampaign.findUnique({ where: { id: data.campaignId } });
     if (campaign) {
       if (goalAchieved) {
@@ -734,7 +708,6 @@ export class OutboundBotService {
           campaign.topicId,
           `🎉 **${call.businessName}** — цель достигнута! (${data.durationSec}с)\n\n${cleanSummary}`,
         );
-        // Pause campaign — goal achieved, ask user if they want to continue
         await this.prisma.outboundCampaign.update({ where: { id: data.campaignId }, data: { status: 'paused' } });
         await this.updateTopicIcon(campaign.topicId, 'paused');
         await this.postBotMessage(
@@ -750,68 +723,38 @@ export class OutboundBotService {
         );
       }
     }
-
-    // Delete room quickly to hang up SIP call (recorder processes from local PCM files)
-    if (call.roomName) {
-      const roomName = call.roomName;
-      setTimeout(async () => {
-        try {
-          await this.rooms.deleteRoom(roomName);
-          this.logger.log(`[hangup] Room ${roomName} deleted`);
-        } catch (e) {
-          this.logger.warn(`[hangup] Failed to delete room: ${(e as Error).message}`);
-        }
-      }, 2000); // 2s — enough for recorder to get stop signal
-    }
   }
 
-  // ── Stop recorder and retrieve recording URL ──
+  // ── Fetch recording URL from Voximplant (polled after call ends) ──
 
-  private async stopRecorderAndGetUrl(callId: string, roomName: string, campaignId: string) {
-    try {
-      // Stop the recorder
-      const stopRes = await fetch(`${AI_AGENT_URL}/stop-record`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomName }),
-      });
-      this.logger.log(`[recorder] Stop request for ${roomName}: ${stopRes.status}`);
+  private async fetchVoxRecording(callId: string, voxCallSessionHistoryId: number, campaignId: string) {
+    // Voximplant needs ~10-30s to finalize the recording after call ends
+    for (let attempt = 0; attempt < 30; attempt++) {
+      await new Promise(r => setTimeout(r, 5000));
+      const voxUrl = await this.vox.getCallRecording(voxCallSessionHistoryId);
+      if (!voxUrl) continue;
 
-      // Wait for processing — poll MeetingSummary for recordingUrl
-      for (let attempt = 0; attempt < 40; attempt++) {
-        await new Promise(r => setTimeout(r, 3000));
-        const summary = await this.prisma.meetingSummary.findFirst({
-          where: { roomName },
-        });
-        if (summary?.recordingUrl) {
-          // Decode %2F → / so flutter_markdown doesn't double-encode it
-          const decodedUrl = decodeURIComponent(summary.recordingUrl);
-          // Update OutboundCall with recording URL
-          await this.prisma.outboundCall.update({
-            where: { id: callId },
-            data: { recordingUrl: decodedUrl },
-          });
-          this.logger.log(`[recorder] Got recording URL for call ${callId}: ${decodedUrl}`);
+      // Voximplant URL requires auth; download to our /var/www/recordings/ and serve publicly
+      const RECORDINGS_DIR = process.env.RECORDINGS_DIR || '/var/www/recordings';
+      const RECORDINGS_BASE_URL = process.env.RECORDINGS_BASE_URL || 'https://id.taler.tirol/recordings';
+      const filename = `outbound-${callId}.mp3`;
+      const localPath = `${RECORDINGS_DIR}/${filename}`;
+      const ok = await this.vox.downloadRecording(voxUrl, localPath);
+      const publicUrl = ok ? `${RECORDINGS_BASE_URL}/${filename}` : voxUrl;
 
-          // Post recording link to chat
-          const call = await this.prisma.outboundCall.findUnique({
-            where: { id: callId },
-            include: { campaign: true },
-          });
-          if (call?.campaign) {
-            await this.postBotMessage(
-              call.campaign.conversationId,
-              call.campaign.topicId,
-              `🎧 **Запись: ${call.businessName}**\n[▶ Слушать / Скачать](${decodedUrl})`,
-            );
-          }
-          return;
-        }
+      await this.prisma.outboundCall.update({ where: { id: callId }, data: { recordingUrl: publicUrl } });
+      const call = await this.prisma.outboundCall.findUnique({ where: { id: callId }, include: { campaign: true } });
+      if (call?.campaign) {
+        await this.postBotMessage(
+          call.campaign.conversationId,
+          call.campaign.topicId,
+          `🎧 **Запись: ${call.businessName}**\n[▶ Слушать / Скачать](${publicUrl})`,
+        );
       }
-      this.logger.warn(`[recorder] No recording URL found after 120s for room ${roomName}`);
-    } catch (e) {
-      this.logger.warn(`[recorder] Error: ${(e as Error).message}`);
+      this.logger.log(`[recording] Saved call ${callId}: ${publicUrl}`);
+      return;
     }
+    this.logger.warn(`[recording] No URL found after 150s for call ${callId}`);
   }
 
   // ── Topic icon by campaign status ──

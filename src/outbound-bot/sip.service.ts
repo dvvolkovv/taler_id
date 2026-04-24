@@ -1,24 +1,22 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { SipClient } from 'livekit-server-sdk';
 
-const LK_HOST = process.env.LIVEKIT_HOST || 'http://localhost:7880';
-const LK_API_KEY = process.env.LIVEKIT_API_KEY || 'lkdevkey';
-const LK_API_SECRET = process.env.LIVEKIT_API_SECRET || 'lkSecret2024TalerID';
-
-// Created via livekit-cli: ST_23t6SdE5NVuj
-const SIP_TRUNK_ID = process.env.SIP_TRUNK_ID || 'ST_23t6SdE5NVuj';
+const LK_HOST = process.env.LIVEKIT_HOST_OUTBOUND || 'https://ru.id.taler.tirol';
+const LK_API_KEY = process.env.LIVEKIT_API_KEY_OUTBOUND || 'devkey278c50b6c7ef4dab';
+const LK_API_SECRET = process.env.LIVEKIT_API_SECRET_OUTBOUND || '71658877e5b5f568313c7394c57a566ee6acd66ccf8e3f900237ac88d7e649e7';
+const SIP_TRUNK_ID = process.env.SIP_TRUNK_ID || '';
 
 @Injectable()
 export class SipService {
   private readonly logger = new Logger(SipService.name);
   private readonly sipClient = new SipClient(LK_HOST, LK_API_KEY, LK_API_SECRET);
 
-  /**
-   * Dial an outbound phone number and bridge into a LiveKit room.
-   */
+  isConfigured(): boolean {
+    return !!SIP_TRUNK_ID;
+  }
+
   async dialOutbound(roomName: string, phoneNumber: string): Promise<{ participantId: string }> {
     this.logger.log(`[SIP] dialOutbound room=${roomName} phone=${phoneNumber} trunk=${SIP_TRUNK_ID}`);
-
     try {
       const result = await this.sipClient.createSipParticipant(
         SIP_TRUNK_ID,
@@ -31,18 +29,11 @@ export class SipService {
           timeout: 30,
         },
       );
-      this.logger.log(`[SIP] Call connected: ${JSON.stringify(result)}`);
+      this.logger.log(`[SIP] Call connected: ${result?.participantIdentity}`);
       return { participantId: result?.participantIdentity || `sip-${phoneNumber}` };
     } catch (e) {
       this.logger.error(`[SIP] dialOutbound failed: ${(e as Error).message}`);
       throw e;
     }
-  }
-
-  /**
-   * Check if SIP trunk is configured and ready.
-   */
-  isConfigured(): boolean {
-    return !!SIP_TRUNK_ID;
   }
 }

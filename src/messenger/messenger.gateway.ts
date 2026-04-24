@@ -193,6 +193,28 @@ export class MessengerGateway
       // AI Analyst: dispatch user message to Claude Worker asynchronously.
       // The response will appear as a new system message in the same chat.
       if (msgConvType === 'AI_ANALYST') {
+        // Claude Worker's multer rejects files over this size with 500.
+        // Skip them silently in history; reject the current message loudly.
+        const MAX_ANALYST_FILE_BYTES = 20 * 1024 * 1024;
+
+        if (payload.fileUrl && payload.fileSize && payload.fileSize > MAX_ANALYST_FILE_BYTES) {
+          const mb = (payload.fileSize / 1024 / 1024).toFixed(1);
+          const errMsg = await this.service.createMessage(
+            payload.conversationId,
+            client.data.userId,
+            `❌ Файл «${payload.fileName || 'file'}» слишком большой (${mb} МБ). Лимит для AI Аналитика — 20 МБ.`,
+            undefined,
+            undefined,
+            true,
+          );
+          this.server.to(`user:${client.data.userId}`).emit('new_message', {
+            ...errMsg,
+            senderName: 'AI Аналитик',
+            isSystem: true,
+          });
+          return;
+        }
+
         // Collect files from recent user messages (current + last few) so
         // that when the user sends 2 files as separate messages then types
         // a question, Claude sees all the files, not just the last one.
@@ -203,6 +225,10 @@ export class MessengerGateway
               conversationId: payload.conversationId,
               isSystem: false,
               fileUrl: { not: null },
+              OR: [
+                { fileSize: null },
+                { fileSize: { lte: MAX_ANALYST_FILE_BYTES } },
+              ],
             },
             orderBy: { sentAt: 'desc' },
             take: 10,
