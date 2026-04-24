@@ -8,6 +8,7 @@ import { GatingService } from './services/gating.service';
 import { MeteringService } from './services/metering.service';
 import { BillingController } from './controllers/billing.controller';
 import { MeteringController } from './controllers/metering.controller';
+import { AdminBillingController } from './controllers/admin-billing.controller';
 import { MeteringSecretGuard } from './guards/metering-secret.guard';
 
 @Module({
@@ -30,7 +31,7 @@ import { MeteringSecretGuard } from './guards/metering-secret.guard';
       },
     },
   ],
-  controllers: [BillingController, MeteringController],
+  controllers: [BillingController, MeteringController, AdminBillingController],
   exports: [PricingService, LedgerService, GatingService, MeteringService],
 })
 export class BillingModule {}
