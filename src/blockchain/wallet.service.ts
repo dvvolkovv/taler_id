@@ -18,8 +18,7 @@ export class WalletService implements OnModuleInit {
   ) {}
 
   async onModuleInit() {
-    await cryptoWaitReady();
-    this.keyring = new Keyring({ type: 'sr25519', ss58Format: SS58_PREFIX });
+    await this.ensureKeyring();
   }
 
   private getEncryptionKey(): string {
@@ -30,6 +29,14 @@ export class WalletService implements OnModuleInit {
     return k;
   }
 
+  private async ensureKeyring(): Promise<Keyring> {
+    if (!this.keyring) {
+      await cryptoWaitReady();
+      this.keyring = new Keyring({ type: 'sr25519', ss58Format: SS58_PREFIX });
+    }
+    return this.keyring;
+  }
+
   async getOrCreate(userId: string): Promise<{
     userId: string;
     custodialAddress: string;
@@ -38,13 +45,9 @@ export class WalletService implements OnModuleInit {
     const existing = await this.prisma.userWallet.findUnique({ where: { userId } });
     if (existing) return existing;
 
-    if (!this.keyring) {
-      await cryptoWaitReady();
-      this.keyring = new Keyring({ type: 'sr25519', ss58Format: SS58_PREFIX });
-    }
-
+    const keyring = await this.ensureKeyring();
     const mnemonic = mnemonicGenerate();
-    const pair = this.keyring.addFromMnemonic(mnemonic);
+    const pair = keyring.addFromMnemonic(mnemonic);
     const enc = encrypt(mnemonic, this.getEncryptionKey());
 
     const w = await this.prisma.userWallet.create({
@@ -66,11 +69,18 @@ export class WalletService implements OnModuleInit {
   async loadKeypairForSigning(userId: string) {
     const w = await this.prisma.userWallet.findUnique({ where: { userId } });
     if (!w) throw new Error(`no wallet for user ${userId}`);
-    const mnemonic = decrypt(w.custodialKeyEnc, this.getEncryptionKey());
-    if (!this.keyring) {
-      await cryptoWaitReady();
-      this.keyring = new Keyring({ type: 'sr25519', ss58Format: SS58_PREFIX });
+
+    let mnemonic: string;
+    try {
+      mnemonic = decrypt(w.custodialKeyEnc, this.getEncryptionKey());
+    } catch (e) {
+      // Never log the original crypto error — it may leak timing / structural info.
+      // GCM integrity failure here means either the key rotated or the ciphertext
+      // was tampered with. Both are unrecoverable without the original key material.
+      throw new Error(`failed to decrypt wallet key for user ${userId}`);
     }
-    return this.keyring.addFromMnemonic(mnemonic);
+
+    const keyring = await this.ensureKeyring();
+    return keyring.addFromMnemonic(mnemonic);
   }
 }
