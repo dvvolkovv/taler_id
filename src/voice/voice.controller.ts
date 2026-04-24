@@ -110,9 +110,12 @@ export class VoiceController {
     @Param("sessionId") sessionId: string,
     @Body() body: { durationSec: number },
   ) {
-    const userId = user.sub ?? user.id;
-    const durationSec = typeof body?.durationSec === "number" ? body.durationSec : 0;
-    await this.service.closeVoiceSession(userId, sessionId, durationSec);
+    const rawDuration = (body as { durationSec?: unknown })?.durationSec;
+    const durationSec =
+      typeof rawDuration === "number" && Number.isFinite(rawDuration) && rawDuration >= 0
+        ? rawDuration
+        : 0;
+    await this.service.closeVoiceSession(user.sub, sessionId, durationSec);
     return { ok: true };
   }
 

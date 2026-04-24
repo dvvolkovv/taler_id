@@ -246,11 +246,23 @@ export class VoiceService {
     sessionId: string,
     durationSec: number,
   ): Promise<void> {
-    const durationMin = Math.max(0, durationSec) / 60;
+    const session = await this.prisma.aiSession.findUnique({
+      where: { id: sessionId },
+      select: { userId: true, status: true },
+    });
+    // Return 404 (not 403) to avoid revealing whether a sessionId exists.
+    if (!session || session.userId !== userId) {
+      throw new NotFoundException('session not found');
+    }
+
+    const safeDuration = Number.isFinite(durationSec) && durationSec > 0 ? durationSec : 0;
+    const durationMin = safeDuration / 60;
     try {
       await this.metering.reportUsage(sessionId, durationMin, 'client');
     } catch {
-      // Fall through — session close must be idempotent from the client's view.
+      // Swallow report failure so session close always succeeds. Metering's cron
+      // tick has already been draining at ~10-second granularity, so a swallowed
+      // final report means at most ~10 seconds of under-billing drift, not lost billing.
     }
     await this.gating.endSession(sessionId, 'completed');
   }
