@@ -237,6 +237,7 @@ model Message {
   fileRecordId       String?
   threadParentId     String?
   topicId            String?
+  metadata           Json?
   fileRecord         FileRecord?       @relation(fields: [fileRecordId], references: [id])
   conversation       Conversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sender             User              @relation(fields: [senderId], references: [id])
