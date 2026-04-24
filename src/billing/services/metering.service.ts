@@ -18,6 +18,7 @@ const MINUTE_BASED = new Set(['voice_assistant', 'ai_twin', 'outbound_call']);
 @Injectable()
 export class MeteringService {
   private readonly log = new Logger(MeteringService.name);
+  private readonly lowBalanceWarnedSessions = new Set<string>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -36,9 +37,22 @@ export class MeteringService {
       if (!MINUTE_BASED.has(s.featureKey)) continue;
 
       const now = new Date();
-      const elapsedMs = now.getTime() - new Date(s.lastMeteredAt).getTime();
+      const oldLastMeteredAt = new Date(s.lastMeteredAt);
+      const elapsedMs = now.getTime() - oldLastMeteredAt.getTime();
       const elapsedMinutes = elapsedMs / 60_000;
       if (elapsedMinutes <= 0) continue;
+
+      // Optimistic concurrency: claim this tick's elapsed window by atomically advancing
+      // lastMeteredAt only if no other tick has already done so. updateMany returns { count }
+      // with zero if the row's lastMeteredAt changed since our findMany.
+      const claim = await this.prisma.aiSession.updateMany({
+        where: { id: s.id, lastMeteredAt: oldLastMeteredAt, status: 'active' },
+        data: { lastMeteredAt: now },
+      });
+      if (claim.count === 0) {
+        // Another tick already metered this window — skip.
+        continue;
+      }
 
       try {
         const cost = await this.pricing.calculatePlanckCost(s.featureKey, elapsedMinutes);
@@ -49,21 +63,31 @@ export class MeteringService {
         });
         await this.prisma.aiSession.update({
           where: { id: s.id },
-          data: { lastMeteredAt: now, totalSpentPlanck: { increment: cost } },
+          data: { totalSpentPlanck: { increment: cost } },
         });
-        await this.prisma.usageLog.create({
-          data: {
-            userId: s.userId,
-            sessionId: s.id,
-            featureKey: s.featureKey,
-            unit: 'minute',
-            units: elapsedMinutes.toFixed(4),
-            reporter: 'backend',
-          },
-        });
+
+        // Separate try block — log failure must not leave audit gap while cost stays debited.
+        try {
+          await this.prisma.usageLog.create({
+            data: {
+              userId: s.userId,
+              sessionId: s.id,
+              featureKey: s.featureKey,
+              unit: 'minute',
+              units: elapsedMinutes.toFixed(4),
+              reporter: 'backend',
+            },
+          });
+        } catch (logErr) {
+          this.log.error(
+            `usageLog.create failed for session ${s.id} (cost ${cost} already debited): ${String(logErr)}`,
+          );
+        }
+
         await this.checkLowBalanceWarning(s);
       } catch (err) {
         if (err instanceof InsufficientFundsException) {
+          this.lowBalanceWarnedSessions.delete(s.id);
           if (cfg.billingEnforced) {
             await this.gating.endSession(s.id, 'terminated_no_funds');
             this.gateway.emitToUser(s.userId, 'ai_session_terminated', {
@@ -91,19 +115,32 @@ export class MeteringService {
       this.ledger.getBalance(s.userId),
       this.pricing.getMinReservePlanck(s.featureKey),
     ]);
-    if (balance < minReserve * 3n && balance >= minReserve) {
+
+    const inWindow = balance < minReserve * 3n && balance >= minReserve;
+    const wasWarned = this.lowBalanceWarnedSessions.has(s.id);
+
+    if (inWindow && !wasWarned) {
       this.gateway.emitToUser(s.userId, 'billing_low_balance_warning', {
         sessionId: s.id,
         balancePlanck: balance.toString(),
         minReservePlanck: minReserve.toString(),
       });
+      this.lowBalanceWarnedSessions.add(s.id);
+    } else if (!inWindow) {
+      // User topped up above 3× OR dropped below minReserve — clear so we can warn again
+      // if they re-enter the window later in the same session.
+      this.lowBalanceWarnedSessions.delete(s.id);
     }
   }
 
   /**
-   * Final adjustment reported by an agent (ai-twin, outbound-call) or client (voice_assistant).
-   * If agent-reported total > cron-debited total, debit the difference.
-   * If less, keep cron-debited amount (trust cron / never credit back).
+   * Final adjustment from an agent (ai-twin, outbound-call) or client (voice_assistant).
+   *
+   * Debits `totalExpected - session.totalSpentPlanck` if positive. Never credits back
+   * if the agent reports less than cron already drained (trust cron as source of truth).
+   *
+   * Late adjustments after `status='completed'` are intentionally allowed to capture
+   * crash-recovery reports — we do not guard on session status here.
    */
   async reportUsage(sessionId: string, totalUnits: number, reporter: string): Promise<void> {
     const s = await this.prisma.aiSession.findUnique({ where: { id: sessionId } });
@@ -145,10 +182,15 @@ export class MeteringService {
   }
 
   async heartbeat(sessionId: string): Promise<void> {
-    // Liveness only. Cron drives actual time-based billing.
-    await this.prisma.aiSession.update({
+    // Pure liveness check. We do NOT advance lastMeteredAt — that would skip billing
+    // for the interval between the last cron tick and this heartbeat. We only verify
+    // the session still exists and is active.
+    const session = await this.prisma.aiSession.findUnique({
       where: { id: sessionId },
-      data: {},
+      select: { status: true },
     });
+    if (!session || session.status !== 'active') {
+      throw new Error(`session ${sessionId} not active`);
+    }
   }
 }

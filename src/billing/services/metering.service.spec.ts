@@ -16,7 +16,12 @@ describe('MeteringService', () => {
 
   beforeEach(async () => {
     prisma = {
-      aiSession: { findMany: jest.fn(), update: jest.fn(), findUnique: jest.fn() },
+      aiSession: {
+        findMany: jest.fn(),
+        update: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }), // default: claim succeeds
+        findUnique: jest.fn(),
+      },
       usageLog: { create: jest.fn() },
     };
     pricing = { calculatePlanckCost: jest.fn(), getMinReservePlanck: jest.fn(), getConfig: jest.fn() };
@@ -68,9 +73,22 @@ describe('MeteringService', () => {
       'SPEND',
       expect.objectContaining({ featureKey: 'voice_assistant', sessionId: 's1' }),
     );
+    expect(prisma.aiSession.updateMany).toHaveBeenCalledWith({
+      where: { id: 's1', lastMeteredAt: startedAt, status: 'active' },
+      data: { lastMeteredAt: now },
+    });
     expect(prisma.aiSession.update).toHaveBeenCalledWith({
       where: { id: 's1' },
-      data: expect.objectContaining({ totalSpentPlanck: { increment: 12_820_000n }, lastMeteredAt: now }),
+      data: expect.objectContaining({ totalSpentPlanck: { increment: 12_820_000n } }),
+    });
+    expect(prisma.usageLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: 'u1',
+        sessionId: 's1',
+        featureKey: 'voice_assistant',
+        unit: 'minute',
+        reporter: 'backend',
+      }),
     });
 
     jest.useRealTimers();
@@ -178,5 +196,26 @@ describe('MeteringService', () => {
       'SPEND',
       expect.objectContaining({ sessionId: 's1' }),
     );
+  });
+
+  it('skips session when another tick already advanced lastMeteredAt (updateMany count=0)', async () => {
+    prisma.aiSession.findMany.mockResolvedValue([
+      {
+        id: 's1',
+        userId: 'u1',
+        featureKey: 'voice_assistant',
+        status: 'active',
+        lastMeteredAt: new Date(Date.now() - 10_000),
+        totalSpentPlanck: 0n,
+      },
+    ]);
+    pricing.getConfig.mockResolvedValue({ billingEnforced: true });
+    prisma.aiSession.updateMany.mockResolvedValue({ count: 0 }); // another tick won
+
+    await service.tick();
+
+    expect(ledger.debit).not.toHaveBeenCalled();
+    expect(pricing.calculatePlanckCost).not.toHaveBeenCalled();
+    expect(prisma.usageLog.create).not.toHaveBeenCalled();
   });
 });
