@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   ForbiddenException,
@@ -137,6 +138,10 @@ export class AdminBillingController {
     if (body.markupMultiplier !== undefined) data.markupMultiplier = body.markupMultiplier;
     if (body.minReservePlanck !== undefined) data.minReservePlanck = BigInt(body.minReservePlanck);
 
+    if (Object.keys(data).length === 0) {
+      throw new BadRequestException('no fields to update');
+    }
+
     try {
       const row = await this.prisma.aiPricebook.update({
         where: { featureKey },
@@ -170,16 +175,29 @@ export class AdminBillingController {
       data.welcomeBonusPlanck = BigInt(body.welcomeBonusPlanck);
     }
 
-    const row = await this.prisma.billingConfig.update({
-      where: { id: 'singleton' },
-      data,
-    });
-    this.pricing.invalidateCache();
-    return {
-      talUsdRate: row.talUsdRate.toString(),
-      billingEnforced: row.billingEnforced,
-      welcomeBonusPlanck: row.welcomeBonusPlanck.toString(),
-      updatedAt: row.updatedAt.toISOString(),
-    };
+    if (Object.keys(data).length === 0) {
+      throw new BadRequestException('no fields to update');
+    }
+
+    try {
+      const row = await this.prisma.billingConfig.update({
+        where: { id: 'singleton' },
+        data,
+      });
+      this.pricing.invalidateCache();
+      return {
+        talUsdRate: row.talUsdRate.toString(),
+        billingEnforced: row.billingEnforced,
+        welcomeBonusPlanck: row.welcomeBonusPlanck.toString(),
+        updatedAt: row.updatedAt.toISOString(),
+      };
+    } catch (err: any) {
+      if (err?.code === 'P2025') {
+        throw new NotFoundException(
+          'billing config not seeded (run prisma migrate deploy on DEV/PROD first)',
+        );
+      }
+      throw err;
+    }
   }
 }
