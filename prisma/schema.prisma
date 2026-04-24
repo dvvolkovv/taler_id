@@ -686,7 +686,7 @@ model BillingTransaction {
   featureKey   String?
   sessionId    String?    @db.Uuid
   session      AiSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
-  chainTxHash  String?
+  chainTxHash  String?    @unique
   metadata     Json?
   createdAt    DateTime   @default(now())
 
