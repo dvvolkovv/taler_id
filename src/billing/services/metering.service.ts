@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, NotFoundException, GoneException } from '@nestjs/common';
 import { Interval } from '@nestjs/schedule';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PricingService } from './pricing.service';
@@ -144,7 +144,7 @@ export class MeteringService {
    */
   async reportUsage(sessionId: string, totalUnits: number, reporter: string): Promise<void> {
     const s = await this.prisma.aiSession.findUnique({ where: { id: sessionId } });
-    if (!s) throw new Error(`session ${sessionId} not found`);
+    if (!s) throw new NotFoundException(`session ${sessionId} not found`);
 
     const totalExpected = await this.pricing.calculatePlanckCost(s.featureKey, totalUnits);
     const diff = totalExpected - s.totalSpentPlanck;
@@ -189,8 +189,12 @@ export class MeteringService {
       where: { id: sessionId },
       select: { status: true },
     });
-    if (!session || session.status !== 'active') {
-      throw new Error(`session ${sessionId} not active`);
+    if (!session) {
+      throw new NotFoundException(`session ${sessionId} not found`);
+    }
+    if (session.status !== 'active') {
+      // HTTP 410 Gone — session existed but is no longer usable. Client should stop heartbeating.
+      throw new GoneException(`session ${sessionId} not active`);
     }
   }
 }
