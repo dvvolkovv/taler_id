@@ -1,4 +1,4 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { InsufficientFundsException } from '../exceptions/insufficient-funds.exception';
 import type { MeteringGateway } from './metering.service';
@@ -16,6 +16,8 @@ import type { TxType, Prisma } from '@prisma/client';
  */
 @Injectable()
 export class LedgerService {
+  private readonly log = new Logger(LedgerService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     @Inject('MESSENGER_GATEWAY') private readonly gateway: MeteringGateway,
@@ -27,15 +29,21 @@ export class LedgerService {
    * clients see the authoritative new value.
    */
   private async emitBalance(userId: string, reason: string, txId: string): Promise<void> {
-    const w = await this.prisma.userWallet.findUnique({
-      where: { userId },
-      select: { balancePlanck: true },
-    });
-    this.gateway.emitToUser(userId, 'billing_balance_changed', {
-      balancePlanck: w?.balancePlanck.toString(),
-      reason,
-      txId,
-    });
+    try {
+      const w = await this.prisma.userWallet.findUnique({
+        where: { userId },
+        select: { balancePlanck: true },
+      });
+      this.gateway.emitToUser(userId, 'billing_balance_changed', {
+        balancePlanck: w?.balancePlanck.toString(),
+        reason,
+        txId,
+      });
+    } catch (err) {
+      // Never let a notification failure bubble up — the ledger change is already
+      // committed. Clients will pick up the new balance on next poll/refresh.
+      this.log.warn(`emitBalance failed for user ${userId}, tx ${txId}: ${String(err)}`);
+    }
   }
 
   async credit(
@@ -141,7 +149,7 @@ export class LedgerService {
         data: { status: 'REVERSED' },
       });
 
-      return tx.billingTransaction.create({
+      const refundTx = await tx.billingTransaction.create({
         data: {
           userId: orig.userId,
           type: 'REFUND',
@@ -152,13 +160,13 @@ export class LedgerService {
           metadata: { originalTxId, reason } as Prisma.InputJsonValue,
         },
       });
+
+      // Return both tx id and userId so emit doesn't need a second round-trip.
+      return { id: refundTx.id, userId: orig.userId };
     });
 
-    // The inner $transaction returns the newly created REFUND row via tx.billingTransaction.create.
-    // Its .userId matches the original owner — re-read outside the tx to fetch userId for the emit.
-    const refundTx = await this.prisma.billingTransaction.findUnique({ where: { id: result.id } });
-    if (refundTx) await this.emitBalance(refundTx.userId, 'REFUND', result.id);
-    return result;
+    await this.emitBalance(result.userId, 'REFUND', result.id);
+    return { id: result.id };
   }
 
   async getBalance(userId: string): Promise<bigint> {

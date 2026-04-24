@@ -118,25 +118,19 @@ describe('LedgerService', () => {
   });
 
   it('refund credits the inverse and marks original REVERSED', async () => {
-    // First call (inside $transaction): returns the original SPEND tx being refunded.
-    // Second call (outside tx, in emitBalance): returns the newly-created REFUND row so
-    // emitBalance knows whose userId to notify.
-    prisma._txFindUnique
-      .mockResolvedValueOnce({
-        id: 'txOrig',
-        userId: 'u1',
-        type: 'SPEND',
-        amountPlanck: 500n,
-        status: 'COMPLETED',
-      })
-      .mockResolvedValueOnce({
-        id: 'txRefund',
-        userId: 'u1',
-        type: 'REFUND',
-      });
+    // The original SPEND tx lookup happens inside $transaction. userId is now
+    // returned from the transaction, so emitBalance no longer does a second
+    // findUnique — one mock value is enough.
+    prisma._txFindUnique.mockResolvedValue({
+      id: 'txOrig',
+      userId: 'u1',
+      type: 'SPEND',
+      amountPlanck: 500n,
+      status: 'COMPLETED',
+    });
     prisma._walletFindUnique.mockResolvedValue({ userId: 'u1', balancePlanck: 500n });
     prisma._walletUpdate.mockResolvedValue({ userId: 'u1', balancePlanck: 500n });
-    prisma._txCreate.mockResolvedValue({ id: 'txRefund' });
+    prisma._txCreate.mockResolvedValue({ id: 'txRefund', userId: 'u1' });
 
     await service.refund('txOrig', 'openai 5xx');
 
