@@ -35,6 +35,9 @@ model User {
   notes                Note[]
   calendarEvents       CalendarEvent[]
   calendarInvites      CalendarInvite[]
+  wallet               UserWallet?
+  billingTransactions  BillingTransaction[]
+  aiSessions           AiSession[]
 }
 
 model DeviceKey {
@@ -58,28 +61,28 @@ model DeviceKey {
 }
 
 model Profile {
-  id                String     @id @default(uuid())
-  userId            String     @unique
-  firstName         String?
-  lastName          String?
-  middleName        String?
-  dateOfBirth       DateTime?
-  country           String?
-  postalCode        String?
-  walletAddress     String?
-  avatarUrl         String?
-  preferredCurrency String?
-  language          String     @default("en")
-  status            String?
-  createdAt         DateTime   @default(now())
-  updatedAt         DateTime   @updatedAt
-  personalRoomCode  String?    @unique
-  aiTwinEnabled        Boolean   @default(false)
-  aiTwinTimeoutSeconds Int       @default(30)
-  aiTwinPrompt         String?   @db.Text
+  id                   String     @id @default(uuid())
+  userId               String     @unique
+  firstName            String?
+  lastName             String?
+  middleName           String?
+  dateOfBirth          DateTime?
+  country              String?
+  postalCode           String?
+  walletAddress        String?
+  avatarUrl            String?
+  preferredCurrency    String?
+  language             String     @default("en")
+  status               String?
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
+  personalRoomCode     String?    @unique
+  aiTwinEnabled        Boolean    @default(false)
+  aiTwinTimeoutSeconds Int        @default(30)
+  aiTwinPrompt         String?    @db.Text
   aiTwinVoiceId        String?
-  documents         Document[]
-  user              User       @relation(fields: [userId], references: [id])
+  documents            Document[]
+  user                 User       @relation(fields: [userId], references: [id])
 }
 
 model Document {
@@ -198,30 +201,30 @@ model AssistantTranscript {
 }
 
 model Conversation {
-  id           String                    @id @default(uuid())
-  type         ConvType                  @default(DIRECT)
-  createdAt    DateTime                  @default(now())
-  name         String?
-  avatarUrl    String?
-  description  String?
-  createdById  String?
-  updatedAt    DateTime  @updatedAt
-  slowMode      Boolean   @default(false)
-  invitePolicy  String    @default("all")
+  id             String                    @id @default(uuid())
+  type           ConvType                  @default(DIRECT)
+  createdAt      DateTime                  @default(now())
+  name           String?
+  avatarUrl      String?
+  description    String?
+  createdById    String?
+  updatedAt      DateTime                  @updatedAt
+  slowMode       Boolean                   @default(false)
+  invitePolicy   String                    @default("all")
   autoDeleteDays Int?
-  topicsEnabled Boolean   @default(false)
-  participants ConversationParticipant[]
-  messages     Message[]
-  topics       Topic[]
+  topicsEnabled  Boolean                   @default(false)
+  participants   ConversationParticipant[]
+  messages       Message[]
+  topics         Topic[]
 }
 
 model ConversationParticipant {
   id             String       @id @default(uuid())
   conversationId String
   userId         String
-  role           GroupRole  @default(MEMBER)
-  joinedAt       DateTime   @default(now())
-  isMuted        Boolean    @default(false)
+  role           GroupRole    @default(MEMBER)
+  joinedAt       DateTime     @default(now())
+  isMuted        Boolean      @default(false)
   mutedUntil     DateTime?
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
@@ -230,49 +233,49 @@ model ConversationParticipant {
 }
 
 model Message {
-  id             String       @id @default(uuid())
-  conversationId String
-  senderId       String
-  content        String
-  sentAt         DateTime     @default(now())
-  fileUrl        String?
-  fileName       String?
-  fileSize       Int?
-  fileType       String?
-  s3Key          String?
+  id                 String            @id @default(uuid())
+  conversationId     String
+  senderId           String
+  content            String
+  sentAt             DateTime          @default(now())
+  fileUrl            String?
+  fileName           String?
+  fileSize           Int?
+  fileType           String?
+  s3Key              String?
   thumbnailSmallUrl  String?
   thumbnailMediumUrl String?
   thumbnailLargeUrl  String?
-  isDelivered    Boolean      @default(false)
-  isRead         Boolean      @default(false)
-  isSystem       Boolean      @default(false)
-  isEdited       Boolean      @default(false)
-  deletedAt     DateTime?
-  hiddenFor     MessageHidden[]
-  reactions     MessageReaction[]
-  poll          Poll?
-  editedAt       DateTime?
-  fileRecordId   String?
-  threadParentId String?
-  topicId        String?
-  fileRecord     FileRecord? @relation(fields: [fileRecordId], references: [id])
-  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  sender         User         @relation(fields: [senderId], references: [id])
+  isDelivered        Boolean           @default(false)
+  isRead             Boolean           @default(false)
+  isSystem           Boolean           @default(false)
+  isEdited           Boolean           @default(false)
+  deletedAt          DateTime?
+  hiddenFor          MessageHidden[]
+  reactions          MessageReaction[]
+  poll               Poll?
+  editedAt           DateTime?
+  fileRecordId       String?
+  threadParentId     String?
+  topicId            String?
+  fileRecord         FileRecord?       @relation(fields: [fileRecordId], references: [id])
+  conversation       Conversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender             User              @relation(fields: [senderId], references: [id])
 
   @@index([conversationId, sentAt])
 }
 
 model FileRecord {
-  id              String   @id @default(uuid())
-  sha256          String   @unique
-  s3Key           String   @unique
+  id              String    @id @default(uuid())
+  sha256          String    @unique
+  s3Key           String    @unique
   mimeType        String?
   size            Int
   thumbnailSmall  String?
   thumbnailMedium String?
   thumbnailLarge  String?
-  refCount        Int      @default(1)
-  createdAt       DateTime @default(now())
+  refCount        Int       @default(1)
+  createdAt       DateTime  @default(now())
   messages        Message[]
 }
 
@@ -321,55 +324,55 @@ enum ConvType {
 }
 
 model CallLog {
-  id             String    @id @default(uuid())
-  roomName       String    @unique
-  initiatorId    String
-  participantIds String[]
-  startedAt      DateTime  @default(now())
-  answeredAt     DateTime?
-  endedAt        DateTime?
-  durationSec    Int?
-  withAi         Boolean   @default(false)
-  conversationId String?
+  id               String          @id @default(uuid())
+  roomName         String          @unique
+  initiatorId      String
+  participantIds   String[]
+  startedAt        DateTime        @default(now())
+  answeredAt       DateTime?
+  endedAt          DateTime?
+  durationSec      Int?
+  withAi           Boolean         @default(false)
+  conversationId   String?
   // Filled in by ai-twin-agent after a call where the AI twin answered.
   // aiTwinTranscript: JSON array of {role, text, timestamp} turns.
   // aiTwinSummary:    short Russian summary generated via GPT-4o.
   aiTwinTranscript Json?
-  aiTwinSummary    String? @db.Text
-  meetingSummary MeetingSummary?
+  aiTwinSummary    String?         @db.Text
+  meetingSummary   MeetingSummary?
 }
 
 model PublicRoom {
-  id        String    @id @default(uuid())
-  code      String    @unique
-  roomName  String
-  creatorId String?
-  title     String    @default("")
-  createdAt DateTime  @default(now())
-  expiresAt DateTime?
-  isActive  Boolean   @default(true)
+  id           String    @id @default(uuid())
+  code         String    @unique
+  roomName     String
+  creatorId    String?
+  title        String    @default("")
+  createdAt    DateTime  @default(now())
+  expiresAt    DateTime?
+  isActive     Boolean   @default(true)
   passwordHash String?
-  type      String    @default("temporary")
+  type         String    @default("temporary")
 }
 
 model MeetingSummary {
-  id           String   @id @default(uuid())
-  roomName     String
-  callLogId    String?  @unique
-  transcript   String   @db.Text
-  summary      String   @db.Text
-  keyPoints    Json     @default("[]")
-  actionItems  Json     @default("[]")
-  decisions    Json     @default("[]")
-  participants    String[]
-  participantIds  String[]
-  recordingUrl    String?
-  durationSec  Int?
-  status       String   @default("done")
+  id                String   @id @default(uuid())
+  roomName          String
+  callLogId         String?  @unique
+  transcript        String   @db.Text
+  summary           String   @db.Text
+  keyPoints         Json     @default("[]")
+  actionItems       Json     @default("[]")
+  decisions         Json     @default("[]")
+  participants      String[]
+  participantIds    String[]
+  recordingUrl      String?
+  durationSec       Int?
+  status            String   @default("done")
   participantTracks Json     @default("{}")
-  createdAt    DateTime @default(now())
+  createdAt         DateTime @default(now())
 
-  callLog      CallLog? @relation(fields: [callLogId], references: [id])
+  callLog CallLog? @relation(fields: [callLogId], references: [id])
 }
 
 model MessageHidden {
@@ -432,17 +435,15 @@ model ProfileSection {
   @@index([userId])
 }
 
-
-
 model Poll {
-  id             String       @id @default(uuid())
-  messageId      String       @unique
-  question       String
-  isAnonymous    Boolean      @default(false)
-  isMultiple     Boolean      @default(false)
-  createdAt      DateTime     @default(now())
-  options        PollOption[]
-  message        Message      @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  id          String       @id @default(uuid())
+  messageId   String       @unique
+  question    String
+  isAnonymous Boolean      @default(false)
+  isMultiple  Boolean      @default(false)
+  createdAt   DateTime     @default(now())
+  options     PollOption[]
+  message     Message      @relation(fields: [messageId], references: [id], onDelete: Cascade)
 }
 
 model PollOption {
@@ -468,12 +469,12 @@ model PollVote {
 }
 
 model Topic {
-  id             String   @id @default(uuid())
+  id             String       @id @default(uuid())
   conversationId String
   title          String
-  icon           String   @default("💬")
+  icon           String       @default("💬")
   createdBy      String
-  createdAt      DateTime @default(now())
+  createdAt      DateTime     @default(now())
   lastMessageAt  DateTime?
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
@@ -547,14 +548,14 @@ enum CalendarEventType {
 // ─── Calendar Invites ───
 
 model CalendarInvite {
-  id        String            @id @default(uuid())
+  id        String        @id @default(uuid())
   eventId   String
   userId    String
-  status    InviteStatus      @default(PENDING)
-  createdAt DateTime          @default(now())
-  updatedAt DateTime          @updatedAt
-  event     CalendarEvent     @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status    InviteStatus  @default(PENDING)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  event     CalendarEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([eventId, userId])
   @@index([userId, status])
@@ -570,12 +571,12 @@ enum InviteStatus {
 // ─── Contact Aliases ───
 
 model ContactAlias {
-  id        String   @id @default(uuid())
-  ownerId   String
-  targetId  String
+  id         String   @id @default(uuid())
+  ownerId    String
+  targetId   String
   customName String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
   @@unique([ownerId, targetId])
   @@index([ownerId])
@@ -611,16 +612,16 @@ model BlockedUser {
 // ─── Outbound Calling Bot ───
 
 model OutboundCampaign {
-  id             String   @id @default(uuid())
+  id             String         @id @default(uuid())
   userId         String
   conversationId String
   topicId        String
-  status         String   @default("planning")  // planning | calling | analyzing | done | failed
+  status         String         @default("planning") // planning | calling | analyzing | done | failed
   taskText       String
   callPlan       Json?
   summary        Json?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
   calls          OutboundCall[]
 
   @@index([userId])
@@ -628,20 +629,130 @@ model OutboundCampaign {
 }
 
 model OutboundCall {
-  id           String    @id @default(uuid())
+  id           String           @id @default(uuid())
   campaignId   String
-  roomName     String?   @unique
+  roomName     String?          @unique
   businessName String
   phoneNumber  String
-  status       String    @default("pending")  // pending | dialing | in_progress | completed | failed | no_answer
+  status       String           @default("pending") // pending | dialing | in_progress | completed | failed | no_answer
   transcript   Json?
   summary      String?
   recordingUrl String?
   durationSec  Int?
   startedAt    DateTime?
   endedAt      DateTime?
-  createdAt    DateTime  @default(now())
+  createdAt    DateTime         @default(now())
   campaign     OutboundCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
 
   @@index([campaignId])
+}
+
+// ─── Taler AI Billing ───
+
+model AiPricebook {
+  id               String   @id @default(uuid())
+  featureKey       String   @unique
+  unit             String
+  costUsdPerUnit   Decimal  @db.Decimal(12, 8)
+  markupMultiplier Decimal  @default(2.0) @db.Decimal(4, 2)
+  minReservePlanck BigInt
+  updatedAt        DateTime @updatedAt
+}
+
+model BillingConfig {
+  id                 String   @id @default("singleton")
+  talUsdRate         Decimal  @db.Decimal(14, 4)
+  billingEnforced    Boolean  @default(false)
+  welcomeBonusPlanck BigInt   @default(50000000)
+  lastSeenBlock      Int?
+  updatedAt          DateTime @updatedAt
+}
+
+model UserWallet {
+  userId           String   @id
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  custodialAddress String   @unique
+  custodialKeyEnc  String
+  balancePlanck    BigInt   @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+enum TxType {
+  TOPUP_STUB
+  TOPUP_ONCHAIN
+  SPEND
+  REFUND
+  ADMIN_CREDIT
+  ADMIN_DEBIT
+  WITHDRAW
+}
+
+enum TxStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REVERSED
+}
+
+model BillingTransaction {
+  id           String     @id @default(uuid())
+  userId       String
+  /// Immutable audit ledger: blocks user hard-delete by design.
+  /// On GDPR/compliance deletes, archive+anonymize rows manually.
+  user         User       @relation(fields: [userId], references: [id])
+  type         TxType
+  status       TxStatus   @default(COMPLETED)
+  amountPlanck BigInt
+  featureKey   String?
+  sessionId    String?    @db.Uuid
+  session      AiSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  chainTxHash  String?    @unique
+  metadata     Json?
+  createdAt    DateTime   @default(now())
+
+  @@index([userId, createdAt])
+  @@index([sessionId])
+}
+
+model AiSession {
+  id               String               @id @default(uuid()) @db.Uuid
+  userId           String
+  user             User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  featureKey       String
+  contextRef       String?
+  status           String               @default("active")
+  startedAt        DateTime             @default(now())
+  lastMeteredAt    DateTime             @default(now())
+  endedAt          DateTime?
+  totalSpentPlanck BigInt               @default(0)
+  metadata         Json?
+  transactions     BillingTransaction[]
+  usageLogs        UsageLog[]
+
+  @@index([userId, status])
+  @@index([contextRef])
+}
+
+model UserFeatureToggle {
+  userId     String
+  featureKey String
+  enabled    Boolean
+  updatedAt  DateTime @updatedAt
+
+  @@id([userId, featureKey])
+}
+
+model UsageLog {
+  id         String     @id @default(uuid())
+  userId     String
+  sessionId  String?    @db.Uuid
+  session    AiSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  featureKey String
+  unit       String
+  units      Decimal    @db.Decimal(14, 4)
+  reporter   String
+  createdAt  DateTime   @default(now())
+
+  @@index([userId, createdAt])
 }

@@ -1,12 +1,19 @@
 import {
+  Inject,
   Injectable,
   Logger,
   OnModuleInit,
   OnModuleDestroy,
+  forwardRef,
 } from '@nestjs/common';
 import { AgentDispatchClient, RoomServiceClient } from 'livekit-server-sdk';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
+import { GatingService } from '../billing/services/gating.service';
+import { MeteringService } from '../billing/services/metering.service';
+import { FEATURE_KEYS } from '../billing/constants/feature-keys';
+import { InsufficientFundsException } from '../billing/exceptions/insufficient-funds.exception';
+import { FeatureDisabledException } from '../billing/exceptions/feature-disabled.exception';
 
 const LK_HOST = process.env.LIVEKIT_HOST || 'http://localhost:7880';
 const LK_API_KEY = process.env.LIVEKIT_API_KEY || 'lkdevkey';
@@ -99,6 +106,13 @@ export class AiTwinService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
+    // forwardRef mirrors the cycle declared in MessengerModule — BillingModule
+    // depends on MessengerModule for MESSENGER_GATEWAY, and AiTwinService
+    // now depends back on BillingModule for gating/metering.
+    @Inject(forwardRef(() => GatingService))
+    private readonly gating: GatingService,
+    @Inject(forwardRef(() => MeteringService))
+    private readonly metering: MeteringService,
   ) {}
 
   registerEmitters(
@@ -286,6 +300,34 @@ export class AiTwinService implements OnModuleInit, OnModuleDestroy {
       });
     } catch (_) {}
 
+    // Billing gate (Task 14): the twin owner (callee) pays — NOT the caller.
+    // If the owner has no funds / has disabled the feature, we skip dispatch and
+    // return 'unavailable'. The caller UI then falls back to the normal
+    // "no twin" behaviour (keep ringing the human).
+    let billingSessionId: string | null = null;
+    try {
+      const session = await this.gating.startSession(
+        payload.calleeId,
+        FEATURE_KEYS.AI_TWIN,
+        roomName,
+      );
+      billingSessionId = session.id;
+    } catch (err) {
+      if (
+        err instanceof InsufficientFundsException ||
+        err instanceof FeatureDisabledException
+      ) {
+        this.logger.warn(
+          `[acceptOffer] ai-twin not dispatched for callee=${payload.calleeId}: ${err.message}`,
+        );
+        // Drop the stash so we don't keep re-offering a twin that can't pay.
+        await client.del(`ai_twin:offered:${roomName}`);
+        return { ok: false, reason: 'unavailable' };
+      }
+      this.logger.error('[acceptOffer] gating.startSession failed', err);
+      return { ok: false, reason: 'gating_failed' };
+    }
+
     const metadata = JSON.stringify({
       voiceId: payload.voiceId,
       prompt: payload.prompt,
@@ -293,6 +335,7 @@ export class AiTwinService implements OnModuleInit, OnModuleDestroy {
       callerName: payload.callerName,
       calleeUserId: payload.calleeId,
       callerUserId: payload.callerId,
+      billingSessionId,
     });
 
     try {
@@ -300,10 +343,13 @@ export class AiTwinService implements OnModuleInit, OnModuleDestroy {
         metadata,
       });
       this.logger.log(
-        `[acceptOffer] dispatched ${AI_TWIN_AGENT_NAME} to room=${roomName}`,
+        `[acceptOffer] dispatched ${AI_TWIN_AGENT_NAME} to room=${roomName} billingSession=${billingSessionId}`,
       );
     } catch (e) {
       this.logger.error('[acceptOffer] dispatch failed', e);
+      // Clean up the billing session we just opened — otherwise the cron would
+      // keep draining the owner's wallet for a call that never happened.
+      await this.gating.endSession(billingSessionId, 'failed').catch(() => {});
       return { ok: false, reason: 'dispatch_failed' };
     }
 
@@ -356,6 +402,31 @@ export class AiTwinService implements OnModuleInit, OnModuleDestroy {
           data: { withAi: false },
         });
       } catch (_) {}
+
+      // Close the billing session so the cron stops draining the owner's wallet.
+      // The agent's callback would eventually reportUsage + endSession anyway,
+      // but that can arrive seconds later — we want to stop the bleeding now.
+      // We DO NOT reportUsage here because the agent still owns the authoritative
+      // duration number; it'll send the final adjustment in its callback.
+      try {
+        const session = await this.prisma.aiSession.findFirst({
+          where: {
+            contextRef: roomName,
+            featureKey: FEATURE_KEYS.AI_TWIN,
+            status: 'active',
+          },
+          select: { id: true },
+        });
+        if (session) {
+          await this.gating
+            .endSession(session.id, 'completed')
+            .catch(() => {});
+        }
+      } catch (e) {
+        this.logger.warn(
+          `[takeoverCall] endSession lookup failed for room=${roomName}: ${(e as Error).message}`,
+        );
+      }
       return true;
     } catch (e) {
       this.logger.warn(
