@@ -1,9 +1,14 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { SipService } from './sip.service';
 import { AgentDispatchClient, RoomServiceClient, AccessToken } from 'livekit-server-sdk';
 import { v4 as uuidv4 } from 'uuid';
+import { GatingService } from '../billing/services/gating.service';
+import { MeteringService } from '../billing/services/metering.service';
+import { FEATURE_KEYS } from '../billing/constants/feature-keys';
+import { InsufficientFundsException } from '../billing/exceptions/insufficient-funds.exception';
+import { FeatureDisabledException } from '../billing/exceptions/feature-disabled.exception';
 
 const CLAUDE_WORKER_URL = process.env.CLAUDE_WORKER_URL || 'http://5.101.115.184:3033';
 const LK_HOST = process.env.LIVEKIT_HOST || 'http://localhost:7880';
@@ -28,6 +33,12 @@ export class OutboundBotService {
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
     private readonly sip: SipService,
+    // forwardRef mirrors the cycle declared in OutboundBotModule — BillingModule
+    // imports MessengerModule which imports OutboundBotModule.
+    @Inject(forwardRef(() => GatingService))
+    private readonly gating: GatingService,
+    @Inject(forwardRef(() => MeteringService))
+    private readonly metering: MeteringService,
   ) {}
 
   registerEmitter(fn: (target: string, event: string, data: any) => void) {
@@ -286,6 +297,16 @@ export class OutboundBotService {
       } catch (e) {
         if ((e as Error).message === 'CAMPAIGN_PAUSED') {
           this.logger.log(`[resume] Campaign paused during call`);
+          return;
+        }
+        if ((e as Error).message === 'BILLING_INSUFFICIENT') {
+          await this.prisma.outboundCampaign.update({
+            where: { id: campaignId }, data: { status: 'paused' },
+          });
+          await this.updateTopicIcon(topicId, 'paused');
+          await this.postBotMessage(conversationId, topicId,
+            '⏸ Кампания приостановлена — недостаточно средств на балансе. Пополните баланс и нажмите "Продолжить".\n\n[ACTION:Продолжить обзвон]',
+          );
           return;
         }
         await this.postBotMessage(conversationId, topicId, `❌ ${remaining[i].businessName}: ${(e as Error).message}`);
@@ -582,6 +603,19 @@ export class OutboundBotService {
           this.logger.log(`[calls] Campaign paused during call ${i}`);
           return;
         }
+        if ((e as Error).message === 'BILLING_INSUFFICIENT') {
+          // Pause the campaign — the owner needs to top up before we can
+          // spend any more of their balance. Post a system message so the
+          // user sees why things stopped.
+          await this.prisma.outboundCampaign.update({
+            where: { id: campaignId }, data: { status: 'paused' },
+          });
+          await this.updateTopicIcon(topicId, 'paused');
+          await this.postBotMessage(conversationId, topicId,
+            '⏸ Кампания приостановлена — недостаточно средств на балансе. Пополните баланс и нажмите "Продолжить".\n\n[ACTION:Продолжить обзвон]',
+          );
+          return;
+        }
         await this.postBotMessage(conversationId, topicId, `❌ ${calls[i].businessName}: ${(e as Error).message}`);
       }
     }
@@ -597,6 +631,36 @@ export class OutboundBotService {
       data: { campaignId, roomName, businessName: spec.businessName, phoneNumber: spec.phone, status: 'dialing', startedAt: new Date() },
     });
 
+    // Billing gate (Task 15): campaign owner pays per-minute for outbound calls.
+    // Check balance BEFORE allocating a LiveKit room or dispatching the agent —
+    // if the user can't afford the minReserve, skip cleanly and let the caller
+    // (executeCalls / resumeCalls) pause the campaign.
+    let billingSessionId: string;
+    try {
+      const session = await this.gating.startSession(
+        userId,
+        FEATURE_KEYS.OUTBOUND_CALL,
+        call.id,
+      );
+      billingSessionId = session.id;
+    } catch (err) {
+      if (
+        err instanceof InsufficientFundsException ||
+        err instanceof FeatureDisabledException
+      ) {
+        // Roll back the outbound_call row we just created so we don't leave
+        // a phantom "dialing" record hanging around for a call that never left.
+        await this.prisma.outboundCall
+          .update({ where: { id: call.id }, data: { status: 'failed', endedAt: new Date() } })
+          .catch(() => {});
+        this.logger.warn(
+          `[billing] outbound call skipped for user=${userId} campaign=${campaignId}: ${err.message}`,
+        );
+        throw new Error('BILLING_INSUFFICIENT');
+      }
+      throw err;
+    }
+
     await this.rooms.createRoom({ name: roomName, emptyTimeout: 300, maxParticipants: 5 });
     const campaign = await this.prisma.outboundCampaign.findUnique({ where: { id: campaignId } });
     const profile = await this.prisma.profile.findUnique({ where: { userId } });
@@ -606,10 +670,20 @@ export class OutboundBotService {
       businessName: spec.businessName, phoneNumber: spec.phone, questionsToAsk: spec.questionsToAsk,
       taskContext: campaign?.taskText || '', campaignId, callId: call.id,
       ownerName, agentPrompt,
+      // Agent echoes this back in the callback so MeteringService can book
+      // the authoritative debit based on actual duration.
+      billingSessionId,
       callbackUrl: `${BACKEND_URL}/outbound-bot/call-callback`,
     });
 
-    await this.dispatcher.createDispatch(roomName, OUTBOUND_AGENT_NAME, { metadata });
+    try {
+      await this.dispatcher.createDispatch(roomName, OUTBOUND_AGENT_NAME, { metadata });
+    } catch (e) {
+      // Release the billing session we just opened — otherwise the cron would
+      // keep draining the owner's wallet for a call that never actually dispatched.
+      await this.gating.endSession(billingSessionId, 'failed').catch(() => {});
+      throw e;
+    }
 
     if (this.sip.isConfigured()) await this.sip.dialOutbound(roomName, spec.phone);
     else this.logger.warn(`SIP not configured — agent in room ${roomName}`);

@@ -1,10 +1,16 @@
 import { Controller, Post, Get, Body, Param, Headers, HttpException, HttpStatus, UseGuards, Request } from '@nestjs/common';
 import { OutboundBotService } from './outbound-bot.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { GatingService } from '../billing/services/gating.service';
+import { MeteringService } from '../billing/services/metering.service';
 
 @Controller('outbound-bot')
 export class OutboundBotController {
-  constructor(private readonly service: OutboundBotService) {}
+  constructor(
+    private readonly service: OutboundBotService,
+    private readonly gating: GatingService,
+    private readonly metering: MeteringService,
+  ) {}
 
   @UseGuards(JwtAuthGuard)
   @Get('chat')
@@ -50,11 +56,40 @@ export class OutboundBotController {
     @Body() body: {
       callId: string; campaignId: string; transcript: any;
       summary: string; durationSec: number; status: string; recordingUrl?: string;
+      // Task 15: agent echoes the billing session it was dispatched with
+      // and the call duration in minutes so we can finalize the debit.
+      billingSessionId?: string;
+      units?: number;
     },
   ) {
     const expected = process.env.OUTBOUND_CALLBACK_SECRET || 'outbound-secret-2026';
     if (!secret || secret !== expected) throw new HttpException('Invalid secret', HttpStatus.UNAUTHORIZED);
     await this.service.handleCallCallback(body);
+
+    // Finalize billing: agent-reported duration is authoritative over the
+    // cron estimate. reportUsage debits any positive diff; endSession flips
+    // the session to 'completed'. Wrapped in try/catch so a metering failure
+    // never propagates into the agent — the transcript save already succeeded.
+    if (
+      body.billingSessionId &&
+      typeof body.units === 'number' &&
+      Number.isFinite(body.units) &&
+      body.units >= 0
+    ) {
+      try {
+        await this.metering.reportUsage(
+          body.billingSessionId,
+          body.units,
+          'outbound-call-agent',
+        );
+      } catch (_) {
+        // reportUsage throws on unknown sessionId — swallow to keep the callback idempotent.
+      }
+      await this.gating
+        .endSession(body.billingSessionId, 'completed')
+        .catch(() => {});
+    }
+
     return { ok: true };
   }
 }

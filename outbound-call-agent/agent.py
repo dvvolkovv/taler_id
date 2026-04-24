@@ -163,6 +163,16 @@ async def _post_callback(metadata: dict, transcript: list, summary: str, duratio
         "durationSec": duration_sec,
         "status": "completed",
     }
+
+    # Task 15: echo back the billing session + actual duration in minutes so the
+    # backend can book the final debit via MeteringService.reportUsage. Only
+    # include when the dispatcher threaded a session through metadata — older
+    # dispatches (before billing) won't have this, and we must stay compatible.
+    billing_session_id = metadata.get("billingSessionId")
+    if billing_session_id:
+        payload["billingSessionId"] = billing_session_id
+        payload["units"] = max(0.0, round(duration_sec / 60.0, 4))
+
     headers = {
         "Content-Type": "application/json",
         "X-Outbound-Secret": CALLBACK_SECRET,
@@ -203,7 +213,10 @@ async def entrypoint(ctx: JobContext):
     logger.info("Outbound call: room=%s business=%s", ctx.room.name, business_name)
 
     import time
-    start_time = time.time()
+    # monotonic() is unaffected by wall-clock jumps (NTP sync, DST), which
+    # matters for the duration we bill on — wall-clock could otherwise under-
+    # or over-report the call length by minutes in pathological cases.
+    start_time = time.monotonic()
 
     session = AgentSession(
         vad=silero.VAD.load(),
@@ -233,7 +246,7 @@ async def entrypoint(ctx: JobContext):
 
     async def on_shutdown():
         try:
-            duration_sec = int(time.time() - start_time)
+            duration_sec = int(time.monotonic() - start_time)
             history = session.history.to_dict()
             messages = history.get("items", [])
             transcript_turns = []
