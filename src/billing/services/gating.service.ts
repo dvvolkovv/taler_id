@@ -1,7 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PricingService } from './pricing.service';
 import { LedgerService } from './ledger.service';
+import type { MeteringGateway } from './metering.service';
 import { InsufficientFundsException } from '../exceptions/insufficient-funds.exception';
 import { FeatureDisabledException } from '../exceptions/feature-disabled.exception';
 
@@ -15,6 +16,7 @@ export class GatingService {
     private readonly prisma: PrismaService,
     private readonly pricing: PricingService,
     private readonly ledger: LedgerService,
+    @Inject('MESSENGER_GATEWAY') private readonly gateway: MeteringGateway,
   ) {}
 
   async startSession(
@@ -46,7 +48,7 @@ export class GatingService {
       );
     }
 
-    return this.prisma.aiSession.create({
+    const session = await this.prisma.aiSession.create({
       data: {
         userId,
         featureKey,
@@ -55,12 +57,31 @@ export class GatingService {
       },
       select: { id: true },
     });
+
+    // Notify all of this user's sockets that an AI session just became active.
+    // Mobile can use this to show a "session live" indicator or close any pre-session modal.
+    this.gateway.emitToUser(userId, 'ai_session_started', {
+      sessionId: session.id,
+      featureKey,
+    });
+
+    return session;
   }
 
   async endSession(sessionId: string, reason: SessionTerminationReason): Promise<void> {
-    await this.prisma.aiSession.update({
+    const session = await this.prisma.aiSession.update({
       where: { id: sessionId },
       data: { status: reason, endedAt: new Date() },
     });
+
+    // Only emit ai_session_terminated for non-completed ends. Normal completion
+    // is handled by the client-initiated flow and needs no push.
+    if (reason !== 'completed') {
+      this.gateway.emitToUser(session.userId, 'ai_session_terminated', {
+        sessionId,
+        reason: reason === 'terminated_no_funds' ? 'no_funds' : 'failed',
+        featureKey: session.featureKey,
+      });
+    }
   }
 }

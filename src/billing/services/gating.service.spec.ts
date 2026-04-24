@@ -11,6 +11,7 @@ describe('GatingService', () => {
   let pricing: any;
   let ledger: any;
   let prisma: any;
+  let gateway: { emitToUser: jest.Mock };
 
   beforeEach(async () => {
     pricing = {
@@ -23,6 +24,7 @@ describe('GatingService', () => {
       aiSession: { create: jest.fn(), update: jest.fn() },
       billingConfig: { findUnique: jest.fn() },
     };
+    gateway = { emitToUser: jest.fn() };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -30,6 +32,7 @@ describe('GatingService', () => {
         { provide: PricingService, useValue: pricing },
         { provide: LedgerService, useValue: ledger },
         { provide: PrismaService, useValue: prisma },
+        { provide: 'MESSENGER_GATEWAY', useValue: gateway },
       ],
     }).compile();
 
@@ -77,6 +80,10 @@ describe('GatingService', () => {
       select: { id: true },
     });
     expect(session.id).toBe('s1');
+    expect(gateway.emitToUser).toHaveBeenCalledWith('u1', 'ai_session_started', {
+      sessionId: 's1',
+      featureKey: 'voice_assistant',
+    });
   });
 
   it('treats missing toggle row as enabled (default-on)', async () => {
@@ -112,14 +119,57 @@ describe('GatingService', () => {
     expect(s.id).toBe('sBoundary');
   });
 
-  it('endSession marks completed', async () => {
-    prisma.aiSession.update.mockResolvedValue({ id: 's1', status: 'completed' });
+  it('endSession marks completed and does NOT emit ai_session_terminated', async () => {
+    prisma.aiSession.update.mockResolvedValue({
+      id: 's1',
+      userId: 'u1',
+      featureKey: 'voice_assistant',
+      status: 'completed',
+    });
 
     await service.endSession('s1', 'completed');
 
     expect(prisma.aiSession.update).toHaveBeenCalledWith({
       where: { id: 's1' },
       data: { status: 'completed', endedAt: expect.any(Date) },
+    });
+    // Normal completion is a client-driven flow — no push event needed.
+    expect(gateway.emitToUser).not.toHaveBeenCalledWith(
+      'u1',
+      'ai_session_terminated',
+      expect.anything(),
+    );
+  });
+
+  it('endSession emits ai_session_terminated with reason=no_funds when terminated', async () => {
+    prisma.aiSession.update.mockResolvedValue({
+      id: 's1',
+      userId: 'u1',
+      featureKey: 'voice_assistant',
+    });
+
+    await service.endSession('s1', 'terminated_no_funds');
+
+    expect(gateway.emitToUser).toHaveBeenCalledWith('u1', 'ai_session_terminated', {
+      sessionId: 's1',
+      reason: 'no_funds',
+      featureKey: 'voice_assistant',
+    });
+  });
+
+  it('endSession emits ai_session_terminated with reason=failed on failed', async () => {
+    prisma.aiSession.update.mockResolvedValue({
+      id: 's9',
+      userId: 'u9',
+      featureKey: 'ai_twin',
+    });
+
+    await service.endSession('s9', 'failed');
+
+    expect(gateway.emitToUser).toHaveBeenCalledWith('u9', 'ai_session_terminated', {
+      sessionId: 's9',
+      reason: 'failed',
+      featureKey: 'ai_twin',
     });
   });
 });

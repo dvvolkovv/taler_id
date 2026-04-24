@@ -1,6 +1,7 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { InsufficientFundsException } from '../exceptions/insufficient-funds.exception';
+import type { MeteringGateway } from './metering.service';
 import type { TxType, Prisma } from '@prisma/client';
 
 /**
@@ -15,7 +16,27 @@ import type { TxType, Prisma } from '@prisma/client';
  */
 @Injectable()
 export class LedgerService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject('MESSENGER_GATEWAY') private readonly gateway: MeteringGateway,
+  ) {}
+
+  /**
+   * Emit a billing_balance_changed event to every socket of this user after
+   * a successful credit/debit/refund commit. Reads balance post-commit so
+   * clients see the authoritative new value.
+   */
+  private async emitBalance(userId: string, reason: string, txId: string): Promise<void> {
+    const w = await this.prisma.userWallet.findUnique({
+      where: { userId },
+      select: { balancePlanck: true },
+    });
+    this.gateway.emitToUser(userId, 'billing_balance_changed', {
+      balancePlanck: w?.balancePlanck.toString(),
+      reason,
+      txId,
+    });
+  }
 
   async credit(
     userId: string,
@@ -26,7 +47,7 @@ export class LedgerService {
   ): Promise<{ id: string }> {
     if (amountPlanck <= 0n) throw new Error('credit amount must be > 0');
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT 1 FROM "UserWallet" WHERE "userId" = ${userId} FOR UPDATE`;
 
       const wallet = await tx.userWallet.findUnique({ where: { userId } });
@@ -50,6 +71,9 @@ export class LedgerService {
         },
       });
     });
+
+    await this.emitBalance(userId, type, result.id);
+    return result;
   }
 
   async debit(
@@ -60,7 +84,7 @@ export class LedgerService {
   ): Promise<{ id: string }> {
     if (amountPlanck <= 0n) throw new Error('debit amount must be > 0');
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT 1 FROM "UserWallet" WHERE "userId" = ${userId} FOR UPDATE`;
 
       const wallet = await tx.userWallet.findUnique({ where: { userId } });
@@ -91,10 +115,13 @@ export class LedgerService {
         },
       });
     });
+
+    await this.emitBalance(userId, type, result.id);
+    return result;
   }
 
   async refund(originalTxId: string, reason: string): Promise<{ id: string }> {
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       // Lock the original transaction row BEFORE reading status, to serialize concurrent refund attempts.
       // BillingTransaction.id is TEXT (cuid/uuid), so no ::uuid cast needed.
       await tx.$executeRaw`SELECT 1 FROM "BillingTransaction" WHERE id = ${originalTxId} FOR UPDATE`;
@@ -126,6 +153,12 @@ export class LedgerService {
         },
       });
     });
+
+    // The inner $transaction returns the newly created REFUND row via tx.billingTransaction.create.
+    // Its .userId matches the original owner — re-read outside the tx to fetch userId for the emit.
+    const refundTx = await this.prisma.billingTransaction.findUnique({ where: { id: result.id } });
+    if (refundTx) await this.emitBalance(refundTx.userId, 'REFUND', result.id);
+    return result;
   }
 
   async getBalance(userId: string): Promise<bigint> {

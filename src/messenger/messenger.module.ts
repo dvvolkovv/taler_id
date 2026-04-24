@@ -26,6 +26,12 @@ import { VideoTranscodeService } from '../common/video-transcode.service';
     FileStorageService,
     ThumbnailService,
     VideoTranscodeService,
+    // Expose MessengerGateway under the 'MESSENGER_GATEWAY' token so BillingModule
+    // (and any other feature module) can @Inject('MESSENGER_GATEWAY') without a
+    // hard type dependency on MessengerGateway itself — keeps the billing code
+    // decoupled and testable via a small MeteringGateway interface.
+    { provide: 'MESSENGER_GATEWAY', useExisting: MessengerGateway },
   ],
+  exports: [MessengerGateway, 'MESSENGER_GATEWAY'],
 })
 export class MessengerModule {}

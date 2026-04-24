@@ -14,6 +14,7 @@ describe('LedgerService', () => {
     const txCreate = jest.fn();
     const txFindUnique = jest.fn();
     const txUpdate = jest.fn();
+    const gatewayMock = { emitToUser: jest.fn() };
 
     prisma = {
       $transaction: jest.fn(async (fn: any) =>
@@ -34,10 +35,15 @@ describe('LedgerService', () => {
       _txCreate: txCreate,
       _txFindUnique: txFindUnique,
       _txUpdate: txUpdate,
+      _gatewayEmit: gatewayMock.emitToUser,
     };
 
     const moduleRef = await Test.createTestingModule({
-      providers: [LedgerService, { provide: PrismaService, useValue: prisma }],
+      providers: [
+        LedgerService,
+        { provide: PrismaService, useValue: prisma },
+        { provide: 'MESSENGER_GATEWAY', useValue: gatewayMock },
+      ],
     }).compile();
 
     service = moduleRef.get(LedgerService);
@@ -63,6 +69,12 @@ describe('LedgerService', () => {
           metadata: { note: 'test' },
         }),
       }),
+    );
+    // emitBalance fires after commit with the post-commit balance (fetched outside tx).
+    expect(prisma._gatewayEmit).toHaveBeenCalledWith(
+      'u1',
+      'billing_balance_changed',
+      expect.objectContaining({ reason: 'TOPUP_STUB', txId: 'tx1' }),
     );
   });
 
@@ -98,17 +110,31 @@ describe('LedgerService', () => {
         }),
       }),
     );
+    expect(prisma._gatewayEmit).toHaveBeenCalledWith(
+      'u1',
+      'billing_balance_changed',
+      expect.objectContaining({ reason: 'SPEND', txId: 'tx2' }),
+    );
   });
 
   it('refund credits the inverse and marks original REVERSED', async () => {
-    prisma._txFindUnique.mockResolvedValue({
-      id: 'txOrig',
-      userId: 'u1',
-      type: 'SPEND',
-      amountPlanck: 500n,
-      status: 'COMPLETED',
-    });
-    prisma._walletFindUnique.mockResolvedValue({ userId: 'u1', balancePlanck: 0n });
+    // First call (inside $transaction): returns the original SPEND tx being refunded.
+    // Second call (outside tx, in emitBalance): returns the newly-created REFUND row so
+    // emitBalance knows whose userId to notify.
+    prisma._txFindUnique
+      .mockResolvedValueOnce({
+        id: 'txOrig',
+        userId: 'u1',
+        type: 'SPEND',
+        amountPlanck: 500n,
+        status: 'COMPLETED',
+      })
+      .mockResolvedValueOnce({
+        id: 'txRefund',
+        userId: 'u1',
+        type: 'REFUND',
+      });
+    prisma._walletFindUnique.mockResolvedValue({ userId: 'u1', balancePlanck: 500n });
     prisma._walletUpdate.mockResolvedValue({ userId: 'u1', balancePlanck: 500n });
     prisma._txCreate.mockResolvedValue({ id: 'txRefund' });
 
@@ -126,6 +152,11 @@ describe('LedgerService', () => {
           metadata: expect.objectContaining({ originalTxId: 'txOrig', reason: 'openai 5xx' }),
         }),
       }),
+    );
+    expect(prisma._gatewayEmit).toHaveBeenCalledWith(
+      'u1',
+      'billing_balance_changed',
+      expect.objectContaining({ reason: 'REFUND', txId: 'txRefund' }),
     );
   });
 
