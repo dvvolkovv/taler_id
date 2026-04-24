@@ -823,10 +823,11 @@ export class VoiceService {
         metadata: { meetingId, durationMin: whisperMinutes, trackCount },
       });
     } catch (err) {
-      // Debit failed (insufficient funds) — revert "processing" and rethrow.
+      // Debit failed (insufficient funds) before Whisper ran — mark the meeting
+      // as failed so the UI doesn't show stale "processing" or misleading "done".
       await this.gating.endSession(whisperSession.id, 'failed').catch(() => {});
       await this.prisma.meetingSummary
-        .update({ where: { id: meetingId }, data: { status: 'done' } })
+        .update({ where: { id: meetingId }, data: { status: 'failed' } })
         .catch(() => {});
       throw err;
     }
@@ -887,6 +888,14 @@ export class VoiceService {
           }
         }
 
+        // If every track failed (per-track catches swallow errors), we'd end up with
+        // an empty transcript, skip GPT-4o, and silently mark the session completed —
+        // leaving the user charged for N tracks × duration with nothing to show.
+        // Throw so the outer catch refunds and marks the meeting failed.
+        if (allSegments.length === 0) {
+          throw new Error('diarization_all_tracks_failed: no transcript produced');
+        }
+
         // Sort by timestamp and format
         allSegments.sort((a, b) => a.start - b.start);
         transcript = allSegments
@@ -913,7 +922,6 @@ export class VoiceService {
 
         if (!whisperRes.ok) {
           const errText = await whisperRes.text();
-          await this.prisma.meetingSummary.update({ where: { id: meetingId }, data: { status: 'done' } });
           throw new Error(`Whisper error ${whisperRes.status}: ${errText}`);
         }
 
@@ -929,8 +937,13 @@ export class VoiceService {
       }
       await this.gating.endSession(whisperSession.id, 'completed');
     } catch (err) {
-      // Whisper failed (single-path rethrow; diarization path catches per-track internally
-      // and never throws, so this branch only hits the mixed-recording error above).
+      // Transcription failed — covers both the single-mixed path (Whisper HTTP error)
+      // and the diarization path (all tracks failed → we throw above). Mark the
+      // meeting as failed so UI stops showing "processing", refund the pre-debit,
+      // and close the gating session.
+      await this.prisma.meetingSummary
+        .update({ where: { id: meetingId }, data: { status: 'failed' } })
+        .catch(() => {});
       await this.ledger
         .refund(whisperTx.id, `whisper error: ${String(err).slice(0, 200)}`)
         .catch(() => {});
@@ -980,6 +993,8 @@ export class VoiceService {
           );
 
           try {
+            // Zero tokens happens only when GPT-4o returns an empty response (edge case,
+            // already logged). Skipping the debit is intentional — don't charge for nothing.
             if (summaryCost > 0n) {
               await this.ledger.debit(userId, summaryCost, 'SPEND', {
                 featureKey: FEATURE_KEYS.MEETING_SUMMARY,
