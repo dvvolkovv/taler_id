@@ -1,15 +1,20 @@
-import { Body, Controller, Post, Get, Delete, Param, Query, UseGuards, Headers, UseInterceptors, UploadedFile, HttpException, HttpStatus } from "@nestjs/common";
+import { Body, Controller, Post, Get, Delete, Param, Query, UseGuards, UseFilters, Headers, UseInterceptors, UploadedFile, HttpException, HttpStatus } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
 import { VoiceService } from "./voice.service";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { FileStorageService } from "../common/file-storage.service";
+import { BillingExceptionFilter } from "../billing/filters/billing-exception.filter";
+import { GatingService } from "../billing/services/gating.service";
+import { MeteringService } from "../billing/services/metering.service";
 
 @Controller("voice")
 export class VoiceController {
   constructor(
     private readonly service: VoiceService,
     private readonly fileStorage: FileStorageService,
+    private readonly gating: GatingService,
+    private readonly metering: MeteringService,
   ) {}
 
   @Post("rooms")
@@ -96,8 +101,26 @@ export class VoiceController {
 
   @Post("session")
   @UseGuards(JwtAuthGuard)
+  @UseFilters(BillingExceptionFilter)
   createVoiceSession(@CurrentUser() user: any) {
     return this.service.createVoiceSession(user.sub);
+  }
+
+  @Post("session/:sessionId/close")
+  @UseGuards(JwtAuthGuard)
+  @UseFilters(BillingExceptionFilter)
+  async closeVoiceSession(
+    @CurrentUser() user: any,
+    @Param("sessionId") sessionId: string,
+    @Body() body: { durationSec: number },
+  ) {
+    const rawDuration = (body as { durationSec?: unknown })?.durationSec;
+    const durationSec =
+      typeof rawDuration === "number" && Number.isFinite(rawDuration) && rawDuration >= 0
+        ? rawDuration
+        : 0;
+    await this.service.closeVoiceSession(user.sub, sessionId, durationSec);
+    return { ok: true };
   }
 
   @Get("call-history")
@@ -141,6 +164,10 @@ export class VoiceController {
       roomName: string;
       transcript: unknown;
       summary: string;
+      // Task 14: agent reports the billing session it was dispatched with
+      // and the call duration in minutes so we can adjust the final debit.
+      billingSessionId?: string;
+      units?: number;
     },
   ) {
     const expected = process.env.AI_TWIN_CALLBACK_SECRET;
@@ -161,6 +188,35 @@ export class VoiceController {
       body.transcript ?? null,
       body.summary ?? "",
     );
+
+    // Finalize billing: agent's reported duration is authoritative over the
+    // cron estimate. reportUsage debits any positive diff; endSession flips
+    // status to 'completed'. If the session was already ended by takeoverCall
+    // (human picked up mid-call), reportUsage still works — it does not
+    // require an active session.
+    const MAX_UNITS_PER_REPORT = 24 * 60; // mirror ReportUsageDto cap on /metering/report
+    if (
+      body.billingSessionId &&
+      typeof body.units === "number" &&
+      Number.isFinite(body.units) &&
+      body.units >= 0
+    ) {
+      const safeUnits = Math.min(body.units, MAX_UNITS_PER_REPORT);
+      try {
+        await this.metering.reportUsage(
+          body.billingSessionId,
+          safeUnits,
+          "ai-twin-agent",
+        );
+      } catch (_) {
+        // reportUsage throws on unknown sessionId — swallow to keep the
+        // agent callback idempotent. The core transcript save already succeeded.
+      }
+      await this.gating
+        .endSession(body.billingSessionId, "completed")
+        .catch(() => {});
+    }
+
     return { ok: true };
   }
 
@@ -309,8 +365,9 @@ export class VoiceController {
 
   @Post("recordings/:id/transcribe")
   @UseGuards(JwtAuthGuard)
-  async transcribeRecording(@Param("id") id: string) {
-    return this.service.transcribeExistingRecording(id);
+  @UseFilters(BillingExceptionFilter)
+  async transcribeRecording(@Param("id") id: string, @CurrentUser() user: any) {
+    return this.service.transcribeExistingRecording(user.sub, id);
   }
   // ─── Hold Music ───
 
