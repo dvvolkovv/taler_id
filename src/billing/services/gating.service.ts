@@ -5,6 +5,7 @@ import { LedgerService } from './ledger.service';
 import type { MeteringGateway } from './metering.service';
 import { InsufficientFundsException } from '../exceptions/insufficient-funds.exception';
 import { FeatureDisabledException } from '../exceptions/feature-disabled.exception';
+import { WalletService } from '../../blockchain/wallet.service';
 
 export type SessionTerminationReason = 'completed' | 'terminated_no_funds' | 'failed';
 
@@ -17,6 +18,7 @@ export class GatingService {
     private readonly pricing: PricingService,
     private readonly ledger: LedgerService,
     @Inject('MESSENGER_GATEWAY') private readonly gateway: MeteringGateway,
+    private readonly wallet: WalletService,
   ) {}
 
   async startSession(
@@ -24,6 +26,10 @@ export class GatingService {
     featureKey: string,
     contextRef?: string,
   ): Promise<{ id: string }> {
+    // Ensure a wallet exists before any balance check or session creation. This is
+    // idempotent — if the wallet already exists, it's a single findUnique.
+    await this.wallet.getOrCreate(userId);
+
     const cfg = await this.pricing.getConfig();
     const enforced = cfg.billingEnforced;
 

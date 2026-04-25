@@ -5,6 +5,7 @@ import { LedgerService } from './ledger.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { InsufficientFundsException } from '../exceptions/insufficient-funds.exception';
 import { FeatureDisabledException } from '../exceptions/feature-disabled.exception';
+import { WalletService } from '../../blockchain/wallet.service';
 
 describe('GatingService', () => {
   let service: GatingService;
@@ -12,6 +13,7 @@ describe('GatingService', () => {
   let ledger: any;
   let prisma: any;
   let gateway: { emitToUser: jest.Mock };
+  let wallet: { getOrCreate: jest.Mock };
 
   beforeEach(async () => {
     pricing = {
@@ -25,6 +27,7 @@ describe('GatingService', () => {
       billingConfig: { findUnique: jest.fn() },
     };
     gateway = { emitToUser: jest.fn() };
+    wallet = { getOrCreate: jest.fn() };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -33,6 +36,7 @@ describe('GatingService', () => {
         { provide: LedgerService, useValue: ledger },
         { provide: PrismaService, useValue: prisma },
         { provide: 'MESSENGER_GATEWAY', useValue: gateway },
+        { provide: WalletService, useValue: wallet },
       ],
     }).compile();
 

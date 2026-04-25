@@ -26,7 +26,7 @@ export class SipService {
           participantIdentity: `sip-${phoneNumber}`,
           participantName: phoneNumber,
           waitUntilAnswered: true,
-          timeout: 30,
+          timeout: 90,
         },
       );
       this.logger.log(`[SIP] Call connected: ${result?.participantIdentity}`);

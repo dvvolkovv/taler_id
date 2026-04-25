@@ -213,6 +213,28 @@ export class FcmService {
     }
   }
 
+  async sendKeyUpdate(userId: string): Promise<void> {
+    if (!this.initialized) return;
+    try {
+      await admin.messaging().send({
+        topic: `mesh-keys/${userId}`,
+        data: {
+          type: 'mesh_key_update',
+          userId,
+          ts: String(Date.now()),
+        },
+        // Data-only push — no notification block intentionally.
+        android: { priority: 'high' as const },
+        apns: {
+          payload: { aps: { contentAvailable: true } },
+          headers: { 'apns-priority': '5', 'apns-push-type': 'background' },
+        },
+      });
+    } catch (e) {
+      this.logger.warn(`sendKeyUpdate failed for ${userId}: ${e}`);
+    }
+  }
+
   async sendCallCancelled(fcmToken: string, roomName: string, fromName?: string): Promise<void> {
     if (!this.initialized || !fcmToken) return;
     try {

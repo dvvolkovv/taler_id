@@ -24,6 +24,7 @@ model User {
   lastSeen             DateTime?
   assistantTranscripts AssistantTranscript[]
   auditLogs            AuditLog[]
+  deviceKeys           DeviceKey[]
   kycRecord            KycRecord?
   profile              Profile?
   profileSections      ProfileSection[]
@@ -37,6 +38,26 @@ model User {
   wallet               UserWallet?
   billingTransactions  BillingTransaction[]
   aiSessions           AiSession[]
+}
+
+model DeviceKey {
+  id          String    @id @default(uuid())
+  userId      String
+  devicePk    String    @unique  // hex-encoded 32-byte X25519 public key
+  userPk      String?             // hex 64 chars, Ed25519 UserIdentityKey
+  algorithm   String    @default("X25519")
+  validUntil  DateTime
+  certificate String    @db.Text  // full JSON self-signed cert (for clients to verify)
+  signature   String              // hex Ed25519 signature (redundant with certificate JSON but indexed)
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, revokedAt])
+  @@index([userPk])
 }
 
 model Profile {
@@ -237,6 +258,7 @@ model Message {
   fileRecordId       String?
   threadParentId     String?
   topicId            String?
+  metadata           Json?
   fileRecord         FileRecord?       @relation(fields: [fileRecordId], references: [id])
   conversation       Conversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sender             User              @relation(fields: [senderId], references: [id])
