@@ -37,6 +37,20 @@ try {
   console.warn('[RECORDER] LiveKit RTC not available:', e.message);
 }
 
+// ─── Timeout helpers ─────────────────────────────────────
+
+/** Dynamic ffmpeg timeout: 60s base + 30s per 100 MB of input, min 60s */
+function calcFfmpegTimeout(inputBytes) {
+  const mb = inputBytes / (1024 * 1024);
+  return Math.max(60000, 60000 + Math.ceil(mb / 100) * 30000);
+}
+
+/** Dynamic mix timeout: 120s base + 20s per input file + 30s per 100 MB total */
+function calcMixTimeout(inputFiles, totalBytes) {
+  const mb = totalBytes / (1024 * 1024);
+  return Math.max(120000, 120000 + inputFiles * 20000 + Math.ceil(mb / 100) * 30000);
+}
+
 // ─── Public API ──────────────────────────────────────────
 
 async function startRecording(roomName, withAi = true) {
@@ -281,76 +295,94 @@ async function processAndSave(session) {
     console.warn('[RECORDER] Failed to save pending meeting:', e.message);
   }
 
+  let hadErrors = false;
+
   try {
     // 1. For each participant: convert PCM tracks → OGG, mix if multiple tracks
+    //    Process SEQUENTIALLY with per-participant error handling
     const audioFiles = []; // { identity, name, oggPath, oggSize }
     for (const [identity, tracks] of byIdentity) {
       const name = tracks[0].name;
 
-      if (tracks.length === 1) {
-        // Single track — straightforward convert
-        const entry = tracks[0];
-        const pcmSizeMB = (entry.bytesWritten / 1024 / 1024).toFixed(1);
-        console.log('[RECORDER]', name, ': 1 track,', pcmSizeMB, 'MB PCM');
-
-        const oggPath = path.join(tmpDir, `${identity}.ogg`);
-        await ffmpegConvert(entry.pcmPath, oggPath, SAMPLE_RATE, CHANNELS);
-        const oggSize = fs.statSync(oggPath).size;
-        console.log('[RECORDER]', name, ':', (oggSize / 1024 / 1024).toFixed(1), 'MB OGG');
-        audioFiles.push({ identity, name, oggPath, oggSize });
-
-        // Delete PCM
-        try { fs.unlinkSync(entry.pcmPath); } catch (_) {}
-      } else {
-        // Multiple tracks — convert each to OGG, then mix them
-        console.log('[RECORDER]', name, ':', tracks.length, 'tracks');
-        const trackOggs = [];
-        for (let i = 0; i < tracks.length; i++) {
-          const entry = tracks[i];
+      try {
+        if (tracks.length === 1) {
+          // Single track — straightforward convert
+          const entry = tracks[0];
           const pcmSizeMB = (entry.bytesWritten / 1024 / 1024).toFixed(1);
-          console.log('[RECORDER]   track', i, ':', pcmSizeMB, 'MB PCM');
+          const timeout = calcFfmpegTimeout(entry.bytesWritten);
+          console.log('[RECORDER]', name, ': 1 track,', pcmSizeMB, 'MB PCM (timeout:', Math.round(timeout/1000), 's)');
 
-          const trackOgg = path.join(tmpDir, `${identity}_t${i}.ogg`);
-          await ffmpegConvert(entry.pcmPath, trackOgg, SAMPLE_RATE, CHANNELS);
-          trackOggs.push(trackOgg);
+          const oggPath = path.join(tmpDir, `${identity}.ogg`);
+          await ffmpegConvert(entry.pcmPath, oggPath, SAMPLE_RATE, CHANNELS, timeout);
+          const oggSize = fs.statSync(oggPath).size;
+          console.log('[RECORDER]', name, ':', (oggSize / 1024 / 1024).toFixed(1), 'MB OGG');
+          audioFiles.push({ identity, name, oggPath, oggSize });
 
-          // Delete PCM
+          // Delete PCM only after successful conversion
           try { fs.unlinkSync(entry.pcmPath); } catch (_) {}
-        }
+        } else {
+          // Multiple tracks — convert each to OGG, then mix them
+          console.log('[RECORDER]', name, ':', tracks.length, 'tracks');
+          const trackOggs = [];
+          for (let i = 0; i < tracks.length; i++) {
+            const entry = tracks[i];
+            const pcmSizeMB = (entry.bytesWritten / 1024 / 1024).toFixed(1);
+            const timeout = calcFfmpegTimeout(entry.bytesWritten);
+            console.log('[RECORDER]   track', i, ':', pcmSizeMB, 'MB PCM (timeout:', Math.round(timeout/1000), 's)');
 
-        // Mix all tracks of this participant into one OGG
-        const mixedOgg = path.join(tmpDir, `${identity}_mixed.ogg`);
-        await ffmpegMixTracks(trackOggs, mixedOgg);
-        const oggSize = fs.statSync(mixedOgg).size;
-        console.log('[RECORDER]', name, ': mixed', tracks.length, 'tracks →', (oggSize / 1024 / 1024).toFixed(1), 'MB OGG');
-        audioFiles.push({ identity, name, oggPath: mixedOgg, oggSize });
+            const trackOgg = path.join(tmpDir, `${identity}_t${i}.ogg`);
+            await ffmpegConvert(entry.pcmPath, trackOgg, SAMPLE_RATE, CHANNELS, timeout);
+            trackOggs.push(trackOgg);
 
-        // Cleanup individual track OGGs
-        for (const t of trackOggs) {
-          try { fs.unlinkSync(t); } catch (_) {}
+            // Delete PCM only after successful conversion
+            try { fs.unlinkSync(entry.pcmPath); } catch (_) {}
+          }
+
+          // Mix all tracks of this participant into one OGG
+          const mixedOgg = path.join(tmpDir, `${identity}_mixed.ogg`);
+          await ffmpegMixTracks(trackOggs, mixedOgg);
+          const oggSize = fs.statSync(mixedOgg).size;
+          console.log('[RECORDER]', name, ': mixed', tracks.length, 'tracks →', (oggSize / 1024 / 1024).toFixed(1), 'MB OGG');
+          audioFiles.push({ identity, name, oggPath: mixedOgg, oggSize });
+
+          // Cleanup individual track OGGs
+          for (const t of trackOggs) {
+            try { fs.unlinkSync(t); } catch (_) {}
+          }
         }
+      } catch (e) {
+        // Per-participant error — log and continue with remaining participants
+        hadErrors = true;
+        console.error('[RECORDER] FAILED to process participant', name, '(' + identity + '):', e.message);
+        console.error('[RECORDER] PCM files preserved in:', tmpDir);
+        // Do NOT delete PCM files for this participant — leave for manual recovery
       }
     }
 
-    // 2. Mix all participant audio into a single MP3, upload to S3 via backend
-    // NOTE: Transcription and summarization are done post-hoc via the app's "Протокол" button
+    // 2. Mix all successfully converted participant audio into a single MP3, upload to S3
     let recordingUrl = null;
     if (audioFiles.length > 0) {
       try {
         const recId = uuidv4();
         const outMp3 = path.join(tmpDir, recId + '.mp3');
+        const totalOggBytes = audioFiles.reduce((sum, f) => sum + f.oggSize, 0);
+
         if (audioFiles.length === 1) {
+          const timeout = calcMixTimeout(1, totalOggBytes);
+          console.log('[RECORDER] Converting single OGG to MP3 (timeout:', Math.round(timeout/1000), 's)');
           await new Promise((resolve, reject) => {
             execFile('ffmpeg', [
               '-y', '-i', audioFiles[0].oggPath,
               '-c:a', 'libmp3lame', '-q:a', '4',
               outMp3,
-            ], { timeout: 120000 }, (err, _stdout, stderr) => {
+            ], { timeout }, (err, _stdout, stderr) => {
               if (err) reject(new Error('ffmpeg single mix failed: ' + stderr));
               else resolve();
             });
           });
         } else {
+          const timeout = calcMixTimeout(audioFiles.length, totalOggBytes);
+          console.log('[RECORDER] Mixing', audioFiles.length, 'OGG files to MP3 (timeout:', Math.round(timeout/1000), 's)');
           const inputs = audioFiles.flatMap(f => ['-i', f.oggPath]);
           const filterAr = audioFiles.map((_, i) => `[${i}:a]`).join('');
           const filterComplex = `${filterAr}amix=inputs=${audioFiles.length}:duration=longest[aout]`;
@@ -361,7 +393,7 @@ async function processAndSave(session) {
               '-map', '[aout]',
               '-c:a', 'libmp3lame', '-q:a', '4',
               outMp3,
-            ], { timeout: 180000 }, (err, _stdout, stderr) => {
+            ], { timeout }, (err, _stdout, stderr) => {
               if (err) reject(new Error('ffmpeg multi mix failed: ' + stderr));
               else resolve();
             });
@@ -391,6 +423,10 @@ async function processAndSave(session) {
           fs.copyFileSync(outMp3, fallbackPath);
           recordingUrl = `${BACKEND_URL}/recordings/${recId}.mp3`;
           console.log('[RECORDER] Fallback saved locally:', fallbackPath);
+        }
+
+        if (hadErrors) {
+          console.warn('[RECORDER] Recording created from', audioFiles.length, '/', byIdentity.size, 'participants (some tracks failed)');
         }
       } catch (e) {
         console.error('[RECORDER] Audio mix/upload failed:', e.message);
@@ -429,10 +465,26 @@ async function processAndSave(session) {
       console.log('[RECORDER] Saved fallback to:', fallbackPath);
     }
   } finally {
-    // Cleanup temp files
-    try {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    } catch (e) {}
+    // Only cleanup temp dir if there were NO errors
+    // If there were errors, PCM files are preserved for manual recovery
+    if (hadErrors) {
+      // Clean up only OGG/MP3 intermediaries, keep PCM
+      const files = fs.readdirSync(tmpDir);
+      for (const f of files) {
+        if (!f.endsWith('.pcm')) {
+          try { fs.unlinkSync(path.join(tmpDir, f)); } catch (_) {}
+        }
+      }
+      const remainingPcm = files.filter(f => f.endsWith('.pcm'));
+      if (remainingPcm.length > 0) {
+        console.warn('[RECORDER] ⚠️  PRESERVED', remainingPcm.length, 'PCM files in', tmpDir, 'for manual recovery');
+      } else {
+        // All PCM were successfully converted, safe to delete
+        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+      }
+    } else {
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+    }
     recorderSessions.delete(roomName);
     console.log('[RECORDER] Done processing room:', roomName);
   }
@@ -440,14 +492,14 @@ async function processAndSave(session) {
 
 // ─── Helpers ──────────────────────────────────────────────
 
-function ffmpegConvert(pcmPath, oggPath, sampleRate, channels) {
+function ffmpegConvert(pcmPath, oggPath, sampleRate, channels, timeout) {
   return new Promise((resolve, reject) => {
     execFile('ffmpeg', [
       '-y', '-f', 's16le', '-ar', String(sampleRate), '-ac', String(channels),
       '-i', pcmPath,
       '-c:a', 'libopus', '-b:a', '48k',
       oggPath,
-    ], { timeout: 120000 }, (err, stdout, stderr) => {
+    ], { timeout: timeout || 120000 }, (err, stdout, stderr) => {
       if (err) reject(new Error(`ffmpeg failed: ${err.message}\n${stderr}`));
       else resolve();
     });
