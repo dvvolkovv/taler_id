@@ -423,8 +423,8 @@ export class MessengerService {
   async createMessage(conversationId: string, senderId: string, content: string, fileData?: {
     fileUrl?: string; fileName?: string; fileSize?: number; fileType?: string;
     s3Key?: string; thumbnailSmallUrl?: string; thumbnailMediumUrl?: string; thumbnailLargeUrl?: string;
-  }, topicId?: string, isSystem?: boolean) {
-    return this.prisma.message.create({ data: { conversationId, senderId, content, ...fileData, ...(topicId ? { topicId } : {}), ...(isSystem ? { isSystem } : {}) } });
+  }, topicId?: string, isSystem?: boolean, metadata?: Record<string, any>) {
+    return this.prisma.message.create({ data: { conversationId, senderId, content, ...fileData, ...(topicId ? { topicId } : {}), ...(isSystem ? { isSystem } : {}), ...(metadata ? { metadata } : {}) } });
   }
 
   async assertParticipant(conversationId: string, userId: string) {

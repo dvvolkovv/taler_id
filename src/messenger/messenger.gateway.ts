@@ -20,6 +20,7 @@ import * as jwt from 'jsonwebtoken';
 import * as fs from 'fs';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
+import { PHASE_LABELS, resolveToolLabel, ToolKind } from '../ai-analyst/ai-analyst-labels';
 
 @WebSocketGateway({ namespace: '/messenger', cors: { origin: '*' } })
 export class MessengerGateway
@@ -42,7 +43,7 @@ export class MessengerGateway
     private readonly outboundBot: OutboundBotService,
   ) {
     const publicKeyPath = this.configService.get<string>('jwt.publicKeyPath') ?? '';
-    this.publicKey = fs.readFileSync(publicKeyPath, 'utf8');
+    this.publicKey = publicKeyPath ? fs.readFileSync(publicKeyPath, 'utf8') : '';
   }
 
   onModuleInit() {
@@ -778,6 +779,16 @@ export class MessengerGateway
     this.server.to(`user:${userId}`).emit(event, data);
   }
 
+  /** Get user's preferred language from their profile. Defaults to 'en'. */
+  private async getUserLang(userId: string): Promise<'ru' | 'en'> {
+    const profile = await this.prisma.profile.findUnique({
+      where: { userId },
+      select: { language: true },
+    });
+    const lang = profile?.language;
+    return lang === 'ru' ? 'ru' : 'en';
+  }
+
   /** HTTP fallback for call_ended (used by mobile app as backup) */
   async endCallFromHttp(userId: string, conversationId: string, roomName: string) {
     await this.handleCallEnded({ data: { userId } } as any, { conversationId, roomName });
@@ -855,86 +866,109 @@ export class MessengerGateway
    * streams chunks back as `analyst_chunk` events, and creates the
    * final response as a system message in the conversation.
    */
-  private _dispatchToAnalyst(
+  private async _dispatchToAnalyst(
     userId: string,
     conversationId: string,
     messageText: string,
     fileUrls: { url: string; name: string }[],
-  ) {
-    // Emit "typing" indicator immediately
-    this.server.to(`user:${userId}`).emit('analyst_thinking', {
-      conversationId,
-    });
+  ): Promise<void> {
+    const started = Date.now();
+    // Create the timeout promise synchronously (before any await) so fake timers
+    // in tests can advance past it reliably.
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('AI Analyst timeout (180 s)')), 180_000),
+    );
 
-    this.aiAnalyst
-      .submitTask({
-        userId,
+    const lang = await this.getUserLang(userId);
+    const counts: Record<ToolKind, number> = { search: 0, file: 0, cmd: 0, image: 0, other: 0 };
+    let preparingEmitted = false;
+
+    const emitTyping = (emoji: string, label: string) => {
+      this.server.to(`user:${userId}`).emit('typing', {
         conversationId,
-        messageText,
-        fileUrls: fileUrls.length > 0 ? fileUrls : undefined,
-        onChunk: (text) => {
-          this.server.to(`user:${userId}`).emit('analyst_chunk', {
-            conversationId,
-            text,
-          });
-        },
-        onTool: (tool, input) => {
-          this.server.to(`user:${userId}`).emit('analyst_tool', {
-            conversationId,
-            tool,
-            input,
-          });
-        },
-      })
-      .then(async ({ text, outputFiles }) => {
-        // Create the bot response as a system message
-        let content = text;
-        if (outputFiles.length > 0) {
-          const fileList = outputFiles
-            .map((f: any) => `📎 [${f.name}](http://5.101.115.184:3033${f.url})`)
-            .join('\n');
-          content += '\n\n' + fileList;
-        }
-        const botMsg = await this.service.createMessage(
-          conversationId,
-          userId, // senderId is the user (system message flag differentiates)
-          content,
-          undefined,
-          undefined,
-          true, // isSystem = true → marks it as bot response
-        );
-        this.server.to(`user:${userId}`).emit('new_message', {
-          ...botMsg,
-          senderName: 'AI Аналитик',
-          isSystem: true,
-        });
-        this.server.to(`user:${userId}`).emit('analyst_done', {
-          conversationId,
-        });
-      })
-      .catch((e) => {
-        this.logger.error(`[AI Analyst] dispatch failed: ${(e as Error).message}`);
-        // Send error as a system message so the user sees it in the chat
-        this.service
-          .createMessage(
-            conversationId,
-            userId,
-            `❌ Ошибка анализа: ${(e as Error).message}`,
-            undefined,
-            undefined,
-            true,
-          )
-          .then((errMsg) => {
-            this.server.to(`user:${userId}`).emit('new_message', {
-              ...errMsg,
-              senderName: 'AI Аналитик',
-              isSystem: true,
-            });
-            this.server.to(`user:${userId}`).emit('analyst_done', {
-              conversationId,
-            });
-          })
-          .catch(() => {});
+        userId: 'ai-analyst-bot',
+        userName: 'AI Аналитик',
+        isTyping: true,
+        typingText: `${emoji} ${label}`,
       });
+    };
+    const clearTyping = () => {
+      this.server.to(`user:${userId}`).emit('typing', {
+        conversationId,
+        userId: 'ai-analyst-bot',
+        isTyping: false,
+      });
+    };
+
+    // Phase: thinking
+    emitTyping(PHASE_LABELS.thinking.emoji, PHASE_LABELS.thinking[lang]);
+
+    try {
+      const submitPromise = this.aiAnalyst.submitTask({
+        userId, conversationId, messageText,
+        fileUrls: fileUrls.length > 0 ? fileUrls : undefined,
+        onTool: (tool, input) => {
+          const lbl = resolveToolLabel(tool, input);
+          counts[lbl.kind]++;
+          emitTyping(lbl.emoji, lbl[lang]);
+        },
+        onChunk: (chunkText) => {
+          if (!preparingEmitted) {
+            emitTyping(PHASE_LABELS.preparing.emoji, PHASE_LABELS.preparing[lang]);
+            preparingEmitted = true;
+          }
+          this.server.to(`user:${userId}`).emit('analyst_chunk', {
+            conversationId, text: chunkText,
+          });
+        },
+      });
+      const { text, outputFiles } = await Promise.race([submitPromise, timeoutPromise]);
+
+      // Append output files list (existing behaviour preserved)
+      let content = text;
+      if (outputFiles && outputFiles.length > 0) {
+        const fileList = outputFiles
+          .map((f: any) => `📎 [${f.name}](http://5.101.115.184:3033${f.url})`)
+          .join('\n');
+        content += '\n\n' + fileList;
+      }
+
+      const durationMs = Date.now() - started;
+      const steps = (Object.entries(counts) as [ToolKind, number][])
+        .filter(([_, v]) => v > 0)
+        .map(([kind, count]) => ({ kind, count }));
+      const metadata = { steps, durationMs };
+
+      const botMsg = await this.service.createMessage(
+        conversationId, userId, content, undefined, undefined,
+        true, metadata,
+      );
+
+      clearTyping();
+      this.server.to(`user:${userId}`).emit('new_message', {
+        ...botMsg, senderName: 'AI Аналитик', isSystem: true,
+      });
+      this.server.to(`user:${userId}`).emit('analyst_seam', {
+        conversationId, messageId: botMsg.id, steps, durationMs,
+      });
+    } catch (e) {
+      const err = e as Error;
+      this.logger.error(`[AI Analyst] dispatch failed: ${err.message}`);
+      emitTyping(PHASE_LABELS.error.emoji, `${PHASE_LABELS.error[lang]}: ${err.message}`);
+      try {
+        const errMsg = await this.service.createMessage(
+          conversationId, userId,
+          `❌ ${lang === 'ru' ? 'Ошибка анализа' : 'Analysis error'}: ${err.message}`,
+          undefined, undefined, true,
+          { steps: [], durationMs: Date.now() - started, error: true },
+        );
+        clearTyping();
+        this.server.to(`user:${userId}`).emit('new_message', {
+          ...errMsg, senderName: 'AI Аналитик', isSystem: true,
+        });
+      } catch {
+        clearTyping();
+      }
+    }
   }
 }
