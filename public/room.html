@@ -238,24 +238,7 @@
       background: rgba(15,15,26,0.92); backdrop-filter: blur(16px);
       border-top: 1px solid var(--border-s); justify-content: center; align-items: center;
       flex-wrap: wrap; position: relative; z-index: 101;
-      transition: transform 0.25s ease, opacity 0.25s ease;
     }
-    .controls.hidden {
-      transform: translateY(110%); opacity: 0; pointer-events: none;
-    }
-    .controls-fab {
-      position: fixed; left: 50%; transform: translateX(-50%);
-      bottom: calc(14px + env(safe-area-inset-bottom));
-      width: 56px; height: 32px; border-radius: 16px;
-      background: rgba(15,15,26,0.78); backdrop-filter: blur(14px);
-      border: 1px solid var(--border-s); cursor: pointer;
-      display: none; align-items: center; justify-content: center;
-      z-index: 102; opacity: 0;
-      transition: opacity 0.2s ease, transform 0.2s ease, background 0.15s;
-    }
-    .controls-fab.visible { display: flex; opacity: 0.85; }
-    .controls-fab:hover { background: rgba(15,15,26,0.95); opacity: 1; transform: translateX(-50%) translateY(-2px); }
-    .controls-fab svg { width: 18px; height: 18px; stroke: var(--text); fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
     .ctrl-btn {
       width: 52px; height: 52px; border-radius: 14px; border: none;
       background: var(--surface); color: var(--text); cursor: pointer;
@@ -799,9 +782,6 @@
         <div class="ctrl-label">Завершить</div>
       </div>
     </div>
-    <button class="controls-fab" id="controls-fab" onclick="showControls(true)" title="Показать панель">
-      <svg viewBox="0 0 24 24"><polyline points="18 15 12 9 6 15"/></svg>
-    </button>
   </div>
 
   <!-- Import map for ESM-based track-processors (resolves bare specifiers in browser) -->
@@ -1737,10 +1717,6 @@
       document.getElementById(id).classList.add('active');
       document.getElementById('main-container').style.display = id === 'step-call' ? 'none' : '';
       document.getElementById('step-call').style.display = id === 'step-call' ? 'flex' : 'none';
-      // Toggle auto-hide of bottom controls based on whether we're in a live call
-      if (typeof setControlsAutoHide === 'function') {
-        setControlsAutoHide(id === 'step-call');
-      }
     }
 
     document.getElementById('guest-name').addEventListener('keydown', e => {
@@ -1795,74 +1771,6 @@
         }
       });
     }
-
-    // ── Auto-hide controls panel during call ──
-    let _ctrlHideTimer = null;
-    let _ctrlAutoHideEnabled = false;
-    const CTRL_AUTO_HIDE_MS = 3500;
-
-    function _shouldKeepControlsVisible() {
-      // Don't hide while a popup, picker or chat input is in use
-      if (document.querySelector('.device-popup.active')) return true;
-      if (document.querySelector('.bg-picker.active')) return true;
-      const ae = document.activeElement;
-      if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA')) return true;
-      return false;
-    }
-
-    function showControls(restartTimer = true) {
-      const ctrl = document.querySelector('.controls');
-      const fab = document.getElementById('controls-fab');
-      if (ctrl) ctrl.classList.remove('hidden');
-      if (fab) fab.classList.remove('visible');
-      clearTimeout(_ctrlHideTimer);
-      if (restartTimer && _ctrlAutoHideEnabled) {
-        _ctrlHideTimer = setTimeout(hideControls, CTRL_AUTO_HIDE_MS);
-      }
-    }
-
-    function hideControls() {
-      if (_shouldKeepControlsVisible()) {
-        // Reschedule, don't hide while user is interacting
-        _ctrlHideTimer = setTimeout(hideControls, CTRL_AUTO_HIDE_MS);
-        return;
-      }
-      const ctrl = document.querySelector('.controls');
-      const fab = document.getElementById('controls-fab');
-      if (ctrl) ctrl.classList.add('hidden');
-      if (fab) fab.classList.add('visible');
-      clearTimeout(_ctrlHideTimer);
-    }
-
-    function setControlsAutoHide(enabled) {
-      _ctrlAutoHideEnabled = enabled;
-      if (enabled) {
-        showControls(true);
-      } else {
-        clearTimeout(_ctrlHideTimer);
-        showControls(false);
-      }
-    }
-
-    // User activity in call resets the hide timer (and shows panel if hidden)
-    (function bindCtrlActivity() {
-      const root = document.getElementById('step-call');
-      if (!root) return;
-      const onActivity = () => { if (_ctrlAutoHideEnabled) showControls(true); };
-      root.addEventListener('mousemove', onActivity);
-      root.addEventListener('touchstart', onActivity, { passive: true });
-      // Click on video grid toggles controls
-      const grid = document.getElementById('video-grid');
-      if (grid) {
-        grid.addEventListener('click', (e) => {
-          if (!_ctrlAutoHideEnabled) return;
-          // Ignore clicks bubbling from interactive children (hint overlays use pointer-events:none, OK)
-          const ctrl = document.querySelector('.controls');
-          if (ctrl && ctrl.classList.contains('hidden')) showControls(true);
-          else hideControls();
-        });
-      }
-    })();
 
     // Fullscreen
     function toggleFullscreen() {
