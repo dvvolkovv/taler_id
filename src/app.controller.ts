@@ -1,4 +1,4 @@
-import { Controller, Get, Redirect } from '@nestjs/common';
+import { Controller, Get, Header, Redirect } from '@nestjs/common';
 
 @Controller()
 export class AppController {
@@ -14,6 +14,26 @@ export class AppController {
   @Get('.well-known/openid-configuration')
   @Redirect('/oauth/.well-known/openid-configuration')
   openidConfiguration() {}
+
+  @Get('.well-known/apple-app-site-association')
+  @Header('Content-Type', 'application/json')
+  appleAppSiteAssociation() {
+    return {
+      applinks: {
+        apps: [],
+        details: [
+          {
+            appID: 'MG58MDUNZ2.tirol.taler.talerIdMobile',
+            paths: ['/room/*', '/ui/invite*'],
+          },
+          {
+            appID: 'MG58MDUNZ2.tirol.taler.talerIdMobile.dev',
+            paths: ['/room/*', '/ui/invite*'],
+          },
+        ],
+      },
+    };
+  }
 
   @Get('app/version')
   appVersion() {
