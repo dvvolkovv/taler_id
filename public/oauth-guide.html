@@ -205,16 +205,42 @@
 
     <!-- REGISTRATION -->
     <h2 id="registration">Client Registration</h2>
-    <p>Each application needs a registered OAuth client in Taler ID. Contact the Taler team to register your client with:</p>
-    <table>
-      <tr><th>Field</th><th>Description</th><th>Example</th></tr>
-      <tr><td><code>client_id</code></td><td>Unique application identifier</td><td><code>my-app</code></td></tr>
-      <tr><td><code>client_secret</code></td><td>Secret for token exchange (keep secure!)</td><td><code>s3cr3t...</code></td></tr>
-      <tr><td><code>redirect_uris</code></td><td>Allowed callback URLs (exact match)</td><td><code>https://myapp.com/callback</code></td></tr>
-      <tr><td><code>name</code></td><td>Display name shown on consent screen</td><td><code>My Application</code></td></tr>
-      <tr><td><code>allowed_scopes</code></td><td>Scopes this client can request</td><td><code>openid profile email kyc</code></td></tr>
-      <tr><td><code>logo_uri</code></td><td>Logo URL for consent screen (optional)</td><td><code>https://myapp.com/logo.png</code></td></tr>
-    </table>
+    <p>Any email-verified Taler ID user can register an OAuth client without contacting the Taler team. Self-registered clients are auto-approved with the default scope set (<code>openid profile email offline_access</code>). Sensitive scopes (<code>kyc</code>, <code>wallet</code>, <code>phone</code>) require a manual upgrade — email <a href="mailto:support@taler.tirol">support@taler.tirol</a>.</p>
+
+    <h3>POST /oauth/register</h3>
+    <pre><code class="lang-bash">curl -X POST https://id.taler.tirol/oauth/register \
+  -H "Authorization: Bearer YOUR_TALER_ID_JWT" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "client_name": "My App",
+    "redirect_uris": ["https://myapp.example/callback"],
+    "logo_uri": "https://myapp.example/logo.png"
+  }'</code></pre>
+
+    <p>Successful response (<a href="https://datatracker.ietf.org/doc/html/rfc7591" target="_blank" rel="noopener">RFC 7591</a>):</p>
+    <pre><code class="lang-json">{
+  "client_id": "9d2a8e44-...-uuid",
+  "client_secret": "base64url-secret",
+  "client_id_issued_at": 1714293000,
+  "client_secret_expires_at": 0,
+  "client_name": "My App",
+  "redirect_uris": ["https://myapp.example/callback"],
+  "scope": "openid profile email offline_access",
+  "token_endpoint_auth_method": "client_secret_basic",
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"]
+}</code></pre>
+
+    <h3>Manage your clients</h3>
+    <ul>
+      <li><code>GET /oauth/clients</code> — list your clients (no <code>client_secret</code> returned)</li>
+      <li><code>GET /oauth/clients/:clientId</code> — view one</li>
+      <li><code>PATCH /oauth/clients/:clientId</code> — update <code>client_name</code>, <code>redirect_uris</code>, <code>logo_uri</code>, <code>scope</code></li>
+      <li><code>DELETE /oauth/clients/:clientId</code> — remove a client</li>
+    </ul>
+
+    <p><strong>Limits:</strong> 10 clients per user, 3 registrations per minute per IP.</p>
+    <p><strong>Lost your <code>client_secret</code>?</strong> The secret is shown only at registration. To rotate, delete the client and register a new one (a dedicated rotation endpoint is planned).</p>
 
     <!-- FLOW -->
     <h2 id="flow">Authorization Flow</h2>
