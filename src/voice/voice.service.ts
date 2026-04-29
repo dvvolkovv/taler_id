@@ -63,6 +63,37 @@ export class VoiceService {
     return { token: await this.makeToken(roomName, userId) };
   }
 
+  /**
+   * Issues a LiveKit access token for a group voice call. Group calls live in
+   * rooms named `group-${groupCallId}` so the LiveKit webhook handler (Task 15)
+   * can route room events to GroupCallService by prefix. Mirrors the 1-on-1
+   * `makeToken` shape (roomJoin + canPublish/canSubscribe) and adds
+   * canPublishData for in-room signaling. Returns the WS URL alongside the
+   * token so callers don't need to know the LiveKit endpoint.
+   */
+  async generateGroupCallToken(
+    groupCallId: string,
+    userId: string,
+  ): Promise<{ token: string; livekitWsUrl: string }> {
+    const roomName = `group-${groupCallId}`;
+    const at = new AccessToken(LK_API_KEY, LK_API_SECRET, {
+      identity: userId,
+      ttl: 60 * 60 * 4, // 4 hours
+    });
+    at.addGrant({
+      room: roomName,
+      roomJoin: true,
+      canPublish: true,
+      canSubscribe: true,
+      canPublishData: true,
+    });
+    const token = await at.toJwt();
+    return {
+      token,
+      livekitWsUrl: process.env.LIVEKIT_WS_URL || "wss://id.taler.tirol/livekit",
+    };
+  }
+
   async endCallLog(roomName: string): Promise<void> {
     try {
       const log = await this.prisma.callLog.findUnique({ where: { roomName } });
