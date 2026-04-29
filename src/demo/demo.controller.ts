@@ -62,11 +62,21 @@ export class DemoController {
     const verifier = randomBytes(32).toString('base64url');
     const challenge = createHash('sha256').update(verifier).digest('base64url');
     const state = randomUUID();
-    await this.redis.setEx(
-      `${DemoController.STATE_KEY_PREFIX}${state}`,
-      DemoController.STATE_TTL_SECONDS,
-      verifier,
-    );
+    try {
+      await this.redis.setEx(
+        `${DemoController.STATE_KEY_PREFIX}${state}`,
+        DemoController.STATE_TTL_SECONDS,
+        verifier,
+      );
+      // eslint-disable-next-line no-console
+      console.log(
+        `[demo/login] stored state=${state.slice(0, 8)}... in Redis (TTL ${DemoController.STATE_TTL_SECONDS}s)`,
+      );
+    } catch (e: any) {
+      // eslint-disable-next-line no-console
+      console.error(`[demo/login] FAILED to store state in Redis:`, e?.message ?? e);
+      throw e;
+    }
 
     const params = new URLSearchParams({
       client_id: this.clientId,
