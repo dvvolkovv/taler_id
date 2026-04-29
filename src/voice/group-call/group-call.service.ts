@@ -959,6 +959,47 @@ export class GroupCallService {
   }
 
   /**
+   * Called by BullMQ when a `timeout-invite` job fires (30s after createCall/inviteMore).
+   *
+   * Idempotent: if the invite is no longer CALLING (JOINED/DECLINED/LEFT/TIMEOUT
+   * already), this is a no-op. The job may have raced with a join/decline that
+   * already cancelled it, or the job may have run twice via BullMQ retry — either
+   * case is harmless.
+   *
+   * If the timeout was the last pending ring on a LOBBY call (no JOINED, no
+   * remaining CALLING), `endCallIfDeserted` ends the call with reason `timeout`.
+   */
+  async handleInviteTimeout(inviteId: string): Promise<void> {
+    const invite = await this.prisma.groupCallInvite.findUnique({
+      where: { id: inviteId },
+    });
+    if (!invite) return;
+    if (invite.status !== GroupCallInviteStatus.CALLING) return;
+
+    await this.prisma.groupCallInvite.update({
+      where: { id: inviteId },
+      data: {
+        status: GroupCallInviteStatus.TIMEOUT,
+        respondedAt: new Date(),
+      },
+    });
+
+    const refreshed = await this.prisma.groupCall.findUnique({
+      where: { id: invite.groupCallId },
+      include: { invites: true },
+    });
+    if (!refreshed) return;
+
+    const participantIds = this.collectParticipantIds(refreshed);
+    this.gateway.emitStatus(participantIds, {
+      groupCallId: refreshed.id,
+      invites: refreshed.invites,
+    });
+
+    await this.endCallIfDeserted(refreshed);
+  }
+
+  /**
    * Recipients of group-call status broadcasts: host + everyone whose invite
    * is currently active (CALLING or JOINED). LEFT/DECLINED users are excluded
    * intentionally — they explicitly opted out and shouldn't keep receiving

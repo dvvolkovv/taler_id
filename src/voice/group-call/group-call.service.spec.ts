@@ -704,6 +704,83 @@ describe('GroupCallService', () => {
     });
   });
 
+  describe('handleInviteTimeout', () => {
+    it('marks invite TIMEOUT if still CALLING, broadcasts, may end call', async () => {
+      const invite = { id: 'i1', groupCallId: 'c1', userId: 'u1', status: 'CALLING' };
+      prisma.groupCallInvite.findUnique = jest.fn().mockResolvedValue(invite);
+      prisma.groupCallInvite.update = jest.fn();
+      prisma.groupCall.findUnique = jest.fn().mockResolvedValue({
+        id: 'c1', status: 'LOBBY', hostUserId: 'host', livekitRoomName: 'group-c1',
+        invites: [{ ...invite, status: 'TIMEOUT' }],
+      });
+      // Single-invitee desertion path: endCallIfDeserted → endCall calls these.
+      // We don't assert on them here (the dedicated "ends LOBBY call" test does);
+      // we just need the chain to not blow up on undefined.
+      prisma.groupCall.update = jest.fn().mockResolvedValue({
+        id: 'c1', hostUserId: 'host', livekitRoomName: 'group-c1', status: 'ENDED',
+      });
+      prisma.groupCallInvite.findMany = jest.fn().mockResolvedValue([
+        { userId: 'u1', status: 'TIMEOUT' },
+      ]);
+      voice.deleteRoom = jest.fn().mockResolvedValue(undefined);
+
+      await service.handleInviteTimeout('i1');
+
+      expect(prisma.groupCallInvite.update).toHaveBeenCalledWith(expect.objectContaining({
+        where: { id: 'i1' },
+        data: expect.objectContaining({ status: 'TIMEOUT' }),
+      }));
+      expect(gateway.emitStatus).toHaveBeenCalled();
+    });
+
+    it('no-op if invite already JOINED', async () => {
+      prisma.groupCallInvite.findUnique = jest.fn().mockResolvedValue({
+        id: 'i1', groupCallId: 'c1', userId: 'u1', status: 'JOINED',
+      });
+      prisma.groupCallInvite.update = jest.fn();
+      await service.handleInviteTimeout('i1');
+      expect(prisma.groupCallInvite.update).not.toHaveBeenCalled();
+    });
+
+    it('no-op if invite already DECLINED', async () => {
+      prisma.groupCallInvite.findUnique = jest.fn().mockResolvedValue({
+        id: 'i1', groupCallId: 'c1', userId: 'u1', status: 'DECLINED',
+      });
+      prisma.groupCallInvite.update = jest.fn();
+      await service.handleInviteTimeout('i1');
+      expect(prisma.groupCallInvite.update).not.toHaveBeenCalled();
+    });
+
+    it('no-op if invite not found (missing)', async () => {
+      prisma.groupCallInvite.findUnique = jest.fn().mockResolvedValue(null);
+      prisma.groupCallInvite.update = jest.fn();
+      await service.handleInviteTimeout('xxx');
+      expect(prisma.groupCallInvite.update).not.toHaveBeenCalled();
+    });
+
+    it('ends LOBBY call if last CALLING times out and no one JOINED', async () => {
+      const invite = { id: 'i1', groupCallId: 'c1', userId: 'u1', status: 'CALLING' };
+      prisma.groupCallInvite.findUnique = jest.fn().mockResolvedValue(invite);
+      prisma.groupCallInvite.update = jest.fn();
+      prisma.groupCall.findUnique = jest.fn().mockResolvedValue({
+        id: 'c1', status: 'LOBBY', hostUserId: 'host', livekitRoomName: 'group-c1',
+        invites: [{ ...invite, status: 'TIMEOUT' }], // single invitee, now TIMEOUT
+      });
+      prisma.groupCall.update = jest.fn().mockResolvedValue({
+        id: 'c1', hostUserId: 'host', livekitRoomName: 'group-c1', status: 'ENDED',
+      });
+      prisma.groupCallInvite.findMany = jest.fn().mockResolvedValue([{ userId: 'u1', status: 'TIMEOUT' }]);
+      voice.deleteRoom = jest.fn().mockResolvedValue(undefined);
+
+      await service.handleInviteTimeout('i1');
+
+      expect(prisma.groupCall.update).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ status: 'ENDED', endedReason: 'timeout' }),
+      }));
+      expect(gateway.emitEnded).toHaveBeenCalled();
+    });
+  });
+
   describe('forceEnd (host only)', () => {
     it('rejects if non-host', async () => {
       prisma.groupCall.findUnique = jest.fn().mockResolvedValue({
