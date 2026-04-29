@@ -1,13 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
 import * as admin from 'firebase-admin';
 import * as fs from 'fs';
+import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class FcmService {
   private readonly logger = new Logger(FcmService.name);
   private initialized = false;
 
-  constructor() {
+  constructor(private readonly prisma: PrismaService) {
     this.init();
   }
 
@@ -249,8 +250,39 @@ export class FcmService {
       inviteeCount: number;
     },
   ): Promise<void> {
-    // TODO(Task 14): fetch FCM tokens, build data-only message, dispatch.
-    this.logger.debug(`[stub] sendGroupCallInvite to ${userId} for ${payload.groupCallId}`);
+    if (!this.initialized) return;
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { fcmToken: true },
+    });
+    const fcmToken = user?.fcmToken;
+    if (!fcmToken) {
+      this.logger.debug(`No FCM token for user ${userId} — skipping FCM group-call push`);
+      return;
+    }
+
+    try {
+      await admin.messaging().send({
+        token: fcmToken,
+        android: {
+          priority: 'high',
+          ttl: 30 * 1000, // ringing TTL
+        },
+        data: {
+          type: 'group_call_invite',
+          groupCallId: payload.groupCallId,
+          hostId: payload.host.id,
+          hostDisplayName: payload.host.displayName,
+          hostAvatarUrl: payload.host.avatarUrl ?? '',
+          inviteeCount: String(payload.inviteeCount),
+        },
+      });
+    } catch (e: any) {
+      this.logger.error(
+        `FCM sendGroupCallInvite error for ${userId}: ${e?.message ?? e}`,
+      );
+    }
   }
 
   async sendCallCancelled(fcmToken: string, roomName: string, fromName?: string): Promise<void> {
