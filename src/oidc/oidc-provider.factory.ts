@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import type Redis from 'ioredis';
 import type { PrismaService } from '../prisma/prisma.service';
 import { RedisOidcAdapter } from './adapters/redis-adapter.js';
+import { PrismaClientAdapter } from './adapters/prisma-client-adapter.js';
 
 export interface OidcProviderConfig {
   issuer: string;
@@ -25,26 +26,15 @@ export async function createOidcProvider(config: OidcProviderConfig) {
   jwk.alg = 'RS256';
   jwk.kid = 'taler-id-rsa';
 
-  // Load OAuth clients from database
-  const dbClients = await config.prisma.oAuthClient.findMany();
-  const clients = dbClients.map((c) => ({
-    client_id: c.clientId,
-    client_secret: c.clientId === 'walletx' ? config.walletxClientSecret : c.clientSecret,
-    redirect_uris: c.redirectUris,
-    grant_types: ['authorization_code', 'refresh_token'],
-    response_types: ['code'],
-    scope: c.allowedScopes.join(' '),
-    token_endpoint_auth_method: 'client_secret_basic' as const,
-    client_name: c.name,
-    logo_uri: c.logoUri || undefined,
-  }));
-
   const provider = new Provider(config.issuer, {
-    adapter: (model: string) => new RedisOidcAdapter(model, config.redisClient),
+    adapter: (model: string) => {
+      if (model === 'Client') {
+        return new PrismaClientAdapter(config.prisma, config.walletxClientSecret);
+      }
+      return new RedisOidcAdapter(model, config.redisClient);
+    },
 
     jwks: { keys: [jwk] },
-
-    clients,
 
     claims: {
       openid: ['sub'],
