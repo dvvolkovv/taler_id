@@ -17,9 +17,10 @@ import { RedisService } from '../redis/redis.service';
 export class DemoController {
   constructor(private readonly redis: RedisService) {}
 
-  // PKCE state stored in Redis with 5-minute TTL — survives pm2 restarts and
-  // any future multi-worker deployment. Key: `demo:pkce:<state>`, value: code_verifier.
-  private static readonly STATE_TTL_SECONDS = 5 * 60;
+  // PKCE state stored in Redis with 30-minute TTL — survives pm2 restarts,
+  // multi-worker deployment, and gives the user enough time to complete login
+  // + consent without the state expiring under them. Key: `demo:pkce:<state>`.
+  private static readonly STATE_TTL_SECONDS = 30 * 60;
   private static readonly STATE_KEY_PREFIX = 'demo:pkce:';
 
   private get clientId(): string | undefined {
