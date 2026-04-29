@@ -8,6 +8,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { GroupCallService } from './group-call.service';
 import { CreateGroupCallDto } from './dto/create-group-call.dto';
@@ -21,39 +22,40 @@ export class GroupCallController {
   constructor(private readonly service: GroupCallService) {}
 
   @Post()
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   async create(@Req() req: any, @Body() dto: CreateGroupCallDto) {
-    return this.service.createCall(req.user.id, dto.inviteeIds);
+    return this.service.createCall(req.user.sub, dto.inviteeIds);
   }
 
   @Get('active')
   async active(@Req() req: any) {
-    const calls = await this.service.getActiveCallsForUser(req.user.id);
+    const calls = await this.service.getActiveCallsForUser(req.user.sub);
     return { calls };
   }
 
   @Get(':id')
   async detail(@Req() req: any, @Param('id') id: string) {
-    const groupCall = await this.service.getCall(id, req.user.id);
+    const groupCall = await this.service.getCall(id, req.user.sub);
     return { groupCall };
   }
 
   @Post(':id/join')
   @HttpCode(200)
   async join(@Req() req: any, @Param('id') id: string) {
-    return this.service.joinCall(id, req.user.id);
+    return this.service.joinCall(id, req.user.sub);
   }
 
   @Post(':id/decline')
   @HttpCode(200)
   async decline(@Req() req: any, @Param('id') id: string) {
-    await this.service.declineCall(id, req.user.id);
+    await this.service.declineCall(id, req.user.sub);
     return { ok: true };
   }
 
   @Post(':id/leave')
   @HttpCode(200)
   async leave(@Req() req: any, @Param('id') id: string) {
-    await this.service.leaveCall(id, req.user.id);
+    await this.service.leaveCall(id, req.user.sub);
     return { ok: true };
   }
 
@@ -64,7 +66,7 @@ export class GroupCallController {
     @Param('id') id: string,
     @Body() dto: InviteUsersDto,
   ) {
-    return this.service.inviteMore(id, req.user.id, dto.userIds);
+    return this.service.inviteMore(id, req.user.sub, dto.userIds);
   }
 
   @Post(':id/kick')
@@ -75,7 +77,7 @@ export class GroupCallController {
     @Param('id') id: string,
     @Body() dto: KickUserDto,
   ) {
-    await this.service.kick(id, req.user.id, dto.userId);
+    await this.service.kick(id, req.user.sub, dto.userId);
     return { ok: true };
   }
 
@@ -83,7 +85,7 @@ export class GroupCallController {
   @UseGuards(GroupCallHostGuard)
   @HttpCode(200)
   async muteAll(@Req() req: any, @Param('id') id: string) {
-    await this.service.muteAll(id, req.user.id);
+    await this.service.muteAll(id, req.user.sub);
     return { ok: true };
   }
 
@@ -91,7 +93,7 @@ export class GroupCallController {
   @UseGuards(GroupCallHostGuard)
   @HttpCode(200)
   async end(@Req() req: any, @Param('id') id: string) {
-    await this.service.forceEnd(id, req.user.id);
+    await this.service.forceEnd(id, req.user.sub);
     return { ok: true };
   }
 }
