@@ -9,27 +9,29 @@ import { PrismaModule } from './prisma/prisma.module';
 import { RedisModule } from './redis/redis.module';
 import { KycModule } from './kyc/kyc.module';
 import { ProfileModule } from './profile/profile.module';
-import { TenantModule } from "./tenant/tenant.module";
-import { BlockchainModule } from "./blockchain/blockchain.module";
-import { EmailModule } from "./email/email.module";
-import { AdminModule } from "./admin/admin.module";
-import { OidcModule } from "./oidc/oidc.module";
-import { AssistantModule } from "./assistant/assistant.module";
-import { MessengerModule } from "./messenger/messenger.module";
-import { VoiceModule } from "./voice/voice.module";
-import { ProfileSectionsModule } from "./profile-sections/profile-sections.module";
-import { NotesModule } from "./notes/notes.module";
-import { CalendarModule } from "./calendar/calendar.module";
-import { AiAnalystModule } from "./ai-analyst/ai-analyst.module";
-import { OutboundBotModule } from "./outbound-bot/outbound-bot.module";
-import { DeviceKeysModule } from "./device-keys/device-keys.module";
-import { BillingModule } from "./billing/billing.module";
-import { ScheduleModule } from "@nestjs/schedule";
+import { TenantModule } from './tenant/tenant.module';
+import { BlockchainModule } from './blockchain/blockchain.module';
+import { EmailModule } from './email/email.module';
+import { AdminModule } from './admin/admin.module';
+import { OidcModule } from './oidc/oidc.module';
+import { OAuthRegistrationModule } from './oauth-registration/oauth-registration.module';
+import { AssistantModule } from './assistant/assistant.module';
+import { MessengerModule } from './messenger/messenger.module';
+import { VoiceModule } from './voice/voice.module';
+import { ProfileSectionsModule } from './profile-sections/profile-sections.module';
+import { NotesModule } from './notes/notes.module';
+import { CalendarModule } from './calendar/calendar.module';
+import { AiAnalystModule } from './ai-analyst/ai-analyst.module';
+import { OutboundBotModule } from './outbound-bot/outbound-bot.module';
+import { DeviceKeysModule } from './device-keys/device-keys.module';
+import { BillingModule } from './billing/billing.module';
+import { ScheduleModule } from '@nestjs/schedule';
 import configuration from './config/configuration';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ envFilePath: ".env",
+    ConfigModule.forRoot({
+      envFilePath: '.env',
       isGlobal: true,
       load: [configuration],
     }),
@@ -72,6 +74,7 @@ import configuration from './config/configuration';
     EmailModule,
     AdminModule,
     OidcModule,
+    OAuthRegistrationModule,
     AssistantModule,
     MessengerModule,
     VoiceModule,
