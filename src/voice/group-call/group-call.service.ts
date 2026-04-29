@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, Logger } from '@nestjs/common';
+import { Inject, Injectable, BadRequestException, Logger, forwardRef } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { v4 as uuidv4 } from 'uuid';
@@ -11,6 +11,9 @@ import { GroupCallStatus, GroupCallInviteStatus } from '@prisma/client';
 
 const MAX_PARTICIPANTS = 8;
 const RING_TIMEOUT_SEC = 30;
+
+// NOTE: BullModule.forRoot() must be configured in AppModule before this queue
+// can connect at runtime (Task 11 owns this wiring). Unit tests mock the queue.
 
 /**
  * Orchestrates group voice calls (Phase 1).
@@ -28,6 +31,7 @@ export class GroupCallService {
 
   constructor(
     private readonly prisma: PrismaService,
+    @Inject(forwardRef(() => VoiceService))
     private readonly voice: VoiceService,
     private readonly gateway: GroupCallGateway,
     @InjectQueue('group-call-timeouts') private readonly queue: Queue,
@@ -76,49 +80,72 @@ export class GroupCallService {
       return created;
     });
 
+    // Issue the host's LiveKit token immediately after the DB write succeeds —
+    // before ringing invitees. If token generation throws (env typo, signature
+    // mismatch), we surface the error to the host without waking up callees
+    // who would then ring against a call the host can't join.
+    const { token, livekitWsUrl } = await this.voice.generateGroupCallToken(call.id, hostUserId);
+
     const invites = await this.prisma.groupCallInvite.findMany({
       where: { groupCallId: call.id },
     });
 
-    // Schedule per-invite ring-timeout jobs. BullMQ persists in Redis so
-    // the timeouts survive a backend restart; jobId lets us cancel a
-    // specific invite when the user accepts/declines (Task 6).
-    for (const inv of invites) {
-      await this.queue.add(
-        'timeout-invite',
-        { inviteId: inv.id },
-        { delay: RING_TIMEOUT_SEC * 1000, jobId: `timeout-${inv.id}` },
-      );
-    }
+    // Pull only the public fields needed for push/Socket.io fan-out so we
+    // don't leak password/refreshTokens/KYC fields into APNs/FCM payloads
+    // (those land in carrier logs once Task 14 wires real delivery).
+    // displayName/avatarUrl live on Profile, not User, so we read Profile
+    // directly and synthesize displayName the same way voice.service.makeToken
+    // does (`firstName lastName` with userId as fallback).
+    const profile = await this.prisma.profile.findUnique({
+      where: { userId: hostUserId },
+      select: { firstName: true, lastName: true, avatarUrl: true },
+    });
+    const host: { id: string; displayName: string; avatarUrl?: string | null } = {
+      id: hostUserId,
+      displayName:
+        `${profile?.firstName ?? ''} ${profile?.lastName ?? ''}`.trim() || hostUserId,
+      avatarUrl: profile?.avatarUrl ?? null,
+    };
 
-    // Push + Socket.io fan-out. Push failures shouldn't fail the call —
-    // Socket.io still reaches connected clients, and the bell rings on
-    // reconnect via the active-call query (Task 5).
-    const host = await this.prisma.user.findUnique({ where: { id: hostUserId } });
-    for (const inv of invites) {
-      this.apns
-        .sendGroupCallInvite(inv.userId, {
+    // Schedule per-invite ring-timeout jobs in parallel (each `queue.add` is
+    // an awaited Redis round-trip; serialising them stalled the host's
+    // response by N×RTT). BullMQ persists in Redis so the timeouts survive
+    // a backend restart; jobId lets us cancel a specific invite when the
+    // user accepts/declines (Task 6). Push + Socket.io fan-out is folded
+    // into the same Promise.all iteration: APNs/FCM are fire-and-forget
+    // (push failures shouldn't fail the call — Socket.io still reaches
+    // connected clients, and the bell rings on reconnect via the
+    // active-call query in Task 5), and `emitInvite` is sync.
+    await Promise.all(
+      invites.map(async (inv) => {
+        await this.queue.add(
+          'timeout-invite',
+          { inviteId: inv.id },
+          { delay: RING_TIMEOUT_SEC * 1000, jobId: `timeout-${inv.id}` },
+        );
+        this.apns
+          .sendGroupCallInvite(inv.userId, {
+            groupCallId: call.id,
+            host,
+            inviteeCount: invites.length,
+            livekitRoomName: call.livekitRoomName,
+          })
+          .catch((e) => this.logger.warn(`APNs push failed for ${inv.userId}: ${e?.message ?? e}`));
+        this.fcm
+          .sendGroupCallInvite(inv.userId, {
+            groupCallId: call.id,
+            host,
+            inviteeCount: invites.length,
+          })
+          .catch((e) => this.logger.warn(`FCM push failed for ${inv.userId}: ${e?.message ?? e}`));
+        this.gateway.emitInvite(inv.userId, {
           groupCallId: call.id,
-          host: host as any,
-          inviteeCount: invites.length,
-          livekitRoomName: call.livekitRoomName,
-        })
-        .catch((e) => this.logger.warn(`APNs push failed for ${inv.userId}: ${e?.message ?? e}`));
-      this.fcm
-        .sendGroupCallInvite(inv.userId, {
-          groupCallId: call.id,
-          host: host as any,
-          inviteeCount: invites.length,
-        })
-        .catch((e) => this.logger.warn(`FCM push failed for ${inv.userId}: ${e?.message ?? e}`));
-      this.gateway.emitInvite(inv.userId, {
-        groupCallId: call.id,
-        host,
-        invitees: invites,
-      });
-    }
+          host,
+          invitees: invites,
+        });
+      }),
+    );
 
-    const { token, livekitWsUrl } = await this.voice.generateGroupCallToken(call.id, hostUserId);
     return {
       groupCall: { ...call, invites },
       livekitToken: token,

@@ -20,7 +20,9 @@ describe('GroupCallService', () => {
     prisma = {
       groupCall: { create: jest.fn(), findUnique: jest.fn(), update: jest.fn() },
       groupCallInvite: { createMany: jest.fn(), findMany: jest.fn(), update: jest.fn() },
-      user: { findUnique: jest.fn().mockResolvedValue({ id: 'host', displayName: 'Host User' }) },
+      profile: {
+        findUnique: jest.fn().mockResolvedValue({ firstName: 'Host', lastName: 'User', avatarUrl: null }),
+      },
       $transaction: jest.fn(async (cb) => cb(prisma)),
     };
     voice = {
@@ -91,6 +93,34 @@ describe('GroupCallService', () => {
 
     it('rejects host self-invite', async () => {
       await expect(service.createCall('host', ['host', 'u1'])).rejects.toThrow();
+    });
+
+    it('rolls back if invite createMany throws', async () => {
+      prisma.groupCall.create.mockResolvedValue({ id: 'gc-1', hostUserId: 'host', status: 'LOBBY', livekitRoomName: 'group-gc-1' });
+      prisma.groupCallInvite.createMany.mockRejectedValue(new Error('db unique violation'));
+
+      await expect(service.createCall('host', ['u1', 'u2'])).rejects.toThrow();
+
+      // Push, queue, emit must NOT be called when DB write fails
+      expect(queue.add).not.toHaveBeenCalled();
+      expect(apns.sendGroupCallInvite).not.toHaveBeenCalled();
+      expect(fcm.sendGroupCallInvite).not.toHaveBeenCalled();
+      expect(gateway.emitInvite).not.toHaveBeenCalled();
+    });
+
+    it('two consecutive createCall invocations produce distinct GroupCalls (no idempotency)', async () => {
+      // First call
+      prisma.groupCall.create.mockResolvedValueOnce({ id: 'gc-1', hostUserId: 'host', status: 'LOBBY', livekitRoomName: 'group-gc-1' });
+      prisma.groupCallInvite.findMany.mockResolvedValueOnce([{ id: 'i1', userId: 'u1', status: 'CALLING' }]);
+      // Second call
+      prisma.groupCall.create.mockResolvedValueOnce({ id: 'gc-2', hostUserId: 'host', status: 'LOBBY', livekitRoomName: 'group-gc-2' });
+      prisma.groupCallInvite.findMany.mockResolvedValueOnce([{ id: 'i2', userId: 'u1', status: 'CALLING' }]);
+
+      const r1 = await service.createCall('host', ['u1']);
+      const r2 = await service.createCall('host', ['u1']);
+
+      expect(r1.groupCall.id).not.toBe(r2.groupCall.id);
+      expect(prisma.groupCall.create).toHaveBeenCalledTimes(2);
     });
   });
 });
