@@ -4,6 +4,7 @@ import {
   BadRequestException,
   NotFoundException,
   ForbiddenException,
+  GoneException,
   Logger,
   forwardRef,
 } from '@nestjs/common';
@@ -237,5 +238,112 @@ export class GroupCallService {
       throw new ForbiddenException('No access to this call');
     }
     return call;
+  }
+
+  /**
+   * Invitee joins the call.
+   *
+   * - Validates the user actually has an invite (404/403/410 are distinguished
+   *   so the mobile UI can show "call ended" vs "no permission").
+   * - Idempotent: if the user already JOINED, we just re-issue a LiveKit
+   *   token. This handles iOS CallKit reconnect-flicker where the same
+   *   `joinCall` REST call lands twice in quick succession — without this we
+   *   would skip the early-return and run the transaction with stale invite
+   *   data. We intentionally do NOT touch the queue or fan-out events on the
+   *   idempotent path so we don't double-emit `groupCallJoined` to peers.
+   * - First-join transitions LOBBY→ACTIVE; subsequent joins leave the call
+   *   ACTIVE alone. Both happen inside a single $transaction so a peer
+   *   listing the call between writes never sees an invite=JOINED + call=LOBBY
+   *   inconsistency (Phase 1 has no compensating reconciliation logic).
+   * - The ring-timeout job is cancelled best-effort: if BullMQ already fired
+   *   the timeout (race with NO_ANSWER), `queue.remove` either no-ops or
+   *   throws "job not found"; we swallow either since the invite is now
+   *   JOINED and the timeout job's effect (mark NO_ANSWER) is moot.
+   */
+  async joinCall(callId: string, userId: string) {
+    const call = await this.prisma.groupCall.findUnique({
+      where: { id: callId },
+      include: { invites: true },
+    });
+    if (!call) throw new NotFoundException('GroupCall not found');
+    if (call.status === GroupCallStatus.ENDED) {
+      throw new GoneException('Call ended');
+    }
+
+    const invite = call.invites.find((i: any) => i.userId === userId);
+    if (!invite) throw new ForbiddenException('No invite for this user');
+
+    // Idempotent: if already JOINED, just re-issue the token without touching
+    // DB / queue / gateway. See doc comment above for why.
+    if (invite.status === GroupCallInviteStatus.JOINED) {
+      const { token, livekitWsUrl } = await this.voice.generateGroupCallToken(call.id, userId);
+      return { livekitToken: token, livekitWsUrl };
+    }
+
+    // Single-transaction state transition so concurrent readers can't observe
+    // an inconsistent (invite=JOINED, call=LOBBY) snapshot.
+    await this.prisma.$transaction(async (tx: any) => {
+      await tx.groupCallInvite.update({
+        where: { groupCallId_userId: { groupCallId: callId, userId } },
+        data: {
+          status: GroupCallInviteStatus.JOINED,
+          joinedAt: new Date(),
+          respondedAt: new Date(),
+        },
+      });
+      if (call.status === GroupCallStatus.LOBBY) {
+        await tx.groupCall.update({
+          where: { id: callId },
+          data: { status: GroupCallStatus.ACTIVE },
+        });
+      }
+    });
+
+    // Best-effort cancel of the ring-timeout job. If the timeout already fired
+    // (BullMQ delivered the job to its worker before we got here), `remove`
+    // either no-ops or throws — either is fine since the invite is JOINED now.
+    // `Promise.resolve` wraps in case `queue.remove` returns void synchronously
+    // (some BullMQ versions / the unit-test mock).
+    await Promise.resolve(this.queue.remove(`timeout-${invite.id}`)).catch(() => {});
+
+    // Refetch invites so the broadcast carries the post-update view (the
+    // pre-update `call` still has the old CALLING status). emitStatus also
+    // needs the up-to-date list to compute the participant audience.
+    const refreshed = await this.prisma.groupCall.findUnique({
+      where: { id: callId },
+      include: { invites: true },
+    });
+    const participantIds = this.collectParticipantIds(refreshed!);
+    this.gateway.emitStatus(participantIds, {
+      groupCallId: callId,
+      invites: refreshed!.invites,
+    });
+    this.gateway.emitJoined(participantIds, {
+      groupCallId: callId,
+      userId,
+      joinedAt: new Date(),
+    });
+
+    const { token, livekitWsUrl } = await this.voice.generateGroupCallToken(call.id, userId);
+    return { livekitToken: token, livekitWsUrl };
+  }
+
+  /**
+   * Recipients of group-call status broadcasts: host + everyone whose invite
+   * is currently active (CALLING or JOINED). LEFT/DECLINED users are excluded
+   * intentionally — they explicitly opted out and shouldn't keep receiving
+   * presence churn. Reused by Tasks 7-9 (leave/end/kick).
+   */
+  private collectParticipantIds(call: any): string[] {
+    const ids = new Set<string>([call.hostUserId]);
+    for (const inv of call.invites) {
+      if (
+        inv.status === GroupCallInviteStatus.CALLING ||
+        inv.status === GroupCallInviteStatus.JOINED
+      ) {
+        ids.add(inv.userId);
+      }
+    }
+    return Array.from(ids);
   }
 }
