@@ -819,4 +819,37 @@ describe('GroupCallService', () => {
       expect(prisma.groupCall.update).not.toHaveBeenCalled();
     });
   });
+
+  describe('handleZombieEnd', () => {
+    it('delegates to endCall (transitions ENDED)', async () => {
+      const call = {
+        id: 'c1', hostUserId: 'host', livekitRoomName: 'group-c1', status: 'LOBBY',
+      };
+      prisma.groupCall.update = jest.fn().mockResolvedValue(call);
+      prisma.groupCallInvite.findMany = jest.fn().mockResolvedValue([]);
+      voice.deleteRoom = jest.fn().mockResolvedValue(undefined);
+
+      await service.handleZombieEnd('c1', 'timeout');
+
+      expect(prisma.groupCall.update).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ status: 'ENDED', endedReason: 'timeout' }),
+      }));
+      expect(gateway.emitEnded).toHaveBeenCalled();
+    });
+
+    it('handles all_left reason', async () => {
+      const call = {
+        id: 'c1', hostUserId: 'host', livekitRoomName: 'group-c1', status: 'ACTIVE',
+      };
+      prisma.groupCall.update = jest.fn().mockResolvedValue(call);
+      prisma.groupCallInvite.findMany = jest.fn().mockResolvedValue([]);
+      voice.deleteRoom = jest.fn().mockResolvedValue(undefined);
+
+      await service.handleZombieEnd('c1', 'all_left');
+
+      expect(prisma.groupCall.update).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ endedReason: 'all_left' }),
+      }));
+    });
+  });
 });

@@ -5,6 +5,7 @@ import { GroupCallGateway } from './group-call.gateway';
 import { GroupCallController } from './group-call.controller';
 import { GroupCallHostGuard } from './guards/group-call-host.guard';
 import { GroupCallTimeoutProcessor } from './jobs/timeout.processor';
+import { GroupCallCleanupCron } from './jobs/cleanup.cron';
 import { VoiceModule } from '../voice.module';
 import { ApnsService } from '../../common/apns.service';
 import { FcmService } from '../../common/fcm.service';
@@ -37,6 +38,7 @@ import { RedisModule } from '../../redis/redis.module';
     FcmService,
     GroupCallHostGuard,
     GroupCallTimeoutProcessor,
+    GroupCallCleanupCron,
   ],
   exports: [GroupCallService],
 })

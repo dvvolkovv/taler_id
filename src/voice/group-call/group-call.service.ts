@@ -627,6 +627,20 @@ export class GroupCallService {
   }
 
   /**
+   * Public wrapper for `endCall`, used by `GroupCallCleanupCron` (Task 12) to
+   * force-end zombie LOBBY/ACTIVE rows that have been stale beyond the cleanup
+   * thresholds. The underlying `endCall` is already race-safe via its
+   * `where: { status: { in: [LOBBY, ACTIVE] } }` filter, so concurrent ends
+   * (e.g. last-leaver + cron tick) are harmless.
+   */
+  async handleZombieEnd(
+    callId: string,
+    reason: 'all_left' | 'timeout' | 'host_ended',
+  ): Promise<void> {
+    await this.endCall(callId, reason);
+  }
+
+  /**
    * Host adds more invitees to an in-progress call.
    *
    * - 404 / 403 / 409 ordering matches the rest of the lifecycle methods.
