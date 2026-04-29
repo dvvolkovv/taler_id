@@ -15,6 +15,7 @@ import { EmailModule } from './email/email.module';
 import { AdminModule } from './admin/admin.module';
 import { OidcModule } from './oidc/oidc.module';
 import { OAuthRegistrationModule } from './oauth-registration/oauth-registration.module';
+import { DemoModule } from './demo/demo.module';
 import { AssistantModule } from './assistant/assistant.module';
 import { MessengerModule } from './messenger/messenger.module';
 import { VoiceModule } from './voice/voice.module';
@@ -75,6 +76,7 @@ import configuration from './config/configuration';
     AdminModule,
     OidcModule,
     OAuthRegistrationModule,
+    DemoModule,
     AssistantModule,
     MessengerModule,
     VoiceModule,

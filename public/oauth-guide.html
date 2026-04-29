@@ -245,9 +245,22 @@
 
     <!-- EXAMPLE APP -->
     <h2 id="example-app">Working Example: Node.js + Express</h2>
+
+    <div style="background: linear-gradient(135deg, #167EF2 0%, #0F66C7 100%); color: white; padding: 24px; border-radius: 12px; margin: 16px 0 32px;">
+      <h3 style="color: white; margin-top: 0;">🎮 Try it live — no installation needed</h3>
+      <p style="color: rgba(255,255,255,0.92); margin: 8px 0 16px;">
+        We host a live instance of this exact demo on the same server. Click below to log in
+        with your Taler ID account and see the full Authorization Code + PKCE flow end-to-end —
+        including a userinfo fetch from <code style="background: rgba(255,255,255,0.2); color: white;">/oauth/me</code>.
+      </p>
+      <p style="margin: 0;">
+        <a href="/demo/" style="display: inline-block; padding: 12px 24px; background: white; color: #167EF2; text-decoration: none; border-radius: 8px; font-weight: 600;">→ Open Live Demo</a>
+      </p>
+    </div>
+
     <p>
-      A complete minimal app you can copy, run locally, and use to test the full
-      OAuth flow with Taler ID. Uses the standard
+      Below is the same demo as a full source listing — copy, run locally, and adapt to your
+      own app. Uses the standard
       <a href="https://github.com/panva/openid-client" target="_blank" rel="noopener"><code>openid-client</code></a>
       library which auto-discovers all endpoints from <code>/oauth/.well-known/openid-configuration</code>.
     </p>
