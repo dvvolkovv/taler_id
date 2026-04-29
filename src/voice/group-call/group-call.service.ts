@@ -488,6 +488,11 @@ export class GroupCallService {
     const allInvites = await this.prisma.groupCallInvite.findMany({
       where: { groupCallId: callId },
     });
+    // DO NOT replace this with `collectParticipantIds(...)`. The end-of-call
+    // event MUST reach DECLINED/LEFT/TIMEOUT invitees too — e.g. a user who
+    // declined on phone A may still have a stale incoming-call sheet on phone B
+    // (delivered via APNs but never reconciled by Socket.IO). Narrowing the
+    // audience here will silently strand those sheets. See Task 7 review.
     const allUserIds = Array.from(
       new Set([updated.hostUserId, ...allInvites.map((i: any) => i.userId)]),
     );
