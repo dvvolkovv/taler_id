@@ -103,9 +103,20 @@ export class DemoController {
     const verifier = await this.redis.get(stateKey);
     if (verifier) await this.redis.del(stateKey);
     if (!verifier) {
+      // Log to help diagnose stale-callback issues. Includes Redis key existence
+      // (without value, since the value is the PKCE verifier).
+      const allKeys = await this.redis.getClient().keys('demo:pkce:*');
+      // eslint-disable-next-line no-console
+      console.log(
+        `[demo/callback] Unknown state="${state}". Redis has ${allKeys.length} other demo states (other UIDs): ${allKeys.slice(0, 3).map((k) => k.replace('demo:pkce:', '').slice(0, 8)).join(', ')}...`,
+      );
       res
         .type('html')
-        .send(this.renderError('Unknown or expired state. Try logging in again.'));
+        .send(
+          this.renderError(
+            `Unknown or expired state. Try logging in again. (state=${state.slice(0, 12)}... — likely a stale URL from a previous attempt; click 'Try again' to start fresh.)`,
+          ),
+        );
       return;
     }
 
