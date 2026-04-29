@@ -1,6 +1,7 @@
 import { Controller, Get, Query, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { createHash, randomBytes, randomUUID } from 'crypto';
+import { RedisService } from '../redis/redis.service';
 
 /**
  * Live "Try it live" demo for the OAuth integration guide.
@@ -14,10 +15,12 @@ import { createHash, randomBytes, randomUUID } from 'crypto';
  */
 @Controller('demo')
 export class DemoController {
-  // In-memory PKCE store. State is short-lived (5 min) and not security-sensitive
-  // beyond the demo itself (PKCE binding still requires the verifier).
-  private readonly pendingLogins = new Map<string, string>();
-  private static readonly STATE_TTL_MS = 5 * 60 * 1000;
+  constructor(private readonly redis: RedisService) {}
+
+  // PKCE state stored in Redis with 5-minute TTL — survives pm2 restarts and
+  // any future multi-worker deployment. Key: `demo:pkce:<state>`, value: code_verifier.
+  private static readonly STATE_TTL_SECONDS = 5 * 60;
+  private static readonly STATE_KEY_PREFIX = 'demo:pkce:';
 
   private get clientId(): string | undefined {
     return process.env.DEMO_OAUTH_CLIENT_ID;
@@ -43,7 +46,7 @@ export class DemoController {
   }
 
   @Get('/login')
-  login(@Res() res: Response): void {
+  async login(@Res() res: Response): Promise<void> {
     if (!this.clientId || !this.clientSecret) {
       res
         .status(503)
@@ -58,10 +61,10 @@ export class DemoController {
     const verifier = randomBytes(32).toString('base64url');
     const challenge = createHash('sha256').update(verifier).digest('base64url');
     const state = randomUUID();
-    this.pendingLogins.set(state, verifier);
-    setTimeout(
-      () => this.pendingLogins.delete(state),
-      DemoController.STATE_TTL_MS,
+    await this.redis.setEx(
+      `${DemoController.STATE_KEY_PREFIX}${state}`,
+      DemoController.STATE_TTL_SECONDS,
+      verifier,
     );
 
     const params = new URLSearchParams({
@@ -96,8 +99,9 @@ export class DemoController {
       res.type('html').send(this.renderError('Missing code or state in callback.'));
       return;
     }
-    const verifier = this.pendingLogins.get(state);
-    this.pendingLogins.delete(state);
+    const stateKey = `${DemoController.STATE_KEY_PREFIX}${state}`;
+    const verifier = await this.redis.get(stateKey);
+    if (verifier) await this.redis.del(stateKey);
     if (!verifier) {
       res
         .type('html')
