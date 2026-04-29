@@ -9,7 +9,13 @@ import {
   UnauthorizedException,
   ForbiddenException,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiParam, ApiBody, ApiResponse } from '@nestjs/swagger';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiParam,
+  ApiBody,
+  ApiResponse,
+} from '@nestjs/swagger';
 // Using 'any' for req/res to avoid TS1272 with isolatedModules + emitDecoratorMetadata
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
@@ -28,15 +34,50 @@ export class OidcInteractionController {
   @Get(':uid')
   @ApiOperation({
     summary: 'Get interaction details',
-    description: 'Returns details about the current OAuth interaction (login or consent). The uid is provided by the authorization endpoint redirect.',
+    description:
+      'Returns details about the current OAuth interaction (login or consent). The uid is provided by the authorization endpoint redirect.',
   })
-  @ApiParam({ name: 'uid', description: 'Interaction UID from the authorization redirect' })
-  @ApiResponse({ status: 200, description: 'Interaction details (login or consent)' })
+  @ApiParam({
+    name: 'uid',
+    description: 'Interaction UID from the authorization redirect',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Interaction details (login or consent)',
+  })
   async interaction(
     @Param('uid') uid: string,
     @Req() req: any,
     @Res() res: any,
   ) {
+    // Content negotiation: when the user navigates here in a browser, serve the
+    // consent.html SPA shell. When the SPA itself or another script does a
+    // `fetch(..., { headers: { Accept: 'application/json' } })`, return JSON.
+    // Most browsers send `Accept: text/html,...` for navigations; fetch defaults
+    // to `*/*` but our SPA explicitly sets `Accept: application/json`.
+    const acceptsHtml = (req.headers?.accept as string | undefined)?.includes(
+      'text/html',
+    );
+    const acceptsJson = (req.headers?.accept as string | undefined)?.includes(
+      'application/json',
+    );
+
+    if (acceptsHtml && !acceptsJson) {
+      // Send the consent.html SPA from disk. The SPA itself does the
+      // /oauth/interaction/:uid fetch (with Accept: application/json) to
+      // populate its state.
+      const fs = await import('fs');
+      const path = await import('path');
+      const htmlPath = path.resolve(
+        process.cwd(),
+        'public',
+        'consent.html',
+      );
+      const html = fs.readFileSync(htmlPath, 'utf8');
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      return res.send(html);
+    }
+
     const details = await this.oidcService.getInteractionDetails(req, res);
     const { prompt, params } = details;
 
@@ -50,7 +91,9 @@ export class OidcInteractionController {
     }
 
     if (prompt.name === 'consent') {
-      const client = await this.oidcService.findClient(params.client_id as string);
+      const client = await this.oidcService.findClient(
+        params.client_id as string,
+      );
       return res.json({
         interaction: 'consent',
         uid,
@@ -68,29 +111,52 @@ export class OidcInteractionController {
   @Post(':uid/login')
   @ApiOperation({
     summary: 'Submit login credentials',
-    description: 'Authenticates the user during OAuth flow. On success, redirects to consent or back to client with authorization code.',
+    description:
+      'Authenticates the user during OAuth flow. On success, redirects to consent or back to client with authorization code.',
   })
   @ApiParam({ name: 'uid', description: 'Interaction UID' })
-  @ApiBody({ schema: {
-    type: 'object',
-    properties: {
-      email: { type: 'string', description: 'User email', example: 'user@example.com' },
-      phone: { type: 'string', description: 'Or phone number (alternative to email)' },
-      password: { type: 'string', description: 'User password' },
-      remember: { type: 'boolean', description: 'Remember login session', default: true },
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        email: {
+          type: 'string',
+          description: 'User email',
+          example: 'user@example.com',
+        },
+        phone: {
+          type: 'string',
+          description: 'Or phone number (alternative to email)',
+        },
+        password: { type: 'string', description: 'User password' },
+        remember: {
+          type: 'boolean',
+          description: 'Remember login session',
+          default: true,
+        },
+      },
+      required: ['password'],
     },
-    required: ['password'],
-  }})
-  @ApiResponse({ status: 303, description: 'Redirect to consent or back to client' })
+  })
+  @ApiResponse({
+    status: 303,
+    description: 'Redirect to consent or back to client',
+  })
   @ApiResponse({ status: 401, description: 'Invalid credentials' })
-  @ApiResponse({ status: 403, description: 'Account locked (5+ failed attempts, 15min lockout)' })
+  @ApiResponse({
+    status: 403,
+    description: 'Account locked (5+ failed attempts, 15min lockout)',
+  })
   async login(
     @Param('uid') _uid: string,
     @Body() body: any,
     @Req() req: any,
     @Res() res: any,
   ) {
-    const user = await this.authenticateUser(body.email || body.phone, body.password);
+    const user = await this.authenticateUser(
+      body.email || body.phone,
+      body.password,
+    );
 
     const result = {
       login: {
@@ -106,21 +172,28 @@ export class OidcInteractionController {
   @Post(':uid/consent')
   @ApiOperation({
     summary: 'Submit consent decision',
-    description: 'Approves the requested scopes (all or partial). On success, redirects back to client with authorization code.',
+    description:
+      'Approves the requested scopes (all or partial). On success, redirects back to client with authorization code.',
   })
   @ApiParam({ name: 'uid', description: 'Interaction UID' })
-  @ApiBody({ schema: {
-    type: 'object',
-    properties: {
-      approved_scopes: {
-        type: 'array',
-        items: { type: 'string' },
-        description: 'Scopes to approve. If omitted, all requested scopes are approved.',
-        example: ['openid', 'profile', 'email'],
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        approved_scopes: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Scopes to approve. If omitted, all requested scopes are approved.',
+          example: ['openid', 'profile', 'email'],
+        },
       },
     },
-  }})
-  @ApiResponse({ status: 303, description: 'Redirect to client with authorization code' })
+  })
+  @ApiResponse({
+    status: 303,
+    description: 'Redirect to client with authorization code',
+  })
   @ApiResponse({ status: 401, description: 'Not logged in' })
   async consent(
     @Param('uid') _uid: string,
@@ -163,15 +236,15 @@ export class OidcInteractionController {
   @Get(':uid/abort')
   @ApiOperation({
     summary: 'Abort interaction',
-    description: 'Cancels the OAuth flow. Redirects back to the client with error=access_denied.',
+    description:
+      'Cancels the OAuth flow. Redirects back to the client with error=access_denied.',
   })
   @ApiParam({ name: 'uid', description: 'Interaction UID' })
-  @ApiResponse({ status: 303, description: 'Redirect to client with error=access_denied' })
-  async abort(
-    @Param('uid') _uid: string,
-    @Req() req: any,
-    @Res() res: any,
-  ) {
+  @ApiResponse({
+    status: 303,
+    description: 'Redirect to client with error=access_denied',
+  })
+  async abort(@Param('uid') _uid: string, @Req() req: any, @Res() res: any) {
     const result = {
       error: 'access_denied',
       error_description: 'End-User aborted interaction',
@@ -195,7 +268,9 @@ export class OidcInteractionController {
     const lockoutKey = `lockout:${identifier}`;
     const lockout = await this.redis.get(lockoutKey);
     if (lockout) {
-      throw new ForbiddenException('Account locked due to too many failed attempts');
+      throw new ForbiddenException(
+        'Account locked due to too many failed attempts',
+      );
     }
 
     const user = await this.prisma.user.findFirst({
