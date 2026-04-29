@@ -3,9 +3,10 @@ import { VoiceController } from "./voice.controller";
 import { VoiceService } from "./voice.service";
 import { FileStorageService } from "../common/file-storage.service";
 import { BillingModule } from "../billing/billing.module";
+import { GroupCallModule } from "./group-call/group-call.module";
 
 @Module({
-  imports: [BillingModule],
+  imports: [BillingModule, GroupCallModule],
   controllers: [VoiceController],
   providers: [VoiceService, FileStorageService],
 })
