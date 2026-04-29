@@ -106,6 +106,57 @@
       font-size: 14px;
     }
     .download-btn:hover { background: var(--primary-dark); text-decoration: none; }
+
+    /* Colors section */
+    .color-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 16px;
+    }
+    .color-card {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .color-swatch {
+      height: 96px;
+      width: 100%;
+    }
+    .color-meta {
+      padding: 12px 16px;
+    }
+    .color-name {
+      font-weight: 600;
+      font-size: 14px;
+      margin-bottom: 4px;
+    }
+    .color-hex {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--fg-muted);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+    }
+    .copy-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--fg-muted);
+      border-radius: 4px;
+      padding: 2px 8px;
+      font-size: 11px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .copy-btn:hover {
+      color: var(--fg);
+      border-color: var(--primary);
+    }
+    .copy-btn.copied {
+      color: var(--accent);
+      border-color: var(--accent);
+    }
   </style>
 </head>
 <body>
@@ -135,6 +186,45 @@
         </div>
         <div class="logo-meta">1024 × 1024 px, PNG · Use on light backgrounds</div>
         <a class="download-btn" href="/brand/logo-dark.png" download>Download PNG</a>
+      </div>
+    </div>
+
+    <h2>Colors</h2>
+    <div class="color-grid">
+      <div class="color-card">
+        <div class="color-swatch" style="background: #167EF2"></div>
+        <div class="color-meta">
+          <div class="color-name">Taler Blue</div>
+          <div class="color-hex"><code>#167EF2</code><button class="copy-btn" data-copy="#167EF2">Copy</button></div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background: #1570D6"></div>
+        <div class="color-meta">
+          <div class="color-name">Taler Blue Dark</div>
+          <div class="color-hex"><code>#1570D6</code><button class="copy-btn" data-copy="#1570D6">Copy</button></div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background: #FBBF24"></div>
+        <div class="color-meta">
+          <div class="color-name">Taler Gold</div>
+          <div class="color-hex"><code>#FBBF24</code><button class="copy-btn" data-copy="#FBBF24">Copy</button></div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background: #0A0E1A; border-bottom: 1px solid #232A40"></div>
+        <div class="color-meta">
+          <div class="color-name">Background Dark</div>
+          <div class="color-hex"><code>#0A0E1A</code><button class="copy-btn" data-copy="#0A0E1A">Copy</button></div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background: #F5F7FA"></div>
+        <div class="color-meta">
+          <div class="color-name">Foreground Light</div>
+          <div class="color-hex"><code>#F5F7FA</code><button class="copy-btn" data-copy="#F5F7FA">Copy</button></div>
+        </div>
       </div>
     </div>
   </div>
