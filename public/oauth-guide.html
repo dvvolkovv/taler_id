@@ -125,6 +125,7 @@
       <a href="#overview">Overview</a>
       <a href="#quickstart">Quick Start</a>
       <a href="#registration">Registration</a>
+      <a href="#example-app">Example App</a>
       <a href="#flow">Auth Flow</a>
       <a href="#endpoints">Endpoints</a>
       <a href="#scopes">Scopes & Claims</a>
@@ -241,6 +242,155 @@
 
     <p><strong>Limits:</strong> 10 clients per user, 3 registrations per minute per IP.</p>
     <p><strong>Lost your <code>client_secret</code>?</strong> The secret is shown only at registration. To rotate, delete the client and register a new one (a dedicated rotation endpoint is planned).</p>
+
+    <!-- EXAMPLE APP -->
+    <h2 id="example-app">Working Example: Node.js + Express</h2>
+    <p>
+      A complete minimal app you can copy, run locally, and use to test the full
+      OAuth flow with Taler ID. Uses the standard
+      <a href="https://github.com/panva/openid-client" target="_blank" rel="noopener"><code>openid-client</code></a>
+      library which auto-discovers all endpoints from <code>/oauth/.well-known/openid-configuration</code>.
+    </p>
+
+    <h3>Step 1 — Register the client</h3>
+    <p>
+      Use any logged-in Taler ID user (with <code>email_verified=true</code>) to register
+      your demo client. <code>redirect_uris</code> must include the local callback URL:
+    </p>
+<pre><code class="lang-bash">curl -X POST https://id.taler.tirol/oauth/register \
+  -H "Authorization: Bearer YOUR_TALER_ID_JWT" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "client_name": "Demo App",
+    "redirect_uris": ["http://localhost:3000/callback"]
+  }'</code></pre>
+    <p>Copy <code>client_id</code> and <code>client_secret</code> from the response — you'll need them in step 3.</p>
+
+    <h3>Step 2 — Project files</h3>
+    <p>Create a fresh directory <code>taler-id-demo/</code> with three files:</p>
+
+    <h4><code>package.json</code></h4>
+<pre><code class="lang-json">{
+  "name": "taler-id-demo",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": { "start": "node server.js" },
+  "dependencies": {
+    "express": "^4.18.0",
+    "openid-client": "^5.6.0",
+    "dotenv": "^16.0.0"
+  }
+}</code></pre>
+
+    <h4><code>.env</code></h4>
+<pre><code class="lang-ini">TALER_ISSUER=https://id.taler.tirol/oauth
+TALER_CLIENT_ID=&lt;paste from step 1&gt;
+TALER_CLIENT_SECRET=&lt;paste from step 1&gt;
+APP_BASE_URL=http://localhost:3000</code></pre>
+
+    <h4><code>server.js</code></h4>
+<pre><code class="lang-js">import express from 'express';
+import { Issuer, generators } from 'openid-client';
+import 'dotenv/config';
+
+const app = express();
+const PORT = 3000;
+
+// 1. Discover Taler ID OIDC endpoints automatically.
+const issuer = await Issuer.discover(process.env.TALER_ISSUER);
+
+// 2. Build a client with your registered credentials.
+const client = new issuer.Client({
+  client_id: process.env.TALER_CLIENT_ID,
+  client_secret: process.env.TALER_CLIENT_SECRET,
+  redirect_uris: [`${process.env.APP_BASE_URL}/callback`],
+  response_types: ['code'],
+});
+
+// 3. In-memory PKCE store (use Redis or signed cookies in production).
+const pendingLogins = new Map();
+
+// 4. Landing page with the "Login with Taler ID" button.
+app.get('/', (_req, res) =&gt; {
+  res.send(`
+    &lt;h1&gt;Demo App&lt;/h1&gt;
+    &lt;a href="/login" style="
+      display: inline-block; padding: 12px 24px;
+      background: #167EF2; color: white;
+      text-decoration: none; border-radius: 8px;
+      font-family: system-ui;
+    "&gt;Login with Taler ID&lt;/a&gt;
+  `);
+});
+
+// 5. Start the OAuth flow: generate PKCE + redirect to /oauth/auth.
+app.get('/login', (req, res) =&gt; {
+  const code_verifier = generators.codeVerifier();
+  const code_challenge = generators.codeChallenge(code_verifier);
+  const state = generators.state();
+  pendingLogins.set(state, code_verifier);
+
+  const url = client.authorizationUrl({
+    scope: 'openid profile email',
+    code_challenge,
+    code_challenge_method: 'S256',
+    state,
+  });
+  res.redirect(url);
+});
+
+// 6. Receive the authorization code, exchange for tokens, fetch userinfo.
+app.get('/callback', async (req, res) =&gt; {
+  const params = client.callbackParams(req);
+  const code_verifier = pendingLogins.get(params.state);
+  pendingLogins.delete(params.state);
+
+  if (!code_verifier) return res.status(400).send('Unknown state');
+
+  const tokenSet = await client.callback(
+    `${process.env.APP_BASE_URL}/callback`,
+    params,
+    { code_verifier, state: params.state },
+  );
+
+  const userinfo = await client.userinfo(tokenSet.access_token);
+
+  res.send(`
+    &lt;h1&gt;✅ Logged in&lt;/h1&gt;
+    &lt;pre&gt;${JSON.stringify(userinfo, null, 2)}&lt;/pre&gt;
+    &lt;a href="/"&gt;← Back&lt;/a&gt;
+  `);
+});
+
+app.listen(PORT, () =&gt; {
+  console.log(`Demo running on http://localhost:${PORT}`);
+});</code></pre>
+
+    <h3>Step 3 — Run it</h3>
+<pre><code class="lang-bash">npm install
+npm start
+# Open http://localhost:3000 in a browser, click "Login with Taler ID"</code></pre>
+
+    <p>
+      You'll be redirected to Taler ID's login page, then to a consent screen showing your
+      app's name and requested scopes, then back to <code>/callback</code> where the demo
+      shows the user's profile (sub, email, name).
+    </p>
+
+    <h3>What this proves</h3>
+    <ul>
+      <li>Self-service registration works end-to-end (step 1).</li>
+      <li>Authorization Code + PKCE flow with our backend (steps 5–6).</li>
+      <li>Token exchange returns <code>access_token</code> + <code>id_token</code> (and <code>refresh_token</code> if you add <code>offline_access</code> to scopes).</li>
+      <li><code>/oauth/me</code> userinfo endpoint returns claims for the logged-in user.</li>
+    </ul>
+
+    <p>
+      <strong>Adapt for production:</strong> replace the in-memory <code>pendingLogins</code>
+      Map with Redis or signed cookies; persist tokens in a session store; add
+      <code>offline_access</code> to scopes if you need refresh tokens; add CSRF protection
+      to forms; serve over HTTPS.
+    </p>
 
     <!-- FLOW -->
     <h2 id="flow">Authorization Flow</h2>
