@@ -203,6 +203,53 @@
       top: 12px;
       right: 12px;
     }
+
+    /* Sign-in button library (Phase 0 — Inter, no glyph yet) */
+    .signin-btn {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      font-weight: 600;
+      border-radius: 8px;
+      border: 1px solid #167EF2;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      text-decoration: none;
+      transition: background 120ms ease;
+      user-select: none;
+      box-sizing: border-box;
+    }
+    .signin-btn:hover { text-decoration: none; }
+    .signin-btn--regular { height: 44px; padding: 0 16px; font-size: 14px; }
+    .signin-btn--large { height: 56px; padding: 0 24px; font-size: 16px; }
+    .signin-btn--light { background: #FFFFFF; color: #167EF2; }
+    .signin-btn--light:hover { background: #EFF6FF; }
+    .signin-btn--dark { background: #167EF2; color: #FFFFFF; }
+    .signin-btn--dark:hover { background: #1570D6; border-color: #1570D6; }
+
+    /* Button preview cards */
+    .btn-card {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 16px;
+    }
+    .btn-card-title {
+      font-size: 14px;
+      color: var(--fg-muted);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      margin-bottom: 16px;
+    }
+    .btn-preview-light, .btn-preview-dark {
+      padding: 32px;
+      border-radius: 8px;
+      text-align: center;
+      margin-bottom: 12px;
+    }
+    .btn-preview-light { background: #F5F7FA; }
+    .btn-preview-dark { background: #0A0E1A; border: 1px solid var(--border); }
   </style>
 </head>
 <body>
@@ -298,6 +345,80 @@
       <div class="code-block">
         <button class="copy-btn" data-copy-target="font-mono">Copy</button>
         <pre id="font-mono">&lt;link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"&gt;</pre>
+      </div>
+    </div>
+
+    <h2>Buttons</h2>
+    <p class="lead" style="font-size: 16px; margin-bottom: 24px;">Drop these "Sign in with Taler ID" buttons into your app. The CSS block below covers all four variants — paste it once, then use the per-variant HTML.</p>
+
+    <div class="btn-card">
+      <div class="btn-card-title">Shared CSS — paste once</div>
+      <div class="code-block">
+        <button class="copy-btn" data-copy-target="shared-css">Copy</button>
+        <pre id="shared-css">.signin-btn {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-weight: 600;
+  border-radius: 8px;
+  border: 1px solid #167EF2;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  transition: background 120ms ease;
+  user-select: none;
+  box-sizing: border-box;
+}
+.signin-btn--regular { height: 44px; padding: 0 16px; font-size: 14px; }
+.signin-btn--large   { height: 56px; padding: 0 24px; font-size: 16px; }
+.signin-btn--light          { background: #FFFFFF; color: #167EF2; }
+.signin-btn--light:hover    { background: #EFF6FF; }
+.signin-btn--dark           { background: #167EF2; color: #FFFFFF; }
+.signin-btn--dark:hover     { background: #1570D6; border-color: #1570D6; }</pre>
+      </div>
+    </div>
+
+    <div class="btn-card">
+      <div class="btn-card-title">Light · Regular (44 px)</div>
+      <div class="btn-preview-light">
+        <a href="#" class="signin-btn signin-btn--regular signin-btn--light">Sign in with Taler ID</a>
+      </div>
+      <div class="code-block">
+        <button class="copy-btn" data-copy-target="btn-light-regular">Copy</button>
+        <pre id="btn-light-regular">&lt;a href="https://id.taler.tirol/oauth/auth?..." class="signin-btn signin-btn--regular signin-btn--light"&gt;Sign in with Taler ID&lt;/a&gt;</pre>
+      </div>
+    </div>
+
+    <div class="btn-card">
+      <div class="btn-card-title">Light · Large (56 px)</div>
+      <div class="btn-preview-light">
+        <a href="#" class="signin-btn signin-btn--large signin-btn--light">Sign in with Taler ID</a>
+      </div>
+      <div class="code-block">
+        <button class="copy-btn" data-copy-target="btn-light-large">Copy</button>
+        <pre id="btn-light-large">&lt;a href="https://id.taler.tirol/oauth/auth?..." class="signin-btn signin-btn--large signin-btn--light"&gt;Sign in with Taler ID&lt;/a&gt;</pre>
+      </div>
+    </div>
+
+    <div class="btn-card">
+      <div class="btn-card-title">Dark · Regular (44 px)</div>
+      <div class="btn-preview-dark">
+        <a href="#" class="signin-btn signin-btn--regular signin-btn--dark">Sign in with Taler ID</a>
+      </div>
+      <div class="code-block">
+        <button class="copy-btn" data-copy-target="btn-dark-regular">Copy</button>
+        <pre id="btn-dark-regular">&lt;a href="https://id.taler.tirol/oauth/auth?..." class="signin-btn signin-btn--regular signin-btn--dark"&gt;Sign in with Taler ID&lt;/a&gt;</pre>
+      </div>
+    </div>
+
+    <div class="btn-card">
+      <div class="btn-card-title">Dark · Large (56 px)</div>
+      <div class="btn-preview-dark">
+        <a href="#" class="signin-btn signin-btn--large signin-btn--dark">Sign in with Taler ID</a>
+      </div>
+      <div class="code-block">
+        <button class="copy-btn" data-copy-target="btn-dark-large">Copy</button>
+        <pre id="btn-dark-large">&lt;a href="https://id.taler.tirol/oauth/auth?..." class="signin-btn signin-btn--large signin-btn--dark"&gt;Sign in with Taler ID&lt;/a&gt;</pre>
       </div>
     </div>
   </div>
