@@ -38,6 +38,7 @@ model User {
   wallet               UserWallet?
   billingTransactions  BillingTransaction[]
   aiSessions           AiSession[]
+  oauthClients         OAuthClient[]
 }
 
 model DeviceKey {
@@ -151,7 +152,12 @@ model OAuthClient {
   redirectUris  String[]
   allowedScopes String[]
   logoUri       String?
+  userId        String?
+  user          User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([userId])
 }
 
 model Tenant {
