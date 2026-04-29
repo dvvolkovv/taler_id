@@ -187,8 +187,22 @@ export class GroupCallService {
         },
       },
       include: {
-        host: { include: { profile: true } },
-        invites: { include: { user: { include: { profile: true } } } },
+        host: {
+          select: {
+            id: true,
+            profile: { select: { firstName: true, lastName: true, avatarUrl: true } },
+          },
+        },
+        invites: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                profile: { select: { firstName: true, lastName: true, avatarUrl: true } },
+              },
+            },
+          },
+        },
       },
       orderBy: { startedAt: 'desc' },
     });
@@ -198,8 +212,22 @@ export class GroupCallService {
     const call = await this.prisma.groupCall.findUnique({
       where: { id: callId },
       include: {
-        host: { include: { profile: true } },
-        invites: { include: { user: { include: { profile: true } } } },
+        host: {
+          select: {
+            id: true,
+            profile: { select: { firstName: true, lastName: true, avatarUrl: true } },
+          },
+        },
+        invites: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                profile: { select: { firstName: true, lastName: true, avatarUrl: true } },
+              },
+            },
+          },
+        },
       },
     });
     if (!call) throw new NotFoundException('GroupCall not found');
