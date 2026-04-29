@@ -2,6 +2,8 @@ import { Module, forwardRef } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { GroupCallService } from './group-call.service';
 import { GroupCallGateway } from './group-call.gateway';
+import { GroupCallController } from './group-call.controller';
+import { GroupCallHostGuard } from './guards/group-call-host.guard';
 import { VoiceModule } from '../voice.module';
 import { ApnsService } from '../../common/apns.service';
 import { FcmService } from '../../common/fcm.service';
@@ -26,7 +28,8 @@ import { RedisModule } from '../../redis/redis.module';
     BullModule.registerQueue({ name: 'group-call-timeouts' }),
     RedisModule,
   ],
-  providers: [GroupCallService, GroupCallGateway, ApnsService, FcmService],
+  controllers: [GroupCallController],
+  providers: [GroupCallService, GroupCallGateway, ApnsService, FcmService, GroupCallHostGuard],
   exports: [GroupCallService],
 })
 export class GroupCallModule {}
