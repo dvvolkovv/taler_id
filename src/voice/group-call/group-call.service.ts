@@ -6,6 +6,8 @@ import {
   ForbiddenException,
   GoneException,
   ConflictException,
+  HttpException,
+  HttpStatus,
   Logger,
   forwardRef,
 } from '@nestjs/common';
@@ -17,6 +19,7 @@ import { VoiceService } from '../voice.service';
 import { GroupCallGateway } from './group-call.gateway';
 import { ApnsService } from '../../common/apns.service';
 import { FcmService } from '../../common/fcm.service';
+import { RedisService } from '../../redis/redis.service';
 import { GroupCallStatus, GroupCallInviteStatus } from '@prisma/client';
 
 const MAX_PARTICIPANTS = 8;
@@ -47,6 +50,7 @@ export class GroupCallService {
     @InjectQueue('group-call-timeouts') private readonly queue: Queue,
     private readonly apns: ApnsService,
     private readonly fcm: FcmService,
+    private readonly redis: RedisService,
   ) {}
 
   async createCall(hostUserId: string, inviteeIds: string[]) {
@@ -620,6 +624,338 @@ export class GroupCallService {
       .catch((e: any) =>
         this.logger.warn(`LiveKit deleteRoom failed: ${e?.message ?? e}`),
       );
+  }
+
+  /**
+   * Host adds more invitees to an in-progress call.
+   *
+   * - 404 / 403 / 409 ordering matches the rest of the lifecycle methods.
+   *   ENDED is rejected with 409 because there's no recovery path (the
+   *   LiveKit room has been deleted by `endCall`); the iOS UI will never
+   *   show the "invite more" button for an ENDED call, but a flaky network
+   *   could race the user's tap against the ENDED transition.
+   * - **Capacity**: counts host (1) + currently-active invites (JOINED OR
+   *   CALLING). CALLING counts because pending-ring slots aren't free —
+   *   if every still-CALLING invitee accepts after we add new ones, the
+   *   room would otherwise overflow. We don't count LEFT/DECLINED/TIMEOUT
+   *   since those users have already vacated their slot.
+   * - **Deduplication**: any userId already JOINED/CALLING is silently
+   *   skipped (idempotent). The host could re-tap an invitee whose ring
+   *   is in flight, and we shouldn't double-create an invite row (would
+   *   violate the `(groupCallId, userId)` unique constraint anyway). We
+   *   also defensively skip the host's own id even though the schema has
+   *   no host invite row, mirroring `createCall`'s self-invite guard.
+   * - DB write + queue + push + Socket.io fan-out follow the same parallel
+   *   `Promise.all` pattern as `createCall` for low latency, and emit a
+   *   final `emitStatus` to existing participants so they see the new
+   *   invitees appear in their participant grid in CALLING state.
+   * - **Note**: this method does NOT use a $transaction around createMany.
+   *   Unlike `createCall` (which atomically creates both the GroupCall and
+   *   its first invites), here the GroupCall already exists and its state
+   *   is unchanged. createMany is a single write — if it fails, no
+   *   rollback is needed.
+   */
+  async inviteMore(callId: string, hostUserId: string, userIds: string[]) {
+    const call = await this.prisma.groupCall.findUnique({
+      where: { id: callId },
+      include: { invites: true },
+    });
+    if (!call) throw new NotFoundException('GroupCall not found');
+    if (call.hostUserId !== hostUserId) {
+      throw new ForbiddenException('Only host can invite');
+    }
+    if (call.status === GroupCallStatus.ENDED) {
+      throw new ConflictException('Call ended');
+    }
+
+    // Skip userIds that already have a JOINED or CALLING invite (no duplicates),
+    // and the host's own id (defensive — schema has no host invite row, but
+    // a future schema change shouldn't accidentally create one).
+    const existingIds = new Set(
+      call.invites
+        .filter(
+          (i: any) =>
+            i.status === GroupCallInviteStatus.JOINED ||
+            i.status === GroupCallInviteStatus.CALLING,
+        )
+        .map((i: any) => i.userId),
+    );
+    const newUserIds = userIds.filter(
+      (id) => !existingIds.has(id) && id !== hostUserId,
+    );
+
+    // Capacity: occupied = host + JOINED + CALLING. CALLING counts because
+    // the pending ring still holds a slot — if all current rings accept
+    // after the new ones are added, the room could overflow.
+    const occupied =
+      1 /* host */ +
+      call.invites.filter(
+        (i: any) =>
+          i.status === GroupCallInviteStatus.JOINED ||
+          i.status === GroupCallInviteStatus.CALLING,
+      ).length;
+    if (occupied + newUserIds.length > MAX_PARTICIPANTS) {
+      throw new ConflictException(
+        `Capacity exceeded: ${MAX_PARTICIPANTS} max participants`,
+      );
+    }
+
+    // Nothing to do? Still return a structured response so the controller
+    // can give the client a deterministic shape.
+    if (newUserIds.length === 0) return { added: 0 };
+
+    await this.prisma.groupCallInvite.createMany({
+      data: newUserIds.map((uid) => ({
+        groupCallId: callId,
+        userId: uid,
+        invitedBy: hostUserId,
+        status: GroupCallInviteStatus.CALLING,
+      })),
+    });
+
+    // Refetch only the new invites so we know their auto-generated `id`s
+    // (needed for the `timeout-${invite.id}` jobId). createMany doesn't
+    // return rows in Prisma.
+    const newInvites = await this.prisma.groupCallInvite.findMany({
+      where: { groupCallId: callId, userId: { in: newUserIds } },
+    });
+
+    // Same Profile-based host payload as createCall — we keep this in sync
+    // so iOS clients render the incoming-call sheet identically whether the
+    // invite came from the initial createCall or a subsequent inviteMore.
+    const profile = await this.prisma.profile.findUnique({
+      where: { userId: hostUserId },
+      select: { firstName: true, lastName: true, avatarUrl: true },
+    });
+    const host = {
+      id: hostUserId,
+      displayName:
+        `${profile?.firstName ?? ''} ${profile?.lastName ?? ''}`.trim() ||
+        hostUserId,
+      avatarUrl: profile?.avatarUrl ?? null,
+    };
+
+    await Promise.all(
+      newInvites.map(async (inv: any) => {
+        await this.queue.add(
+          'timeout-invite',
+          { inviteId: inv.id },
+          { delay: RING_TIMEOUT_SEC * 1000, jobId: `timeout-${inv.id}` },
+        );
+        this.apns
+          .sendGroupCallInvite(inv.userId, {
+            groupCallId: callId,
+            host,
+            inviteeCount: newInvites.length,
+            livekitRoomName: call.livekitRoomName,
+          })
+          .catch((e) =>
+            this.logger.warn(
+              `APNs push failed for ${inv.userId}: ${e?.message ?? e}`,
+            ),
+          );
+        this.fcm
+          .sendGroupCallInvite(inv.userId, {
+            groupCallId: callId,
+            host,
+            inviteeCount: newInvites.length,
+          })
+          .catch((e) =>
+            this.logger.warn(
+              `FCM push failed for ${inv.userId}: ${e?.message ?? e}`,
+            ),
+          );
+        this.gateway.emitInvite(inv.userId, {
+          groupCallId: callId,
+          host,
+          invitees: newInvites,
+        });
+      }),
+    );
+
+    // Refetch and broadcast the updated invite list to existing participants
+    // (same pattern as joinCall/leaveCall) so their UIs add the new pending
+    // tiles to the participant grid.
+    const refreshed = await this.prisma.groupCall.findUnique({
+      where: { id: callId },
+      include: { invites: true },
+    });
+    const participantIds = this.collectParticipantIds(refreshed!);
+    this.gateway.emitStatus(participantIds, {
+      groupCallId: callId,
+      invites: refreshed!.invites,
+    });
+
+    return { added: newUserIds.length };
+  }
+
+  /**
+   * Host forcibly removes an invitee from the call.
+   *
+   * - 400 / 404 / 403 / idempotent ordering matches the lifecycle convention,
+   *   with one wrinkle: `BadRequest` for self-kick is checked BEFORE the DB
+   *   round-trip because it's a pure pre-condition — saves a query for an
+   *   obviously broken request.
+   * - **Authorization vs. existence**: we look up the call, verify host,
+   *   then locate the target invite. Missing target → 404 (the host's UI
+   *   would only show "kick" for a participant they can see; if the row
+   *   is missing the host has stale state).
+   * - **Idempotent**: target already LEFT → no-op early return so a flaky
+   *   double-tap doesn't try to re-disconnect a phantom LiveKit participant
+   *   or re-broadcast.
+   * - **LiveKit removeParticipant is best-effort**: the kicked user may have
+   *   already disconnected on their own, in which case LK either returns
+   *   success or a benign error. We log but don't throw — the DB write
+   *   (status=LEFT) is the source of truth, and LK's `departureTimeout`
+   *   will reap stragglers.
+   * - **Broadcast**: the kicked user gets a single-recipient `emitKicked`
+   *   event so their UI can show a "you were removed" sheet (vs. the
+   *   self-initiated leave UX). Other participants get the standard
+   *   `emitStatus` so their grid drops the kicked user's tile.
+   * - Calls `endCallIfDeserted` after to handle the (rare) case where
+   *   kicking the last JOINED invitee leaves the host alone in an ACTIVE
+   *   call — that should auto-end with `all_left`. (The host itself can't
+   *   be kicked, so the host-only-remaining branch is the only path here.)
+   */
+  async kick(callId: string, hostUserId: string, targetUserId: string) {
+    if (hostUserId === targetUserId) {
+      throw new BadRequestException('Cannot kick host');
+    }
+
+    const call = await this.prisma.groupCall.findUnique({
+      where: { id: callId },
+      include: { invites: true },
+    });
+    if (!call) throw new NotFoundException('GroupCall not found');
+    if (call.hostUserId !== hostUserId) {
+      throw new ForbiddenException('Only host can kick');
+    }
+
+    const target = call.invites.find((i: any) => i.userId === targetUserId);
+    if (!target) throw new NotFoundException('Target not in call');
+    if (target.status === GroupCallInviteStatus.LEFT) return; // idempotent
+
+    await this.prisma.groupCallInvite.update({
+      where: {
+        groupCallId_userId: { groupCallId: callId, userId: targetUserId },
+      },
+      data: { status: GroupCallInviteStatus.LEFT, leftAt: new Date() },
+    });
+
+    // Force LiveKit disconnect (best-effort — target may already be gone).
+    await this.voice
+      .removeParticipant(call.livekitRoomName, targetUserId)
+      .catch((e: any) =>
+        this.logger.warn(
+          `LiveKit removeParticipant failed: ${e?.message ?? e}`,
+        ),
+      );
+
+    // Single-recipient kicked event so the kicked client can show
+    // a distinguishable "you were removed" sheet vs. the self-leave UX;
+    // status broadcast updates everyone else's grid.
+    this.gateway.emitKicked(targetUserId, {
+      groupCallId: callId,
+      by: hostUserId,
+    });
+
+    const refreshed = await this.prisma.groupCall.findUnique({
+      where: { id: callId },
+      include: { invites: true },
+    });
+    const participantIds = this.collectParticipantIds(refreshed!);
+    this.gateway.emitStatus(participantIds, {
+      groupCallId: callId,
+      invites: refreshed!.invites,
+    });
+
+    // If kicking the last JOINED invitee leaves the host alone, auto-end
+    // with `all_left`. Same desertion logic as decline/leave.
+    await this.endCallIfDeserted(refreshed!);
+  }
+
+  /**
+   * Host requests all JOINED participants to mute themselves.
+   *
+   * - **Peer-equal philosophy**: the host doesn't actually mute peers via
+   *   LiveKit's `updateParticipant` track-publication API — we send a soft
+   *   request via Socket.io and let each client's UI decide whether to
+   *   comply. This keeps the host from being able to silently censor a
+   *   participant (e.g., a hostile host muting a whistleblower mid-call)
+   *   and surfaces the action as a notification on the muted client.
+   * - **Rate limit**: 1 per 10s per call, enforced via Redis SET NX EX.
+   *   Prevents a runaway host (or buggy client) from spamming the entire
+   *   room with mute prompts. Returns 429 (TooManyRequests) on hit.
+   * - **Audience**: only JOINED participants except the host. CALLING users
+   *   aren't yet in the LiveKit room and have no media to mute, so sending
+   *   them a mute request is meaningless and would just churn their UI.
+   * - We explicitly do NOT pre-validate that there are any JOINED targets:
+   *   a host muting an empty room is a no-op (the gateway emits to []),
+   *   not an error. This lets the host pre-mute before everyone joins.
+   */
+  async muteAll(callId: string, hostUserId: string) {
+    const call = await this.prisma.groupCall.findUnique({
+      where: { id: callId },
+      include: { invites: true },
+    });
+    if (!call) throw new NotFoundException('GroupCall not found');
+    if (call.hostUserId !== hostUserId) {
+      throw new ForbiddenException('Only host can mute-all');
+    }
+
+    // Rate limit: 1 per 10s per call. Redis SET NX returns 'OK' if the key
+    // was set, null if it already existed. The TTL self-cleans the key so
+    // we don't need a sweeper. Per-call (not per-host) so a transferred
+    // host can't immediately re-mute on top of the previous host's burst.
+    const allowed = await this.redis
+      .getClient()
+      .set(`groupcall:mute-all:${callId}`, '1', 'EX', 10, 'NX');
+    if (allowed !== 'OK') {
+      throw new HttpException(
+        'Rate limited: 1 mute-all per 10s',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    // Soft-mute request to JOINED only (excluding host). CALLING users have
+    // no media to mute yet — sending to them is noise.
+    const targetIds = call.invites
+      .filter(
+        (i: any) =>
+          i.status === GroupCallInviteStatus.JOINED && i.userId !== hostUserId,
+      )
+      .map((i: any) => i.userId);
+
+    this.gateway.emitMuteRequest(targetIds, {
+      groupCallId: callId,
+      by: hostUserId,
+    });
+  }
+
+  /**
+   * Host explicitly ends the call for everyone.
+   *
+   * - 404 / 403 / idempotent ordering matches the rest of the lifecycle.
+   * - Already-ENDED → silent no-op (idempotent), so a flaky double-tap on
+   *   "End for all" doesn't error after the first click already won the
+   *   ENDED transition.
+   * - Delegates to the private `endCall` helper with reason `host_ended`,
+   *   which atomically transitions ENDED, broadcasts `groupCallEnded` to
+   *   the FULL invitee audience (DECLINED/LEFT/TIMEOUT included — see
+   *   `endCall` doc on why narrowing strands stale incoming-call sheets),
+   *   and best-effort deletes the LiveKit room.
+   */
+  async forceEnd(callId: string, hostUserId: string) {
+    const call = await this.prisma.groupCall.findUnique({
+      where: { id: callId },
+    });
+    if (!call) throw new NotFoundException('GroupCall not found');
+    if (call.hostUserId !== hostUserId) {
+      throw new ForbiddenException('Only host can end call');
+    }
+    if (call.status === GroupCallStatus.ENDED) return; // idempotent
+
+    await this.endCall(callId, 'host_ended');
   }
 
   /**

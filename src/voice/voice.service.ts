@@ -106,6 +106,26 @@ export class VoiceService {
     await this.rooms.deleteRoom(roomName);
   }
 
+  /**
+   * Force-disconnect a participant from a LiveKit room.
+   *
+   * Used by group-call host actions (Task 9 `kick`) to forcibly remove an
+   * invitee. Mirrors `deleteRoom`: thin pass-through to the LiveKit
+   * RoomServiceClient. The same direct call already exists in
+   * `ai-twin.service.ts` — wrapping it here gives the group-call service
+   * a clean injection seam for unit-testing without spying on LiveKit
+   * internals.
+   *
+   * Best-effort from the caller's perspective: LiveKit returns success when
+   * the participant is already gone, so callers don't need to pre-check
+   * existence. If the LK server is transiently down, callers should swallow
+   * the error and rely on their DB write (status=LEFT) as the source of
+   * truth — the participant will be reaped by LiveKit's `departureTimeout`.
+   */
+  async removeParticipant(roomName: string, identity: string): Promise<void> {
+    await this.rooms.removeParticipant(roomName, identity);
+  }
+
   async endCallLog(roomName: string): Promise<void> {
     try {
       const log = await this.prisma.callLog.findUnique({ where: { roomName } });

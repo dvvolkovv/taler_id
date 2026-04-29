@@ -5,6 +5,7 @@ import { GroupCallGateway } from './group-call.gateway';
 import { VoiceModule } from '../voice.module';
 import { ApnsService } from '../../common/apns.service';
 import { FcmService } from '../../common/fcm.service';
+import { RedisModule } from '../../redis/redis.module';
 
 /**
  * Group voice call (Phase 1) module. PrismaModule is global so we don't
@@ -14,11 +15,16 @@ import { FcmService } from '../../common/fcm.service';
  * imports GroupCallModule (so VoiceController can wire group-call routes
  * once Task 11 lands), so the reverse VoiceService dependency uses
  * `forwardRef` to break the cycle.
+ *
+ * RedisModule is `@Global()` so importing it here is technically redundant,
+ * but listing it explicitly documents the dependency (Task 9 `muteAll` rate
+ * limit) and keeps the module self-describing for future readers.
  */
 @Module({
   imports: [
     forwardRef(() => VoiceModule),
     BullModule.registerQueue({ name: 'group-call-timeouts' }),
+    RedisModule,
   ],
   providers: [GroupCallService, GroupCallGateway, ApnsService, FcmService],
   exports: [GroupCallService],
