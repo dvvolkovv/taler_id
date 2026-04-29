@@ -20,18 +20,18 @@ Publish a self-contained brand assets page at `https://id.taler.tirol/brand` so 
 
 ## Architecture
 
-Single static page `public/brand.html`, served via the existing Express static-file middleware that already serves `public/oauth-guide.html` and `public/consent.html`. Referenced logo PNGs are copied (not symlinked) into `public/brand/` so the page is self-contained and movable.
+Single static page `public/brand/index.html`, served via the existing `ServeStaticModule` (`rootPath: public/`, `serveRoot: '/'`). Putting the page inside a directory and naming it `index.html` gives a clean URL `/brand` (NestJS auto-redirects to `/brand/`, which serves `index.html`) — same pattern already used by `public/admin/index.html`. Logo PNGs sit alongside the HTML in the same directory so the page is self-contained.
 
 ```
 public/
-├── brand.html              # the page (all 4 sections inline)
 ├── brand/
-│   ├── logo-light.png      # 1024×1024 — copy of existing assets/logo-light.png
-│   └── logo-dark.png       # 1024×1024 — copy of existing assets/logo-dark.png
+│   ├── index.html          # the page (all 4 sections, inline CSS)
+│   ├── logo-light.png      # 1024×1024 — copy from mobile repo's app_icon_light.png
+│   └── logo-dark.png       # 1024×1024 — copy from mobile repo's app_icon_dark.png
 └── oauth-guide.html        # gains a "Brand assets →" link in header
 ```
 
-No new CSS file: styles are inlined in `brand.html` to keep the deliverable a single drop-in artifact.
+No new CSS file: styles are inlined in `index.html` to keep the deliverable a single drop-in artifact.
 
 ## Page Structure
 
@@ -88,10 +88,10 @@ Common styles (all variants): Inter 600 weight, 8 px border-radius, 16 px horizo
 
 This is a static-asset deliverable — no unit tests. Manual acceptance checks:
 
-1. `curl -fI https://staging.id.taler.tirol/brand` returns 200, content-type `text/html`.
+1. `curl -fIL https://staging.id.taler.tirol/brand` returns 200 (after 301 → `/brand/`), content-type `text/html`.
 2. `curl -fI https://staging.id.taler.tirol/brand/logo-light.png` returns 200, content-type `image/png`.
 3. Open `/brand` in a browser; verify all 4 sections render, copy buttons work, "Download PNG" downloads (not opens) the file.
-4. Open `/oauth-guide` and click "Brand assets →"; verify it lands on `/brand`.
+4. Open `/oauth-guide.html` and click "Brand assets →"; verify it lands on `/brand/`.
 5. Visual smoke: two button variants displayed in the panel match the live mobile app's primary color (eyeball check; both are `#167EF2`).
 
 ## Deployment
