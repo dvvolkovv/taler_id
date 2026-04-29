@@ -123,4 +123,43 @@ describe('GroupCallService', () => {
       expect(prisma.groupCall.create).toHaveBeenCalledTimes(2);
     });
   });
+
+  describe('getActiveCallsForUser', () => {
+    it('returns calls where user has CALLING/JOINED/LEFT/DECLINED invite and call is LOBBY/ACTIVE', async () => {
+      const calls = [{ id: 'c1', status: 'ACTIVE', invites: [{ userId: 'u1', status: 'JOINED' }] }];
+      prisma.groupCall.findMany = jest.fn().mockResolvedValue(calls);
+      const result = await service.getActiveCallsForUser('u1');
+      expect(prisma.groupCall.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({
+          status: { in: ['LOBBY', 'ACTIVE'] },
+          invites: { some: { userId: 'u1', status: { in: ['CALLING', 'JOINED', 'LEFT', 'DECLINED'] } } },
+        }),
+      }));
+      expect(result).toEqual(calls);
+    });
+  });
+
+  describe('getCall', () => {
+    it('throws NotFound if call missing', async () => {
+      prisma.groupCall.findUnique = jest.fn().mockResolvedValue(null);
+      await expect(service.getCall('xxx', 'u1')).rejects.toThrow();
+    });
+
+    it('throws Forbidden if user has no invite for the call', async () => {
+      prisma.groupCall.findUnique = jest.fn().mockResolvedValue({ id: 'c1', hostUserId: 'host', invites: [{ userId: 'u2' }] });
+      await expect(service.getCall('c1', 'u1')).rejects.toThrow();
+    });
+
+    it('returns call if user has invite', async () => {
+      const call = { id: 'c1', hostUserId: 'host', invites: [{ userId: 'u1' }] };
+      prisma.groupCall.findUnique = jest.fn().mockResolvedValue(call);
+      expect(await service.getCall('c1', 'u1')).toEqual(call);
+    });
+
+    it('returns call if user is host (no invite needed)', async () => {
+      const call = { id: 'c1', hostUserId: 'me', invites: [] };
+      prisma.groupCall.findUnique = jest.fn().mockResolvedValue(call);
+      expect(await service.getCall('c1', 'me')).toEqual(call);
+    });
+  });
 });

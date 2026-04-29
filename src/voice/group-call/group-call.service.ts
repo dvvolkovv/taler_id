@@ -1,4 +1,12 @@
-import { Inject, Injectable, BadRequestException, Logger, forwardRef } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  BadRequestException,
+  NotFoundException,
+  ForbiddenException,
+  Logger,
+  forwardRef,
+} from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { v4 as uuidv4 } from 'uuid';
@@ -151,5 +159,55 @@ export class GroupCallService {
       livekitToken: token,
       livekitWsUrl,
     };
+  }
+
+  // The plan called for `host: { select: { id, displayName, avatarUrl } }`,
+  // but the User model has neither column — `displayName`/`avatarUrl` live on
+  // the Profile relation (`User.profile Profile?`). We therefore include the
+  // `host` and each invite's `user` together with their `profile`, leaving
+  // synthesis of `displayName` (firstName+lastName fallback to userId) to the
+  // controller/gateway layer (Tasks 10, 17), which is the same convention the
+  // existing `createCall` push-payload code already follows.
+  async getActiveCallsForUser(userId: string) {
+    return this.prisma.groupCall.findMany({
+      where: {
+        status: { in: [GroupCallStatus.LOBBY, GroupCallStatus.ACTIVE] },
+        invites: {
+          some: {
+            userId,
+            status: {
+              in: [
+                GroupCallInviteStatus.CALLING,
+                GroupCallInviteStatus.JOINED,
+                GroupCallInviteStatus.LEFT,
+                GroupCallInviteStatus.DECLINED,
+              ],
+            },
+          },
+        },
+      },
+      include: {
+        host: { include: { profile: true } },
+        invites: { include: { user: { include: { profile: true } } } },
+      },
+      orderBy: { startedAt: 'desc' },
+    });
+  }
+
+  async getCall(callId: string, userId: string) {
+    const call = await this.prisma.groupCall.findUnique({
+      where: { id: callId },
+      include: {
+        host: { include: { profile: true } },
+        invites: { include: { user: { include: { profile: true } } } },
+      },
+    });
+    if (!call) throw new NotFoundException('GroupCall not found');
+    const isHost = call.hostUserId === userId;
+    const hasInvite = call.invites.some((i: any) => i.userId === userId);
+    if (!isHost && !hasInvite) {
+      throw new ForbiddenException('No access to this call');
+    }
+    return call;
   }
 }
