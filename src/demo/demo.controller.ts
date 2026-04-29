@@ -1,5 +1,5 @@
-import { Controller, Get, Query, Res } from '@nestjs/common';
-import type { Response } from 'express';
+import { Controller, Get, Query, Req, Res } from '@nestjs/common';
+import type { Request, Response } from 'express';
 import { createHash, randomBytes, randomUUID } from 'crypto';
 import { RedisService } from '../redis/redis.service';
 
@@ -22,6 +22,13 @@ export class DemoController {
   // + consent without the state expiring under them. Key: `demo:pkce:<state>`.
   private static readonly STATE_TTL_SECONDS = 30 * 60;
   private static readonly STATE_KEY_PREFIX = 'demo:pkce:';
+
+  // After a successful /callback (PRG pattern), the user info + token summary
+  // are stashed in Redis under `demo:session:<sid>`, sid stored in an HttpOnly
+  // cookie. This makes the success page survive browser refresh / back-button.
+  private static readonly SESSION_TTL_SECONDS = 60 * 60; // 1h
+  private static readonly SESSION_KEY_PREFIX = 'demo:session:';
+  private static readonly SESSION_COOKIE = 'demo_sid';
 
   private get clientId(): string | undefined {
     return process.env.DEMO_OAUTH_CLIENT_ID;
@@ -185,7 +192,92 @@ export class DemoController {
     }
     const userInfo = (await userInfoRes.json()) as Record<string, unknown>;
 
-    res.type('html').send(this.renderSuccess(userInfo, tokens));
+    // PRG: stash the result in a session, set a cookie, redirect to /demo/me.
+    // This makes the success page survive browser refresh / back-button — and
+    // a re-load of the (now-stale) callback URL won't show "Unknown state".
+    const sid = randomUUID();
+    const sessionPayload = JSON.stringify({
+      userInfo,
+      tokens: {
+        token_type: 'Bearer',
+        access_token_length: tokens.access_token.length,
+        access_token_preview: `${tokens.access_token.slice(0, 24)}...`,
+        id_token_present: Boolean(tokens.id_token),
+        id_token: tokens.id_token, // kept for Sign Out's id_token_hint
+        refresh_token_present: Boolean(tokens.refresh_token),
+        expires_in_seconds: tokens.expires_in,
+      },
+    });
+    await this.redis.setEx(
+      `${DemoController.SESSION_KEY_PREFIX}${sid}`,
+      DemoController.SESSION_TTL_SECONDS,
+      sessionPayload,
+    );
+    res.cookie(DemoController.SESSION_COOKIE, sid, {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'lax',
+      maxAge: DemoController.SESSION_TTL_SECONDS * 1000,
+      path: '/demo',
+    });
+    res.redirect('/demo/me');
+  }
+
+  private extractCookie(req: Request, name: string): string | undefined {
+    // No cookie-parser middleware in this project; parse manually from raw header.
+    const header = req.headers?.cookie ?? '';
+    for (const part of header.split(';')) {
+      const [k, ...v] = part.trim().split('=');
+      if (k === name) return decodeURIComponent(v.join('='));
+    }
+    return undefined;
+  }
+
+  @Get('/me')
+  async me(@Req() req: Request, @Res() res: Response): Promise<void> {
+    const sid = this.extractCookie(req, DemoController.SESSION_COOKIE) ?? '';
+    if (!sid) {
+      res.redirect('/demo/');
+      return;
+    }
+    const raw = await this.redis.get(`${DemoController.SESSION_KEY_PREFIX}${sid}`);
+    if (!raw) {
+      res.clearCookie(DemoController.SESSION_COOKIE, { path: '/demo' });
+      res.redirect('/demo/');
+      return;
+    }
+    const session = JSON.parse(raw) as {
+      userInfo: Record<string, unknown>;
+      tokens: {
+        access_token_length: number;
+        access_token_preview: string;
+        id_token_present: boolean;
+        id_token?: string;
+        refresh_token_present: boolean;
+        expires_in_seconds: number;
+      };
+    };
+    res.type('html').send(this.renderSuccess(session.userInfo, session.tokens));
+  }
+
+  @Get('/signout')
+  async signout(@Req() req: Request, @Res() res: Response): Promise<void> {
+    const sid = this.extractCookie(req, DemoController.SESSION_COOKIE) ?? '';
+    let idToken: string | undefined;
+    if (sid) {
+      const raw = await this.redis.get(`${DemoController.SESSION_KEY_PREFIX}${sid}`);
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw) as { tokens?: { id_token?: string } };
+          idToken = parsed.tokens?.id_token;
+        } catch {
+          /* ignore */
+        }
+      }
+      await this.redis.del(`${DemoController.SESSION_KEY_PREFIX}${sid}`);
+      res.clearCookie(DemoController.SESSION_COOKIE, { path: '/demo' });
+    }
+    res.redirect(this.buildLogoutUrl(idToken));
   }
 
   private renderLanding(): string {
@@ -211,17 +303,24 @@ export class DemoController {
 
   private renderSuccess(
     userInfo: Record<string, unknown>,
-    tokens: { access_token: string; id_token?: string; refresh_token?: string; expires_in: number },
+    tokens: {
+      access_token_length: number;
+      access_token_preview: string;
+      id_token_present: boolean;
+      id_token?: string;
+      refresh_token_present: boolean;
+      expires_in_seconds: number;
+    },
   ): string {
     const safeUserInfo = JSON.stringify(userInfo, null, 2);
     const tokenSummary = JSON.stringify(
       {
         token_type: 'Bearer',
-        access_token_length: tokens.access_token.length,
-        access_token_preview: `${tokens.access_token.slice(0, 24)}...`,
-        id_token_present: Boolean(tokens.id_token),
-        refresh_token_present: Boolean(tokens.refresh_token),
-        expires_in_seconds: tokens.expires_in,
+        access_token_length: tokens.access_token_length,
+        access_token_preview: tokens.access_token_preview,
+        id_token_present: tokens.id_token_present,
+        refresh_token_present: tokens.refresh_token_present,
+        expires_in_seconds: tokens.expires_in_seconds,
       },
       null,
       2,
@@ -242,7 +341,7 @@ export class DemoController {
 
       <p style="margin-top: 24px">
         <a href="/demo/login" class="btn">Sign in again</a>
-        <a href="${this.escape(this.buildLogoutUrl(tokens.id_token))}" class="btn-secondary" style="margin-left: 12px">Sign Out</a>
+        <a href="/demo/signout" class="btn-secondary" style="margin-left: 12px">Sign Out</a>
         <a href="/ui/oauth-guide.html#example-app" style="margin-left: 16px">← Back to guide</a>
       </p>
       `,
