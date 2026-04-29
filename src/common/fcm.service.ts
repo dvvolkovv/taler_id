@@ -235,6 +235,24 @@ export class FcmService {
     }
   }
 
+  /**
+   * Group voice call invite via FCM (Android). Stub for Phase 1 Task 4 —
+   * Task 14 fills in the body: fetch the user's FCM token(s), build a
+   * data-only message (`type: 'group_call_invite'`) including groupCallId,
+   * host display name, invitee count, and dispatch.
+   */
+  async sendGroupCallInvite(
+    userId: string,
+    payload: {
+      groupCallId: string;
+      host: { id: string; displayName: string; avatarUrl?: string | null };
+      inviteeCount: number;
+    },
+  ): Promise<void> {
+    // TODO(Task 14): fetch FCM tokens, build data-only message, dispatch.
+    this.logger.debug(`[stub] sendGroupCallInvite to ${userId} for ${payload.groupCallId}`);
+  }
+
   async sendCallCancelled(fcmToken: string, roomName: string, fromName?: string): Promise<void> {
     if (!this.initialized || !fcmToken) return;
     try {

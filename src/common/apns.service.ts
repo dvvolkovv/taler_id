@@ -71,4 +71,24 @@ export class ApnsService {
       this.logger.error('APNs sendVoIPCallInvite error:', e);
     }
   }
+
+  /**
+   * Group voice call invite via VoIP push (iOS CallKit). Stub for Phase 1
+   * Task 4 — Task 14 fills in the body: fetch the user's VoIP token(s), build
+   * an APNs payload similar to sendVoIPCallInvite (pushType `voip`,
+   * topic `${bundleId}.voip`), include `groupCallId` + host info + invitee
+   * count in `extra`, and dispatch via production with sandbox fallback.
+   */
+  async sendGroupCallInvite(
+    userId: string,
+    payload: {
+      groupCallId: string;
+      host: { id: string; displayName: string; avatarUrl?: string | null };
+      inviteeCount: number;
+      livekitRoomName: string;
+    },
+  ): Promise<void> {
+    // TODO(Task 14): build APNs payload similar to sendVoIPCallInvite and dispatch.
+    this.logger.debug(`[stub] sendGroupCallInvite to ${userId} for ${payload.groupCallId}`);
+  }
 }
