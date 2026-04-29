@@ -15,6 +15,7 @@ import { FEATURE_KEYS } from "../billing/constants/feature-keys";
 const LK_HOST = process.env.LIVEKIT_HOST || "http://localhost:7880";
 const LK_API_KEY = process.env.LIVEKIT_API_KEY || "lkdevkey";
 const LK_API_SECRET = process.env.LIVEKIT_API_SECRET || "lkSecret2024TalerID";
+const LK_WS_URL = process.env.LIVEKIT_WS_URL || "ws://localhost:7880";
 const AI_AGENT_URL = process.env.AI_AGENT_URL || "http://localhost:3100";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const BASE_URL = process.env.BASE_URL || "https://id.taler.tirol";
@@ -90,7 +91,7 @@ export class VoiceService {
     const token = await at.toJwt();
     return {
       token,
-      livekitWsUrl: process.env.LIVEKIT_WS_URL || "wss://id.taler.tirol/livekit",
+      livekitWsUrl: LK_WS_URL,
     };
   }
 
