@@ -10,6 +10,17 @@ export class PrismaClientAdapter {
     const c = await this.prisma.oAuthClient.findUnique({ where: { clientId: id } });
     if (!c) return undefined;
 
+    // Hardcoded post-logout redirect URIs for the demo client until the
+    // OAuthClient model gains a postLogoutRedirectUris column (planned for
+    // Phase 4 — developer portal).
+    const postLogoutRedirectUris =
+      c.clientId === 'taler-id-demo'
+        ? [
+            'https://staging.id.taler.tirol/demo/',
+            'https://id.taler.tirol/demo/',
+          ]
+        : undefined;
+
     return {
       client_id: c.clientId,
       client_secret: c.clientId === 'walletx' ? this.walletxClientSecret : c.clientSecret,
@@ -20,6 +31,9 @@ export class PrismaClientAdapter {
       token_endpoint_auth_method: 'client_secret_basic' as const,
       grant_types: ['authorization_code', 'refresh_token'],
       response_types: ['code'],
+      ...(postLogoutRedirectUris
+        ? { post_logout_redirect_uris: postLogoutRedirectUris }
+        : {}),
     };
   }
 

@@ -220,10 +220,24 @@ export class DemoController {
 
       <p style="margin-top: 24px">
         <a href="/demo/login" class="btn">Sign in again</a>
+        <a href="${this.escape(this.buildLogoutUrl(tokens.id_token))}" class="btn-secondary" style="margin-left: 12px">Sign Out</a>
         <a href="/ui/oauth-guide.html#example-app" style="margin-left: 16px">← Back to guide</a>
       </p>
       `,
     );
+  }
+
+  private buildLogoutUrl(idToken?: string): string {
+    // OIDC RP-initiated logout. Without id_token_hint oidc-provider shows a
+    // confirmation page; with it the flow auto-completes. post_logout_redirect_uri
+    // must match a value registered on the client (see PrismaClientAdapter
+    // hardcoding for taler-id-demo).
+    const params = new URLSearchParams({
+      post_logout_redirect_uri: `${this.baseUrl}/demo/`,
+      client_id: this.clientId ?? '',
+    });
+    if (idToken) params.set('id_token_hint', idToken);
+    return `${this.baseUrl}/oauth/session/end?${params.toString()}`;
   }
 
   private renderError(message: string): string {
