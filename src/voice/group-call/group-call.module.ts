@@ -7,6 +7,7 @@ import { GroupCallHostGuard } from './guards/group-call-host.guard';
 import { GroupCallTimeoutProcessor } from './jobs/timeout.processor';
 import { GroupCallCleanupCron } from './jobs/cleanup.cron';
 import { VoiceModule } from '../voice.module';
+import { MessengerModule } from '../../messenger/messenger.module';
 import { ApnsService } from '../../common/apns.service';
 import { FcmService } from '../../common/fcm.service';
 import { RedisModule } from '../../redis/redis.module';
@@ -27,6 +28,11 @@ import { RedisModule } from '../../redis/redis.module';
 @Module({
   imports: [
     forwardRef(() => VoiceModule),
+    // forwardRef defensively: MessengerModule itself doesn't currently import
+    // VoiceModule/GroupCallModule, but billing/messenger have an existing cycle
+    // via BillingModule (forwardRef'd in MessengerModule), so we mirror the
+    // pattern to stay safe against future module-graph changes.
+    forwardRef(() => MessengerModule),
     BullModule.registerQueue({ name: 'group-call-timeouts' }),
     RedisModule,
   ],
