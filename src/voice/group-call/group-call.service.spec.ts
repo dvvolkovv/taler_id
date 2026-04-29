@@ -358,4 +358,151 @@ describe('GroupCallService', () => {
       await expect(service.declineCall('c1', 'u1')).rejects.toThrow();
     });
   });
+
+  describe('leaveCall', () => {
+    it('marks invite LEFT, broadcasts status (non-host leaves)', async () => {
+      const call = {
+        id: 'c1', status: 'ACTIVE', hostUserId: 'host', livekitRoomName: 'group-c1',
+        invites: [
+          { id: 'i1', userId: 'u1', status: 'JOINED', joinedAt: new Date('2026-04-29T10:00:00Z') },
+          { id: 'i2', userId: 'u2', status: 'JOINED', joinedAt: new Date('2026-04-29T10:01:00Z') },
+        ],
+      };
+      prisma.groupCall.findUnique = jest.fn()
+        .mockResolvedValueOnce(call)
+        .mockResolvedValueOnce({
+          ...call,
+          invites: [{ ...call.invites[0], status: 'LEFT', leftAt: new Date() }, call.invites[1]],
+        });
+      prisma.groupCallInvite.update = jest.fn();
+      prisma.groupCall.update = jest.fn();
+
+      await service.leaveCall('c1', 'u1');
+
+      expect(prisma.groupCallInvite.update).toHaveBeenCalledWith(expect.objectContaining({
+        where: { groupCallId_userId: { groupCallId: 'c1', userId: 'u1' } },
+        data: expect.objectContaining({ status: 'LEFT' }),
+      }));
+      expect(prisma.groupCall.update).not.toHaveBeenCalled(); // no host change since u1 isn't host
+      expect(gateway.emitLeft).toHaveBeenCalled();
+    });
+
+    it('transfers host to next JOINED (joinedAt asc) when host leaves', async () => {
+      const call = {
+        id: 'c1', status: 'ACTIVE', hostUserId: 'host', livekitRoomName: 'group-c1',
+        invites: [
+          { id: 'i1', userId: 'u1', status: 'JOINED', joinedAt: new Date('2026-04-29T10:00:00Z') },
+          { id: 'i2', userId: 'u2', status: 'JOINED', joinedAt: new Date('2026-04-29T10:01:00Z') },
+        ],
+      };
+      prisma.groupCall.findUnique = jest.fn()
+        .mockResolvedValueOnce(call)
+        .mockResolvedValueOnce(call); // refetch returns same set (host's invite doesn't exist as a row)
+      prisma.groupCall.update = jest.fn();
+
+      await service.leaveCall('c1', 'host');
+
+      expect(prisma.groupCall.update).toHaveBeenCalledWith(expect.objectContaining({
+        where: { id: 'c1' },
+        data: expect.objectContaining({ hostUserId: 'u1' }),
+      }));
+      expect(gateway.emitHostChanged).toHaveBeenCalledWith(
+        expect.any(Array),
+        expect.objectContaining({ groupCallId: 'c1', newHostUserId: 'u1' }),
+      );
+    });
+
+    it('ends call (all_left) when last JOINED leaves', async () => {
+      const call = {
+        id: 'c1', status: 'ACTIVE', hostUserId: 'host', livekitRoomName: 'group-c1',
+        invites: [{ id: 'i1', userId: 'u1', status: 'JOINED', joinedAt: new Date() }],
+      };
+      prisma.groupCall.findUnique = jest.fn()
+        .mockResolvedValueOnce(call)
+        .mockResolvedValueOnce({
+          ...call,
+          invites: [{ ...call.invites[0], status: 'LEFT', leftAt: new Date() }],
+        });
+      prisma.groupCallInvite.update = jest.fn();
+      prisma.groupCallInvite.findMany = jest.fn().mockResolvedValue([
+        { userId: 'u1', status: 'LEFT' },
+      ]);
+      prisma.groupCall.update = jest.fn().mockResolvedValue({
+        ...call, status: 'ENDED', endedReason: 'all_left',
+      });
+      voice.deleteRoom = jest.fn().mockResolvedValue(undefined);
+
+      await service.leaveCall('c1', 'u1');
+
+      expect(prisma.groupCall.update).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ status: 'ENDED', endedReason: 'all_left' }),
+      }));
+      expect(gateway.emitEnded).toHaveBeenCalled();
+    });
+
+    it('idempotent if already LEFT', async () => {
+      const call = {
+        id: 'c1', status: 'ACTIVE', hostUserId: 'host', livekitRoomName: 'group-c1',
+        invites: [{ id: 'i1', userId: 'u1', status: 'LEFT', joinedAt: new Date() }],
+      };
+      prisma.groupCall.findUnique = jest.fn().mockResolvedValue(call);
+      prisma.groupCallInvite.update = jest.fn();
+
+      await service.leaveCall('c1', 'u1');
+
+      expect(prisma.groupCallInvite.update).not.toHaveBeenCalled();
+    });
+
+    it('returns silently if call already ENDED (race-safe)', async () => {
+      prisma.groupCall.findUnique = jest.fn().mockResolvedValue({
+        id: 'c1', status: 'ENDED', hostUserId: 'host', invites: [],
+      });
+      prisma.groupCallInvite.update = jest.fn();
+
+      await service.leaveCall('c1', 'u1');
+
+      expect(prisma.groupCallInvite.update).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFound if call missing', async () => {
+      prisma.groupCall.findUnique = jest.fn().mockResolvedValue(null);
+      await expect(service.leaveCall('xxx', 'u1')).rejects.toThrow();
+    });
+
+    it('throws Forbidden if user is neither host nor invitee', async () => {
+      prisma.groupCall.findUnique = jest.fn().mockResolvedValue({
+        id: 'c1', status: 'ACTIVE', hostUserId: 'host',
+        invites: [{ userId: 'u-other', status: 'JOINED' }],
+      });
+      await expect(service.leaveCall('c1', 'u1')).rejects.toThrow();
+    });
+
+    it('host leaves alone (no other JOINED) → call ENDED, no transfer', async () => {
+      const call = {
+        id: 'c1', status: 'ACTIVE', hostUserId: 'host', livekitRoomName: 'group-c1',
+        invites: [
+          { id: 'i1', userId: 'u1', status: 'DECLINED', joinedAt: null },
+          { id: 'i2', userId: 'u2', status: 'TIMEOUT', joinedAt: null },
+        ],
+      };
+      prisma.groupCall.findUnique = jest.fn()
+        .mockResolvedValueOnce(call)
+        .mockResolvedValueOnce(call);
+      // Single mock catches both possible writes (host transfer skipped + endCall ENDED).
+      prisma.groupCall.update = jest.fn().mockResolvedValue({
+        ...call, status: 'ENDED', endedReason: 'all_left',
+      });
+      prisma.groupCallInvite.findMany = jest.fn().mockResolvedValue(call.invites);
+      voice.deleteRoom = jest.fn().mockResolvedValue(undefined);
+
+      await service.leaveCall('c1', 'host');
+
+      // Host should NOT be transferred (no JOINED candidates).
+      expect(gateway.emitHostChanged).not.toHaveBeenCalled();
+      // Call should be ENDED.
+      expect(prisma.groupCall.update).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ status: 'ENDED', endedReason: 'all_left' }),
+      }));
+    });
+  });
 });

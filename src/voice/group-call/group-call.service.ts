@@ -404,6 +404,122 @@ export class GroupCallService {
   }
 
   /**
+   * Participant (or host) leaves an active call.
+   *
+   * - 404 / 403 / idempotent / race-safe-ENDED ordering matches the rest of
+   *   the lifecycle methods. Unlike `declineCall`, this method accepts a
+   *   bare host (no invite row) — host has no `GroupCallInvite` since the
+   *   schema models the host on `GroupCall.hostUserId` only.
+   * - Idempotent on already-LEFT invites: re-tapping "leave" on a flaky
+   *   network won't double-broadcast `groupCallLeft` to peers.
+   * - Race-safe on already-ENDED calls: if `endCall` won concurrently
+   *   (host-ended button + last-leaver simultaneously), this is a no-op
+   *   instead of a confusing 409 error to the leaver.
+   * - **Host transfer**: if the host leaves and at least one invitee is still
+   *   JOINED, the host role is transferred to the next JOINED invitee sorted
+   *   by `joinedAt` ascending (earliest joiner wins — closest to a "vice-host"
+   *   semantic). The transfer happens inside the same `$transaction` as the
+   *   invite update so peers never see an inconsistent (host-userId stale +
+   *   invite=LEFT) snapshot. If no JOINED candidates remain, the host change
+   *   is skipped and `endCallIfDeserted` will end the call with `all_left`.
+   * - We deliberately do NOT touch the BullMQ queue here: leaving an ACTIVE
+   *   call means the ring-timeout for this invite has already fired or been
+   *   cancelled at JOIN time.
+   * - Emits in order: `emitHostChanged` (if applicable) → `emitStatus`
+   *   → `emitLeft`. The status broadcast carries the post-update invite
+   *   list; clients can rebuild their participant grid from it without
+   *   needing to merge the `emitLeft` event. Then `endCallIfDeserted` may
+   *   fire `emitEnded` after.
+   */
+  async leaveCall(callId: string, userId: string): Promise<void> {
+    const call = await this.prisma.groupCall.findUnique({
+      where: { id: callId },
+      include: { invites: true },
+    });
+    if (!call) throw new NotFoundException('GroupCall not found');
+    if (call.status === GroupCallStatus.ENDED) return; // idempotent — call already over
+
+    const isHost = call.hostUserId === userId;
+    const invite = call.invites.find((i: any) => i.userId === userId);
+
+    // Authorization: must be host OR have an invite.
+    if (!isHost && !invite) {
+      throw new ForbiddenException('Not a participant of this call');
+    }
+
+    // Idempotent: if invite already LEFT, no-op (host has no invite row, so
+    // this branch is non-host-only by construction).
+    if (invite && invite.status === GroupCallInviteStatus.LEFT) return;
+
+    // Transaction: mark invite LEFT (if exists) + maybe transfer host. Wrapping
+    // both writes guarantees peers can't observe (host=stale, invite=LEFT) or
+    // (host=new, invite=JOINED) snapshots between the two updates.
+    let newHostId: string | null = null;
+    await this.prisma.$transaction(async (tx: any) => {
+      if (invite) {
+        await tx.groupCallInvite.update({
+          where: { groupCallId_userId: { groupCallId: callId, userId } },
+          data: { status: GroupCallInviteStatus.LEFT, leftAt: new Date() },
+        });
+      }
+
+      if (isHost) {
+        // Host transfer candidate: earliest JOINED invitee (joinedAt asc).
+        // We exclude the leaving user defensively even though the host can't
+        // have an invite row in the current schema — a future schema where
+        // the host also has an invite row would otherwise self-transfer.
+        const candidates = call.invites
+          .filter(
+            (i: any) =>
+              i.status === GroupCallInviteStatus.JOINED &&
+              i.userId !== userId &&
+              i.joinedAt,
+          )
+          .sort((a: any, b: any) => a.joinedAt!.getTime() - b.joinedAt!.getTime());
+        const next = candidates[0];
+        if (next) {
+          await tx.groupCall.update({
+            where: { id: callId },
+            data: { hostUserId: next.userId },
+          });
+          newHostId = next.userId;
+        }
+        // No candidate → leave hostUserId untouched; endCallIfDeserted below
+        // will catch (ACTIVE + no JOINED) and end the call with `all_left`.
+      }
+    });
+
+    // Refetch + broadcast the post-update view.
+    const refreshed = await this.prisma.groupCall.findUnique({
+      where: { id: callId },
+      include: { invites: true },
+    });
+    const participantIds = this.collectParticipantIds(refreshed!);
+
+    if (newHostId) {
+      this.gateway.emitHostChanged(participantIds, {
+        groupCallId: callId,
+        newHostUserId: newHostId,
+      });
+    }
+    this.gateway.emitStatus(participantIds, {
+      groupCallId: callId,
+      invites: refreshed!.invites,
+    });
+    this.gateway.emitLeft(participantIds, {
+      groupCallId: callId,
+      userId,
+      leftAt: new Date(),
+    });
+
+    // Auto-end if the room is now deserted (LOBBY: nobody answered; ACTIVE:
+    // last JOINED left, including the host-leaves-alone path). Runs after
+    // the per-event broadcasts so subscribers see Status → Left → Ended in
+    // the order the UI expects.
+    await this.endCallIfDeserted(refreshed!);
+  }
+
+  /**
    * Maybe-end-call helper: called after every state-changing operation
    * (decline, leave, kick — Tasks 7/8/9) to detect "all gone" terminal
    * conditions. Two variants:
