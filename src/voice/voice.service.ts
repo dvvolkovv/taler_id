@@ -95,6 +95,17 @@ export class VoiceService {
     };
   }
 
+  /**
+   * Forcefully delete a LiveKit room (any active participants are evicted).
+   * Used by group-call lifecycle (Task 7+) when ending a call so the room
+   * doesn't sit around until LiveKit's `emptyTimeout` reaps it. Idempotent
+   * from the caller's perspective: LiveKit returns success even if the room
+   * is already gone, so callers don't need to check existence first.
+   */
+  async deleteRoom(roomName: string): Promise<void> {
+    await this.rooms.deleteRoom(roomName);
+  }
+
   async endCallLog(roomName: string): Promise<void> {
     try {
       const log = await this.prisma.callLog.findUnique({ where: { roomName } });

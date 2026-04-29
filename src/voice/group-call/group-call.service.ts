@@ -5,6 +5,7 @@ import {
   NotFoundException,
   ForbiddenException,
   GoneException,
+  ConflictException,
   Logger,
   forwardRef,
 } from '@nestjs/common';
@@ -332,6 +333,172 @@ export class GroupCallService {
     });
 
     return { livekitToken: token, livekitWsUrl };
+  }
+
+  /**
+   * Invitee declines the call.
+   *
+   * - 404 / 403 / 409 / idempotent ordering matches `joinCall` (and the same
+   *   pattern documented in Task 6): missing call → 404, no invite → 403,
+   *   already JOINED → 409 (the iOS UI must call `/leave` instead, since
+   *   declining a call you've already joined would leave the LiveKit session
+   *   dangling and confuse peers who already see this user as a participant).
+   * - Already-DECLINED is an early-return no-op so the iOS Push-extension
+   *   "decline" button is safe to retry on flaky network without spamming
+   *   `groupCallStatus` events to peers.
+   * - The 410 (Gone) check that `joinCall` does is intentionally absent here:
+   *   if the call has ENDED, the caller's invite will already be in a
+   *   terminal state (TIMEOUT / LEFT / DECLINED — `endCall` doesn't mutate
+   *   invites, but the invite was set to one of those before reaching ENDED),
+   *   so the JOINED-check or idempotent-DECLINED branch handles it. Falling
+   *   through to mutate a CALLING invite on an ENDED call would be benign
+   *   (DB row updates fine), and the broadcast on stale call data is
+   *   harmless because clients ignore status events for ENDED calls.
+   * - Cancels the ring-timeout job best-effort (same swallowed-throw pattern
+   *   as `joinCall`).
+   * - After the broadcast, calls `endCallIfDeserted` to auto-end LOBBY calls
+   *   where every invitee has now declined / timed out — this is the path
+   *   that fires `voice.deleteRoom` to release the LiveKit room.
+   */
+  async declineCall(callId: string, userId: string) {
+    const call = await this.prisma.groupCall.findUnique({
+      where: { id: callId },
+      include: { invites: true },
+    });
+    if (!call) throw new NotFoundException('GroupCall not found');
+
+    const invite = call.invites.find((i: any) => i.userId === userId);
+    if (!invite) throw new ForbiddenException('No invite for this user');
+    if (invite.status === GroupCallInviteStatus.JOINED) {
+      throw new ConflictException('Already joined; use /leave instead');
+    }
+    if (invite.status === GroupCallInviteStatus.DECLINED) return; // idempotent
+
+    await this.prisma.groupCallInvite.update({
+      where: { groupCallId_userId: { groupCallId: callId, userId } },
+      data: {
+        status: GroupCallInviteStatus.DECLINED,
+        respondedAt: new Date(),
+      },
+    });
+
+    // Cancel pending timeout (idempotent — fine if already gone).
+    await Promise.resolve(this.queue.remove(`timeout-${invite.id}`)).catch(() => {});
+
+    // Refetch and broadcast post-update view (call.invites is pre-update).
+    const refreshed = await this.prisma.groupCall.findUnique({
+      where: { id: callId },
+      include: { invites: true },
+    });
+    const participantIds = this.collectParticipantIds(refreshed!);
+    this.gateway.emitStatus(participantIds, {
+      groupCallId: callId,
+      invites: refreshed!.invites,
+    });
+
+    // Auto-end the call if everyone's gone (LOBBY: nobody answered; ACTIVE:
+    // last participant left). Runs after the status broadcast so subscribers
+    // first see the DECLINED transition, then the ENDED event — same UI flow
+    // as a host-ended call.
+    await this.endCallIfDeserted(refreshed!);
+  }
+
+  /**
+   * Maybe-end-call helper: called after every state-changing operation
+   * (decline, leave, kick — Tasks 7/8/9) to detect "all gone" terminal
+   * conditions. Two variants:
+   *
+   * - LOBBY → end with reason `timeout` if no JOINED and no still-CALLING
+   *   invitees (the host's createCall LOBBY had a chance, nobody picked up
+   *   or everyone declined).
+   * - ACTIVE → end with reason `all_left` if no JOINED invitees remain
+   *   (everyone explicitly left after the call started).
+   *
+   * Does NOT cover `host_ended` (Task 8 calls `endCall` directly with that
+   * reason). The two reason values here are derived solely from the
+   * deserted-room state.
+   */
+  private async endCallIfDeserted(call: any): Promise<void> {
+    if (
+      call.status !== GroupCallStatus.LOBBY &&
+      call.status !== GroupCallStatus.ACTIVE
+    ) {
+      return;
+    }
+    const anyJoined = call.invites.some(
+      (i: any) => i.status === GroupCallInviteStatus.JOINED,
+    );
+    const anyCalling = call.invites.some(
+      (i: any) => i.status === GroupCallInviteStatus.CALLING,
+    );
+
+    if (call.status === GroupCallStatus.LOBBY && !anyJoined && !anyCalling) {
+      await this.endCall(call.id, 'timeout');
+      return;
+    }
+    if (call.status === GroupCallStatus.ACTIVE && !anyJoined) {
+      await this.endCall(call.id, 'all_left');
+      return;
+    }
+  }
+
+  /**
+   * Atomically transition a GroupCall to ENDED, broadcast `groupCallEnded`,
+   * and best-effort delete the LiveKit room.
+   *
+   * - The Prisma update is race-safe: the `where` clause filters on
+   *   `status: { in: [LOBBY, ACTIVE] }`, so a concurrent caller (e.g. host
+   *   pressing "End" at the same moment as the last invitee leaves) only
+   *   wins once. Prisma 5 throws `P2025` (RecordNotFound) when zero rows
+   *   match; we swallow that with `.catch(() => null)` and short-circuit so
+   *   we never double-emit `groupCallEnded`.
+   * - The audience for `emitEnded` is the FULL invitee list (DECLINED/LEFT/
+   *   TIMEOUT included). Unlike status broadcasts (where we exclude
+   *   opted-out users via `collectParticipantIds`), the call-ended event
+   *   needs to reach those users so their UI can clear any stale "incoming
+   *   call" sheet that may be lingering after a push-only delivery.
+   * - LiveKit `deleteRoom` failure is non-fatal: the room may already be
+   *   empty and auto-cleaned by LiveKit's `emptyTimeout`, or the LK server
+   *   might be transiently down. We log a warning so ops can investigate
+   *   if leaks accumulate, but the call is already ENDED in our DB so the
+   *   user-facing flow is correct.
+   */
+  private async endCall(
+    callId: string,
+    reason: 'all_left' | 'timeout' | 'host_ended',
+  ): Promise<void> {
+    const updated = await this.prisma.groupCall
+      .update({
+        where: {
+          id: callId,
+          status: {
+            in: [GroupCallStatus.LOBBY, GroupCallStatus.ACTIVE],
+          } as any,
+        } as any,
+        data: {
+          status: GroupCallStatus.ENDED,
+          endedAt: new Date(),
+          endedReason: reason,
+        },
+      })
+      .catch(() => null); // already ENDED → P2025, no-op
+
+    if (!updated) return;
+
+    const allInvites = await this.prisma.groupCallInvite.findMany({
+      where: { groupCallId: callId },
+    });
+    const allUserIds = Array.from(
+      new Set([updated.hostUserId, ...allInvites.map((i: any) => i.userId)]),
+    );
+    this.gateway.emitEnded(allUserIds, { groupCallId: callId, reason });
+
+    // Best-effort LiveKit cleanup; the room may already be gone.
+    await this.voice
+      .deleteRoom(updated.livekitRoomName)
+      .catch((e: any) =>
+        this.logger.warn(`LiveKit deleteRoom failed: ${e?.message ?? e}`),
+      );
   }
 
   /**
