@@ -306,6 +306,13 @@ export class GroupCallService {
     // (some BullMQ versions / the unit-test mock).
     await Promise.resolve(this.queue.remove(`timeout-${invite.id}`)).catch(() => {});
 
+    // Issue the joiner's LiveKit token BEFORE the fan-out — parity with
+    // `createCall` (Task 4). If token generation throws (env typo, signature
+    // mismatch), peers haven't yet been told this user joined, so we don't
+    // leave the call in a state where everyone sees "X joined" but X has no
+    // token to actually connect to LiveKit.
+    const { token, livekitWsUrl } = await this.voice.generateGroupCallToken(call.id, userId);
+
     // Refetch invites so the broadcast carries the post-update view (the
     // pre-update `call` still has the old CALLING status). emitStatus also
     // needs the up-to-date list to compute the participant audience.
@@ -324,7 +331,6 @@ export class GroupCallService {
       joinedAt: new Date(),
     });
 
-    const { token, livekitWsUrl } = await this.voice.generateGroupCallToken(call.id, userId);
     return { livekitToken: token, livekitWsUrl };
   }
 
