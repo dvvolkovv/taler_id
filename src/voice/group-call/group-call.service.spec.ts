@@ -635,6 +635,35 @@ describe('GroupCallService', () => {
       });
       await expect(service.kick('c1', 'host', 'u1')).rejects.toThrow();
     });
+
+    it('ends call (all_left) if kicking the last JOINED leaves nobody', async () => {
+      const call = {
+        id: 'c1', hostUserId: 'host', livekitRoomName: 'group-c1', status: 'ACTIVE',
+        invites: [{ id: 'i1', userId: 'u1', status: 'JOINED', joinedAt: new Date() }],
+      };
+      prisma.groupCall.findUnique = jest.fn()
+        .mockResolvedValueOnce(call)
+        .mockResolvedValueOnce({
+          ...call,
+          invites: [{ ...call.invites[0], status: 'LEFT' }],
+        });
+      prisma.groupCallInvite.update = jest.fn();
+      prisma.groupCallInvite.findMany = jest.fn().mockResolvedValue([
+        { userId: 'u1', status: 'LEFT' },
+      ]);
+      prisma.groupCall.update = jest.fn().mockResolvedValue({
+        ...call, status: 'ENDED', endedReason: 'all_left',
+      });
+      voice.removeParticipant = jest.fn().mockResolvedValue(undefined);
+      voice.deleteRoom = jest.fn().mockResolvedValue(undefined);
+
+      await service.kick('c1', 'host', 'u1');
+
+      expect(prisma.groupCall.update).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ status: 'ENDED', endedReason: 'all_left' }),
+      }));
+      expect(gateway.emitEnded).toHaveBeenCalled();
+    });
   });
 
   describe('muteAll (host only, rate-limited)', () => {
