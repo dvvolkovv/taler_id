@@ -157,6 +157,52 @@
       color: var(--accent);
       border-color: var(--accent);
     }
+
+    /* Typography section */
+    .type-card {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 16px;
+    }
+    .type-name {
+      font-size: 14px;
+      color: var(--fg-muted);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+    .type-sample {
+      margin-bottom: 24px;
+    }
+    .type-sample-32 { font-size: 32px; line-height: 1.2; font-weight: 600; }
+    .type-sample-16 { font-size: 16px; line-height: 1.5; margin-top: 8px; }
+    .type-sample-14 { font-size: 14px; line-height: 1.5; color: var(--fg-muted); margin-top: 4px; }
+    .type-sample-mono { font-family: 'JetBrains Mono', monospace; font-size: 14px; }
+
+    .code-block {
+      position: relative;
+      background: #05070D;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      padding-right: 80px;
+      margin-top: 12px;
+      overflow-x: auto;
+    }
+    .code-block pre {
+      margin: 0;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      color: var(--fg);
+      white-space: pre;
+    }
+    .code-block .copy-btn {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+    }
   </style>
 </head>
 <body>
@@ -225,6 +271,33 @@
           <div class="color-name">Foreground Light</div>
           <div class="color-hex"><code>#F5F7FA</code><button class="copy-btn" data-copy="#F5F7FA">Copy</button></div>
         </div>
+      </div>
+    </div>
+
+    <h2>Typography</h2>
+    <div class="type-card">
+      <div class="type-name">Inter — UI text</div>
+      <div class="type-sample">
+        <div class="type-sample-32">Sign in with Taler ID</div>
+        <div class="type-sample-16">Body text uses Inter at 16 px with 1.5 line-height for readability.</div>
+        <div class="type-sample-14">Smaller hints and metadata sit at 14 px in muted color.</div>
+      </div>
+      <div class="code-block">
+        <button class="copy-btn" data-copy-target="font-inter">Copy</button>
+        <pre id="font-inter">&lt;link rel="preconnect" href="https://fonts.googleapis.com"&gt;
+&lt;link rel="preconnect" href="https://fonts.gstatic.com" crossorigin&gt;
+&lt;link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet"&gt;</pre>
+      </div>
+    </div>
+
+    <div class="type-card">
+      <div class="type-name">JetBrains Mono — Code</div>
+      <div class="type-sample">
+        <div class="type-sample-mono">curl -X POST https://id.taler.tirol/oauth/register</div>
+      </div>
+      <div class="code-block">
+        <button class="copy-btn" data-copy-target="font-mono">Copy</button>
+        <pre id="font-mono">&lt;link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"&gt;</pre>
       </div>
     </div>
   </div>
