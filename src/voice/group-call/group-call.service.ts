@@ -641,6 +641,31 @@ export class GroupCallService {
   }
 
   /**
+   * LiveKit webhook callback for `participant_left`. Translates the LiveKit
+   * event into a normal `leaveCall` so the GroupCall state machine handles it
+   * uniformly (LEFT transition, host transfer, auto-end-deserted, etc.).
+   *
+   * Swallows 403/404 because: (a) a kicked user's `leaveCall` race-loses to
+   * the kick path that already set LEFT (404 on the invite), (b) a stale
+   * webhook for an already-ENDED call returns silently (handled inside
+   * `leaveCall` itself, but keeping the swallow defensive is cheap), (c) the
+   * host has no invite row so 403 fires if the leftBundle is the host who
+   * already left. Rethrows other errors so they hit Sentry.
+   */
+  async handleLivekitParticipantLeft(
+    callId: string,
+    userId: string,
+  ): Promise<void> {
+    try {
+      await this.leaveCall(callId, userId);
+    } catch (e: any) {
+      const status = e?.status ?? e?.getStatus?.();
+      if (status === 403 || status === 404) return;
+      throw e;
+    }
+  }
+
+  /**
    * Host adds more invitees to an in-progress call.
    *
    * - 404 / 403 / 409 ordering matches the rest of the lifecycle methods.

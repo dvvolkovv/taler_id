@@ -852,4 +852,32 @@ describe('GroupCallService', () => {
       }));
     });
   });
+
+  describe('handleLivekitParticipantLeft', () => {
+    it('delegates to leaveCall and swallows 403 (not a participant)', async () => {
+      const err: any = new Error('Not a participant of this call');
+      err.status = 403;
+      jest.spyOn(service, 'leaveCall').mockRejectedValue(err);
+      await expect(service.handleLivekitParticipantLeft('c1', 'u1')).resolves.toBeUndefined();
+    });
+
+    it('also swallows 404 (call already gone)', async () => {
+      const err: any = new Error('GroupCall not found');
+      err.status = 404;
+      jest.spyOn(service, 'leaveCall').mockRejectedValue(err);
+      await expect(service.handleLivekitParticipantLeft('c1', 'u1')).resolves.toBeUndefined();
+    });
+
+    it('rethrows non-auth errors (e.g. 500)', async () => {
+      const err: any = new Error('db down');
+      err.status = 500;
+      jest.spyOn(service, 'leaveCall').mockRejectedValue(err);
+      await expect(service.handleLivekitParticipantLeft('c1', 'u1')).rejects.toThrow('db down');
+    });
+
+    it('returns silently on success', async () => {
+      jest.spyOn(service, 'leaveCall').mockResolvedValue(undefined);
+      await expect(service.handleLivekitParticipantLeft('c1', 'u1')).resolves.toBeUndefined();
+    });
+  });
 });
