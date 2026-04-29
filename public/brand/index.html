@@ -422,5 +422,29 @@
       </div>
     </div>
   </div>
+
+  <script>
+    document.querySelectorAll('.copy-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const text = btn.dataset.copy
+          ?? document.getElementById(btn.dataset.copyTarget)?.textContent
+          ?? '';
+        if (!text) return;
+        try {
+          await navigator.clipboard.writeText(text);
+          const originalText = btn.textContent;
+          btn.textContent = 'Copied!';
+          btn.classList.add('copied');
+          setTimeout(() => {
+            btn.textContent = originalText;
+            btn.classList.remove('copied');
+          }, 1200);
+        } catch (err) {
+          console.error('Copy failed', err);
+          btn.textContent = 'Press Ctrl+C';
+        }
+      });
+    });
+  </script>
 </body>
 </html>
