@@ -1,6 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { SectionType, SectionVisibility, UpsertSectionDto } from './dto/upsert-section.dto';
+import {
+  SectionType,
+  SectionVisibility,
+  UpsertSectionDto,
+} from './dto/upsert-section.dto';
 
 @Injectable()
 export class ProfileSectionsService {
@@ -45,7 +49,11 @@ export class ProfileSectionsService {
     return { success: true };
   }
 
-  async updateVisibility(userId: string, type: SectionType, visibility: SectionVisibility) {
+  async updateVisibility(
+    userId: string,
+    type: SectionType,
+    visibility: SectionVisibility,
+  ) {
     return this.prisma.profileSection.update({
       where: { userId_type: { userId, type } },
       data: { visibility },

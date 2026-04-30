@@ -8,7 +8,12 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { ConfigService } from '@nestjs/config';
 import { TenantRole, KycStatus } from '@prisma/client';
-import { CreateTenantDto, UpdateTenantDto, InviteMemberDto, ChangeRoleDto } from './dto/create-tenant.dto';
+import {
+  CreateTenantDto,
+  UpdateTenantDto,
+  InviteMemberDto,
+  ChangeRoleDto,
+} from './dto/create-tenant.dto';
 import * as crypto from 'crypto';
 import { EmailService } from '../email/email.service';
 import { v4 as uuidv4 } from 'uuid';
@@ -78,7 +83,10 @@ export class TenantService {
   }
 
   async updateTenant(tenantId: string, userId: string, dto: UpdateTenantDto) {
-    await this.assertRole(tenantId, userId, [TenantRole.OWNER, TenantRole.ADMIN]);
+    await this.assertRole(tenantId, userId, [
+      TenantRole.OWNER,
+      TenantRole.ADMIN,
+    ]);
     return this.prisma.tenant.update({
       where: { id: tenantId },
       data: {
@@ -94,7 +102,9 @@ export class TenantService {
 
   async startKyb(tenantId: string, userId: string) {
     await this.assertRole(tenantId, userId, [TenantRole.OWNER]);
-    const tenant = await this.prisma.tenant.findUnique({ where: { id: tenantId } });
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+    });
     if (!tenant) throw new NotFoundException('Tenant not found');
 
     const appToken = this.config.get<string>('sumsub.appToken');
@@ -115,31 +125,37 @@ export class TenantService {
       // basic-kyb-level is read-only (can't pre-create applicants via API).
       // userId=tenantId becomes externalUserId in Sumsub for webhook matching.
       const secretKey = this.config.get<string>('sumsub.secretKey') ?? '';
-      const baseUrl = this.config.get<string>('sumsub.baseUrl') ?? 'https://api.sumsub.com';
-      const kybLevel = this.config.get<string>('sumsub.kybLevelName') ?? 'basic-kyb-level';
+      const baseUrl =
+        this.config.get<string>('sumsub.baseUrl') ?? 'https://api.sumsub.com';
+      const kybLevel =
+        this.config.get<string>('sumsub.kybLevelName') ?? 'basic-kyb-level';
 
       const ts = Math.floor(Date.now() / 1000).toString();
       // IMPORTANT: no body in request, no body in signature — Sumsub requires exact match
       const tokenPath = `/resources/accessTokens?userId=${tenantId}&levelName=${kybLevel}&ttlInSecs=3600`;
-      const tokenSig = crypto.createHmac('sha256', secretKey)
+      const tokenSig = crypto
+        .createHmac('sha256', secretKey)
         .update(ts + 'POST' + tokenPath)
         .digest('hex');
       const tokenResp = await fetch(`${baseUrl}${tokenPath}`, {
         method: 'POST',
         headers: {
-          'X-App-Token': appToken!,
+          'X-App-Token': appToken,
           'X-App-Access-Sig': tokenSig,
           'X-App-Access-Ts': ts,
         },
         // No body — including a body breaks signature verification
       });
       if (!tokenResp.ok) {
-        const err = await tokenResp.json() as any;
-        throw new BadRequestException('Failed to get KYB token: ' + (err.description || JSON.stringify(err)));
+        const err = await tokenResp.json();
+        throw new BadRequestException(
+          'Failed to get KYB token: ' +
+            (err.description || JSON.stringify(err)),
+        );
       }
-      const tokenData = await tokenResp.json() as any;
+      const tokenData = await tokenResp.json();
       sdkToken = tokenData.token;
-      applicantId = '';  // will be set when webhook arrives with externalUserId=tenantId
+      applicantId = ''; // will be set when webhook arrives with externalUserId=tenantId
     }
 
     await this.prisma.tenant.update({
@@ -162,7 +178,9 @@ export class TenantService {
       where: { sumsubApplicantId: applicantId },
     });
     if (!tenant && externalUserId) {
-      tenant = await this.prisma.tenant.findUnique({ where: { id: externalUserId } });
+      tenant = await this.prisma.tenant.findUnique({
+        where: { id: externalUserId },
+      });
     }
     if (!tenant) return { processed: false };
 
@@ -176,7 +194,9 @@ export class TenantService {
       data: {
         kybStatus: status,
         // Store applicantId if not already known (set via SDK flow)
-        ...(applicantId && !tenant.sumsubApplicantId ? { sumsubApplicantId: applicantId } : {}),
+        ...(applicantId && !tenant.sumsubApplicantId
+          ? { sumsubApplicantId: applicantId }
+          : {}),
       },
     });
 
@@ -194,7 +214,10 @@ export class TenantService {
   }
 
   async inviteMember(tenantId: string, userId: string, dto: InviteMemberDto) {
-    await this.assertRole(tenantId, userId, [TenantRole.OWNER, TenantRole.ADMIN]);
+    await this.assertRole(tenantId, userId, [
+      TenantRole.OWNER,
+      TenantRole.ADMIN,
+    ]);
 
     const role = dto.role.toUpperCase() as TenantRole;
     if (!Object.values(TenantRole).includes(role)) {
@@ -232,17 +255,33 @@ export class TenantService {
     });
 
     // Send invite email (non-blocking)
-    const tenant = await this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { name: true } });
-    const inviter = await this.prisma.user.findUnique({ where: { id: userId }, select: { email: true } });
-    this.email.sendInvite(dto.email, tenant?.name ?? tenantId, invite.token, inviter?.email ?? 'Taler ID').catch(() => {});
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { name: true },
+    });
+    const inviter = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true },
+    });
+    this.email
+      .sendInvite(
+        dto.email,
+        tenant?.name ?? tenantId,
+        invite.token,
+        inviter?.email ?? 'Taler ID',
+      )
+      .catch(() => {});
 
     return { type: 'invited', inviteToken: invite.token, email: dto.email };
   }
 
   async acceptInvite(token: string, userId: string) {
-    const invite = await this.prisma.pendingInvite.findUnique({ where: { token } });
+    const invite = await this.prisma.pendingInvite.findUnique({
+      where: { token },
+    });
     if (!invite) throw new NotFoundException('Invite not found');
-    if (invite.expiresAt < new Date()) throw new BadRequestException('Invite expired');
+    if (invite.expiresAt < new Date())
+      throw new BadRequestException('Invite expired');
 
     // Check user's email matches invite
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
@@ -258,8 +297,16 @@ export class TenantService {
     return member;
   }
 
-  async changeRole(tenantId: string, requesterId: string, targetUserId: string, dto: ChangeRoleDto) {
-    const requesterMember = await this.assertRole(tenantId, requesterId, [TenantRole.OWNER, TenantRole.ADMIN]);
+  async changeRole(
+    tenantId: string,
+    requesterId: string,
+    targetUserId: string,
+    dto: ChangeRoleDto,
+  ) {
+    const requesterMember = await this.assertRole(tenantId, requesterId, [
+      TenantRole.OWNER,
+      TenantRole.ADMIN,
+    ]);
 
     const newRole = dto.role.toUpperCase() as TenantRole;
     if (!Object.values(TenantRole).includes(newRole)) {
@@ -273,7 +320,10 @@ export class TenantService {
 
     // ADMIN cannot change OWNER's role or assign OWNER role
     if (requesterMember.role === TenantRole.ADMIN) {
-      if (targetMember.role === TenantRole.OWNER || newRole === TenantRole.OWNER) {
+      if (
+        targetMember.role === TenantRole.OWNER ||
+        newRole === TenantRole.OWNER
+      ) {
         throw new ForbiddenException('Admins cannot modify owner role');
       }
     }
@@ -284,8 +334,15 @@ export class TenantService {
     });
   }
 
-  async removeMember(tenantId: string, requesterId: string, targetUserId: string) {
-    await this.assertRole(tenantId, requesterId, [TenantRole.OWNER, TenantRole.ADMIN]);
+  async removeMember(
+    tenantId: string,
+    requesterId: string,
+    targetUserId: string,
+  ) {
+    await this.assertRole(tenantId, requesterId, [
+      TenantRole.OWNER,
+      TenantRole.ADMIN,
+    ]);
 
     const targetMember = await this.prisma.tenantMember.findFirst({
       where: { tenantId, userId: targetUserId },
@@ -317,7 +374,11 @@ export class TenantService {
     return member;
   }
 
-  private async assertRole(tenantId: string, userId: string, roles: TenantRole[]) {
+  private async assertRole(
+    tenantId: string,
+    userId: string,
+    roles: TenantRole[],
+  ) {
     const member = await this.prisma.tenantMember.findFirst({
       where: { tenantId, userId },
     });

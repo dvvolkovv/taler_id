@@ -1,4 +1,9 @@
-import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleInit,
+  OnModuleDestroy,
+} from '@nestjs/common';
 import { ApiPromise, WsProvider } from '@polkadot/api';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
@@ -23,7 +28,10 @@ export class DepositWatcher implements OnModuleInit, OnModuleDestroy {
       this.log.warn('BLOCKCHAIN_ENABLED != true, skipping deposit watcher');
       return;
     }
-    const url = this.config.get<string>('BLOCKCHAIN_NODE_URL', 'wss://node.dev.gsmsoft.eu/');
+    const url = this.config.get<string>(
+      'BLOCKCHAIN_NODE_URL',
+      'wss://node.dev.gsmsoft.eu/',
+    );
     const provider = new WsProvider(url);
     this.api = await ApiPromise.create({ provider });
     this.log.log(`deposit watcher connected to ${url}`);
@@ -33,27 +41,35 @@ export class DepositWatcher implements OnModuleInit, OnModuleDestroy {
     // BillingConfig.lastSeenBlock to the new head's number, processing every
     // block in between. This makes the watcher idempotent on restart — the
     // same block range is never processed twice.
-    this.unsubscribe = (await this.api.rpc.chain.subscribeFinalizedHeads(async (head) => {
-      if (this.processing) return; // one tick at a time; avoid overlapping catch-up
-      this.processing = true;
-      try {
-        await this.catchUp(head.number.toNumber());
-      } catch (err) {
-        this.log.error(`catch-up failed: ${String(err)}`);
-      } finally {
-        this.processing = false;
-      }
-    })) as unknown as () => void;
+    this.unsubscribe = (await this.api.rpc.chain.subscribeFinalizedHeads(
+      async (head) => {
+        if (this.processing) return; // one tick at a time; avoid overlapping catch-up
+        this.processing = true;
+        try {
+          await this.catchUp(head.number.toNumber());
+        } catch (err) {
+          this.log.error(`catch-up failed: ${String(err)}`);
+        } finally {
+          this.processing = false;
+        }
+      },
+    )) as unknown as () => void;
   }
 
   async onModuleDestroy(): Promise<void> {
-    try { this.unsubscribe?.(); } catch {}
-    try { await this.api?.disconnect(); } catch {}
+    try {
+      this.unsubscribe?.();
+    } catch {}
+    try {
+      await this.api?.disconnect();
+    } catch {}
   }
 
   private async catchUp(finalizedHeadNumber: number): Promise<void> {
     if (!this.api) return;
-    const cfg = await this.prisma.billingConfig.findUnique({ where: { id: 'singleton' } });
+    const cfg = await this.prisma.billingConfig.findUnique({
+      where: { id: 'singleton' },
+    });
     const lastSeen = cfg?.lastSeenBlock ?? finalizedHeadNumber - 1; // skip history on first run
 
     if (lastSeen >= finalizedHeadNumber) return;
@@ -81,7 +97,7 @@ export class DepositWatcher implements OnModuleInit, OnModuleDestroy {
       const { event } = record;
       if (event.section !== 'balances' || event.method !== 'Transfer') continue;
 
-      const [fromRaw, toRaw, amountRaw] = (event.data as any).toJSON() as [
+      const [fromRaw, toRaw, amountRaw] = event.data.toJSON() as [
         string,
         string,
         string | number,
@@ -89,7 +105,7 @@ export class DepositWatcher implements OnModuleInit, OnModuleDestroy {
 
       const to = String(toRaw);
       const from = String(fromRaw);
-      const amount = BigInt(amountRaw as string | number);
+      const amount = BigInt(amountRaw);
       // Idempotency key: block hash + event index. Unique across all blocks.
       const chainTxHash = `${blockHash.toHex()}-${i}`;
 
@@ -101,10 +117,14 @@ export class DepositWatcher implements OnModuleInit, OnModuleDestroy {
           err instanceof Prisma.PrismaClientKnownRequestError &&
           err.code === 'P2002'
         ) {
-          this.log.debug(`duplicate transfer ${chainTxHash} ignored (idempotent)`);
+          this.log.debug(
+            `duplicate transfer ${chainTxHash} ignored (idempotent)`,
+          );
           continue;
         }
-        this.log.error(`failed to handle transfer ${chainTxHash}: ${String(err)}`);
+        this.log.error(
+          `failed to handle transfer ${chainTxHash}: ${String(err)}`,
+        );
         // Don't throw — continue processing other events in this block.
       }
     }

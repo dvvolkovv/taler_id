@@ -32,7 +32,9 @@ export class PricingService {
     const cached = this.pricebookCache.get(featureKey);
     if (cached && Date.now() - cached.ts < CACHE_TTL_MS) return cached.row;
 
-    const row = await this.prisma.aiPricebook.findUnique({ where: { featureKey } });
+    const row = await this.prisma.aiPricebook.findUnique({
+      where: { featureKey },
+    });
     if (!row) throw new NotFoundException(`Unknown feature ${featureKey}`);
     this.pricebookCache.set(featureKey, { row, ts: Date.now() });
     return row;
@@ -42,19 +44,31 @@ export class PricingService {
     if (this.configCache && Date.now() - this.configCache.ts < CACHE_TTL_MS) {
       return this.configCache.row;
     }
-    const row = await this.prisma.billingConfig.findUnique({ where: { id: 'singleton' } });
+    const row = await this.prisma.billingConfig.findUnique({
+      where: { id: 'singleton' },
+    });
     if (!row) throw new NotFoundException('Billing config not seeded');
     this.configCache = { row, ts: Date.now() };
     return row;
   }
 
-  async calculatePlanckCost(featureKey: string, units: number): Promise<bigint> {
+  async calculatePlanckCost(
+    featureKey: string,
+    units: number,
+  ): Promise<bigint> {
     if (!Number.isFinite(units) || units < 0) {
-      throw new Error(`units must be a non-negative finite number, got ${units}`);
+      throw new Error(
+        `units must be a non-negative finite number, got ${units}`,
+      );
     }
-    const [pb, cfg] = await Promise.all([this.getPricebook(featureKey), this.getConfig()]);
+    const [pb, cfg] = await Promise.all([
+      this.getPricebook(featureKey),
+      this.getConfig(),
+    ]);
 
-    const costUsd = new Prisma.Decimal(units).mul(pb.costUsdPerUnit).mul(pb.markupMultiplier);
+    const costUsd = new Prisma.Decimal(units)
+      .mul(pb.costUsdPerUnit)
+      .mul(pb.markupMultiplier);
     const costTal = costUsd.div(cfg.talUsdRate);
     const planck = costTal.mul(PLANCK_PER_TAL).ceil();
     return BigInt(planck.toFixed(0));

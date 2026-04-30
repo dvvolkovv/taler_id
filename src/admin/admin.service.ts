@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { BlockchainService } from '../blockchain/blockchain.service';
 import { JwtService } from '@nestjs/jwt';
@@ -17,7 +21,8 @@ export class AdminService {
 
   async adminLogin(email: string, password: string) {
     const user = await this.prisma.user.findUnique({ where: { email } });
-    if (!user || !user.passwordHash) throw new BadRequestException('Invalid credentials');
+    if (!user || !user.passwordHash)
+      throw new BadRequestException('Invalid credentials');
     if (!user.isAdmin) throw new BadRequestException('Not an admin');
     const valid = await bcrypt.compare(password, user.passwordHash);
     if (!valid) throw new BadRequestException('Invalid credentials');
@@ -65,10 +70,15 @@ export class AdminService {
       where: { userId: { in: userIds } },
       select: { userId: true, status: true },
     });
-    const kycMap = Object.fromEntries(kycRecords.map((k: any) => [k.userId, k.status]));
+    const kycMap = Object.fromEntries(
+      kycRecords.map((k: any) => [k.userId, k.status]),
+    );
 
     return {
-      data: users.map((u: any) => ({ ...u, kycStatus: kycMap[u.id] ?? 'UNVERIFIED' })),
+      data: users.map((u: any) => ({
+        ...u,
+        kycStatus: kycMap[u.id] ?? 'UNVERIFIED',
+      })),
       total,
       page,
       limit,
@@ -90,13 +100,17 @@ export class AdminService {
     });
     if (!user) throw new NotFoundException('User not found');
 
-    const kyc = await (this.prisma.kycRecord.findUnique({
-      where: { userId },
-    }) as Promise<any>).catch(() => null);
+    const kyc = await (
+      this.prisma.kycRecord.findUnique({
+        where: { userId },
+      }) as Promise<any>
+    ).catch(() => null);
 
     const tenantMembers = await this.prisma.tenantMember.findMany({
       where: { userId },
-      include: { tenant: { select: { id: true, name: true, kybStatus: true } } },
+      include: {
+        tenant: { select: { id: true, name: true, kybStatus: true } },
+      },
     });
 
     let onChain: any = null;
@@ -122,9 +136,12 @@ export class AdminService {
 
   async updateKycStatus(userId: string, status: string) {
     const validStatuses = ['UNVERIFIED', 'PENDING', 'VERIFIED', 'REJECTED'];
-    if (!validStatuses.includes(status)) throw new BadRequestException('Invalid status');
+    if (!validStatuses.includes(status))
+      throw new BadRequestException('Invalid status');
 
-    const existing = await this.prisma.kycRecord.findUnique({ where: { userId } });
+    const existing = await this.prisma.kycRecord.findUnique({
+      where: { userId },
+    });
     if (existing) {
       await this.prisma.kycRecord.update({
         where: { userId },
@@ -155,7 +172,8 @@ export class AdminService {
   }
 
   async attestUserBlockchain(userId: string, kycStatus: number) {
-    if (![1, 2, 3].includes(kycStatus)) throw new BadRequestException('kycStatus must be 1, 2, or 3');
+    if (![1, 2, 3].includes(kycStatus))
+      throw new BadRequestException('kycStatus must be 1, 2, or 3');
     await this.blockchain.attestVerification(userId, kycStatus as 1 | 2 | 3);
     return { success: true };
   }
@@ -217,7 +235,9 @@ export class AdminService {
     let ownerOnChain: any = null;
     if (owner) {
       try {
-        ownerOnChain = await this.blockchain.getOnChainVerification(owner.userId);
+        ownerOnChain = await this.blockchain.getOnChainVerification(
+          owner.userId,
+        );
       } catch {
         ownerOnChain = null;
       }
@@ -231,7 +251,8 @@ export class AdminService {
 
   async updateKybStatus(tenantId: string, status: string) {
     const validStatuses = ['UNVERIFIED', 'PENDING', 'VERIFIED', 'REJECTED'];
-    if (!validStatuses.includes(status)) throw new BadRequestException('Invalid status');
+    if (!validStatuses.includes(status))
+      throw new BadRequestException('Invalid status');
     await this.prisma.tenant.update({
       where: { id: tenantId },
       data: { kybStatus: status as any },

@@ -11,7 +11,9 @@ async function main() {
     const ledger = app.get(LedgerService);
     const wallet = app.get(WalletService);
 
-    const cfg = await prisma.billingConfig.findUnique({ where: { id: 'singleton' } });
+    const cfg = await prisma.billingConfig.findUnique({
+      where: { id: 'singleton' },
+    });
     if (!cfg) throw new Error('billing config not seeded');
     const amount = cfg.welcomeBonusPlanck;
     console.log(`welcome bonus amount: ${amount} planck`);
@@ -55,7 +57,9 @@ async function main() {
       }
     }
 
-    console.log(`credited ${credited}, skipped ${skipped} (already bonused), failed ${failed}`);
+    console.log(
+      `credited ${credited}, skipped ${skipped} (already bonused), failed ${failed}`,
+    );
   } finally {
     await app.close();
   }

@@ -32,7 +32,9 @@ export class AiAnalystService {
         participants: { create: { userId, role: 'OWNER' } },
       },
     });
-    this.logger.log(`Created AI_ANALYST conversation ${conv.id} for user ${userId}`);
+    this.logger.log(
+      `Created AI_ANALYST conversation ${conv.id} for user ${userId}`,
+    );
     return conv.id;
   }
 
@@ -72,7 +74,9 @@ export class AiAnalystService {
             formData.append('files', blob, file.name);
           }
         } catch (e) {
-          this.logger.warn(`Failed to download file ${file.name}: ${(e as Error).message}`);
+          this.logger.warn(
+            `Failed to download file ${file.name}: ${(e as Error).message}`,
+          );
         }
       }
 

@@ -33,8 +33,8 @@ describe('DeviceKeysService', () => {
     }).compile();
 
     service = module.get<DeviceKeysService>(DeviceKeysService);
-    prisma = module.get(PrismaService) as any;
-    fcm = module.get(FcmService) as any;
+    prisma = module.get(PrismaService);
+    fcm = module.get(FcmService);
   });
 
   describe('register', () => {
@@ -281,9 +281,9 @@ describe('DeviceKeysService', () => {
         id: 'dk-1',
         userId: 'other-user',
       });
-      await expect(
-        service.revoke('user-1', 'dk-1', {}),
-      ).rejects.toBeInstanceOf(NotFoundException);
+      await expect(service.revoke('user-1', 'dk-1', {})).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
   });
 });

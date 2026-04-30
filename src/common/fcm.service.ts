@@ -33,13 +33,19 @@ export class FcmService {
         return;
       }
     } else {
-      this.logger.warn('Neither FIREBASE_SERVICE_ACCOUNT_PATH nor FIREBASE_SERVICE_ACCOUNT_JSON set — FCM push disabled');
+      this.logger.warn(
+        'Neither FIREBASE_SERVICE_ACCOUNT_PATH nor FIREBASE_SERVICE_ACCOUNT_JSON set — FCM push disabled',
+      );
       return;
     }
 
     try {
       if (admin.apps.length === 0) {
-        admin.initializeApp({ credential: admin.credential.cert(serviceAccount as admin.ServiceAccount) });
+        admin.initializeApp({
+          credential: admin.credential.cert(
+            serviceAccount as admin.ServiceAccount,
+          ),
+        });
       }
       this.initialized = true;
       this.logger.log('Firebase Admin initialized');
@@ -48,7 +54,14 @@ export class FcmService {
     }
   }
 
-  async sendCallInvite(fcmToken: string, fromName: string, roomName: string, conversationId: string, e2eeKey?: string, fromAvatar?: string): Promise<void> {
+  async sendCallInvite(
+    fcmToken: string,
+    fromName: string,
+    roomName: string,
+    conversationId: string,
+    e2eeKey?: string,
+    fromAvatar?: string,
+  ): Promise<void> {
     if (!this.initialized || !fcmToken) return;
     try {
       await admin.messaging().send({
@@ -88,7 +101,12 @@ export class FcmService {
     }
   }
 
-  async sendNewMessage(fcmToken: string, fromName: string, body: string, conversationId: string): Promise<void> {
+  async sendNewMessage(
+    fcmToken: string,
+    fromName: string,
+    body: string,
+    conversationId: string,
+  ): Promise<void> {
     if (!this.initialized || !fcmToken) return;
     const truncated = body.length > 100 ? body.substring(0, 100) + '…' : body;
     try {
@@ -130,8 +148,12 @@ export class FcmService {
     }
   }
 
-
-  async sendCalendarInvite(fcmToken: string, title: string, body: string, eventId: string): Promise<void> {
+  async sendCalendarInvite(
+    fcmToken: string,
+    title: string,
+    body: string,
+    eventId: string,
+  ): Promise<void> {
     if (!this.initialized || !fcmToken) return;
     try {
       await admin.messaging().send({
@@ -146,7 +168,12 @@ export class FcmService {
     }
   }
 
-  async sendCalendarReminder(fcmToken: string, title: string, body: string, eventId: string): Promise<void> {
+  async sendCalendarReminder(
+    fcmToken: string,
+    title: string,
+    body: string,
+    eventId: string,
+  ): Promise<void> {
     if (!this.initialized || !fcmToken) return;
     try {
       await admin.messaging().send({
@@ -168,7 +195,10 @@ export class FcmService {
         token: fcmToken,
         data: { type: 'calendar_updated' },
         android: { priority: 'high' as const },
-        apns: { payload: { aps: { 'content-available': 1 } }, headers: { 'apns-push-type': 'background', 'apns-priority': '5' } },
+        apns: {
+          payload: { aps: { 'content-available': 1 } },
+          headers: { 'apns-push-type': 'background', 'apns-priority': '5' },
+        },
       });
     } catch (e: any) {}
   }
@@ -235,7 +265,11 @@ export class FcmService {
     }
   }
 
-  async sendCallCancelled(fcmToken: string, roomName: string, fromName?: string): Promise<void> {
+  async sendCallCancelled(
+    fcmToken: string,
+    roomName: string,
+    fromName?: string,
+  ): Promise<void> {
     if (!this.initialized || !fcmToken) return;
     try {
       await admin.messaging().send({
@@ -261,4 +295,3 @@ export class FcmService {
     }
   }
 }
-

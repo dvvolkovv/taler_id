@@ -1,4 +1,14 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Delete,
+  Body,
+  Param,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { NotesService } from './notes.service';
@@ -9,8 +19,16 @@ export class NotesController {
   constructor(private readonly service: NotesService) {}
 
   @Get()
-  findAll(@CurrentUser() user: any, @Query('limit') limit?: string, @Query('offset') offset?: string) {
-    return this.service.findAll(user.sub, limit ? parseInt(limit) : 50, offset ? parseInt(offset) : 0);
+  findAll(
+    @CurrentUser() user: any,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    return this.service.findAll(
+      user.sub,
+      limit ? parseInt(limit) : 50,
+      offset ? parseInt(offset) : 0,
+    );
   }
 
   @Get(':id')
@@ -19,12 +37,19 @@ export class NotesController {
   }
 
   @Post()
-  create(@CurrentUser() user: any, @Body() body: { title: string; content: string; source?: string }) {
+  create(
+    @CurrentUser() user: any,
+    @Body() body: { title: string; content: string; source?: string },
+  ) {
     return this.service.create(user.sub, body);
   }
 
   @Patch(':id')
-  update(@CurrentUser() user: any, @Param('id') id: string, @Body() body: { title?: string; content?: string }) {
+  update(
+    @CurrentUser() user: any,
+    @Param('id') id: string,
+    @Body() body: { title?: string; content?: string },
+  ) {
     return this.service.update(user.sub, id, body);
   }
 

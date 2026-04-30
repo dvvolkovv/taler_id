@@ -8,7 +8,9 @@ export default () => ({
     refreshExpiry: process.env.JWT_REFRESH_EXPIRY || '30d',
   },
   oidc: {
-    issuer: process.env.OIDC_ISSUER || `${process.env.BASE_URL || 'http://localhost:3000'}/oauth`,
+    issuer:
+      process.env.OIDC_ISSUER ||
+      `${process.env.BASE_URL || 'http://localhost:3000'}/oauth`,
     cookieKeys: process.env.OIDC_COOKIE_KEYS || 'taler-oidc-default-key',
   },
   database: {
@@ -19,8 +21,10 @@ export default () => ({
   },
   security: {
     bcryptRounds: parseInt(process.env.BCRYPT_ROUNDS ?? '12', 10) || 12,
-    bruteForceMaxAttempts: parseInt(process.env.BRUTE_FORCE_MAX_ATTEMPTS ?? '5', 10) || 5,
-    bruteForceLockouttMinutes: parseInt(process.env.BRUTE_FORCE_LOCKOUT_MINUTES ?? '15', 10) || 15,
+    bruteForceMaxAttempts:
+      parseInt(process.env.BRUTE_FORCE_MAX_ATTEMPTS ?? '5', 10) || 5,
+    bruteForceLockouttMinutes:
+      parseInt(process.env.BRUTE_FORCE_LOCKOUT_MINUTES ?? '15', 10) || 15,
   },
   email: {
     smtp: {

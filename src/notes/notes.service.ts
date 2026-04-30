@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -21,7 +25,10 @@ export class NotesService {
     return note;
   }
 
-  async create(userId: string, data: { title: string; content: string; source?: string }) {
+  async create(
+    userId: string,
+    data: { title: string; content: string; source?: string },
+  ) {
     return this.prisma.note.create({
       data: {
         userId,
@@ -32,7 +39,11 @@ export class NotesService {
     });
   }
 
-  async update(userId: string, id: string, data: { title?: string; content?: string }) {
+  async update(
+    userId: string,
+    id: string,
+    data: { title?: string; content?: string },
+  ) {
     const note = await this.prisma.note.findUnique({ where: { id } });
     if (!note) throw new NotFoundException('Note not found');
     if (note.userId !== userId) throw new ForbiddenException();

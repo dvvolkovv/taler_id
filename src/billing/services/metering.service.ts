@@ -1,4 +1,10 @@
-import { Inject, Injectable, Logger, NotFoundException, GoneException } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  NotFoundException,
+  GoneException,
+} from '@nestjs/common';
 import { Interval } from '@nestjs/schedule';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PricingService } from './pricing.service';
@@ -30,7 +36,9 @@ export class MeteringService {
 
   @Interval(10_000)
   async tick(): Promise<void> {
-    const sessions = await this.prisma.aiSession.findMany({ where: { status: 'active' } });
+    const sessions = await this.prisma.aiSession.findMany({
+      where: { status: 'active' },
+    });
     const cfg = await this.pricing.getConfig();
 
     for (const s of sessions) {
@@ -55,7 +63,10 @@ export class MeteringService {
       }
 
       try {
-        const cost = await this.pricing.calculatePlanckCost(s.featureKey, elapsedMinutes);
+        const cost = await this.pricing.calculatePlanckCost(
+          s.featureKey,
+          elapsedMinutes,
+        );
         await this.ledger.debit(s.userId, cost, 'SPEND', {
           featureKey: s.featureKey,
           sessionId: s.id,
@@ -103,7 +114,9 @@ export class MeteringService {
               );
             }
           } else {
-            this.log.warn(`[dry-run] would terminate ${s.id} for ${s.userId} — continuing`);
+            this.log.warn(
+              `[dry-run] would terminate ${s.id} for ${s.userId} — continuing`,
+            );
           }
         } else {
           this.log.error(`metering failed for session ${s.id}: ${String(err)}`);
@@ -154,11 +167,20 @@ export class MeteringService {
    * Late adjustments after `status='completed'` are intentionally allowed to capture
    * crash-recovery reports — we do not guard on session status here.
    */
-  async reportUsage(sessionId: string, totalUnits: number, reporter: string): Promise<void> {
-    const s = await this.prisma.aiSession.findUnique({ where: { id: sessionId } });
+  async reportUsage(
+    sessionId: string,
+    totalUnits: number,
+    reporter: string,
+  ): Promise<void> {
+    const s = await this.prisma.aiSession.findUnique({
+      where: { id: sessionId },
+    });
     if (!s) throw new NotFoundException(`session ${sessionId} not found`);
 
-    const totalExpected = await this.pricing.calculatePlanckCost(s.featureKey, totalUnits);
+    const totalExpected = await this.pricing.calculatePlanckCost(
+      s.featureKey,
+      totalUnits,
+    );
     const diff = totalExpected - s.totalSpentPlanck;
 
     await this.prisma.usageLog.create({
@@ -186,7 +208,9 @@ export class MeteringService {
       });
     } catch (err) {
       if (err instanceof InsufficientFundsException) {
-        this.log.warn(`final adjustment for ${sessionId} skipped: insufficient funds`);
+        this.log.warn(
+          `final adjustment for ${sessionId} skipped: insufficient funds`,
+        );
       } else {
         throw err;
       }

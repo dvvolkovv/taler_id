@@ -20,7 +20,11 @@ import * as jwt from 'jsonwebtoken';
 import * as fs from 'fs';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
-import { PHASE_LABELS, resolveToolLabel, ToolKind } from '../ai-analyst/ai-analyst-labels';
+import {
+  PHASE_LABELS,
+  resolveToolLabel,
+  ToolKind,
+} from '../ai-analyst/ai-analyst-labels';
 
 @WebSocketGateway({ namespace: '/messenger', cors: { origin: '*' } })
 export class MessengerGateway
@@ -42,8 +46,11 @@ export class MessengerGateway
     private readonly aiAnalyst: AiAnalystService,
     private readonly outboundBot: OutboundBotService,
   ) {
-    const publicKeyPath = this.configService.get<string>('jwt.publicKeyPath') ?? '';
-    this.publicKey = publicKeyPath ? fs.readFileSync(publicKeyPath, 'utf8') : '';
+    const publicKeyPath =
+      this.configService.get<string>('jwt.publicKeyPath') ?? '';
+    this.publicKey = publicKeyPath
+      ? fs.readFileSync(publicKeyPath, 'utf8')
+      : '';
   }
 
   onModuleInit() {
@@ -68,16 +75,23 @@ export class MessengerGateway
         this.server.to(`user:${callerId}`).emit('call_ai_twin_offer', payload);
       },
       (targetUserId, payload) => {
-        this.server.to(`user:${targetUserId}`).emit('call_ai_twin_joined', payload);
+        this.server
+          .to(`user:${targetUserId}`)
+          .emit('call_ai_twin_joined', payload);
       },
     );
   }
 
   async handleConnection(client: Socket) {
     try {
-      const token = (client.handshake.auth?.token as string)?.replace('Bearer ', '');
+      const token = (client.handshake.auth?.token as string)?.replace(
+        'Bearer ',
+        '',
+      );
       if (!token) throw new Error('No token');
-      const payload = jwt.verify(token, this.publicKey, { algorithms: ['RS256'] }) as any;
+      const payload = jwt.verify(token, this.publicKey, {
+        algorithms: ['RS256'],
+      }) as any;
       client.data.userId = payload.sub;
       client.join(`user:${payload.sub}`);
     } catch {
@@ -87,17 +101,22 @@ export class MessengerGateway
 
   handleDisconnect(client: Socket) {
     if (client.data.userId) {
-      this.prisma.user.update({
-        where: { id: client.data.userId },
-        data: { lastSeen: new Date() },
-      }).catch(() => {});
+      this.prisma.user
+        .update({
+          where: { id: client.data.userId },
+          data: { lastSeen: new Date() },
+        })
+        .catch(() => {});
     }
   }
 
   @SubscribeMessage('join')
   async handleJoin(client: Socket, payload: { conversationId: string }) {
     try {
-      await this.service.assertParticipant(payload.conversationId, client.data.userId);
+      await this.service.assertParticipant(
+        payload.conversationId,
+        client.data.userId,
+      );
       client.join(payload.conversationId);
     } catch {
       client.emit('error', { message: 'Not a participant' });
@@ -105,12 +124,24 @@ export class MessengerGateway
   }
 
   @SubscribeMessage('message')
-  async handleMessage(client: Socket, payload: {
-    conversationId: string; content: string;
-    fileUrl?: string; fileName?: string; fileSize?: number; fileType?: string;
-    s3Key?: string; thumbnailSmallUrl?: string; thumbnailMediumUrl?: string; thumbnailLargeUrl?: string; silent?: boolean;
-    topicId?: string; clientTempId?: string;
-  }) {
+  async handleMessage(
+    client: Socket,
+    payload: {
+      conversationId: string;
+      content: string;
+      fileUrl?: string;
+      fileName?: string;
+      fileSize?: number;
+      fileType?: string;
+      s3Key?: string;
+      thumbnailSmallUrl?: string;
+      thumbnailMediumUrl?: string;
+      thumbnailLargeUrl?: string;
+      silent?: boolean;
+      topicId?: string;
+      clientTempId?: string;
+    },
+  ) {
     try {
       // Idempotency: skip duplicate messages sent during reconnects.
       // On duplicate we still MUST tell the sender we have their message —
@@ -119,7 +150,9 @@ export class MessengerGateway
         const dedupKey = `msg:dedup:${client.data.userId}:${payload.clientTempId}`;
         const alreadySent = await this.redis.get(dedupKey);
         if (alreadySent) {
-          this.logger.log(`[handleMessage] Duplicate clientTempId=${payload.clientTempId}, ack-only`);
+          this.logger.log(
+            `[handleMessage] Duplicate clientTempId=${payload.clientTempId}, ack-only`,
+          );
           client.emit('message_acked', {
             clientTempId: payload.clientTempId,
             messageId: alreadySent !== '1' ? alreadySent : undefined,
@@ -130,39 +163,62 @@ export class MessengerGateway
         // Value will be overwritten with real messageId after insert.
         await this.redis.setEx(dedupKey, 86400, '1');
       }
-      const fileData = payload.fileUrl ? {
-        fileUrl: payload.fileUrl, fileName: payload.fileName,
-        fileSize: payload.fileSize, fileType: payload.fileType,
-        s3Key: payload.s3Key,
-        thumbnailSmallUrl: payload.thumbnailSmallUrl,
-        thumbnailMediumUrl: payload.thumbnailMediumUrl,
-        thumbnailLargeUrl: payload.thumbnailLargeUrl,
-      } : undefined;
+      const fileData = payload.fileUrl
+        ? {
+            fileUrl: payload.fileUrl,
+            fileName: payload.fileName,
+            fileSize: payload.fileSize,
+            fileType: payload.fileType,
+            s3Key: payload.s3Key,
+            thumbnailSmallUrl: payload.thumbnailSmallUrl,
+            thumbnailMediumUrl: payload.thumbnailMediumUrl,
+            thumbnailLargeUrl: payload.thumbnailLargeUrl,
+          }
+        : undefined;
       // For DIRECT conversations, check contact/block status BEFORE saving message
-      const msgConvType = await this.service.getConversationType(payload.conversationId);
+      const msgConvType = await this.service.getConversationType(
+        payload.conversationId,
+      );
       if (msgConvType === 'DIRECT') {
-        const allParticipants = await this.service.getParticipants(payload.conversationId);
-        const otherParticipant = allParticipants.find(p => p.userId !== client.data.userId);
+        const allParticipants = await this.service.getParticipants(
+          payload.conversationId,
+        );
+        const otherParticipant = allParticipants.find(
+          (p) => p.userId !== client.data.userId,
+        );
         if (otherParticipant) {
           // Check if sender is blocked by recipient
           const blocked = await this.prisma.blockedUser.findFirst({
-            where: { blockerId: otherParticipant.userId, blockedId: client.data.userId },
+            where: {
+              blockerId: otherParticipant.userId,
+              blockedId: client.data.userId,
+            },
           });
           if (blocked) {
-            client.emit('error', { message: 'Вы заблокированы этим пользователем' });
+            client.emit('error', {
+              message: 'Вы заблокированы этим пользователем',
+            });
             return;
           }
           // Check if still contacts
-          const stillContacts = await this.service.hasContactWith(client.data.userId, otherParticipant.userId);
+          const stillContacts = await this.service.hasContactWith(
+            client.data.userId,
+            otherParticipant.userId,
+          );
           if (!stillContacts) {
-            client.emit('error', { message: 'Пользователь удалил вас из контактов' });
+            client.emit('error', {
+              message: 'Пользователь удалил вас из контактов',
+            });
             return;
           }
         }
       }
       // Check channel permissions
-      if (msgConvType === "CHANNEL") {
-        await this.service.assertCanPostInChannel(payload.conversationId, client.data.userId);
+      if (msgConvType === 'CHANNEL') {
+        await this.service.assertCanPostInChannel(
+          payload.conversationId,
+          client.data.userId,
+        );
       }
       const msg = await this.service.createMessage(
         payload.conversationId,
@@ -171,7 +227,9 @@ export class MessengerGateway
         fileData,
         payload.topicId,
       );
-      const senderName = await this.service.getUserDisplayName(client.data.userId);
+      const senderName = await this.service.getUserDisplayName(
+        client.data.userId,
+      );
       const enrichedMsg = { ...msg, senderName, reactions: [] };
       // Update dedup key with real messageId so future duplicate retries can
       // receive the server-side id (useful for clients that lost the original
@@ -198,7 +256,11 @@ export class MessengerGateway
         // Skip them silently in history; reject the current message loudly.
         const MAX_ANALYST_FILE_BYTES = 20 * 1024 * 1024;
 
-        if (payload.fileUrl && payload.fileSize && payload.fileSize > MAX_ANALYST_FILE_BYTES) {
+        if (
+          payload.fileUrl &&
+          payload.fileSize &&
+          payload.fileSize > MAX_ANALYST_FILE_BYTES
+        ) {
           const mb = (payload.fileSize / 1024 / 1024).toFixed(1);
           const errMsg = await this.service.createMessage(
             payload.conversationId,
@@ -242,8 +304,14 @@ export class MessengerGateway
           }
         } catch (_) {}
         // Also include the current message's file if any
-        if (payload.fileUrl && !recentFiles.some(f => f.url === payload.fileUrl)) {
-          recentFiles.unshift({ url: payload.fileUrl, name: payload.fileName || 'file' });
+        if (
+          payload.fileUrl &&
+          !recentFiles.some((f) => f.url === payload.fileUrl)
+        ) {
+          recentFiles.unshift({
+            url: payload.fileUrl,
+            name: payload.fileName || 'file',
+          });
         }
         this._dispatchToAnalyst(
           client.data.userId,
@@ -257,18 +325,35 @@ export class MessengerGateway
       }
 
       // AI Outbound Bot: dispatch user message to start a call campaign.
-      this.logger.log(`[AI_OUTBOUND] msgConvType=${msgConvType} convId=${payload.conversationId} content=${(payload.content || "").slice(0,50)}`);
+      this.logger.log(
+        `[AI_OUTBOUND] msgConvType=${msgConvType} convId=${payload.conversationId} content=${(payload.content || '').slice(0, 50)}`,
+      );
       if (msgConvType === 'AI_OUTBOUND') {
         const recentFiles: { url: string; name: string }[] = [];
         try {
           const recent = await this.prisma.message.findMany({
-            where: { conversationId: payload.conversationId, isSystem: false, fileUrl: { not: null } },
-            orderBy: { sentAt: 'desc' }, take: 10, select: { fileUrl: true, fileName: true },
+            where: {
+              conversationId: payload.conversationId,
+              isSystem: false,
+              fileUrl: { not: null },
+            },
+            orderBy: { sentAt: 'desc' },
+            take: 10,
+            select: { fileUrl: true, fileName: true },
           });
-          for (const m of recent) { if (m.fileUrl) recentFiles.push({ url: m.fileUrl, name: m.fileName || 'file' }); }
+          for (const m of recent) {
+            if (m.fileUrl)
+              recentFiles.push({ url: m.fileUrl, name: m.fileName || 'file' });
+          }
         } catch (_) {}
-        if (payload.fileUrl && !recentFiles.some(f => f.url === payload.fileUrl)) {
-          recentFiles.unshift({ url: payload.fileUrl, name: payload.fileName || 'file' });
+        if (
+          payload.fileUrl &&
+          !recentFiles.some((f) => f.url === payload.fileUrl)
+        ) {
+          recentFiles.unshift({
+            url: payload.fileUrl,
+            name: payload.fileName || 'file',
+          });
         }
         this.outboundBot.handleUserMessage({
           userId: client.data.userId,
@@ -280,7 +365,9 @@ export class MessengerGateway
         return;
       }
 
-      const participants = await this.service.getParticipants(payload.conversationId);
+      const participants = await this.service.getParticipants(
+        payload.conversationId,
+      );
       for (const p of participants) {
         if (p.userId === client.data.userId) continue;
         // Skip delivery if recipient has blocked sender
@@ -289,17 +376,28 @@ export class MessengerGateway
         });
         if (isBlocked) continue;
         this.server.to(`user:${p.userId}`).emit('new_message', enrichedMsg);
-        const socketsInConv = await this.server.in(payload.conversationId).fetchSockets();
-        const recipientInConv = socketsInConv.some(s => s.data.userId === p.userId);
+        const socketsInConv = await this.server
+          .in(payload.conversationId)
+          .fetchSockets();
+        const recipientInConv = socketsInConv.some(
+          (s) => s.data.userId === p.userId,
+        );
         const sockets = await this.server.in(`user:${p.userId}`).fetchSockets();
         const isOnline = sockets.length > 0;
         if (isOnline) {
           await this.service.markDelivered(msg.id);
-          this.server.to(`user:${client.data.userId}`).emit('message_updated', { id: msg.id, isDelivered: true });
+          this.server
+            .to(`user:${client.data.userId}`)
+            .emit('message_updated', { id: msg.id, isDelivered: true });
         }
-        this.logger.log(`FCM: recipientId=${p.userId} online=${isOnline} inConv=${recipientInConv} → push=${!recipientInConv}`);
+        this.logger.log(
+          `FCM: recipientId=${p.userId} online=${isOnline} inConv=${recipientInConv} → push=${!recipientInConv}`,
+        );
         if (!recipientInConv && !payload.silent) {
-          const muted = await this.service.isParticipantMuted(payload.conversationId, p.userId);
+          const muted = await this.service.isParticipantMuted(
+            payload.conversationId,
+            p.userId,
+          );
           if (muted) {
             this.logger.log(`FCM skipped for ${p.userId}: conversation muted`);
           } else {
@@ -318,13 +416,17 @@ export class MessengerGateway
                 }
                 return c;
               })();
-              this.fcmService.sendNewMessage(
-                fcmToken,
-                senderName,
-                pushText,
-                payload.conversationId,
-              ).then(() => this.logger.log(`FCM sent to ${p.userId}`))
-               .catch(e => this.logger.error(`FCM failed for ${p.userId}:`, e));
+              this.fcmService
+                .sendNewMessage(
+                  fcmToken,
+                  senderName,
+                  pushText,
+                  payload.conversationId,
+                )
+                .then(() => this.logger.log(`FCM sent to ${p.userId}`))
+                .catch((e) =>
+                  this.logger.error(`FCM failed for ${p.userId}:`, e),
+                );
             }
           }
         }
@@ -335,11 +437,20 @@ export class MessengerGateway
   }
 
   @SubscribeMessage('edit_message')
-  async handleEditMessage(client: Socket, payload: { conversationId: string; messageId: string; content: string }) {
+  async handleEditMessage(
+    client: Socket,
+    payload: { conversationId: string; messageId: string; content: string },
+  ) {
     try {
-      const updated = await this.service.editMessage(payload.messageId, client.data.userId, payload.content);
+      const updated = await this.service.editMessage(
+        payload.messageId,
+        client.data.userId,
+        payload.content,
+      );
       this.server.to(payload.conversationId).emit('message_updated', {
-        id: updated.id, content: updated.content, isEdited: true,
+        id: updated.id,
+        content: updated.content,
+        isEdited: true,
       });
     } catch (e) {
       client.emit('error', { message: e.message });
@@ -347,9 +458,20 @@ export class MessengerGateway
   }
 
   @SubscribeMessage('delete_message')
-  async handleDeleteMessage(client: Socket, payload: { conversationId: string; messageId: string; scope: 'self' | 'all' }) {
+  async handleDeleteMessage(
+    client: Socket,
+    payload: {
+      conversationId: string;
+      messageId: string;
+      scope: 'self' | 'all';
+    },
+  ) {
     try {
-      const result = await this.service.deleteMessage(payload.messageId, client.data.userId, payload.scope);
+      const result = await this.service.deleteMessage(
+        payload.messageId,
+        client.data.userId,
+        payload.scope,
+      );
       if (payload.scope === 'all') {
         this.server.to(payload.conversationId).emit('message_deleted', {
           messageId: payload.messageId,
@@ -369,7 +491,10 @@ export class MessengerGateway
   }
 
   @SubscribeMessage('typing')
-  async handleTyping(client: Socket, payload: { conversationId: string; isTyping: boolean }) {
+  async handleTyping(
+    client: Socket,
+    payload: { conversationId: string; isTyping: boolean },
+  ) {
     const userId = client.data.userId;
     let userName: string | undefined;
     try {
@@ -378,7 +503,9 @@ export class MessengerGateway
         select: { firstName: true, lastName: true },
       });
       if (profile) {
-        userName = [profile.firstName, profile.lastName].filter(Boolean).join(' ') || undefined;
+        userName =
+          [profile.firstName, profile.lastName].filter(Boolean).join(' ') ||
+          undefined;
       }
     } catch (_) {}
     client.to(payload.conversationId).emit('typing', {
@@ -392,21 +519,33 @@ export class MessengerGateway
   @SubscribeMessage('call_invite')
   async handleCallInvite(
     client: Socket,
-    payload: { conversationId: string; roomName: string; inviteeId?: string; e2eeKey?: string },
+    payload: {
+      conversationId: string;
+      roomName: string;
+      inviteeId?: string;
+      e2eeKey?: string;
+    },
   ) {
     const callerInfo = await this.service.getUserCallInfo(client.data.userId);
-    this.logger.log(`[call_invite] caller=${client.data.userId} conv=${payload.conversationId} room=${payload.roomName} inviteeId=${payload.inviteeId}`);
+    this.logger.log(
+      `[call_invite] caller=${client.data.userId} conv=${payload.conversationId} room=${payload.roomName} inviteeId=${payload.inviteeId}`,
+    );
     const fromUserName = callerInfo.name;
     const fromUserAvatar = callerInfo.avatarUrl;
-    const hasConversation = payload.conversationId && payload.conversationId.length > 0;
-    const convType = hasConversation ? await this.service.getConversationType(payload.conversationId) : null;
+    const hasConversation =
+      payload.conversationId && payload.conversationId.length > 0;
+    const convType = hasConversation
+      ? await this.service.getConversationType(payload.conversationId)
+      : null;
     const isGroup = convType === 'GROUP';
 
     let calleeIds: string[];
     if (payload.inviteeId) {
       calleeIds = [payload.inviteeId];
     } else if (hasConversation) {
-      const participants = await this.service.getParticipants(payload.conversationId);
+      const participants = await this.service.getParticipants(
+        payload.conversationId,
+      );
       calleeIds = participants
         .filter((p) => p.userId !== client.data.userId)
         .map((p) => p.userId);
@@ -418,7 +557,9 @@ export class MessengerGateway
 
     // For group calls, emit group_call_started to all participants
     if (isGroup && hasConversation) {
-      const participants = await this.service.getParticipants(payload.conversationId);
+      const participants = await this.service.getParticipants(
+        payload.conversationId,
+      );
       for (const p of participants) {
         this.server.to(`user:${p.userId}`).emit('group_call_started', {
           conversationId: payload.conversationId,
@@ -437,12 +578,17 @@ export class MessengerGateway
       if (callBlocked) continue;
       // For DIRECT calls, skip if not contacts
       if (!isGroup) {
-        const areContacts = await this.service.hasContactWith(client.data.userId, calleeId);
+        const areContacts = await this.service.hasContactWith(
+          client.data.userId,
+          calleeId,
+        );
         if (!areContacts) continue;
       }
       // Add callee to CallLog ONLY after passing all checks
       try {
-        const log = await this.prisma.callLog.findUnique({ where: { roomName: payload.roomName } });
+        const log = await this.prisma.callLog.findUnique({
+          where: { roomName: payload.roomName },
+        });
         if (log && !log.participantIds.includes(calleeId)) {
           await this.prisma.callLog.update({
             where: { roomName: payload.roomName },
@@ -453,7 +599,10 @@ export class MessengerGateway
 
       // Check mute before sending push (but still send socket event for banner)
       const muted = hasConversation
-        ? await this.service.isParticipantMuted(payload.conversationId, calleeId)
+        ? await this.service.isParticipantMuted(
+            payload.conversationId,
+            calleeId,
+          )
         : false;
 
       this.server.to(`user:${calleeId}`).emit('call_invite', {
@@ -484,10 +633,7 @@ export class MessengerGateway
             },
           });
           if (calleeProfile?.aiTwinEnabled) {
-            const calleeName = [
-              calleeProfile.firstName,
-              calleeProfile.lastName,
-            ]
+            const calleeName = [calleeProfile.firstName, calleeProfile.lastName]
               .filter(Boolean)
               .join(' ')
               .trim();
@@ -513,39 +659,65 @@ export class MessengerGateway
 
       if (!muted) {
         const calleeToken = await this.service.getFcmToken(calleeId);
-        this.logger.log(`[call_invite] calleeId=${calleeId} fcmToken=${calleeToken ? "YES(" + calleeToken.substring(0,20) + "...)" : "NULL"}`);
+        this.logger.log(
+          `[call_invite] calleeId=${calleeId} fcmToken=${calleeToken ? 'YES(' + calleeToken.substring(0, 20) + '...)' : 'NULL'}`,
+        );
         if (calleeToken) {
-          this.fcmService.sendCallInvite(calleeToken, fromUserName, payload.roomName, payload.conversationId || '', payload.e2eeKey, fromUserAvatar ?? undefined).catch(() => {});
+          this.fcmService
+            .sendCallInvite(
+              calleeToken,
+              fromUserName,
+              payload.roomName,
+              payload.conversationId || '',
+              payload.e2eeKey,
+              fromUserAvatar ?? undefined,
+            )
+            .catch(() => {});
         }
         const voipToken = await this.service.getVoipToken(calleeId);
         if (voipToken) {
-          this.apnsService.sendVoIPCallInvite(voipToken, {
-            nameCaller: isGroup ? `${fromUserName} (группа)` : fromUserName,
-            roomName: payload.roomName,
-            conversationId: payload.conversationId || '',
-            ...(payload.e2eeKey ? { e2eeKey: payload.e2eeKey } : {}),
-          }).catch(() => {});
+          this.apnsService
+            .sendVoIPCallInvite(voipToken, {
+              nameCaller: isGroup ? `${fromUserName} (группа)` : fromUserName,
+              roomName: payload.roomName,
+              conversationId: payload.conversationId || '',
+              ...(payload.e2eeKey ? { e2eeKey: payload.e2eeKey } : {}),
+            })
+            .catch(() => {});
         }
       } else {
-        this.logger.log(`Call push skipped for ${calleeId}: conversation muted`);
+        this.logger.log(
+          `Call push skipped for ${calleeId}: conversation muted`,
+        );
       }
     }
   }
 
   @SubscribeMessage('call_ended')
-  async handleCallEnded(client: Socket, payload: { conversationId: string; roomName: string }) {
-    this.logger.log(`[call_ended] from=${client.data.userId} room=${payload.roomName} conv=${payload.conversationId}`);
+  async handleCallEnded(
+    client: Socket,
+    payload: { conversationId: string; roomName: string },
+  ) {
+    this.logger.log(
+      `[call_ended] from=${client.data.userId} room=${payload.roomName} conv=${payload.conversationId}`,
+    );
     // Cancel any pending AI twin fallback — the call is over.
     this.aiTwin.cancelPending(payload.roomName).catch(() => {});
-    const msgConvType = await this.service.getConversationType(payload.conversationId);
+    const msgConvType = await this.service.getConversationType(
+      payload.conversationId,
+    );
     const isGroup = msgConvType === 'GROUP';
 
-    const participants = await this.service.getParticipants(payload.conversationId);
+    const participants = await this.service.getParticipants(
+      payload.conversationId,
+    );
 
     // Look up CallLog to determine initiator and whether call was answered
     let callLog: any = null;
     try {
-      callLog = await this.prisma.callLog.findUnique({ where: { roomName: payload.roomName } });
+      callLog = await this.prisma.callLog.findUnique({
+        where: { roomName: payload.roomName },
+      });
     } catch (_) {}
     const initiatorId = callLog?.initiatorId;
     // Call is considered answered if:
@@ -561,7 +733,9 @@ export class MessengerGateway
         // If endedAt was already set by initiator, recalculate durationSec
         if (callLog.endedAt) {
           updateData.durationSec = Math.round(
-            (new Date(callLog.endedAt).getTime() - new Date(answeredAt).getTime()) / 1000,
+            (new Date(callLog.endedAt).getTime() -
+              new Date(answeredAt).getTime()) /
+              1000,
           );
         }
         callLog = await this.prisma.callLog.update({
@@ -572,12 +746,16 @@ export class MessengerGateway
     }
     // Determine wasAnswered AFTER fallback so it reflects the updated state
     const wasAnswered = !!callLog?.answeredAt || !!senderIsCallee;
-    this.logger.log(`[call_ended] initiator=${initiatorId} senderIsCallee=${senderIsCallee} wasAnswered=${wasAnswered} answeredAt=${callLog?.answeredAt} endedAt=${callLog?.endedAt}`);
+    this.logger.log(
+      `[call_ended] initiator=${initiatorId} senderIsCallee=${senderIsCallee} wasAnswered=${wasAnswered} answeredAt=${callLog?.answeredAt} endedAt=${callLog?.endedAt}`,
+    );
 
     const callerProfile = initiatorId
       ? await this.prisma.profile.findUnique({ where: { userId: initiatorId } })
       : null;
-    const callerName = callerProfile ? `${callerProfile.firstName ?? ''} ${callerProfile.lastName ?? ''}`.trim() : 'Неизвестный';
+    const callerName = callerProfile
+      ? `${callerProfile.firstName ?? ''} ${callerProfile.lastName ?? ''}`.trim()
+      : 'Неизвестный';
 
     for (const p of participants) {
       this.server.to(`user:${p.userId}`).emit('call_ended', {
@@ -587,19 +765,29 @@ export class MessengerGateway
       // Send missed call push ONLY when call was never answered,
       // and ONLY to non-initiators (callees who missed the call).
       // Also skip if endedAt already set (another call_ended already processed).
-      if (!wasAnswered && !callLog?.endedAt && initiatorId && p.userId !== initiatorId) {
+      if (
+        !wasAnswered &&
+        !callLog?.endedAt &&
+        initiatorId &&
+        p.userId !== initiatorId
+      ) {
         // Skip missed call notification if callee blocked the initiator or not contacts
         const calleeBlockedInitiator = await this.prisma.blockedUser.findFirst({
           where: { blockerId: p.userId, blockedId: initiatorId },
         });
         if (calleeBlockedInitiator) continue;
         if (!isGroup) {
-          const areContacts = await this.service.hasContactWith(initiatorId, p.userId);
+          const areContacts = await this.service.hasContactWith(
+            initiatorId,
+            p.userId,
+          );
           if (!areContacts) continue;
         }
         const token = await this.service.getFcmToken(p.userId);
         if (token) {
-          this.fcmService.sendCallCancelled(token, payload.roomName, callerName).catch(() => {});
+          this.fcmService
+            .sendCallCancelled(token, payload.roomName, callerName)
+            .catch(() => {});
         }
         // Create system message "Missed call" in the conversation
         if (payload.conversationId) {
@@ -636,21 +824,35 @@ export class MessengerGateway
     }
 
     try {
-      const log = callLog ?? await this.prisma.callLog.findUnique({ where: { roomName: payload.roomName } });
+      const log =
+        callLog ??
+        (await this.prisma.callLog.findUnique({
+          where: { roomName: payload.roomName },
+        }));
       if (log && !log.endedAt) {
         const endedAt = new Date();
         // durationSec = talk time (from answeredAt), or 0 if never answered
         const durationSec = log.answeredAt
-          ? Math.round((endedAt.getTime() - new Date(log.answeredAt).getTime()) / 1000)
+          ? Math.round(
+              (endedAt.getTime() - new Date(log.answeredAt).getTime()) / 1000,
+            )
           : 0;
-        await this.prisma.callLog.update({ where: { roomName: payload.roomName }, data: { endedAt, durationSec } });
+        await this.prisma.callLog.update({
+          where: { roomName: payload.roomName },
+          data: { endedAt, durationSec },
+        });
       }
     } catch (_) {}
   }
 
   @SubscribeMessage('call_answered')
-  async handleCallAnswered(client: Socket, payload: { conversationId: string; roomName: string }) {
-    this.logger.log(`[call_answered] from=${client.data.userId} room=${payload.roomName} conv=${payload.conversationId}`);
+  async handleCallAnswered(
+    client: Socket,
+    payload: { conversationId: string; roomName: string },
+  ) {
+    this.logger.log(
+      `[call_answered] from=${client.data.userId} room=${payload.roomName} conv=${payload.conversationId}`,
+    );
     // Human callee picked up — cancel any pending AI twin fallback.
     this.aiTwin.cancelPending(payload.roomName).catch(() => {});
     // If the AI twin had already taken over, kick it out so the human can
@@ -681,7 +883,9 @@ export class MessengerGateway
     try {
       // Mark answeredAt in CallLog (first answer wins)
       try {
-        const log = await this.prisma.callLog.findUnique({ where: { roomName: payload.roomName } });
+        const log = await this.prisma.callLog.findUnique({
+          where: { roomName: payload.roomName },
+        });
         if (log && !log.answeredAt) {
           await this.prisma.callLog.update({
             where: { roomName: payload.roomName },
@@ -689,8 +893,12 @@ export class MessengerGateway
           });
         }
       } catch (_) {}
-      const participants = await this.service.getParticipants(payload.conversationId);
-      for (const p of participants.filter((p) => p.userId !== client.data.userId)) {
+      const participants = await this.service.getParticipants(
+        payload.conversationId,
+      );
+      for (const p of participants.filter(
+        (p) => p.userId !== client.data.userId,
+      )) {
         this.server.to(`user:${p.userId}`).emit('call_answered', {
           roomName: payload.roomName,
         });
@@ -699,10 +907,7 @@ export class MessengerGateway
   }
 
   @SubscribeMessage('call_ai_twin_accepted')
-  async handleAiTwinAccepted(
-    client: Socket,
-    payload: { roomName: string },
-  ) {
+  async handleAiTwinAccepted(client: Socket, payload: { roomName: string }) {
     this.logger.log(
       `[call_ai_twin_accepted] caller=${client.data.userId} room=${payload.roomName}`,
     );
@@ -718,22 +923,27 @@ export class MessengerGateway
   }
 
   @SubscribeMessage('call_ai_twin_declined')
-  async handleAiTwinDeclined(
-    client: Socket,
-    payload: { roomName: string },
-  ) {
+  async handleAiTwinDeclined(client: Socket, payload: { roomName: string }) {
     this.logger.log(
       `[call_ai_twin_declined] caller=${client.data.userId} room=${payload.roomName}`,
     );
     await this.aiTwin.declineOffer(payload.roomName);
   }
 
-
   @SubscribeMessage('react_message')
-  async handleReactMessage(client: Socket, payload: { conversationId: string; messageId: string; emoji: string }) {
+  async handleReactMessage(
+    client: Socket,
+    payload: { conversationId: string; messageId: string; emoji: string },
+  ) {
     try {
-      const reactions = await this.service.toggleReaction(payload.messageId, client.data.userId, payload.emoji);
-      const participants = await this.service.getParticipants(payload.conversationId);
+      const reactions = await this.service.toggleReaction(
+        payload.messageId,
+        client.data.userId,
+        payload.emoji,
+      );
+      const participants = await this.service.getParticipants(
+        payload.conversationId,
+      );
       for (const p of participants) {
         this.server.to(`user:${p.userId}`).emit('message_reaction_updated', {
           messageId: payload.messageId,
@@ -749,9 +959,14 @@ export class MessengerGateway
   @SubscribeMessage('mark_read')
   async handleMarkRead(client: Socket, payload: { conversationId: string }) {
     try {
-      const updatedIds = await this.service.markConversationRead(payload.conversationId, client.data.userId);
+      const updatedIds = await this.service.markConversationRead(
+        payload.conversationId,
+        client.data.userId,
+      );
       if (updatedIds.length > 0) {
-        const participants = await this.service.getParticipants(payload.conversationId);
+        const participants = await this.service.getParticipants(
+          payload.conversationId,
+        );
         for (const p of participants) {
           if (p.userId === client.data.userId) continue;
           this.server.to(`user:${p.userId}`).emit('messages_read', {
@@ -766,7 +981,11 @@ export class MessengerGateway
   // ─── Group events broadcast ───
 
   /** Emit a group event to all participants' personal rooms */
-  async emitToConversationParticipants(conversationId: string, event: string, data: any) {
+  async emitToConversationParticipants(
+    conversationId: string,
+    event: string,
+    data: any,
+  ) {
     const participants = await this.service.getParticipants(conversationId);
     for (const p of participants) {
       this.server.to(`user:${p.userId}`).emit(event, data);
@@ -790,14 +1009,24 @@ export class MessengerGateway
   }
 
   /** HTTP fallback for call_ended (used by mobile app as backup) */
-  async endCallFromHttp(userId: string, conversationId: string, roomName: string) {
-    await this.handleCallEnded({ data: { userId } } as any, { conversationId, roomName });
+  async endCallFromHttp(
+    userId: string,
+    conversationId: string,
+    roomName: string,
+  ) {
+    await this.handleCallEnded({ data: { userId } } as any, {
+      conversationId,
+      roomName,
+    });
   }
 
   // ── Call Hold/Resume ──────────────────────────────────────────────
 
   @SubscribeMessage('call_hold')
-  async handleCallHold(client: any, payload: { roomName: string; conversationId?: string }) {
+  async handleCallHold(
+    client: any,
+    payload: { roomName: string; conversationId?: string },
+  ) {
     const userId = client.data?.userId;
     if (!userId || !payload.roomName) return;
     this.logger.log(`[call_hold] from=${userId} room=${payload.roomName}`);
@@ -818,7 +1047,10 @@ export class MessengerGateway
   }
 
   @SubscribeMessage('call_resume')
-  async handleCallResume(client: any, payload: { roomName: string; conversationId?: string }) {
+  async handleCallResume(
+    client: any,
+    payload: { roomName: string; conversationId?: string },
+  ) {
     const userId = client.data?.userId;
     if (!userId || !payload.roomName) return;
     this.logger.log(`[call_resume] from=${userId} room=${payload.roomName}`);
@@ -838,10 +1070,15 @@ export class MessengerGateway
     }
   }
 
-  @SubscribeMessage("thread_reply")
+  @SubscribeMessage('thread_reply')
   async handleThreadReply(
     @ConnectedSocket() client: Socket,
-    @MessageBody() payload: { conversationId: string; threadParentId: string; content: string },
+    @MessageBody()
+    payload: {
+      conversationId: string;
+      threadParentId: string;
+      content: string;
+    },
   ) {
     const msg = await this.service.sendThreadReply(
       payload.conversationId,
@@ -849,9 +1086,11 @@ export class MessengerGateway
       payload.content,
       payload.threadParentId,
     );
-    const senderName = await this.service.getUserDisplayName(client.data.userId);
+    const senderName = await this.service.getUserDisplayName(
+      client.data.userId,
+    );
     const count = await this.service.getThreadCount(payload.threadParentId);
-    this.server.to(payload.conversationId).emit("new_thread_reply", {
+    this.server.to(payload.conversationId).emit('new_thread_reply', {
       ...msg,
       senderName,
       threadParentId: payload.threadParentId,
@@ -876,11 +1115,20 @@ export class MessengerGateway
     // Create the timeout promise synchronously (before any await) so fake timers
     // in tests can advance past it reliably.
     const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('AI Analyst timeout (180 s)')), 180_000),
+      setTimeout(
+        () => reject(new Error('AI Analyst timeout (180 s)')),
+        180_000,
+      ),
     );
 
     const lang = await this.getUserLang(userId);
-    const counts: Record<ToolKind, number> = { search: 0, file: 0, cmd: 0, image: 0, other: 0 };
+    const counts: Record<ToolKind, number> = {
+      search: 0,
+      file: 0,
+      cmd: 0,
+      image: 0,
+      other: 0,
+    };
     let preparingEmitted = false;
 
     const emitTyping = (emoji: string, label: string) => {
@@ -905,7 +1153,9 @@ export class MessengerGateway
 
     try {
       const submitPromise = this.aiAnalyst.submitTask({
-        userId, conversationId, messageText,
+        userId,
+        conversationId,
+        messageText,
         fileUrls: fileUrls.length > 0 ? fileUrls : undefined,
         onTool: (tool, input) => {
           const lbl = resolveToolLabel(tool, input);
@@ -914,15 +1164,22 @@ export class MessengerGateway
         },
         onChunk: (chunkText) => {
           if (!preparingEmitted) {
-            emitTyping(PHASE_LABELS.preparing.emoji, PHASE_LABELS.preparing[lang]);
+            emitTyping(
+              PHASE_LABELS.preparing.emoji,
+              PHASE_LABELS.preparing[lang],
+            );
             preparingEmitted = true;
           }
           this.server.to(`user:${userId}`).emit('analyst_chunk', {
-            conversationId, text: chunkText,
+            conversationId,
+            text: chunkText,
           });
         },
       });
-      const { text, outputFiles } = await Promise.race([submitPromise, timeoutPromise]);
+      const { text, outputFiles } = await Promise.race([
+        submitPromise,
+        timeoutPromise,
+      ]);
 
       // Append output files list (existing behaviour preserved)
       let content = text;
@@ -940,31 +1197,49 @@ export class MessengerGateway
       const metadata = { steps, durationMs };
 
       const botMsg = await this.service.createMessage(
-        conversationId, userId, content, undefined, undefined,
-        true, metadata,
+        conversationId,
+        userId,
+        content,
+        undefined,
+        undefined,
+        true,
+        metadata,
       );
 
       clearTyping();
       this.server.to(`user:${userId}`).emit('new_message', {
-        ...botMsg, senderName: 'AI Аналитик', isSystem: true,
+        ...botMsg,
+        senderName: 'AI Аналитик',
+        isSystem: true,
       });
       this.server.to(`user:${userId}`).emit('analyst_seam', {
-        conversationId, messageId: botMsg.id, steps, durationMs,
+        conversationId,
+        messageId: botMsg.id,
+        steps,
+        durationMs,
       });
     } catch (e) {
       const err = e as Error;
       this.logger.error(`[AI Analyst] dispatch failed: ${err.message}`);
-      emitTyping(PHASE_LABELS.error.emoji, `${PHASE_LABELS.error[lang]}: ${err.message}`);
+      emitTyping(
+        PHASE_LABELS.error.emoji,
+        `${PHASE_LABELS.error[lang]}: ${err.message}`,
+      );
       try {
         const errMsg = await this.service.createMessage(
-          conversationId, userId,
+          conversationId,
+          userId,
           `❌ ${lang === 'ru' ? 'Ошибка анализа' : 'Analysis error'}: ${err.message}`,
-          undefined, undefined, true,
+          undefined,
+          undefined,
+          true,
           { steps: [], durationMs: Date.now() - started, error: true },
         );
         clearTyping();
         this.server.to(`user:${userId}`).emit('new_message', {
-          ...errMsg, senderName: 'AI Аналитик', isSystem: true,
+          ...errMsg,
+          senderName: 'AI Аналитик',
+          isSystem: true,
         });
       } catch {
         clearTyping();

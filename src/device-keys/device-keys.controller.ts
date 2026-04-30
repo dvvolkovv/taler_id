@@ -1,11 +1,4 @@
-import {
-  Body,
-  Controller,
-  Get,
-  Param,
-  Post,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { DeviceKeysService } from './device-keys.service';
@@ -23,10 +16,7 @@ export class DeviceKeysController {
   }
 
   @Get('contacts/:userId/keys')
-  listForContact(
-    @CurrentUser() user: any,
-    @Param('userId') userId: string,
-  ) {
+  listForContact(@CurrentUser() user: any, @Param('userId') userId: string) {
     return this.svc.listForContact(user.sub, userId);
   }
 

@@ -28,7 +28,11 @@ export class LedgerService {
    * a successful credit/debit/refund commit. Reads balance post-commit so
    * clients see the authoritative new value.
    */
-  private async emitBalance(userId: string, reason: string, txId: string): Promise<void> {
+  private async emitBalance(
+    userId: string,
+    reason: string,
+    txId: string,
+  ): Promise<void> {
     try {
       const w = await this.prisma.userWallet.findUnique({
         where: { userId },
@@ -42,7 +46,9 @@ export class LedgerService {
     } catch (err) {
       // Never let a notification failure bubble up — the ledger change is already
       // committed. Clients will pick up the new balance on next poll/refresh.
-      this.log.warn(`emitBalance failed for user ${userId}, tx ${txId}: ${String(err)}`);
+      this.log.warn(
+        `emitBalance failed for user ${userId}, tx ${txId}: ${String(err)}`,
+      );
     }
   }
 
@@ -88,7 +94,11 @@ export class LedgerService {
     userId: string,
     amountPlanck: bigint,
     type: TxType,
-    extras: { featureKey?: string; sessionId?: string; metadata?: Prisma.JsonObject } = {},
+    extras: {
+      featureKey?: string;
+      sessionId?: string;
+      metadata?: Prisma.JsonObject;
+    } = {},
   ): Promise<{ id: string }> {
     if (amountPlanck <= 0n) throw new Error('debit amount must be > 0');
 
@@ -133,9 +143,13 @@ export class LedgerService {
       // Lock the original transaction row BEFORE reading status, to serialize concurrent refund attempts.
       // BillingTransaction.id is TEXT (cuid/uuid), so no ::uuid cast needed.
       await tx.$executeRaw`SELECT 1 FROM "BillingTransaction" WHERE id = ${originalTxId} FOR UPDATE`;
-      const orig = await tx.billingTransaction.findUnique({ where: { id: originalTxId } });
-      if (!orig) throw new NotFoundException(`transaction ${originalTxId} not found`);
-      if (orig.status === 'REVERSED') throw new Error(`transaction ${originalTxId} already reversed`);
+      const orig = await tx.billingTransaction.findUnique({
+        where: { id: originalTxId },
+      });
+      if (!orig)
+        throw new NotFoundException(`transaction ${originalTxId} not found`);
+      if (orig.status === 'REVERSED')
+        throw new Error(`transaction ${originalTxId} already reversed`);
 
       await tx.$executeRaw`SELECT 1 FROM "UserWallet" WHERE "userId" = ${orig.userId} FOR UPDATE`;
 

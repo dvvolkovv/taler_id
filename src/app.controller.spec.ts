@@ -27,11 +27,17 @@ describe('AppController.androidAssetLinks', () => {
       'tirol.taler.taler_id_mobile',
       'tirol.taler.taler_id_mobile.dev',
     ]);
-    const prod = out.find((e) => e.target.package_name === 'tirol.taler.taler_id_mobile');
-    const dev = out.find((e) => e.target.package_name === 'tirol.taler.taler_id_mobile.dev');
+    const prod = out.find(
+      (e) => e.target.package_name === 'tirol.taler.taler_id_mobile',
+    );
+    const dev = out.find(
+      (e) => e.target.package_name === 'tirol.taler.taler_id_mobile.dev',
+    );
     expect(prod.target.sha256_cert_fingerprints).toHaveLength(1);
     expect(dev.target.sha256_cert_fingerprints).toHaveLength(2);
     expect(prod.target.namespace).toBe('android_app');
-    expect(prod.relation).toEqual(['delegate_permission/common.handle_all_urls']);
+    expect(prod.relation).toEqual([
+      'delegate_permission/common.handle_all_urls',
+    ]);
   });
 });

@@ -14,17 +14,30 @@ export class ApnsService {
     const teamId = process.env.APNS_TEAM_ID;
     if (keyPath && keyId && teamId) {
       const tokenConfig = { key: keyPath, keyId, teamId };
-      this.productionProvider = new apn.Provider({ token: tokenConfig, production: true });
-      this.sandboxProvider = new apn.Provider({ token: tokenConfig, production: false });
+      this.productionProvider = new apn.Provider({
+        token: tokenConfig,
+        production: true,
+      });
+      this.sandboxProvider = new apn.Provider({
+        token: tokenConfig,
+        production: false,
+      });
       this.logger.log('APNs providers initialized (production + sandbox)');
     } else {
-      this.logger.warn('APNs not configured (APNS_KEY_PATH/APNS_KEY_ID/APNS_TEAM_ID missing) — VoIP push disabled');
+      this.logger.warn(
+        'APNs not configured (APNS_KEY_PATH/APNS_KEY_ID/APNS_TEAM_ID missing) — VoIP push disabled',
+      );
     }
   }
 
   async sendVoIPCallInvite(
     voipToken: string,
-    data: { nameCaller: string; roomName: string; conversationId: string; e2eeKey?: string },
+    data: {
+      nameCaller: string;
+      roomName: string;
+      conversationId: string;
+      e2eeKey?: string;
+    },
   ): Promise<void> {
     if (!this.productionProvider || !this.sandboxProvider) return;
     const bundleId = process.env.APNS_BUNDLE_ID ?? 'tirol.taler.talerIdMobile';
@@ -41,7 +54,11 @@ export class ApnsService {
         appName: 'Taler ID',
         handle: '',
         type: 0,
-        extra: { roomName: data.roomName, conversationId: data.conversationId, ...(data.e2eeKey ? { e2eeKey: data.e2eeKey } : {}) },
+        extra: {
+          roomName: data.roomName,
+          conversationId: data.conversationId,
+          ...(data.e2eeKey ? { e2eeKey: data.e2eeKey } : {}),
+        },
       };
       return note;
     };
@@ -57,12 +74,20 @@ export class ApnsService {
       const reason = failure?.response?.reason;
       // BadDeviceToken means the token is for sandbox (dev build) — retry with sandbox
       if (reason === 'BadDeviceToken' || reason === 'DeviceTokenNotForTopic') {
-        this.logger.warn(`APNs production failed (${reason}), retrying with sandbox...`);
-        const sandboxResult = await this.sandboxProvider.send(buildNote(), voipToken);
+        this.logger.warn(
+          `APNs production failed (${reason}), retrying with sandbox...`,
+        );
+        const sandboxResult = await this.sandboxProvider.send(
+          buildNote(),
+          voipToken,
+        );
         if (sandboxResult.sent.length > 0) {
           this.logger.log('APNs VoIP sent via sandbox (dev build token)');
         } else {
-          this.logger.error('APNs sandbox also failed:', JSON.stringify(sandboxResult.failed[0]));
+          this.logger.error(
+            'APNs sandbox also failed:',
+            JSON.stringify(sandboxResult.failed[0]),
+          );
         }
       } else {
         this.logger.error('APNs VoIP send failed:', JSON.stringify(failure));

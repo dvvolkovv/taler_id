@@ -38,7 +38,9 @@ export class FileStorageService {
       await this.client.send(new HeadBucketCommand({ Bucket: this.bucket }));
     } catch {
       try {
-        await this.client.send(new CreateBucketCommand({ Bucket: this.bucket }));
+        await this.client.send(
+          new CreateBucketCommand({ Bucket: this.bucket }),
+        );
         this.logger.log(`Bucket "${this.bucket}" created`);
       } catch (e) {
         this.logger.error(`Failed to create bucket "${this.bucket}":`, e);
@@ -57,7 +59,11 @@ export class FileStorageService {
     );
   }
 
-  async getObject(key: string): Promise<{ stream: Readable; contentType: string; contentLength?: number }> {
+  async getObject(key: string): Promise<{
+    stream: Readable;
+    contentType: string;
+    contentLength?: number;
+  }> {
     const resp = await this.client.send(
       new GetObjectCommand({ Bucket: this.bucket, Key: key }),
     );
@@ -70,7 +76,9 @@ export class FileStorageService {
 
   /** Returns a public URL served through NestJS backend */
   getPublicUrl(key: string): string {
-    const base = (process.env.BASE_URL ?? 'https://staging.id.taler.tirol').replace(/\/$/, '');
+    const base = (
+      process.env.BASE_URL ?? 'https://staging.id.taler.tirol'
+    ).replace(/\/$/, '');
     return `${base}/messenger/files/download?key=${encodeURIComponent(key)}`;
   }
 
@@ -82,7 +90,10 @@ export class FileStorageService {
 
   // ─── S3 Multipart Upload ───
 
-  async createMultipartUpload(key: string, contentType: string): Promise<string> {
+  async createMultipartUpload(
+    key: string,
+    contentType: string,
+  ): Promise<string> {
     const resp = await this.client.send(
       new CreateMultipartUploadCommand({
         Bucket: this.bucket,
@@ -93,7 +104,12 @@ export class FileStorageService {
     return resp.UploadId!;
   }
 
-  async uploadPart(key: string, uploadId: string, partNumber: number, data: Buffer): Promise<string> {
+  async uploadPart(
+    key: string,
+    uploadId: string,
+    partNumber: number,
+    data: Buffer,
+  ): Promise<string> {
     const resp = await this.client.send(
       new UploadPartCommand({
         Bucket: this.bucket,

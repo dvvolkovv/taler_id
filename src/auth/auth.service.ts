@@ -30,8 +30,10 @@ export class AuthService {
     private redis: RedisService,
     private emailService: EmailService,
   ) {
-    const privatePath = this.configService.get<string>('jwt.privateKeyPath') ?? '';
-    const publicPath = this.configService.get<string>('jwt.publicKeyPath') ?? '';
+    const privatePath =
+      this.configService.get<string>('jwt.privateKeyPath') ?? '';
+    const publicPath =
+      this.configService.get<string>('jwt.publicKeyPath') ?? '';
     this.privateKey = fs.readFileSync(privatePath, 'utf8');
     this.publicKey = fs.readFileSync(publicPath, 'utf8');
   }
@@ -43,15 +45,20 @@ export class AuthService {
 
     // Check duplicates
     if (dto.email) {
-      const existing = await this.prisma.user.findUnique({ where: { email: dto.email } });
+      const existing = await this.prisma.user.findUnique({
+        where: { email: dto.email },
+      });
       if (existing) throw new ConflictException('Email already registered');
     }
     if (dto.phone) {
-      const existing = await this.prisma.user.findUnique({ where: { phone: dto.phone } });
+      const existing = await this.prisma.user.findUnique({
+        where: { phone: dto.phone },
+      });
       if (existing) throw new ConflictException('Phone already registered');
     }
 
-    const bcryptRounds = this.configService.get<number>('security.bcryptRounds') ?? 12;
+    const bcryptRounds =
+      this.configService.get<number>('security.bcryptRounds') ?? 12;
     const passwordHash = await bcrypt.hash(dto.password, bcryptRounds);
 
     const user = await this.prisma.user.create({
@@ -60,12 +67,19 @@ export class AuthService {
         phone: dto.phone,
         passwordHash,
         username: dto.username,
-        profile: { create: { firstName: dto.firstName, lastName: dto.lastName } },
+        profile: {
+          create: { firstName: dto.firstName, lastName: dto.lastName },
+        },
         kycRecord: { create: {} },
       },
     });
 
-    await this.auditLog(user.id, 'REGISTER_' + (dto.email ? 'EMAIL' : 'PHONE'), ip, userAgent);
+    await this.auditLog(
+      user.id,
+      'REGISTER_' + (dto.email ? 'EMAIL' : 'PHONE'),
+      ip,
+      userAgent,
+    );
 
     const session = await this.createSession(user.id, ip, userAgent);
     return this.generateTokens(user, session.id);
@@ -89,19 +103,25 @@ export class AuthService {
     const lockoutKey = `lockout:${user?.id || 'unknown'}`;
     const lockout = await this.redis.get(lockoutKey);
     if (lockout) {
-      throw new ForbiddenException('Account locked due to too many failed attempts. Try again later.');
+      throw new ForbiddenException(
+        'Account locked due to too many failed attempts. Try again later.',
+      );
     }
 
     if (!user || !user.passwordHash) {
       await this.incrementFailedAttempts(user?.id || `ip:${ip}`, ip);
-      await this.auditLog(null, 'LOGIN_FAILED', ip, userAgent, { reason: 'user_not_found' });
+      await this.auditLog(null, 'LOGIN_FAILED', ip, userAgent, {
+        reason: 'user_not_found',
+      });
       throw new UnauthorizedException('Invalid credentials');
     }
 
     const isValid = await bcrypt.compare(dto.password, user.passwordHash);
     if (!isValid) {
       await this.incrementFailedAttempts(user.id, ip);
-      await this.auditLog(user.id, 'LOGIN_FAILED', ip, userAgent, { reason: 'wrong_password' });
+      await this.auditLog(user.id, 'LOGIN_FAILED', ip, userAgent, {
+        reason: 'wrong_password',
+      });
       throw new UnauthorizedException('Invalid credentials');
     }
 
@@ -120,17 +140,27 @@ export class AuthService {
     return this.generateTokens(user, session.id);
   }
 
-  async verify2fa(challengeToken: string, code: string, ip: string, userAgent: string) {
+  async verify2fa(
+    challengeToken: string,
+    code: string,
+    ip: string,
+    userAgent: string,
+  ) {
     const userId = await this.redis.get(`2fa_challenge:${challengeToken}`);
-    if (!userId) throw new UnauthorizedException('Invalid or expired challenge token');
+    if (!userId)
+      throw new UnauthorizedException('Invalid or expired challenge token');
 
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       include: { totpSecret: true },
     });
-    if (!user || !user.totpSecret) throw new UnauthorizedException('User not found');
+    if (!user || !user.totpSecret)
+      throw new UnauthorizedException('User not found');
 
-    const result = await otpVerify({ token: code, secret: user.totpSecret.secret });
+    const result = await otpVerify({
+      token: code,
+      secret: user.totpSecret.secret,
+    });
     if (!result.valid) {
       await this.auditLog(userId, '2FA_FAILED', ip, userAgent);
       throw new UnauthorizedException('Invalid 2FA code');
@@ -146,7 +176,11 @@ export class AuthService {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     const secret = generateSecret();
     const identifier = user?.email || user?.phone || userId;
-    const otpAuthUri = generateURI({ issuer: 'Taler ID', label: identifier, secret });
+    const otpAuthUri = generateURI({
+      issuer: 'Taler ID',
+      label: identifier,
+      secret,
+    });
     const qrCodeDataUrl = await QRCode.toDataURL(otpAuthUri);
 
     // Save unverified secret
@@ -159,19 +193,34 @@ export class AuthService {
     return { secret, qrCode: qrCodeDataUrl, otpAuthUri };
   }
 
-  async verifyTotp(userId: string, code: string, ip: string, userAgent: string) {
-    const totpRecord = await this.prisma.totpSecret.findUnique({ where: { userId } });
+  async verifyTotp(
+    userId: string,
+    code: string,
+    ip: string,
+    userAgent: string,
+  ) {
+    const totpRecord = await this.prisma.totpSecret.findUnique({
+      where: { userId },
+    });
     if (!totpRecord) throw new BadRequestException('TOTP not set up');
 
     const result = await otpVerify({ token: code, secret: totpRecord.secret });
     if (!result.valid) throw new UnauthorizedException('Invalid TOTP code');
 
-    await this.prisma.totpSecret.update({ where: { userId }, data: { verified: true } });
+    await this.prisma.totpSecret.update({
+      where: { userId },
+      data: { verified: true },
+    });
     await this.auditLog(userId, '2FA_ENABLED', ip, userAgent);
     return { success: true };
   }
 
-  async disableTotp(userId: string, password: string, ip: string, userAgent: string) {
+  async disableTotp(
+    userId: string,
+    password: string,
+    ip: string,
+    userAgent: string,
+  ) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user?.passwordHash) throw new UnauthorizedException('User not found');
     const isValid = await bcrypt.compare(password, user.passwordHash);
@@ -185,7 +234,8 @@ export class AuthService {
   async refreshTokens(refreshToken: string, ip: string, userAgent: string) {
     // Verify the refresh token is in Redis
     const sessionId = await this.redis.get(`refresh:${refreshToken}`);
-    if (!sessionId) throw new UnauthorizedException('Invalid or expired refresh token');
+    if (!sessionId)
+      throw new UnauthorizedException('Invalid or expired refresh token');
 
     // Invalidate old refresh token (rotation)
     await this.redis.del(`refresh:${refreshToken}`);
@@ -194,7 +244,8 @@ export class AuthService {
       where: { id: sessionId },
       include: { user: { include: { kycRecord: true } } },
     });
-    if (!session || session.isRevoked) throw new UnauthorizedException('Session revoked');
+    if (!session || session.isRevoked)
+      throw new UnauthorizedException('Session revoked');
 
     // Generate new token pair
     const newTokens = await this.generateTokens(session.user, session.id);
@@ -208,7 +259,14 @@ export class AuthService {
     return newTokens;
   }
 
-  async logout(userId: string, sessionId: string, ip: string, userAgent: string, fcmToken?: string, voipToken?: string) {
+  async logout(
+    userId: string,
+    sessionId: string,
+    ip: string,
+    userAgent: string,
+    fcmToken?: string,
+    voipToken?: string,
+  ) {
     await this.prisma.session.update({
       where: { id: sessionId },
       data: { isRevoked: true },
@@ -217,9 +275,13 @@ export class AuthService {
     const clearData: any = {};
     if (fcmToken !== undefined) {
       // Only clear if the stored token matches the one being logged out
-      const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { fcmToken: true, voipToken: true } });
+      const user = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { fcmToken: true, voipToken: true },
+      });
       if (user?.fcmToken === fcmToken) clearData.fcmToken = null;
-      if (voipToken !== undefined && user?.voipToken === voipToken) clearData.voipToken = null;
+      if (voipToken !== undefined && user?.voipToken === voipToken)
+        clearData.voipToken = null;
     } else {
       clearData.fcmToken = null;
       clearData.voipToken = null;
@@ -234,23 +296,50 @@ export class AuthService {
   async getSessions(userId: string, currentSessionId?: string) {
     const sessions = await this.prisma.session.findMany({
       where: { userId, isRevoked: false, expiresAt: { gt: new Date() } },
-      select: { id: true, deviceInfo: true, ipAddress: true, location: true, createdAt: true, lastSeenAt: true },
+      select: {
+        id: true,
+        deviceInfo: true,
+        ipAddress: true,
+        location: true,
+        createdAt: true,
+        lastSeenAt: true,
+      },
       orderBy: { lastSeenAt: 'desc' },
     });
-    return sessions.map(s => ({ ...s, isCurrent: s.id === currentSessionId }));
+    return sessions.map((s) => ({
+      ...s,
+      isCurrent: s.id === currentSessionId,
+    }));
   }
 
-  async revokeSession(userId: string, sessionId: string, ip: string, userAgent: string) {
-    const session = await this.prisma.session.findUnique({ where: { id: sessionId } });
+  async revokeSession(
+    userId: string,
+    sessionId: string,
+    ip: string,
+    userAgent: string,
+  ) {
+    const session = await this.prisma.session.findUnique({
+      where: { id: sessionId },
+    });
     if (!session || session.userId !== userId) {
       throw new ForbiddenException('Cannot revoke this session');
     }
-    await this.prisma.session.update({ where: { id: sessionId }, data: { isRevoked: true } });
-    await this.auditLog(userId, 'SESSION_REVOKED', ip, userAgent, { revokedSessionId: sessionId });
+    await this.prisma.session.update({
+      where: { id: sessionId },
+      data: { isRevoked: true },
+    });
+    await this.auditLog(userId, 'SESSION_REVOKED', ip, userAgent, {
+      revokedSessionId: sessionId,
+    });
     return { success: true };
   }
 
-  async revokeAllSessions(userId: string, currentSessionId: string, ip: string, userAgent: string) {
+  async revokeAllSessions(
+    userId: string,
+    currentSessionId: string,
+    ip: string,
+    userAgent: string,
+  ) {
     await this.prisma.session.updateMany({
       where: { userId, id: { not: currentSessionId } },
       data: { isRevoked: true },
@@ -274,7 +363,9 @@ export class AuthService {
   }
 
   private async generateTokens(user: any, sessionId: string) {
-    const kyc = await this.prisma.kycRecord.findUnique({ where: { userId: user.id } });
+    const kyc = await this.prisma.kycRecord.findUnique({
+      where: { userId: user.id },
+    });
 
     const payload = {
       sub: user.id,
@@ -299,8 +390,11 @@ export class AuthService {
 
   private async incrementFailedAttempts(key: string, ip: string) {
     const failedKey = `failed:${key}`;
-    const maxAttempts = this.configService.get<number>('security.bruteForceMaxAttempts') ?? 5;
-    const lockoutMinutes = this.configService.get<number>('security.bruteForceLockouttMinutes') ?? 15;
+    const maxAttempts =
+      this.configService.get<number>('security.bruteForceMaxAttempts') ?? 5;
+    const lockoutMinutes =
+      this.configService.get<number>('security.bruteForceLockouttMinutes') ??
+      15;
 
     const attempts = await this.redis.incr(failedKey);
     await this.redis.expire(failedKey, lockoutMinutes * 60);
@@ -314,8 +408,10 @@ export class AuthService {
 
   async sendEmailVerification(userId: string) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!user?.email) throw new BadRequestException('No email address on this account');
-    if ((user as any).emailVerified) return { sent: false, alreadyVerified: true };
+    if (!user?.email)
+      throw new BadRequestException('No email address on this account');
+    if ((user as any).emailVerified)
+      return { sent: false, alreadyVerified: true };
 
     const code = Math.floor(100000 + Math.random() * 900000).toString();
     await this.redis.setEx(`email_verify:${userId}`, 600, code);
@@ -325,7 +421,8 @@ export class AuthService {
 
   async verifyEmail(userId: string, code: string) {
     const stored = await this.redis.get(`email_verify:${userId}`);
-    if (!stored || stored !== code) throw new BadRequestException('Invalid or expired code');
+    if (!stored || stored !== code)
+      throw new BadRequestException('Invalid or expired code');
 
     await this.prisma.user.update({
       where: { id: userId },
@@ -336,7 +433,13 @@ export class AuthService {
     return { verified: true };
   }
 
-  async auditLog(userId: string | null, action: string, ip: string, userAgent: string, meta?: any) {
+  async auditLog(
+    userId: string | null,
+    action: string,
+    ip: string,
+    userAgent: string,
+    meta?: any,
+  ) {
     await this.prisma.auditLog.create({
       data: {
         userId,
@@ -391,7 +494,9 @@ export class AuthService {
 
     const isValid = await bcrypt.compare(currentPassword, user.passwordHash);
     if (!isValid) {
-      await this.auditLog(userId, 'PASSWORD_CHANGE_FAILED', ip, userAgent, { reason: 'wrong_current_password' });
+      await this.auditLog(userId, 'PASSWORD_CHANGE_FAILED', ip, userAgent, {
+        reason: 'wrong_current_password',
+      });
       throw new UnauthorizedException('Invalid current password');
     }
 
@@ -399,7 +504,8 @@ export class AuthService {
       throw new BadRequestException('New password must differ from current');
     }
 
-    const bcryptRounds = this.configService.get<number>('security.bcryptRounds') ?? 12;
+    const bcryptRounds =
+      this.configService.get<number>('security.bcryptRounds') ?? 12;
     const passwordHash = await bcrypt.hash(newPassword, bcryptRounds);
 
     await this.prisma.user.update({
@@ -426,10 +532,13 @@ export class AuthService {
       throw new BadRequestException('Invalid token purpose');
     }
 
-    const user = await this.prisma.user.findUnique({ where: { email: payload.email } });
+    const user = await this.prisma.user.findUnique({
+      where: { email: payload.email },
+    });
     if (!user) throw new BadRequestException('User not found');
 
-    const bcryptRounds = this.configService.get<number>('security.bcryptRounds') ?? 12;
+    const bcryptRounds =
+      this.configService.get<number>('security.bcryptRounds') ?? 12;
     const passwordHash = await bcrypt.hash(newPassword, bcryptRounds);
 
     await this.prisma.user.update({

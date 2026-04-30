@@ -29,7 +29,10 @@ export async function createOidcProvider(config: OidcProviderConfig) {
   const provider = new Provider(config.issuer, {
     adapter: (model: string) => {
       if (model === 'Client') {
-        return new PrismaClientAdapter(config.prisma, config.walletxClientSecret);
+        return new PrismaClientAdapter(
+          config.prisma,
+          config.walletxClientSecret,
+        );
       }
       return new RedisOidcAdapter(model, config.redisClient);
     },
@@ -38,14 +41,29 @@ export async function createOidcProvider(config: OidcProviderConfig) {
 
     claims: {
       openid: ['sub'],
-      profile: ['name', 'given_name', 'family_name', 'middle_name', 'locale', 'updated_at'],
+      profile: [
+        'name',
+        'given_name',
+        'family_name',
+        'middle_name',
+        'locale',
+        'updated_at',
+      ],
       email: ['email', 'email_verified'],
       phone: ['phone_number', 'phone_number_verified'],
       kyc: ['kyc_status', 'kyc_type', 'kyc_verified_at'],
       wallet: ['wallet_address'],
     },
 
-    scopes: ['openid', 'profile', 'email', 'phone', 'kyc', 'wallet', 'offline_access'],
+    scopes: [
+      'openid',
+      'profile',
+      'email',
+      'phone',
+      'kyc',
+      'wallet',
+      'offline_access',
+    ],
 
     features: {
       devInteractions: { enabled: false },
@@ -102,7 +120,9 @@ export async function createOidcProvider(config: OidcProviderConfig) {
               .filter(Boolean)
               .join(' ');
             result.locale = user.profile.language;
-            result.updated_at = Math.floor(user.profile.updatedAt.getTime() / 1000);
+            result.updated_at = Math.floor(
+              user.profile.updatedAt.getTime() / 1000,
+            );
           }
 
           if (scopes.includes('email')) {

@@ -1,4 +1,10 @@
-import { IsEnum, IsObject, IsOptional, IsArray, IsString } from 'class-validator';
+import {
+  IsEnum,
+  IsObject,
+  IsOptional,
+  IsArray,
+  IsString,
+} from 'class-validator';
 
 export enum SectionType {
   VALUES = 'VALUES',

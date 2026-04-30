@@ -1,7 +1,7 @@
-import { IsString, IsIn } from "class-validator";
+import { IsString, IsIn } from 'class-validator';
 
 export class ChangeGroupRoleDto {
   @IsString()
-  @IsIn(["OWNER", "ADMIN", "MEMBER"])
+  @IsIn(['OWNER', 'ADMIN', 'MEMBER'])
   role: string;
 }

@@ -95,7 +95,9 @@ export class AdminBillingController {
     const actorId = actor.sub ?? actor.id;
     await this.assertAdmin(actorId);
 
-    const target = await this.prisma.user.findUnique({ where: { id: targetId } });
+    const target = await this.prisma.user.findUnique({
+      where: { id: targetId },
+    });
     if (!target) throw new NotFoundException(`user ${targetId} not found`);
 
     const tx = await this.ledger.credit(
@@ -116,12 +118,19 @@ export class AdminBillingController {
     const actorId = actor.sub ?? actor.id;
     await this.assertAdmin(actorId);
 
-    const target = await this.prisma.user.findUnique({ where: { id: targetId } });
+    const target = await this.prisma.user.findUnique({
+      where: { id: targetId },
+    });
     if (!target) throw new NotFoundException(`user ${targetId} not found`);
 
-    const tx = await this.ledger.debit(targetId, BigInt(body.amountPlanck), 'ADMIN_DEBIT', {
-      metadata: { actor: actorId, reason: body.reason },
-    });
+    const tx = await this.ledger.debit(
+      targetId,
+      BigInt(body.amountPlanck),
+      'ADMIN_DEBIT',
+      {
+        metadata: { actor: actorId, reason: body.reason },
+      },
+    );
     return { txId: tx.id };
   }
 
@@ -134,9 +143,12 @@ export class AdminBillingController {
     await this.assertAdmin(actor.sub ?? actor.id);
 
     const data: any = {};
-    if (body.costUsdPerUnit !== undefined) data.costUsdPerUnit = body.costUsdPerUnit;
-    if (body.markupMultiplier !== undefined) data.markupMultiplier = body.markupMultiplier;
-    if (body.minReservePlanck !== undefined) data.minReservePlanck = BigInt(body.minReservePlanck);
+    if (body.costUsdPerUnit !== undefined)
+      data.costUsdPerUnit = body.costUsdPerUnit;
+    if (body.markupMultiplier !== undefined)
+      data.markupMultiplier = body.markupMultiplier;
+    if (body.minReservePlanck !== undefined)
+      data.minReservePlanck = BigInt(body.minReservePlanck);
 
     if (Object.keys(data).length === 0) {
       throw new BadRequestException('no fields to update');
@@ -165,12 +177,16 @@ export class AdminBillingController {
   }
 
   @Patch('config')
-  async updateConfig(@CurrentUser() actor: any, @Body() body: AdminUpdateConfigDto) {
+  async updateConfig(
+    @CurrentUser() actor: any,
+    @Body() body: AdminUpdateConfigDto,
+  ) {
     await this.assertAdmin(actor.sub ?? actor.id);
 
     const data: any = {};
     if (body.talUsdRate !== undefined) data.talUsdRate = body.talUsdRate;
-    if (body.billingEnforced !== undefined) data.billingEnforced = body.billingEnforced;
+    if (body.billingEnforced !== undefined)
+      data.billingEnforced = body.billingEnforced;
     if (body.welcomeBonusPlanck !== undefined) {
       data.welcomeBonusPlanck = BigInt(body.welcomeBonusPlanck);
     }

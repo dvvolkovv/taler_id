@@ -28,7 +28,11 @@ describe('LedgerService', () => {
           $executeRaw: jest.fn(),
         }),
       ),
-      billingTransaction: { create: txCreate, findUnique: txFindUnique, update: txUpdate },
+      billingTransaction: {
+        create: txCreate,
+        findUnique: txFindUnique,
+        update: txUpdate,
+      },
       userWallet: { findUnique: walletFindUnique, update: walletUpdate },
       _walletFindUnique: walletFindUnique,
       _walletUpdate: walletUpdate,
@@ -50,8 +54,14 @@ describe('LedgerService', () => {
   });
 
   it('credit increases balance and records TOPUP_STUB transaction', async () => {
-    prisma._walletFindUnique.mockResolvedValue({ userId: 'u1', balancePlanck: 100n });
-    prisma._walletUpdate.mockResolvedValue({ userId: 'u1', balancePlanck: 600n });
+    prisma._walletFindUnique.mockResolvedValue({
+      userId: 'u1',
+      balancePlanck: 100n,
+    });
+    prisma._walletUpdate.mockResolvedValue({
+      userId: 'u1',
+      balancePlanck: 600n,
+    });
     prisma._txCreate.mockResolvedValue({ id: 'tx1' });
 
     await service.credit('u1', 500n, 'TOPUP_STUB', { note: 'test' });
@@ -79,7 +89,10 @@ describe('LedgerService', () => {
   });
 
   it('debit throws InsufficientFundsException when balance below amount', async () => {
-    prisma._walletFindUnique.mockResolvedValue({ userId: 'u1', balancePlanck: 10n });
+    prisma._walletFindUnique.mockResolvedValue({
+      userId: 'u1',
+      balancePlanck: 10n,
+    });
 
     await expect(
       service.debit('u1', 500n, 'SPEND', { featureKey: 'voice_assistant' }),
@@ -90,11 +103,20 @@ describe('LedgerService', () => {
   });
 
   it('debit succeeds when balance sufficient and records SPEND', async () => {
-    prisma._walletFindUnique.mockResolvedValue({ userId: 'u1', balancePlanck: 1000n });
-    prisma._walletUpdate.mockResolvedValue({ userId: 'u1', balancePlanck: 500n });
+    prisma._walletFindUnique.mockResolvedValue({
+      userId: 'u1',
+      balancePlanck: 1000n,
+    });
+    prisma._walletUpdate.mockResolvedValue({
+      userId: 'u1',
+      balancePlanck: 500n,
+    });
     prisma._txCreate.mockResolvedValue({ id: 'tx2' });
 
-    await service.debit('u1', 500n, 'SPEND', { featureKey: 'voice_assistant', sessionId: 's1' });
+    await service.debit('u1', 500n, 'SPEND', {
+      featureKey: 'voice_assistant',
+      sessionId: 's1',
+    });
 
     expect(prisma._walletUpdate).toHaveBeenCalledWith({
       where: { userId: 'u1' },
@@ -128,8 +150,14 @@ describe('LedgerService', () => {
       amountPlanck: 500n,
       status: 'COMPLETED',
     });
-    prisma._walletFindUnique.mockResolvedValue({ userId: 'u1', balancePlanck: 500n });
-    prisma._walletUpdate.mockResolvedValue({ userId: 'u1', balancePlanck: 500n });
+    prisma._walletFindUnique.mockResolvedValue({
+      userId: 'u1',
+      balancePlanck: 500n,
+    });
+    prisma._walletUpdate.mockResolvedValue({
+      userId: 'u1',
+      balancePlanck: 500n,
+    });
     prisma._txCreate.mockResolvedValue({ id: 'txRefund', userId: 'u1' });
 
     await service.refund('txOrig', 'openai 5xx');
@@ -143,7 +171,10 @@ describe('LedgerService', () => {
         data: expect.objectContaining({
           type: 'REFUND',
           amountPlanck: 500n,
-          metadata: expect.objectContaining({ originalTxId: 'txOrig', reason: 'openai 5xx' }),
+          metadata: expect.objectContaining({
+            originalTxId: 'txOrig',
+            reason: 'openai 5xx',
+          }),
         }),
       }),
     );
@@ -177,7 +208,9 @@ describe('LedgerService', () => {
   it('debit throws NotFoundException when wallet is missing', async () => {
     prisma._walletFindUnique.mockResolvedValue(null);
 
-    await expect(service.debit('u1', 100n, 'SPEND')).rejects.toThrow(NotFoundException);
+    await expect(service.debit('u1', 100n, 'SPEND')).rejects.toThrow(
+      NotFoundException,
+    );
     expect(prisma._walletUpdate).not.toHaveBeenCalled();
     expect(prisma._txCreate).not.toHaveBeenCalled();
   });
@@ -185,7 +218,9 @@ describe('LedgerService', () => {
   it('credit throws NotFoundException when wallet is missing', async () => {
     prisma._walletFindUnique.mockResolvedValue(null);
 
-    await expect(service.credit('u1', 100n, 'TOPUP_STUB')).rejects.toThrow(NotFoundException);
+    await expect(service.credit('u1', 100n, 'TOPUP_STUB')).rejects.toThrow(
+      NotFoundException,
+    );
     expect(prisma._walletUpdate).not.toHaveBeenCalled();
     expect(prisma._txCreate).not.toHaveBeenCalled();
   });
@@ -193,7 +228,9 @@ describe('LedgerService', () => {
   it('refund throws NotFoundException when original tx missing', async () => {
     prisma._txFindUnique.mockResolvedValue(null);
 
-    await expect(service.refund('nonexistent', 'reason')).rejects.toThrow(NotFoundException);
+    await expect(service.refund('nonexistent', 'reason')).rejects.toThrow(
+      NotFoundException,
+    );
     expect(prisma._walletUpdate).not.toHaveBeenCalled();
     expect(prisma._txCreate).not.toHaveBeenCalled();
   });
@@ -207,7 +244,9 @@ describe('LedgerService', () => {
       status: 'REVERSED',
     });
 
-    await expect(service.refund('txOrig', 'reason')).rejects.toThrow(/already reversed/);
+    await expect(service.refund('txOrig', 'reason')).rejects.toThrow(
+      /already reversed/,
+    );
     expect(prisma._walletUpdate).not.toHaveBeenCalled();
     expect(prisma._txCreate).not.toHaveBeenCalled();
   });

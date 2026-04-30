@@ -4,7 +4,12 @@ declare module 'oidc-provider' {
     proxy: boolean;
     callback(): (req: any, res: any) => void;
     interactionDetails(req: any, res: any): Promise<any>;
-    interactionFinished(req: any, res: any, result: any, options?: any): Promise<void>;
+    interactionFinished(
+      req: any,
+      res: any,
+      result: any,
+      options?: any,
+    ): Promise<void>;
     Grant: any;
   }
 }

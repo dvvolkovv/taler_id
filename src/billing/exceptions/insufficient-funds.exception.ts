@@ -5,6 +5,8 @@ export class InsufficientFundsException extends Error {
     public readonly availablePlanck: bigint,
     public readonly suggestedPackage?: string,
   ) {
-    super(`insufficient funds for ${featureKey}: need ${requiredPlanck}, have ${availablePlanck}`);
+    super(
+      `insufficient funds for ${featureKey}: need ${requiredPlanck}, have ${availablePlanck}`,
+    );
   }
 }

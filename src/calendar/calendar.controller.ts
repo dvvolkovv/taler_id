@@ -1,4 +1,14 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Delete,
+  Body,
+  Param,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { CalendarService } from './calendar.service';
@@ -9,7 +19,11 @@ export class CalendarController {
   constructor(private readonly service: CalendarService) {}
 
   @Get()
-  findAll(@CurrentUser() user: any, @Query('from') from?: string, @Query('to') to?: string) {
+  findAll(
+    @CurrentUser() user: any,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
     return this.service.findByRange(user.sub, from, to);
   }
 

@@ -13,7 +13,12 @@ import {
 import { TenantService } from './tenant.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
-import { CreateTenantDto, UpdateTenantDto, InviteMemberDto, ChangeRoleDto } from './dto/create-tenant.dto';
+import {
+  CreateTenantDto,
+  UpdateTenantDto,
+  InviteMemberDto,
+  ChangeRoleDto,
+} from './dto/create-tenant.dto';
 
 @Controller('tenant')
 @UseGuards(JwtAuthGuard)

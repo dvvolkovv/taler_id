@@ -13,7 +13,9 @@ export class RegisterDeviceKeyDto {
   validUntilEpochMs: number;
 
   @IsString()
-  @Matches(/^[0-9a-f]{128}$/i, { message: 'signature must be 128 hex chars (Ed25519)' })
+  @Matches(/^[0-9a-f]{128}$/i, {
+    message: 'signature must be 128 hex chars (Ed25519)',
+  })
   signature: string;
 
   @IsString()

@@ -16,21 +16,33 @@ export class AssistantService {
     private readonly pricing: PricingService,
   ) {}
 
-  async saveTranscript(userId: string, messages: { role: string; text: string }[]) {
+  async saveTranscript(
+    userId: string,
+    messages: { role: string; text: string }[],
+  ) {
     return this.prisma.assistantTranscript.create({
       data: { userId, messages },
     });
   }
 
-  async webSearch(userId: string, query: string): Promise<{ answer: string; citations?: string[] }> {
+  async webSearch(
+    userId: string,
+    query: string,
+  ): Promise<{ answer: string; citations?: string[] }> {
     // Billing pre-check: feature toggle + minReserve balance. Throws
     // FeatureDisabledException / InsufficientFundsException for the
     // caller (controller) to map to structured tool-call errors.
-    const session = await this.gating.startSession(userId, FEATURE_KEYS.WEB_SEARCH);
+    const session = await this.gating.startSession(
+      userId,
+      FEATURE_KEYS.WEB_SEARCH,
+    );
 
     // Exact cost for 1 request; debit up-front so the refund path is
     // well-defined on Perplexity failure.
-    const cost = await this.pricing.calculatePlanckCost(FEATURE_KEYS.WEB_SEARCH, 1);
+    const cost = await this.pricing.calculatePlanckCost(
+      FEATURE_KEYS.WEB_SEARCH,
+      1,
+    );
     let tx: { id: string };
     try {
       tx = await this.ledger.debit(userId, cost, 'SPEND', {
@@ -55,7 +67,7 @@ export class AssistantService {
       const res = await fetch('https://api.perplexity.ai/chat/completions', {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${apiKey}`,
+          Authorization: `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
@@ -63,7 +75,8 @@ export class AssistantService {
           messages: [
             {
               role: 'system',
-              content: 'Be concise. Answer in the language of the query. Provide factual information with sources.',
+              content:
+                'Be concise. Answer in the language of the query. Provide factual information with sources.',
             },
             { role: 'user', content: query },
           ],
@@ -74,7 +87,7 @@ export class AssistantService {
         this.logger.error(`Perplexity API error ${res.status}: ${errText}`);
         throw new Error(`Perplexity ${res.status}: ${errText.slice(0, 200)}`);
       }
-      const data = await res.json() as any;
+      const data = await res.json();
       const answer = data.choices?.[0]?.message?.content ?? 'No answer';
       const citations = data.citations as string[] | undefined;
       const result = { answer, citations };
@@ -83,7 +96,9 @@ export class AssistantService {
     } catch (err) {
       // Network / 5xx / Perplexity error: refund + mark session failed.
       this.logger.error(`Perplexity search failed: ${(err as Error).message}`);
-      await this.ledger.refund(tx.id, `web_search error: ${String(err).slice(0, 200)}`).catch(() => {});
+      await this.ledger
+        .refund(tx.id, `web_search error: ${String(err).slice(0, 200)}`)
+        .catch(() => {});
       await this.gating.endSession(session.id, 'failed').catch(() => {});
       throw err;
     }

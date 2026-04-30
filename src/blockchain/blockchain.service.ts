@@ -1,4 +1,9 @@
-import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleInit,
+  OnModuleDestroy,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiPromise, WsProvider, Keyring } from '@polkadot/api';
 import { ContractPromise } from '@polkadot/api-contract';
@@ -23,11 +28,17 @@ export class BlockchainService implements OnModuleInit, OnModuleDestroy {
   async onModuleInit() {
     const enabled = this.config.get<string>('BLOCKCHAIN_ENABLED', 'false');
     if (enabled !== 'true') {
-      this.logger.warn('Blockchain integration disabled (BLOCKCHAIN_ENABLED != true)');
+      this.logger.warn(
+        'Blockchain integration disabled (BLOCKCHAIN_ENABLED != true)',
+      );
       return;
     }
     // Connect in background — do not block NestJS startup
-    this.connect().catch(err => this.logger.error("Blockchain init error: " + (err?.message || String(err))));
+    this.connect().catch((err) =>
+      this.logger.error(
+        'Blockchain init error: ' + (err?.message || String(err)),
+      ),
+    );
   }
 
   async onModuleDestroy() {
@@ -44,11 +55,15 @@ export class BlockchainService implements OnModuleInit, OnModuleDestroy {
     this.connected = false;
     this.contract = null;
     if (this.api) {
-      try { await this.api.disconnect(); } catch {}
+      try {
+        await this.api.disconnect();
+      } catch {}
       this.api = null;
     }
     if (this.provider) {
-      try { this.provider.disconnect(); } catch {}
+      try {
+        this.provider.disconnect();
+      } catch {}
       this.provider = null;
     }
   }
@@ -61,12 +76,19 @@ export class BlockchainService implements OnModuleInit, OnModuleDestroy {
       if (this.destroying) return;
       await this.cleanup();
       // Connect in background — do not block NestJS startup
-    this.connect().catch(err => this.logger.error("Blockchain init error: " + (err?.message || String(err))));
+      this.connect().catch((err) =>
+        this.logger.error(
+          'Blockchain init error: ' + (err?.message || String(err)),
+        ),
+      );
     }, 30_000);
   }
 
   private async connect() {
-    const wsUrl = this.config.get<string>('TALER_NODE_WS', 'wss://node.dev.gsmsoft.eu/');
+    const wsUrl = this.config.get<string>(
+      'TALER_NODE_WS',
+      'wss://node.dev.gsmsoft.eu/',
+    );
     const seedPhrase = this.config.get<string>('BLOCKCHAIN_ATTESTER_SEED', '');
     const contractAddress = this.config.get<string>('KYC_CONTRACT_ADDRESS', '');
     const abiPath = this.config.get<string>(
@@ -78,8 +100,16 @@ export class BlockchainService implements OnModuleInit, OnModuleDestroy {
       this.logger.log('Connecting to Taler blockchain: ' + wsUrl);
       // Disable auto-reconnect (0 = no auto-reconnect) to prevent listener leaks
       this.provider = new WsProvider(wsUrl, 0);
-      const connectTimeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Blockchain connection timeout (15s)")), 15_000));
-      this.api = await Promise.race([ApiPromise.create({ provider: this.provider }), connectTimeout]);
+      const connectTimeout = new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error('Blockchain connection timeout (15s)')),
+          15_000,
+        ),
+      );
+      this.api = await Promise.race([
+        ApiPromise.create({ provider: this.provider }),
+        connectTimeout,
+      ]);
 
       // Handle disconnection — reconnect manually with full cleanup
       this.provider.on('disconnected', () => {
@@ -89,7 +119,9 @@ export class BlockchainService implements OnModuleInit, OnModuleDestroy {
       });
 
       this.provider.on('error', (err: any) => {
-        this.logger.error('Blockchain WS error: ' + (err?.message || String(err)));
+        this.logger.error(
+          'Blockchain WS error: ' + (err?.message || String(err)),
+        );
       });
 
       const chain = await this.api.rpc.system.chain();
@@ -97,7 +129,9 @@ export class BlockchainService implements OnModuleInit, OnModuleDestroy {
       this.logger.log('Connected to chain: ' + chain + ' v' + nodeVersion);
 
       if (!seedPhrase) {
-        this.logger.warn('BLOCKCHAIN_ATTESTER_SEED not set — blockchain writes disabled');
+        this.logger.warn(
+          'BLOCKCHAIN_ATTESTER_SEED not set — blockchain writes disabled',
+        );
         this.connected = true;
         return;
       }
@@ -110,12 +144,17 @@ export class BlockchainService implements OnModuleInit, OnModuleDestroy {
         this.contract = new ContractPromise(this.api, abi, contractAddress);
         this.logger.log('KYC Attestation Contract loaded: ' + contractAddress);
       } else {
-        this.logger.warn('KYC_CONTRACT_ADDRESS or ABI not set — on-chain writes disabled');
+        this.logger.warn(
+          'KYC_CONTRACT_ADDRESS or ABI not set — on-chain writes disabled',
+        );
       }
 
       this.connected = true;
     } catch (err: any) {
-      this.logger.error('Failed to connect to Taler blockchain: ' + (err?.message || String(err)));
+      this.logger.error(
+        'Failed to connect to Taler blockchain: ' +
+          (err?.message || String(err)),
+      );
       this.scheduleReconnect();
     }
   }
@@ -131,9 +170,14 @@ export class BlockchainService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  async attestVerification(userId: string, kycStatus: 1 | 2 | 3): Promise<{ txHash: string } | null> {
+  async attestVerification(
+    userId: string,
+    kycStatus: 1 | 2 | 3,
+  ): Promise<{ txHash: string } | null> {
     if (!this.connected || !this.api || !this.contract || !this.attester) {
-      this.logger.warn('Blockchain not ready — skipping attestation for user ' + userId);
+      this.logger.warn(
+        'Blockchain not ready — skipping attestation for user ' + userId,
+      );
       return null;
     }
 
@@ -150,7 +194,10 @@ export class BlockchainService implements OnModuleInit, OnModuleDestroy {
       );
 
       if (!dryRun.result.isOk) {
-        this.logger.error('attestVerification dry-run failed: ' + dryRun.result.asErr.toString());
+        this.logger.error(
+          'attestVerification dry-run failed: ' +
+            dryRun.result.asErr.toString(),
+        );
         return null;
       }
 
@@ -162,15 +209,27 @@ export class BlockchainService implements OnModuleInit, OnModuleDestroy {
       );
 
       const txHash = await this.sendAndWait(tx);
-      this.logger.log('KYC attestation on-chain: user=' + userId + ' status=' + kycStatus + ' tx=' + txHash);
+      this.logger.log(
+        'KYC attestation on-chain: user=' +
+          userId +
+          ' status=' +
+          kycStatus +
+          ' tx=' +
+          txHash,
+      );
       return { txHash };
     } catch (err: any) {
-      this.logger.error('attestVerification error: ' + (err?.message || String(err)));
+      this.logger.error(
+        'attestVerification error: ' + (err?.message || String(err)),
+      );
       return null;
     }
   }
 
-  async attestKyb(tenantOwnerId: string, verified: boolean): Promise<{ txHash: string } | null> {
+  async attestKyb(
+    tenantOwnerId: string,
+    verified: boolean,
+  ): Promise<{ txHash: string } | null> {
     if (!this.connected || !this.api || !this.contract || !this.attester) {
       this.logger.warn('Blockchain not ready — skipping KYB attestation');
       return null;
@@ -191,7 +250,12 @@ export class BlockchainService implements OnModuleInit, OnModuleDestroy {
         verified,
       );
       const txHash = await this.sendAndWait(tx);
-      this.logger.log('KYB attestation on-chain: tenantOwner=' + tenantOwnerId + ' tx=' + txHash);
+      this.logger.log(
+        'KYB attestation on-chain: tenantOwner=' +
+          tenantOwnerId +
+          ' tx=' +
+          txHash,
+      );
       return { txHash };
     } catch (err: any) {
       this.logger.error('attestKyb error: ' + (err?.message || String(err)));
@@ -201,7 +265,9 @@ export class BlockchainService implements OnModuleInit, OnModuleDestroy {
 
   async revokeVerification(userId: string): Promise<{ txHash: string } | null> {
     if (!this.connected || !this.api || !this.contract || !this.attester) {
-      this.logger.warn('Blockchain not ready — skipping revocation for user ' + userId);
+      this.logger.warn(
+        'Blockchain not ready — skipping revocation for user ' + userId,
+      );
       return null;
     }
 
@@ -218,10 +284,14 @@ export class BlockchainService implements OnModuleInit, OnModuleDestroy {
         hash,
       );
       const txHash = await this.sendAndWait(tx);
-      this.logger.log('KYC revocation on-chain: user=' + userId + ' tx=' + txHash);
+      this.logger.log(
+        'KYC revocation on-chain: user=' + userId + ' tx=' + txHash,
+      );
       return { txHash };
     } catch (err: any) {
-      this.logger.error('revokeVerification error: ' + (err?.message || String(err)));
+      this.logger.error(
+        'revokeVerification error: ' + (err?.message || String(err)),
+      );
       return null;
     }
   }
@@ -247,13 +317,20 @@ export class BlockchainService implements OnModuleInit, OnModuleDestroy {
         // Polkadot.js JSON: {"ok": [kycStatus, kycTimestamp, kybStatus, isActive]} or {"ok": null}
         const raw = output.toJSON() as any;
         // Unwrap outer Result<...>
-        const inner = (raw && typeof raw === 'object' && !Array.isArray(raw) && 'ok' in raw) ? raw.ok : raw;
+        const inner =
+          raw && typeof raw === 'object' && !Array.isArray(raw) && 'ok' in raw
+            ? raw.ok
+            : raw;
         if (inner === null || inner === undefined) return null;
         // inner may be array directly (Polkadot.js auto-unwraps Option) or {some: [...]}
         let tuple: any[];
         if (Array.isArray(inner)) {
           tuple = inner;
-        } else if (inner && typeof inner === 'object' && Array.isArray(inner.some)) {
+        } else if (
+          inner &&
+          typeof inner === 'object' &&
+          Array.isArray(inner.some)
+        ) {
           tuple = inner.some;
         } else {
           return null;
@@ -264,7 +341,9 @@ export class BlockchainService implements OnModuleInit, OnModuleDestroy {
       }
       return null;
     } catch (err: any) {
-      this.logger.error('getVerification error: ' + (err?.message || String(err)));
+      this.logger.error(
+        'getVerification error: ' + (err?.message || String(err)),
+      );
       return null;
     }
   }

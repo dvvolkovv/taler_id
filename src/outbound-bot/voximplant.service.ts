@@ -6,7 +6,8 @@ const VOX_API_KEY = process.env.VOX_API_KEY || '';
 const VOX_APPLICATION_ID = process.env.VOX_APPLICATION_ID || '';
 const VOX_RULE_ID = process.env.VOX_RULE_ID || '';
 const VOX_CALLER_ID = process.env.VOX_CALLER_ID || '';
-const VOX_VOICE_TURN_URL = process.env.VOX_VOICE_TURN_URL || 'https://staging.id.taler.tirol/voice-turn';
+const VOX_VOICE_TURN_URL =
+  process.env.VOX_VOICE_TURN_URL || 'https://staging.id.taler.tirol/voice-turn';
 
 export interface VoximplantCallParams {
   phone: string;
@@ -23,10 +24,17 @@ export class VoximplantService {
   private readonly logger = new Logger(VoximplantService.name);
 
   isConfigured(): boolean {
-    return !!(VOX_ACCOUNT_ID && VOX_API_KEY && VOX_APPLICATION_ID && VOX_RULE_ID);
+    return !!(
+      VOX_ACCOUNT_ID &&
+      VOX_API_KEY &&
+      VOX_APPLICATION_ID &&
+      VOX_RULE_ID
+    );
   }
 
-  async startOutboundCall(params: VoximplantCallParams): Promise<VoximplantCallResult> {
+  async startOutboundCall(
+    params: VoximplantCallParams,
+  ): Promise<VoximplantCallResult> {
     if (!this.isConfigured()) {
       throw new Error('Voximplant not configured');
     }
@@ -45,7 +53,9 @@ export class VoximplantService {
       }),
     });
 
-    this.logger.log(`[Vox] startOutboundCall phone=${params.phone} session=${params.sessionId}`);
+    this.logger.log(
+      `[Vox] startOutboundCall phone=${params.phone} session=${params.sessionId}`,
+    );
     const resp = await fetch(`${VOX_API_URL}/StartScenarios/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -95,16 +105,22 @@ export class VoximplantService {
     try {
       const resp = await fetch(authedUrl);
       if (!resp.ok) {
-        this.logger.warn(`[Vox] download failed: ${resp.status} ${resp.statusText}`);
+        this.logger.warn(
+          `[Vox] download failed: ${resp.status} ${resp.statusText}`,
+        );
         return false;
       }
       const buf = Buffer.from(await resp.arrayBuffer());
       const fs = await import('fs/promises');
       await fs.writeFile(localPath, buf);
-      this.logger.log(`[Vox] recording saved: ${localPath} (${buf.length} bytes)`);
+      this.logger.log(
+        `[Vox] recording saved: ${localPath} (${buf.length} bytes)`,
+      );
       return true;
     } catch (e) {
-      this.logger.warn(`[Vox] downloadRecording failed: ${(e as Error).message}`);
+      this.logger.warn(
+        `[Vox] downloadRecording failed: ${(e as Error).message}`,
+      );
       return false;
     }
   }

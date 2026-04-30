@@ -1,4 +1,16 @@
-import { Controller, Post, Get, Body, Param, Headers, HttpException, HttpStatus, UseGuards, Request, ServiceUnavailableException } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Get,
+  Body,
+  Param,
+  Headers,
+  HttpException,
+  HttpStatus,
+  UseGuards,
+  Request,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { OutboundBotService } from './outbound-bot.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { GatingService } from '../billing/services/gating.service';
@@ -22,8 +34,12 @@ export class OutboundBotController {
   @UseGuards(JwtAuthGuard)
   @Post('tasks')
   async createTask(@Request() req: any, @Body() body: { title: string }) {
-    if (!body.title?.trim()) throw new HttpException('Title is required', HttpStatus.BAD_REQUEST);
-    const result = await this.service.createTask(req.user.sub, body.title.trim());
+    if (!body.title?.trim())
+      throw new HttpException('Title is required', HttpStatus.BAD_REQUEST);
+    const result = await this.service.createTask(
+      req.user.sub,
+      body.title.trim(),
+    );
     return result;
   }
 
@@ -38,7 +54,8 @@ export class OutboundBotController {
   @Get('campaigns/:id')
   async getCampaign(@Param('id') id: string) {
     const campaign = await this.service.getCampaign(id);
-    if (!campaign) throw new HttpException('Campaign not found', HttpStatus.NOT_FOUND);
+    if (!campaign)
+      throw new HttpException('Campaign not found', HttpStatus.NOT_FOUND);
     return campaign;
   }
 
@@ -46,16 +63,23 @@ export class OutboundBotController {
   @Get('campaigns/:id/listen')
   async listenToCall(@Request() req: any, @Param('id') id: string) {
     const result = await this.service.getActiveCall(id, req.user.sub);
-    if (!result) throw new HttpException('No active call', HttpStatus.NOT_FOUND);
+    if (!result)
+      throw new HttpException('No active call', HttpStatus.NOT_FOUND);
     return result;
   }
 
   @Post('call-callback')
   async callCallback(
     @Headers('x-outbound-secret') secret: string,
-    @Body() body: {
-      callId: string; campaignId: string; transcript: any;
-      summary: string; durationSec: number; status: string; recordingUrl?: string;
+    @Body()
+    body: {
+      callId: string;
+      campaignId: string;
+      transcript: any;
+      summary: string;
+      durationSec: number;
+      status: string;
+      recordingUrl?: string;
       // Task 15: agent echoes the billing session it was dispatched with
       // and the call duration in minutes so we can finalize the debit.
       billingSessionId?: string;
@@ -64,9 +88,12 @@ export class OutboundBotController {
   ) {
     const expected = process.env.OUTBOUND_CALLBACK_SECRET;
     if (!expected) {
-      throw new ServiceUnavailableException('outbound callback secret not configured');
+      throw new ServiceUnavailableException(
+        'outbound callback secret not configured',
+      );
     }
-    if (!secret || secret !== expected) throw new HttpException('Invalid secret', HttpStatus.UNAUTHORIZED);
+    if (!secret || secret !== expected)
+      throw new HttpException('Invalid secret', HttpStatus.UNAUTHORIZED);
     await this.service.handleCallCallback(body);
 
     // Finalize billing: agent-reported duration is authoritative over the

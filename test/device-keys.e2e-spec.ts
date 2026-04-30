@@ -5,7 +5,9 @@ import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 
 function decodeJwtSub(token: string): string {
-  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
+  const payload = JSON.parse(
+    Buffer.from(token.split('.')[1], 'base64').toString(),
+  );
   return payload.sub as string;
 }
 
@@ -46,7 +48,9 @@ describe('DeviceKeys (e2e)', () => {
   });
 
   afterAll(async () => {
-    await prisma.deviceKey.deleteMany({ where: { userId: { in: [user1Id, user2Id] } } });
+    await prisma.deviceKey.deleteMany({
+      where: { userId: { in: [user1Id, user2Id] } },
+    });
     await prisma.user.deleteMany({ where: { id: { in: [user1Id, user2Id] } } });
     await app.close();
   });
@@ -134,7 +138,7 @@ describe('DeviceKeys (e2e)', () => {
       .expect(400);
   });
 
-  it('rejects revoke of another user\'s key (404)', async () => {
+  it("rejects revoke of another user's key (404)", async () => {
     // Register a key for user2
     const reg = await request(app.getHttpServer())
       .post('/profile/device-keys')

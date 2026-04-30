@@ -1,17 +1,26 @@
 import {
-  Controller, Get, Put, Patch, Post, Delete, Body, Param, UseGuards,
-  UseInterceptors, UploadedFile,
-} from "@nestjs/common";
-import { FileInterceptor } from "@nestjs/platform-express";
-import { diskStorage } from "multer";
-import { extname } from "path";
-import { v4 as uuidv4 } from "uuid";
-import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
-import { CurrentUser } from "../common/decorators/current-user.decorator";
-import { ProfileService } from "./profile.service";
-import { UpdateProfileDto, LinkWalletDto } from "./dto/update-profile.dto";
+  Controller,
+  Get,
+  Put,
+  Patch,
+  Post,
+  Delete,
+  Body,
+  Param,
+  UseGuards,
+  UseInterceptors,
+  UploadedFile,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { diskStorage } from 'multer';
+import { extname } from 'path';
+import { v4 as uuidv4 } from 'uuid';
+import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { ProfileService } from './profile.service';
+import { UpdateProfileDto, LinkWalletDto } from './dto/update-profile.dto';
 
-@Controller("profile")
+@Controller('profile')
 @UseGuards(JwtAuthGuard)
 export class ProfileController {
   constructor(private readonly profileService: ProfileService) {}
@@ -26,22 +35,22 @@ export class ProfileController {
     return this.profileService.updateProfile(user.sub, dto);
   }
 
-  @Put("phone")
+  @Put('phone')
   updatePhone(@Body() body: { phone?: string }, @CurrentUser() user: any) {
     return this.profileService.updatePhone(user.sub, body.phone);
   }
 
-  @Put("wallet")
+  @Put('wallet')
   linkWallet(@Body() dto: LinkWalletDto, @CurrentUser() user: any) {
     return this.profileService.linkWallet(user.sub, dto);
   }
 
-  @Delete("wallet")
+  @Delete('wallet')
   unlinkWallet(@CurrentUser() user: any) {
     return this.profileService.unlinkWallet(user.sub);
   }
 
-  @Get("export")
+  @Get('export')
   exportData(@CurrentUser() user: any) {
     return this.profileService.exportData(user.sub);
   }
@@ -66,11 +75,11 @@ export class ProfileController {
     return this.profileService.updateUsername(user.sub, username);
   }
 
-  @Post("avatar")
+  @Post('avatar')
   @UseInterceptors(
-    FileInterceptor("file", {
+    FileInterceptor('file', {
       storage: diskStorage({
-        destination: "/home/dvolkov/taler-id/uploads/avatars",
+        destination: '/home/dvolkov/taler-id/uploads/avatars',
         filename: (_req, file, cb) => {
           cb(null, `${uuidv4()}${extname(file.originalname)}`);
         },
@@ -78,13 +87,16 @@ export class ProfileController {
       limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
       fileFilter: (_req, file, cb) => {
         if (!file.mimetype.match(/^image\//)) {
-          return cb(new Error("Only image files are allowed"), false);
+          return cb(new Error('Only image files are allowed'), false);
         }
         cb(null, true);
       },
     }),
   )
-  uploadAvatar(@UploadedFile() file: Express.Multer.File, @CurrentUser() user: any) {
+  uploadAvatar(
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentUser() user: any,
+  ) {
     return this.profileService.uploadAvatar(user.sub, file.filename);
   }
 
@@ -108,7 +120,10 @@ export class ProfileController {
       },
     }),
   )
-  uploadBackground(@UploadedFile() file: Express.Multer.File, @CurrentUser() user: any) {
+  uploadBackground(
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentUser() user: any,
+  ) {
     return this.profileService.uploadBackground(user.sub, file);
   }
 

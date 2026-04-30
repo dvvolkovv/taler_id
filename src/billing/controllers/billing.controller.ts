@@ -78,10 +78,15 @@ export class BillingController {
     // Ensure a wallet exists before crediting; credit() requires UserWallet to exist.
     await this.wallet.getOrCreate(userId);
 
-    const tx = await this.ledger.credit(userId, pkg.amountPlanck, 'TOPUP_STUB', {
-      packageId: pkgId,
-      source: 'stub',
-    });
+    const tx = await this.ledger.credit(
+      userId,
+      pkg.amountPlanck,
+      'TOPUP_STUB',
+      {
+        packageId: pkgId,
+        source: 'stub',
+      },
+    );
     const newBalance = await this.ledger.getBalance(userId);
     return {
       txId: tx.id,
@@ -132,7 +137,9 @@ export class BillingController {
   @Get('settings/toggles')
   async getToggles(@CurrentUser() user: any) {
     const userId = user.sub;
-    const rows = await this.prisma.userFeatureToggle.findMany({ where: { userId } });
+    const rows = await this.prisma.userFeatureToggle.findMany({
+      where: { userId },
+    });
     const map = new Map(rows.map((r) => [r.featureKey, r.enabled]));
     return ALL_FEATURE_KEYS.map((f) => ({
       featureKey: f,

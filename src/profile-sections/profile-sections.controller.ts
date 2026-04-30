@@ -1,10 +1,21 @@
 import {
-  Controller, Get, Put, Delete, Patch, Body, Param, UseGuards,
+  Controller,
+  Get,
+  Put,
+  Delete,
+  Patch,
+  Body,
+  Param,
+  UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { ProfileSectionsService } from './profile-sections.service';
-import { UpsertSectionDto, UpdateVisibilityDto, SectionType } from './dto/upsert-section.dto';
+import {
+  UpsertSectionDto,
+  UpdateVisibilityDto,
+  SectionType,
+} from './dto/upsert-section.dto';
 
 @Controller('profile-sections')
 @UseGuards(JwtAuthGuard)
