@@ -290,7 +290,18 @@ export class GroupCallService {
   async joinCall(callId: string, userId: string) {
     const call = await this.prisma.groupCall.findUnique({
       where: { id: callId },
-      include: { invites: true },
+      include: {
+        invites: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                profile: { select: { firstName: true, lastName: true, avatarUrl: true } },
+              },
+            },
+          },
+        },
+      },
     });
     if (!call) throw new NotFoundException('GroupCall not found');
     if (call.status === GroupCallStatus.ENDED) {
@@ -345,7 +356,18 @@ export class GroupCallService {
     // needs the up-to-date list to compute the participant audience.
     const refreshed = await this.prisma.groupCall.findUnique({
       where: { id: callId },
-      include: { invites: true },
+      include: {
+        invites: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                profile: { select: { firstName: true, lastName: true, avatarUrl: true } },
+              },
+            },
+          },
+        },
+      },
     });
     const participantIds = this.collectParticipantIds(refreshed!);
     this.gateway.emitStatus(participantIds, {
@@ -389,7 +411,18 @@ export class GroupCallService {
   async declineCall(callId: string, userId: string) {
     const call = await this.prisma.groupCall.findUnique({
       where: { id: callId },
-      include: { invites: true },
+      include: {
+        invites: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                profile: { select: { firstName: true, lastName: true, avatarUrl: true } },
+              },
+            },
+          },
+        },
+      },
     });
     if (!call) throw new NotFoundException('GroupCall not found');
 
@@ -414,7 +447,18 @@ export class GroupCallService {
     // Refetch and broadcast post-update view (call.invites is pre-update).
     const refreshed = await this.prisma.groupCall.findUnique({
       where: { id: callId },
-      include: { invites: true },
+      include: {
+        invites: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                profile: { select: { firstName: true, lastName: true, avatarUrl: true } },
+              },
+            },
+          },
+        },
+      },
     });
     const participantIds = this.collectParticipantIds(refreshed!);
     this.gateway.emitStatus(participantIds, {
@@ -460,7 +504,18 @@ export class GroupCallService {
   async leaveCall(callId: string, userId: string): Promise<void> {
     const call = await this.prisma.groupCall.findUnique({
       where: { id: callId },
-      include: { invites: true },
+      include: {
+        invites: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                profile: { select: { firstName: true, lastName: true, avatarUrl: true } },
+              },
+            },
+          },
+        },
+      },
     });
     if (!call) throw new NotFoundException('GroupCall not found');
     if (call.status === GroupCallStatus.ENDED) return; // idempotent — call already over
@@ -520,7 +575,18 @@ export class GroupCallService {
     // Refetch + broadcast the post-update view.
     const refreshed = await this.prisma.groupCall.findUnique({
       where: { id: callId },
-      include: { invites: true },
+      include: {
+        invites: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                profile: { select: { firstName: true, lastName: true, avatarUrl: true } },
+              },
+            },
+          },
+        },
+      },
     });
     const participantIds = this.collectParticipantIds(refreshed!);
 
@@ -732,7 +798,18 @@ export class GroupCallService {
   async inviteMore(callId: string, hostUserId: string, userIds: string[]) {
     const call = await this.prisma.groupCall.findUnique({
       where: { id: callId },
-      include: { invites: true },
+      include: {
+        invites: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                profile: { select: { firstName: true, lastName: true, avatarUrl: true } },
+              },
+            },
+          },
+        },
+      },
     });
     if (!call) throw new NotFoundException('GroupCall not found');
     if (call.hostUserId !== hostUserId) {
@@ -852,7 +929,18 @@ export class GroupCallService {
     // tiles to the participant grid.
     const refreshed = await this.prisma.groupCall.findUnique({
       where: { id: callId },
-      include: { invites: true },
+      include: {
+        invites: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                profile: { select: { firstName: true, lastName: true, avatarUrl: true } },
+              },
+            },
+          },
+        },
+      },
     });
     const participantIds = this.collectParticipantIds(refreshed!);
     this.gateway.emitStatus(participantIds, {
@@ -898,7 +986,18 @@ export class GroupCallService {
 
     const call = await this.prisma.groupCall.findUnique({
       where: { id: callId },
-      include: { invites: true },
+      include: {
+        invites: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                profile: { select: { firstName: true, lastName: true, avatarUrl: true } },
+              },
+            },
+          },
+        },
+      },
     });
     if (!call) throw new NotFoundException('GroupCall not found');
     if (call.hostUserId !== hostUserId) {
@@ -935,7 +1034,18 @@ export class GroupCallService {
 
     const refreshed = await this.prisma.groupCall.findUnique({
       where: { id: callId },
-      include: { invites: true },
+      include: {
+        invites: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                profile: { select: { firstName: true, lastName: true, avatarUrl: true } },
+              },
+            },
+          },
+        },
+      },
     });
     const participantIds = this.collectParticipantIds(refreshed!);
     this.gateway.emitStatus(participantIds, {
@@ -970,7 +1080,18 @@ export class GroupCallService {
   async muteAll(callId: string, hostUserId: string) {
     const call = await this.prisma.groupCall.findUnique({
       where: { id: callId },
-      include: { invites: true },
+      include: {
+        invites: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                profile: { select: { firstName: true, lastName: true, avatarUrl: true } },
+              },
+            },
+          },
+        },
+      },
     });
     if (!call) throw new NotFoundException('GroupCall not found');
     if (call.hostUserId !== hostUserId) {
@@ -1060,7 +1181,18 @@ export class GroupCallService {
 
     const refreshed = await this.prisma.groupCall.findUnique({
       where: { id: invite.groupCallId },
-      include: { invites: true },
+      include: {
+        invites: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                profile: { select: { firstName: true, lastName: true, avatarUrl: true } },
+              },
+            },
+          },
+        },
+      },
     });
     if (!refreshed) return;
 
