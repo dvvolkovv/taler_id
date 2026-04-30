@@ -1,8 +1,9 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
 import { ServeStaticModule } from '@nestjs/serve-static';
+import { BullModule } from '@nestjs/bullmq';
 import { AppController } from './app.controller';
 import { AuthModule } from './auth/auth.module';
 import { PrismaModule } from './prisma/prisma.module';
@@ -64,6 +65,29 @@ import configuration from './config/configuration';
       rootPath: '/home/dvolkov/taler-id/public',
       serveRoot: '/',
       exclude: ['/ui{/*path}', '/uploads{/*path}'],
+    }),
+    // Global BullMQ Redis connection. `BullModule.registerQueue({ name })` in
+    // feature modules (GroupCallModule, etc.) attaches to this connection;
+    // without forRootAsync those queues would have no Redis client at runtime.
+    // We mirror RedisService's URL parsing (`redis://[:pass@]host[:port][/db]`).
+    BullModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => {
+        const url = config.get<string>('redis.url') ?? 'redis://localhost:6379';
+        const parsed = new URL(url);
+        return {
+          connection: {
+            host: parsed.hostname,
+            port: Number(parsed.port) || 6379,
+            password: parsed.password || undefined,
+            db:
+              parsed.pathname && parsed.pathname.length > 1
+                ? Number(parsed.pathname.slice(1))
+                : 0,
+          },
+        };
+      },
     }),
     PrismaModule,
     RedisModule,

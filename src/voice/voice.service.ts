@@ -20,6 +20,7 @@ import { FEATURE_KEYS } from '../billing/constants/feature-keys';
 const LK_HOST = process.env.LIVEKIT_HOST || 'http://localhost:7880';
 const LK_API_KEY = process.env.LIVEKIT_API_KEY || 'lkdevkey';
 const LK_API_SECRET = process.env.LIVEKIT_API_SECRET || 'lkSecret2024TalerID';
+const LK_WS_URL = process.env.LIVEKIT_WS_URL || 'ws://localhost:7880';
 const AI_AGENT_URL = process.env.AI_AGENT_URL || 'http://localhost:3100';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const BASE_URL = process.env.BASE_URL || 'https://id.taler.tirol';
@@ -84,6 +85,68 @@ export class VoiceService {
       }
     } catch (_) {}
     return { token: await this.makeToken(roomName, userId) };
+  }
+
+  /**
+   * Issues a LiveKit access token for a group voice call. Group calls live in
+   * rooms named `group-${groupCallId}` so the LiveKit webhook handler (Task 15)
+   * can route room events to GroupCallService by prefix. Mirrors the 1-on-1
+   * `makeToken` shape (roomJoin + canPublish/canSubscribe) and adds
+   * canPublishData for in-room signaling. Returns the WS URL alongside the
+   * token so callers don't need to know the LiveKit endpoint.
+   */
+  async generateGroupCallToken(
+    groupCallId: string,
+    userId: string,
+  ): Promise<{ token: string; livekitWsUrl: string }> {
+    const roomName = `group-${groupCallId}`;
+    const at = new AccessToken(LK_API_KEY, LK_API_SECRET, {
+      identity: userId,
+      ttl: 60 * 60 * 4, // 4 hours
+    });
+    at.addGrant({
+      room: roomName,
+      roomJoin: true,
+      canPublish: true,
+      canSubscribe: true,
+      canPublishData: true,
+    });
+    const token = await at.toJwt();
+    return {
+      token,
+      livekitWsUrl: LK_WS_URL,
+    };
+  }
+
+  /**
+   * Forcefully delete a LiveKit room (any active participants are evicted).
+   * Used by group-call lifecycle (Task 7+) when ending a call so the room
+   * doesn't sit around until LiveKit's `emptyTimeout` reaps it. Idempotent
+   * from the caller's perspective: LiveKit returns success even if the room
+   * is already gone, so callers don't need to check existence first.
+   */
+  async deleteRoom(roomName: string): Promise<void> {
+    await this.rooms.deleteRoom(roomName);
+  }
+
+  /**
+   * Force-disconnect a participant from a LiveKit room.
+   *
+   * Used by group-call host actions (Task 9 `kick`) to forcibly remove an
+   * invitee. Mirrors `deleteRoom`: thin pass-through to the LiveKit
+   * RoomServiceClient. The same direct call already exists in
+   * `ai-twin.service.ts` — wrapping it here gives the group-call service
+   * a clean injection seam for unit-testing without spying on LiveKit
+   * internals.
+   *
+   * Best-effort from the caller's perspective: LiveKit returns success when
+   * the participant is already gone, so callers don't need to pre-check
+   * existence. If the LK server is transiently down, callers should swallow
+   * the error and rely on their DB write (status=LEFT) as the source of
+   * truth — the participant will be reaped by LiveKit's `departureTimeout`.
+   */
+  async removeParticipant(roomName: string, identity: string): Promise<void> {
+    await this.rooms.removeParticipant(roomName, identity);
   }
 
   async endCallLog(roomName: string): Promise<void> {
@@ -296,7 +359,7 @@ export class VoiceService {
         const err = await response.text();
         throw new Error(`OpenAI session error ${response.status}: ${err}`);
       }
-      const data = await response.json();
+      const data = (await response.json()) as any;
       return {
         clientSecret: data.client_secret.value as string,
         billingSessionId: billingSession.id,
@@ -619,7 +682,7 @@ export class VoiceService {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ roomName }),
       });
-      const data = await res.json();
+      const data = (await res.json()) as any;
       return { status: data.status || 'started' };
     } catch (e) {
       console.error('Failed to start translator:', e);
@@ -634,7 +697,7 @@ export class VoiceService {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ roomName }),
       });
-      const data = await res.json();
+      const data = (await res.json()) as any;
       return { status: data.status || 'stopped' };
     } catch (e) {
       console.error('Failed to stop translator:', e);
@@ -722,7 +785,7 @@ export class VoiceService {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ roomName, withAi }),
       });
-      const data = await res.json();
+      const data = (await res.json()) as any;
       return { status: data.status || 'started' };
     } catch (e) {
       console.error('Failed to start recorder:', e);
@@ -737,7 +800,7 @@ export class VoiceService {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ roomName }),
       });
-      const data = await res.json();
+      const data = (await res.json()) as any;
       return { status: data.status || 'stopping' };
     } catch (e) {
       console.error('Failed to stop recorder:', e);
@@ -1013,7 +1076,7 @@ export class VoiceService {
     const baseDurationSec =
       meeting.durationSec && meeting.durationSec > 0 ? meeting.durationSec : 60;
     const trackCount = hasMultipleTracks
-      ? Object.keys(participantTracks).length
+      ? Object.keys(participantTracks!).length
       : 1;
     const whisperMinutes = (baseDurationSec * trackCount) / 60;
 
@@ -1066,14 +1129,18 @@ export class VoiceService {
           try {
             // Download individual track
             let trackBuffer: Buffer;
-            if (trackUrl.includes('/messenger/files/download?key=')) {
-              const key = decodeURIComponent(trackUrl.split('key=')[1]);
+            if (
+              (trackUrl as string).includes('/messenger/files/download?key=')
+            ) {
+              const key = decodeURIComponent(
+                (trackUrl as string).split('key=')[1],
+              );
               const { stream } = await this.fileStorage.getObject(key);
               const chunks: Buffer[] = [];
               for await (const chunk of stream) chunks.push(Buffer.from(chunk));
               trackBuffer = Buffer.concat(chunks);
             } else {
-              const trackRes = await fetch(trackUrl);
+              const trackRes = await fetch(trackUrl as string);
               if (!trackRes.ok) {
                 console.warn(
                   '[VOICE] Failed to download track for',
@@ -1113,7 +1180,7 @@ export class VoiceService {
               continue;
             }
 
-            const trackData = await trackWhisperRes.json();
+            const trackData = (await trackWhisperRes.json()) as any;
             const segs = trackData.segments ?? [];
             for (const s of segs) {
               allSegments.push({
@@ -1185,7 +1252,7 @@ export class VoiceService {
           throw new Error(`Whisper error ${whisperRes.status}: ${errText}`);
         }
 
-        const whisperData = await whisperRes.json();
+        const whisperData = (await whisperRes.json()) as any;
         const segments = whisperData.segments ?? [];
         transcript =
           segments.length > 0
@@ -1257,7 +1324,7 @@ export class VoiceService {
         );
 
         if (gptRes.ok) {
-          const gptData = await gptRes.json();
+          const gptData = (await gptRes.json()) as any;
           // Exact cost from actual token usage; fallback to 0 only if usage missing.
           const totalTokens = gptData.usage?.total_tokens ?? 0;
           const tokensK = totalTokens / 1000;

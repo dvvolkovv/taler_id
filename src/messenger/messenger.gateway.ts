@@ -992,9 +992,13 @@ export class MessengerGateway
     }
   }
 
-  /** Emit to a specific user's personal room */
+  /**
+   * Emit a Socket.io event to a specific user's personal room. Mirrors the
+   * inline `server.to(`user:${userId}`).emit(...)` pattern used throughout
+   * this gateway. Provided for cross-module use (e.g., GroupCallGateway in
+   * voice/group-call routes group_call_* events through here).
+   */
   emitToUser(userId: string, event: string, data: any) {
-    // This is the generic emitToUser — always emits to user room
     this.server.to(`user:${userId}`).emit(event, data);
   }
 
