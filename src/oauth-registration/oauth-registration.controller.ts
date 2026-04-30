@@ -1,13 +1,13 @@
 import { Body, Controller, Delete, Get, Headers, Ip, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
-import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RegisterClientDto } from './dto/register-client.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
 import { OAuthRegistrationService } from './oauth-registration.service';
+import { OidcBearerGuard } from './oidc-bearer.guard';
 
 @Controller('oauth')
-@UseGuards(JwtAuthGuard)
+@UseGuards(OidcBearerGuard)
 export class OAuthRegistrationController {
   constructor(private readonly svc: OAuthRegistrationService) {}
 
