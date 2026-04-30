@@ -1,5 +1,6 @@
-import { Body, Controller, Post, Get, Delete, Param, Query, UseGuards, UseFilters, Headers, UseInterceptors, UploadedFile, HttpException, HttpStatus } from "@nestjs/common";
+import { Body, Controller, Post, Get, Delete, Param, Query, UseGuards, UseFilters, Headers, UseInterceptors, UploadedFile, HttpException, HttpStatus, Req, HttpCode, Logger, Inject, forwardRef } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
+import { WebhookReceiver } from "livekit-server-sdk";
 import { VoiceService } from "./voice.service";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
@@ -7,15 +8,79 @@ import { FileStorageService } from "../common/file-storage.service";
 import { BillingExceptionFilter } from "../billing/filters/billing-exception.filter";
 import { GatingService } from "../billing/services/gating.service";
 import { MeteringService } from "../billing/services/metering.service";
+import { GroupCallService } from "./group-call/group-call.service";
 
 @Controller("voice")
 export class VoiceController {
+  private readonly webhookReceiver = new WebhookReceiver(
+    process.env.LIVEKIT_API_KEY ?? "lkdevkey",
+    process.env.LIVEKIT_API_SECRET ?? "lkSecret2024TalerID",
+  );
+  private readonly webhookLogger = new Logger("LiveKitWebhook");
+
   constructor(
     private readonly service: VoiceService,
     private readonly fileStorage: FileStorageService,
     private readonly gating: GatingService,
     private readonly metering: MeteringService,
+    @Inject(forwardRef(() => GroupCallService))
+    private readonly groupCallService: GroupCallService,
   ) {}
+
+  /**
+   * LiveKit webhook receiver. The LiveKit server is configured (server-side,
+   * outside this repo) with `webhook.urls = [https://id.taler.tirol/voice/livekit-webhook]`
+   * and signs every payload with the same API key/secret pair we use to mint
+   * AccessTokens. `WebhookReceiver.receive` verifies the JWT in the
+   * `Authorization` header against the raw body, so we MUST read the unparsed
+   * body — `main.ts` enables `rawBody: true` globally so `req.rawBody` is a
+   * Buffer that we stringify here.
+   *
+   * Phase 1 only consumes `participant_left` for `group-*` rooms. Other event
+   * types (room_started, room_finished, track_published, recording_*) are
+   * acknowledged with 200 but ignored — future phases (recording mgmt,
+   * end-of-call analytics) will hook in without changing the verify path.
+   *
+   * Always return 200 to LiveKit, even on signature-verify failure: LiveKit
+   * retries 4xx/5xx aggressively, and we'd rather log the bad signature than
+   * be stuck in a retry loop. Internal handler errors are also caught so a
+   * single broken event can't poison subsequent ones.
+   */
+  @Post("livekit-webhook")
+  @HttpCode(200)
+  async livekitWebhook(@Req() req: any, @Headers("authorization") authz: string) {
+    let event: any;
+    try {
+      const body = req.rawBody?.toString("utf8") ?? JSON.stringify(req.body ?? {});
+      event = await this.webhookReceiver.receive(body, authz);
+    } catch (e: any) {
+      this.webhookLogger.warn(`Webhook signature verify failed: ${e?.message ?? e}`);
+      return { ok: false };
+    }
+
+    this.webhookLogger.debug(
+      `webhook event=${event.event} room=${event.room?.name}`,
+    );
+
+    if (
+      event.event === "participant_left" &&
+      typeof event.room?.name === "string" &&
+      event.room.name.startsWith("group-") &&
+      event.participant?.identity
+    ) {
+      const callId = event.room.name.replace(/^group-/, "");
+      const userId = event.participant.identity;
+      try {
+        await this.groupCallService.handleLivekitParticipantLeft(callId, userId);
+      } catch (e: any) {
+        this.webhookLogger.error(
+          `handleLivekitParticipantLeft failed for ${callId}/${userId}: ${e?.message ?? e}`,
+        );
+      }
+    }
+
+    return { ok: true };
+  }
 
   @Post("rooms")
   @UseGuards(JwtAuthGuard)
