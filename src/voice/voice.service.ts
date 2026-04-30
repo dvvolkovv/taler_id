@@ -15,6 +15,7 @@ import { FEATURE_KEYS } from "../billing/constants/feature-keys";
 const LK_HOST = process.env.LIVEKIT_HOST || "http://localhost:7880";
 const LK_API_KEY = process.env.LIVEKIT_API_KEY || "lkdevkey";
 const LK_API_SECRET = process.env.LIVEKIT_API_SECRET || "lkSecret2024TalerID";
+const LK_WS_URL = process.env.LIVEKIT_WS_URL || "ws://localhost:7880";
 const AI_AGENT_URL = process.env.AI_AGENT_URL || "http://localhost:3100";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const BASE_URL = process.env.BASE_URL || "https://id.taler.tirol";
@@ -61,6 +62,68 @@ export class VoiceService {
       }
     } catch (_) {}
     return { token: await this.makeToken(roomName, userId) };
+  }
+
+  /**
+   * Issues a LiveKit access token for a group voice call. Group calls live in
+   * rooms named `group-${groupCallId}` so the LiveKit webhook handler (Task 15)
+   * can route room events to GroupCallService by prefix. Mirrors the 1-on-1
+   * `makeToken` shape (roomJoin + canPublish/canSubscribe) and adds
+   * canPublishData for in-room signaling. Returns the WS URL alongside the
+   * token so callers don't need to know the LiveKit endpoint.
+   */
+  async generateGroupCallToken(
+    groupCallId: string,
+    userId: string,
+  ): Promise<{ token: string; livekitWsUrl: string }> {
+    const roomName = `group-${groupCallId}`;
+    const at = new AccessToken(LK_API_KEY, LK_API_SECRET, {
+      identity: userId,
+      ttl: 60 * 60 * 4, // 4 hours
+    });
+    at.addGrant({
+      room: roomName,
+      roomJoin: true,
+      canPublish: true,
+      canSubscribe: true,
+      canPublishData: true,
+    });
+    const token = await at.toJwt();
+    return {
+      token,
+      livekitWsUrl: LK_WS_URL,
+    };
+  }
+
+  /**
+   * Forcefully delete a LiveKit room (any active participants are evicted).
+   * Used by group-call lifecycle (Task 7+) when ending a call so the room
+   * doesn't sit around until LiveKit's `emptyTimeout` reaps it. Idempotent
+   * from the caller's perspective: LiveKit returns success even if the room
+   * is already gone, so callers don't need to check existence first.
+   */
+  async deleteRoom(roomName: string): Promise<void> {
+    await this.rooms.deleteRoom(roomName);
+  }
+
+  /**
+   * Force-disconnect a participant from a LiveKit room.
+   *
+   * Used by group-call host actions (Task 9 `kick`) to forcibly remove an
+   * invitee. Mirrors `deleteRoom`: thin pass-through to the LiveKit
+   * RoomServiceClient. The same direct call already exists in
+   * `ai-twin.service.ts` — wrapping it here gives the group-call service
+   * a clean injection seam for unit-testing without spying on LiveKit
+   * internals.
+   *
+   * Best-effort from the caller's perspective: LiveKit returns success when
+   * the participant is already gone, so callers don't need to pre-check
+   * existence. If the LK server is transiently down, callers should swallow
+   * the error and rely on their DB write (status=LEFT) as the source of
+   * truth — the participant will be reaped by LiveKit's `departureTimeout`.
+   */
+  async removeParticipant(roomName: string, identity: string): Promise<void> {
+    await this.rooms.removeParticipant(roomName, identity);
   }
 
   async endCallLog(roomName: string): Promise<void> {

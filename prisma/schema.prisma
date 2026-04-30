@@ -38,22 +38,24 @@ model User {
   wallet               UserWallet?
   billingTransactions  BillingTransaction[]
   aiSessions           AiSession[]
+  hostedGroupCalls     GroupCall[]           @relation("HostedGroupCalls")
+  groupCallInvites     GroupCallInvite[]     @relation("GroupCallInvitesReceived")
 }
 
 model DeviceKey {
   id          String    @id @default(uuid())
   userId      String
-  devicePk    String    @unique  // hex-encoded 32-byte X25519 public key
-  userPk      String?             // hex 64 chars, Ed25519 UserIdentityKey
+  devicePk    String    @unique // hex-encoded 32-byte X25519 public key
+  userPk      String? // hex 64 chars, Ed25519 UserIdentityKey
   algorithm   String    @default("X25519")
   validUntil  DateTime
-  certificate String    @db.Text  // full JSON self-signed cert (for clients to verify)
-  signature   String              // hex Ed25519 signature (redundant with certificate JSON but indexed)
+  certificate String    @db.Text // full JSON self-signed cert (for clients to verify)
+  signature   String // hex Ed25519 signature (redundant with certificate JSON but indexed)
   revokedAt   DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([userId, revokedAt])
@@ -756,4 +758,52 @@ model UsageLog {
   createdAt  DateTime   @default(now())
 
   @@index([userId, createdAt])
+}
+
+enum GroupCallStatus {
+  LOBBY
+  ACTIVE
+  ENDED
+}
+
+enum GroupCallInviteStatus {
+  CALLING
+  JOINED
+  DECLINED
+  TIMEOUT
+  LEFT
+}
+
+model GroupCall {
+  id              String          @id @default(uuid())
+  livekitRoomName String          @unique
+  hostUserId      String
+  status          GroupCallStatus @default(LOBBY)
+  startedAt       DateTime        @default(now())
+  endedAt         DateTime?
+  endedReason     String?
+
+  host    User              @relation("HostedGroupCalls", fields: [hostUserId], references: [id])
+  invites GroupCallInvite[]
+
+  @@index([status, startedAt])
+  @@index([hostUserId, startedAt])
+}
+
+model GroupCallInvite {
+  id          String                @id @default(uuid())
+  groupCallId String
+  userId      String
+  status      GroupCallInviteStatus @default(CALLING)
+  invitedAt   DateTime              @default(now())
+  respondedAt DateTime?
+  joinedAt    DateTime?
+  leftAt      DateTime?
+  invitedBy   String
+
+  groupCall GroupCall @relation(fields: [groupCallId], references: [id], onDelete: Cascade)
+  user      User      @relation("GroupCallInvitesReceived", fields: [userId], references: [id])
+
+  @@unique([groupCallId, userId])
+  @@index([userId, status])
 }
