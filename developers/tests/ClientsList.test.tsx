@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { ClientsList } from '../src/pages/ClientsList';
 import * as sdk from '@taler-id/oauth-client/react';
 
@@ -48,5 +49,16 @@ describe('ClientsList', () => {
     );
     render(<ClientsList />);
     await waitFor(() => expect(screen.getByText(/No OAuth clients yet/i)).toBeInTheDocument());
+  });
+
+  it('clicking "Register new client" opens the create modal', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } }),
+    );
+    const user = userEvent.setup();
+    render(<ClientsList />);
+    await waitFor(() => expect(screen.getByText(/Register new client/i)).toBeInTheDocument());
+    await user.click(screen.getByText(/Register new client/i));
+    expect(screen.getByRole('heading', { name: /Register new OAuth client/i })).toBeInTheDocument();
   });
 });
