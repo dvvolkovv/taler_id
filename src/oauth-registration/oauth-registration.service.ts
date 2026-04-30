@@ -222,4 +222,29 @@ export class OAuthRegistrationService {
     await this.writeAuditLog(userId, 'OAUTH_CLIENT_DELETED', ip, userAgent, { clientId });
     return { deleted: true, client_id: clientId };
   }
+
+  async rotateSecret(userId: string, clientId: string, ip: string, userAgent: string) {
+    const existing = await this.prisma.oAuthClient.findFirst({
+      where: { clientId, userId },
+    });
+    if (!existing) {
+      throw new NotFoundException({ error: 'client_not_found' });
+    }
+
+    const newSecret = randomBytes(32).toString('base64url');
+    await this.prisma.oAuthClient.update({
+      where: { id: existing.id },
+      data: { clientSecret: newSecret },
+    });
+
+    await this.writeAuditLog(userId, 'OAUTH_CLIENT_ROTATED', ip, userAgent, {
+      clientId,
+    });
+
+    return {
+      client_id: clientId,
+      client_secret: newSecret,
+      client_secret_rotated_at: Math.floor(Date.now() / 1000),
+    };
+  }
 }

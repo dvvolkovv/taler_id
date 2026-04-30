@@ -449,4 +449,70 @@ describe('OAuthRegistrationService', () => {
       expect(out.scope).toBe('openid profile email offline_access');
     });
   });
+
+  describe('rotateSecret', () => {
+    it('returns new secret + audit logs success', async () => {
+      const userId = 'u-1';
+      const clientId = 'cli-1';
+      const prisma = buildPrismaMock();
+      prisma.oAuthClient.findFirst.mockResolvedValue({
+        id: 1, clientId, userId, clientSecret: 'OLD',
+        name: 'app', redirectUris: ['app://cb'],
+        allowedScopes: ['openid'], logoUri: null,
+        createdAt: new Date(), updatedAt: new Date(),
+      } as any);
+      prisma.oAuthClient.update.mockResolvedValue({ clientSecret: 'NEW' } as any);
+      prisma.auditLog.create.mockResolvedValue({} as any);
+      const svc = new OAuthRegistrationService(prisma);
+
+      const result = await svc.rotateSecret(userId, clientId, '127.0.0.1', 'ua');
+
+      expect(result.client_id).toBe(clientId);
+      expect(result.client_secret).toMatch(/^[A-Za-z0-9_-]+$/);
+      expect(result.client_secret).not.toBe('OLD');
+      expect(result.client_secret_rotated_at).toBeGreaterThan(0);
+      expect(prisma.oAuthClient.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ clientSecret: expect.any(String) }),
+        }),
+      );
+      expect(prisma.auditLog.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            action: 'OAUTH_CLIENT_ROTATED',
+            userId,
+          }),
+        }),
+      );
+    });
+
+    it('throws NotFoundException when caller does not own client', async () => {
+      const prisma = buildPrismaMock();
+      prisma.oAuthClient.findFirst.mockResolvedValue(null);
+      const svc = new OAuthRegistrationService(prisma);
+
+      await expect(
+        svc.rotateSecret('u-1', 'someone-elses-client', '127.0.0.1', 'ua'),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('generates a 32-byte base64url secret each rotation', async () => {
+      const prisma = buildPrismaMock();
+      prisma.oAuthClient.findFirst.mockResolvedValue({
+        id: 1, clientId: 'c', userId: 'u', clientSecret: 'OLD',
+        name: 'a', redirectUris: ['x'], allowedScopes: [], logoUri: null,
+        createdAt: new Date(), updatedAt: new Date(),
+      } as any);
+      prisma.oAuthClient.update.mockImplementation(({ data }: any) =>
+        Promise.resolve({ clientSecret: data.clientSecret }),
+      );
+      prisma.auditLog.create.mockResolvedValue({} as any);
+      const svc = new OAuthRegistrationService(prisma);
+
+      const a = await svc.rotateSecret('u', 'c', '1.2.3.4', 'ua');
+      const b = await svc.rotateSecret('u', 'c', '1.2.3.4', 'ua');
+      expect(a.client_secret.length).toBeGreaterThanOrEqual(43);
+      expect(a.client_secret).not.toBe(b.client_secret);
+    });
+  });
 });

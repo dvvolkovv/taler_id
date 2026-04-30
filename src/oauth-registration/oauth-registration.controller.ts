@@ -52,4 +52,15 @@ export class OAuthRegistrationController {
   ) {
     return this.svc.deleteMine(user.sub, clientId, ip, userAgent ?? '');
   }
+
+  @Post('clients/:clientId/rotate-secret')
+  @Throttle({ short: { limit: 3, ttl: 60_000 } })
+  rotateSecret(
+    @CurrentUser() user: any,
+    @Param('clientId') clientId: string,
+    @Ip() ip: string,
+    @Headers('user-agent') userAgent: string,
+  ) {
+    return this.svc.rotateSecret(user.sub, clientId, ip, userAgent ?? '');
+  }
 }
