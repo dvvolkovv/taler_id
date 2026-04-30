@@ -134,14 +134,21 @@ describe('GroupCallService', () => {
   });
 
   describe('getActiveCallsForUser', () => {
-    it('returns calls where user has CALLING/JOINED/LEFT/DECLINED invite and call is LOBBY/ACTIVE', async () => {
+    it('returns calls where user is host OR has CALLING/JOINED/LEFT/DECLINED invite, and call is LOBBY/ACTIVE', async () => {
       const calls = [{ id: 'c1', status: 'ACTIVE', invites: [{ userId: 'u1', status: 'JOINED' }] }];
       prisma.groupCall.findMany = jest.fn().mockResolvedValue(calls);
       const result = await service.getActiveCallsForUser('u1');
       expect(prisma.groupCall.findMany).toHaveBeenCalledWith(expect.objectContaining({
         where: expect.objectContaining({
           status: { in: ['LOBBY', 'ACTIVE'] },
-          invites: { some: { userId: 'u1', status: { in: ['CALLING', 'JOINED', 'LEFT', 'DECLINED'] } } },
+          OR: [
+            { hostUserId: 'u1' },
+            {
+              invites: {
+                some: { userId: 'u1', status: { in: ['CALLING', 'JOINED', 'LEFT', 'DECLINED'] } },
+              },
+            },
+          ],
         }),
       }));
       expect(result).toEqual(calls);
@@ -420,7 +427,10 @@ describe('GroupCallService', () => {
       );
     });
 
-    it('ends call (all_left) when last JOINED leaves', async () => {
+    it('does NOT auto-end when last JOINED invitee leaves and host stays alone', async () => {
+      // Invitee leaves an ACTIVE call where host is the only remaining
+      // participant — host should be free to wait, invite more, or /end
+      // manually. Auto-ending here would clobber an imminent host /end.
       const call = {
         id: 'c1', status: 'ACTIVE', hostUserId: 'host', livekitRoomName: 'group-c1',
         invites: [{ id: 'i1', userId: 'u1', status: 'JOINED', joinedAt: new Date() }],
@@ -432,20 +442,18 @@ describe('GroupCallService', () => {
           invites: [{ ...call.invites[0], status: 'LEFT', leftAt: new Date() }],
         });
       prisma.groupCallInvite.update = jest.fn();
-      prisma.groupCallInvite.findMany = jest.fn().mockResolvedValue([
-        { userId: 'u1', status: 'LEFT' },
-      ]);
-      prisma.groupCall.update = jest.fn().mockResolvedValue({
-        ...call, status: 'ENDED', endedReason: 'all_left',
-      });
-      voice.deleteRoom = jest.fn().mockResolvedValue(undefined);
 
       await service.leaveCall('c1', 'u1');
 
-      expect(prisma.groupCall.update).toHaveBeenCalledWith(expect.objectContaining({
-        data: expect.objectContaining({ status: 'ENDED', endedReason: 'all_left' }),
-      }));
-      expect(gateway.emitEnded).toHaveBeenCalled();
+      // Invite was marked LEFT...
+      expect(prisma.groupCallInvite.update).toHaveBeenCalled();
+      // ...but the call was NOT terminated (no GroupCall.update with status=ENDED).
+      const endingCall = (prisma.groupCall.update.mock?.calls ?? []).find(
+        (args: any[]) =>
+          args[0]?.data?.status === 'ENDED',
+      );
+      expect(endingCall).toBeUndefined();
+      expect(gateway.emitEnded).not.toHaveBeenCalled();
     });
 
     it('idempotent if already LEFT', async () => {
@@ -636,7 +644,10 @@ describe('GroupCallService', () => {
       await expect(service.kick('c1', 'host', 'u1')).rejects.toThrow();
     });
 
-    it('ends call (all_left) if kicking the last JOINED leaves nobody', async () => {
+    it('does NOT auto-end after kicking the last JOINED — host stays alone', async () => {
+      // Same semantic as invitee-leave: host kicks last invitee, host
+      // remains alone in ACTIVE call. Auto-ending here would clobber an
+      // imminent host /end with the wrong endedReason.
       const call = {
         id: 'c1', hostUserId: 'host', livekitRoomName: 'group-c1', status: 'ACTIVE',
         invites: [{ id: 'i1', userId: 'u1', status: 'JOINED', joinedAt: new Date() }],
@@ -648,21 +659,18 @@ describe('GroupCallService', () => {
           invites: [{ ...call.invites[0], status: 'LEFT' }],
         });
       prisma.groupCallInvite.update = jest.fn();
-      prisma.groupCallInvite.findMany = jest.fn().mockResolvedValue([
-        { userId: 'u1', status: 'LEFT' },
-      ]);
-      prisma.groupCall.update = jest.fn().mockResolvedValue({
-        ...call, status: 'ENDED', endedReason: 'all_left',
-      });
       voice.removeParticipant = jest.fn().mockResolvedValue(undefined);
-      voice.deleteRoom = jest.fn().mockResolvedValue(undefined);
 
       await service.kick('c1', 'host', 'u1');
 
-      expect(prisma.groupCall.update).toHaveBeenCalledWith(expect.objectContaining({
-        data: expect.objectContaining({ status: 'ENDED', endedReason: 'all_left' }),
-      }));
-      expect(gateway.emitEnded).toHaveBeenCalled();
+      // Invite was marked LEFT...
+      expect(prisma.groupCallInvite.update).toHaveBeenCalled();
+      // ...but the call was NOT terminated.
+      const endingCall = (prisma.groupCall.update.mock?.calls ?? []).find(
+        (args: any[]) => args[0]?.data?.status === 'ENDED',
+      );
+      expect(endingCall).toBeUndefined();
+      expect(gateway.emitEnded).not.toHaveBeenCalled();
     });
   });
 
