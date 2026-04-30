@@ -102,6 +102,14 @@ export class GroupCallService {
 
     const invites = await this.prisma.groupCallInvite.findMany({
       where: { groupCallId: call.id },
+      include: {
+        user: {
+          select: {
+            id: true,
+            profile: { select: { firstName: true, lastName: true, avatarUrl: true } },
+          },
+        },
+      },
     });
 
     // Pull only the public fields needed for push/Socket.io fan-out so we
@@ -119,6 +127,12 @@ export class GroupCallService {
       displayName:
         `${profile?.firstName ?? ''} ${profile?.lastName ?? ''}`.trim() || hostUserId,
       avatarUrl: profile?.avatarUrl ?? null,
+    };
+    // Mirror the `host`/`invites[].user.profile` shape returned by getCall so
+    // the mobile picker→lobby transition renders names instead of UUIDs.
+    const callWithHost = {
+      ...call,
+      host: { id: hostUserId, profile },
     };
 
     // Schedule per-invite ring-timeout jobs in parallel (each `queue.add` is
@@ -161,7 +175,7 @@ export class GroupCallService {
     );
 
     return {
-      groupCall: { ...call, invites },
+      groupCall: { ...callWithHost, invites },
       livekitToken: token,
       livekitWsUrl,
     };
