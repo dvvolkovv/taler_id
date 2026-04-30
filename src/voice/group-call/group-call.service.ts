@@ -178,19 +178,27 @@ export class GroupCallService {
     return this.prisma.groupCall.findMany({
       where: {
         status: { in: [GroupCallStatus.LOBBY, GroupCallStatus.ACTIVE] },
-        invites: {
-          some: {
-            userId,
-            status: {
-              in: [
-                GroupCallInviteStatus.CALLING,
-                GroupCallInviteStatus.JOINED,
-                GroupCallInviteStatus.LEFT,
-                GroupCallInviteStatus.DECLINED,
-              ],
+        // Host has no invite row — they're tracked via `hostUserId`. Include
+        // both arms so the host sees their own call (e.g. after app kill, to
+        // resume from the active-call banner).
+        OR: [
+          { hostUserId: userId },
+          {
+            invites: {
+              some: {
+                userId,
+                status: {
+                  in: [
+                    GroupCallInviteStatus.CALLING,
+                    GroupCallInviteStatus.JOINED,
+                    GroupCallInviteStatus.LEFT,
+                    GroupCallInviteStatus.DECLINED,
+                  ],
+                },
+              },
             },
           },
-        },
+        ],
       },
       include: {
         host: {
@@ -488,8 +496,10 @@ export class GroupCallService {
           });
           newHostId = next.userId;
         }
-        // No candidate → leave hostUserId untouched; endCallIfDeserted below
-        // will catch (ACTIVE + no JOINED) and end the call with `all_left`.
+        // If no candidate, hostUserId stays — we'll end the call directly
+        // below (after the transaction) since `endCallIfDeserted` no longer
+        // auto-ends ACTIVE calls (we made that change so an invitee leaving
+        // doesn't kick the host out — but host-leaves-alone IS a real desertion).
       }
     });
 
@@ -516,10 +526,19 @@ export class GroupCallService {
       leftAt: new Date(),
     });
 
-    // Auto-end if the room is now deserted (LOBBY: nobody answered; ACTIVE:
-    // last JOINED left, including the host-leaves-alone path). Runs after
-    // the per-event broadcasts so subscribers see Status → Left → Ended in
-    // the order the UI expects.
+    // Direct ACTIVE termination only when the host themselves left and no
+    // JOINED candidate remained to take over. (`endCallIfDeserted` no longer
+    // auto-ends ACTIVE — invitee-leave shouldn't kick host out.)
+    if (
+      isHost &&
+      !newHostId &&
+      refreshed!.status === GroupCallStatus.ACTIVE
+    ) {
+      await this.endCall(callId, 'all_left');
+      return;
+    }
+
+    // Otherwise, only LOBBY can be auto-ended (timeout when everyone declined).
     await this.endCallIfDeserted(refreshed!);
   }
 
@@ -539,10 +558,15 @@ export class GroupCallService {
    * deserted-room state.
    */
   private async endCallIfDeserted(call: any): Promise<void> {
-    if (
-      call.status !== GroupCallStatus.LOBBY &&
-      call.status !== GroupCallStatus.ACTIVE
-    ) {
+    if (call.status !== GroupCallStatus.LOBBY) {
+      // ACTIVE auto-end is intentionally NOT handled here:
+      // - When the host leaves last → leaveCall calls endCall('all_left') directly.
+      // - When an invitee leaves and the host stays alone → the host can wait,
+      //   invite more, or /end manually. Auto-ending here would kick the host
+      //   out forcibly and clobber endedReason='host_ended' if the host was
+      //   about to /end.
+      // - Cron cleanup (Task 12) is the safety net for true ACTIVE zombies
+      //   (>1min with no JOINED).
       return;
     }
     const anyJoined = call.invites.some(
@@ -552,13 +576,10 @@ export class GroupCallService {
       (i: any) => i.status === GroupCallInviteStatus.CALLING,
     );
 
-    if (call.status === GroupCallStatus.LOBBY && !anyJoined && !anyCalling) {
+    if (!anyJoined && !anyCalling) {
+      // LOBBY exhausted (everyone declined/timed out before anyone joined).
+      // Host is alone in an empty lobby — auto-end with 'timeout'.
       await this.endCall(call.id, 'timeout');
-      return;
-    }
-    if (call.status === GroupCallStatus.ACTIVE && !anyJoined) {
-      await this.endCall(call.id, 'all_left');
-      return;
     }
   }
 
