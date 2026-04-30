@@ -25,6 +25,14 @@ export class PrismaClientAdapter {
       ];
     }
 
+    // Public clients (browser SPAs using PKCE) authenticate via PKCE alone —
+    // no client_secret, so token_endpoint_auth_method must be 'none'.
+    // Confidential clients (server-side integrations with stored secrets) use
+    // 'client_secret_basic'. The Developer Portal SPA at /developers/ is the
+    // canonical public client.
+    const isPublicClient = c.clientId === 'taler-id-developers';
+    const tokenEndpointAuthMethod = isPublicClient ? 'none' : 'client_secret_basic';
+
     return {
       client_id: c.clientId,
       client_secret: c.clientId === 'walletx' ? this.walletxClientSecret : c.clientSecret,
@@ -32,7 +40,7 @@ export class PrismaClientAdapter {
       redirect_uris: c.redirectUris,
       scope: c.allowedScopes.join(' '),
       logo_uri: c.logoUri ?? undefined,
-      token_endpoint_auth_method: 'client_secret_basic' as const,
+      token_endpoint_auth_method: tokenEndpointAuthMethod,
       grant_types: ['authorization_code', 'refresh_token'],
       response_types: ['code'],
       ...(postLogoutRedirectUris
