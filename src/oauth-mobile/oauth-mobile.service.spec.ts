@@ -1,6 +1,6 @@
 import { Test } from '@nestjs/testing';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { OAuthMobileService } from './oauth-mobile.service';
+import { OAuthMobileService, mergeScopes } from './oauth-mobile.service';
 import { OidcService } from '../oidc/oidc.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -236,7 +236,7 @@ describe('OAuthMobileService.approve', () => {
     expect(prisma.oAuthGrant.upsert).toHaveBeenCalledWith({
       where: { userId_clientId: { userId: 'user-1', clientId: 'mybook' } },
       create: { userId: 'user-1', clientId: 'mybook', scope: 'profile email' },
-      update: { scope: expect.stringMatching(/profile|email/) },
+      update: { scope: 'profile email' },
     });
   });
 
@@ -284,5 +284,29 @@ describe('OAuthMobileService.approve', () => {
     await expect(promise).rejects.toMatchObject({
       response: { error: 'redirect_uri_mismatch' },
     });
+  });
+});
+
+describe('mergeScopes', () => {
+  it('returns added scopes when existing is empty', () => {
+    expect(mergeScopes('', 'profile email')).toBe('profile email');
+  });
+
+  it('returns existing scopes when added is empty', () => {
+    expect(mergeScopes('profile email', '')).toBe('profile email');
+  });
+
+  it('preserves order with existing first then new additions', () => {
+    expect(mergeScopes('profile', 'email')).toBe('profile email');
+  });
+
+  it('deduplicates overlapping scopes', () => {
+    expect(mergeScopes('profile email', 'email openid')).toBe('profile email openid');
+  });
+
+  it('handles extra whitespace and empty tokens', () => {
+    expect(mergeScopes('  profile   email ', ' email  openid ')).toBe(
+      'profile email openid',
+    );
   });
 });

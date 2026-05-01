@@ -145,7 +145,7 @@ export class OAuthMobileService {
   }
 }
 
-function mergeScopes(existing: string, added: string): string {
+export function mergeScopes(existing: string, added: string): string {
   const set = new Set([
     ...existing.split(/\s+/).filter(Boolean),
     ...added.split(/\s+/).filter(Boolean),
