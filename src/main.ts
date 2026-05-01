@@ -530,13 +530,15 @@ async function bootstrap() {
 
   const oidcCallback = oidcProvider.callback();
   expressApp.use('/oauth', (req: any, res: any, next: any) => {
-    // Let NestJS handle interaction endpoints AND self-service client management.
+    // Let NestJS handle interaction endpoints, self-service client management,
+    // and the native-mobile consent endpoints.
     // Note: req.url here is the path AFTER stripping the '/oauth' mount prefix
     // (e.g. '/oauth/register' arrives as '/register').
     if (
       req.url.startsWith('/interaction') ||
       req.url.startsWith('/register') ||
-      req.url.startsWith('/clients')
+      req.url.startsWith('/clients') ||
+      req.url.startsWith('/mobile')
     ) {
       return next();
     }
