@@ -3,6 +3,7 @@ import { OidcService } from '../oidc/oidc.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { describeScopes, ScopeDescriptor } from './scope-descriptors';
 import type { OAuthAuthorizeQueryDto } from './dto/oauth-authorize-query.dto';
+import type { OAuthApproveDto } from './dto/oauth-approve.dto';
 
 export interface GrantInfo {
   client_name: string;
@@ -54,6 +55,50 @@ export class OAuthMobileService {
     };
   }
 
+  async approve(
+    userId: string,
+    params: OAuthApproveDto,
+  ): Promise<{ redirect_uri: string }> {
+    await this.findAndValidateClient(params);
+    const requestedScope = params.scope.trim().split(/\s+/).filter(Boolean).join(' ');
+
+    const provider = this.oidc.getProvider();
+
+    const grant = new provider.Grant({
+      accountId: userId,
+      clientId: params.client_id,
+    });
+    grant.addOIDCScope(requestedScope);
+    await grant.save();
+
+    const code = new provider.AuthorizationCode({
+      accountId: userId,
+      clientId: params.client_id,
+      redirectUri: params.redirect_uri,
+      scope: requestedScope,
+      grantId: grant.jti,
+      codeChallenge: params.code_challenge,
+      codeChallengeMethod: params.code_challenge_method,
+      nonce: params.nonce,
+    });
+    const codeValue = await code.save();
+
+    const existing = await (this.prisma as any).oAuthGrant.findFirst({
+      where: { userId, clientId: params.client_id },
+    });
+    const mergedScopes = mergeScopes(existing?.scope ?? '', requestedScope);
+    await (this.prisma as any).oAuthGrant.upsert({
+      where: { userId_clientId: { userId, clientId: params.client_id } },
+      create: { userId, clientId: params.client_id, scope: mergedScopes },
+      update: { scope: mergedScopes },
+    });
+
+    const url = new URL(params.redirect_uri);
+    url.searchParams.set('code', codeValue);
+    if (params.state) url.searchParams.set('state', params.state);
+    return { redirect_uri: url.toString() };
+  }
+
   private async findAndValidateClient(params: {
     client_id: string;
     redirect_uri: string;
@@ -98,4 +143,12 @@ export class OAuthMobileService {
 
     return client;
   }
+}
+
+function mergeScopes(existing: string, added: string): string {
+  const set = new Set([
+    ...existing.split(/\s+/).filter(Boolean),
+    ...added.split(/\s+/).filter(Boolean),
+  ]);
+  return Array.from(set).join(' ');
 }
