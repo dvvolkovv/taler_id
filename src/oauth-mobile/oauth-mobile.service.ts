@@ -55,25 +55,31 @@ export class OAuthMobileService {
 
     const allowedRedirectUris: string[] = client.redirectUris ?? [];
     if (!allowedRedirectUris.includes(params.redirect_uri)) {
-      throw new BadRequestException('redirect_uri_mismatch');
+      throw new BadRequestException({ error: 'redirect_uri_mismatch' });
     }
 
     const allowedScopes = ((client.scope ?? '') as string).split(/\s+/).filter(Boolean);
     const requestedScopes = params.scope.trim().split(/\s+/).filter(Boolean);
     if (requestedScopes.length === 0) {
-      throw new BadRequestException('invalid_scope');
+      throw new BadRequestException({
+        error: 'invalid_scope',
+        error_description: 'At least one scope is required',
+      });
     }
     const invalid = requestedScopes.filter((s) => !allowedScopes.includes(s));
     if (invalid.length > 0) {
-      throw new BadRequestException(
-        `invalid_scope: Scope not allowed: ${invalid.join(' ')}`,
-      );
+      throw new BadRequestException({
+        error: 'invalid_scope',
+        error_description: `Scope not allowed: ${invalid.join(' ')}`,
+      });
     }
 
     if (client.tokenEndpointAuthMethod !== 'none') {
-      throw new BadRequestException(
-        'confidential_client_not_supported_via_mobile: This client requires client_secret; only public PKCE clients are supported in mobile flow.',
-      );
+      throw new BadRequestException({
+        error: 'confidential_client_not_supported_via_mobile',
+        error_description:
+          'This client requires client_secret; only public PKCE clients are supported in mobile flow.',
+      });
     }
 
     return client;

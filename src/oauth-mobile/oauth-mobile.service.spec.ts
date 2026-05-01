@@ -33,12 +33,14 @@ describe('OAuthMobileService.getGrantInfo', () => {
     response_type: 'code' as const,
   };
 
-  it('throws NotFoundException when client not found', async () => {
+  it('throws NotFoundException with error=unknown_client when client not found', async () => {
     providerMock.Client.find.mockResolvedValue(undefined);
-    await expect(svc.getGrantInfo('user-1', baseParams)).rejects.toThrow(NotFoundException);
+    const promise = svc.getGrantInfo('user-1', baseParams);
+    await expect(promise).rejects.toBeInstanceOf(NotFoundException);
+    await expect(promise).rejects.toMatchObject({ response: { error: 'unknown_client' } });
   });
 
-  it('throws BadRequestException when redirect_uri not in registered list', async () => {
+  it('throws BadRequestException with error=redirect_uri_mismatch when redirect_uri not registered', async () => {
     providerMock.Client.find.mockResolvedValue({
       clientId: 'mybook',
       clientName: 'MyBook',
@@ -46,10 +48,14 @@ describe('OAuthMobileService.getGrantInfo', () => {
       scope: 'profile email',
       tokenEndpointAuthMethod: 'none',
     });
-    await expect(svc.getGrantInfo('user-1', baseParams)).rejects.toThrow(/redirect_uri/);
+    const promise = svc.getGrantInfo('user-1', baseParams);
+    await expect(promise).rejects.toBeInstanceOf(BadRequestException);
+    await expect(promise).rejects.toMatchObject({
+      response: { error: 'redirect_uri_mismatch' },
+    });
   });
 
-  it('throws BadRequestException when scope not subset of allowed', async () => {
+  it('throws BadRequestException with error=invalid_scope when scope not subset of allowed', async () => {
     providerMock.Client.find.mockResolvedValue({
       clientId: 'mybook',
       clientName: 'MyBook',
@@ -57,10 +63,14 @@ describe('OAuthMobileService.getGrantInfo', () => {
       scope: 'profile',
       tokenEndpointAuthMethod: 'none',
     });
-    await expect(svc.getGrantInfo('user-1', baseParams)).rejects.toThrow(/invalid_scope/);
+    const promise = svc.getGrantInfo('user-1', baseParams);
+    await expect(promise).rejects.toBeInstanceOf(BadRequestException);
+    await expect(promise).rejects.toMatchObject({
+      response: { error: 'invalid_scope' },
+    });
   });
 
-  it('throws BadRequestException for confidential client', async () => {
+  it('throws BadRequestException with error=confidential_client_not_supported_via_mobile for confidential client', async () => {
     providerMock.Client.find.mockResolvedValue({
       clientId: 'mybook',
       clientName: 'MyBook',
@@ -68,9 +78,11 @@ describe('OAuthMobileService.getGrantInfo', () => {
       scope: 'profile email',
       tokenEndpointAuthMethod: 'client_secret_basic',
     });
-    await expect(svc.getGrantInfo('user-1', baseParams)).rejects.toThrow(
-      /confidential_client_not_supported_via_mobile/,
-    );
+    const promise = svc.getGrantInfo('user-1', baseParams);
+    await expect(promise).rejects.toBeInstanceOf(BadRequestException);
+    await expect(promise).rejects.toMatchObject({
+      response: { error: 'confidential_client_not_supported_via_mobile' },
+    });
   });
 
   it('returns grant info with remembered=false when no existing grant', async () => {
