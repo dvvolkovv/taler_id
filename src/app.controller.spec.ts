@@ -11,7 +11,7 @@ describe('AppController.appleAppSiteAssociation', () => {
       'MG58MDUNZ2.tirol.taler.talerIdMobile.dev',
     ]);
     out.applinks.details.forEach((d) => {
-      expect(d.paths).toEqual(['/room/*', '/ui/invite*']);
+      expect(d.paths).toEqual(['/oauth/authorize', '/room/*', '/ui/invite*']);
     });
   });
 });

@@ -18,17 +18,18 @@ export class AppController {
   @Get('.well-known/apple-app-site-association')
   @Header('Content-Type', 'application/json')
   appleAppSiteAssociation() {
+    const paths = ['/oauth/authorize', '/room/*', '/ui/invite*'];
     return {
       applinks: {
         apps: [],
         details: [
           {
             appID: 'MG58MDUNZ2.tirol.taler.talerIdMobile',
-            paths: ['/room/*', '/ui/invite*'],
+            paths,
           },
           {
             appID: 'MG58MDUNZ2.tirol.taler.talerIdMobile.dev',
-            paths: ['/room/*', '/ui/invite*'],
+            paths,
           },
         ],
       },
