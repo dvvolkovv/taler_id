@@ -11,6 +11,18 @@ export interface GrantInfo {
   remembered: boolean;
 }
 
+// oidc-provider's Client.find() wraps PrismaClientAdapter's snake_case payload
+// into a Client instance with camelCase accessors. We only need the subset
+// of metadata that this service touches.
+interface OidcClientMetadata {
+  clientId: string;
+  clientName: string;
+  logoUri?: string;
+  redirectUris: string[];
+  scope: string;
+  tokenEndpointAuthMethod: string;
+}
+
 @Injectable()
 export class OAuthMobileService {
   constructor(
@@ -46,9 +58,11 @@ export class OAuthMobileService {
     client_id: string;
     redirect_uri: string;
     scope: string;
-  }): Promise<any> {
+  }): Promise<OidcClientMetadata> {
     const provider = this.oidc.getProvider();
-    const client = await provider.Client.find(params.client_id);
+    const client = (await provider.Client.find(params.client_id)) as
+      | OidcClientMetadata
+      | undefined;
     if (!client) {
       throw new NotFoundException({ error: 'unknown_client' });
     }
