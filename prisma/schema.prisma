@@ -162,6 +162,19 @@ model OAuthClient {
   @@index([userId])
 }
 
+model OAuthGrant {
+  id        String   @id @default(uuid())
+  userId    String
+  clientId  String
+  scope     String   // space-separated scopes
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, clientId])
+  @@index([userId])
+  @@index([clientId])
+}
+
 model Tenant {
   id                String         @id @default(uuid())
   name              String
