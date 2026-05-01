@@ -12,6 +12,50 @@ export class FcmService {
     this.init();
   }
 
+  /**
+   * Detects FCM "token is stale" errors and nulls the `fcmToken` column for
+   * any user whose token matches the bad value. Wrapped in `.catch(() => {})`
+   * downstream so push fan-out is never blocked by cleanup failures.
+   *
+   * Matches all known forms:
+   *   - 'messaging/registration-token-not-registered'  (current Admin SDK)
+   *   - 'messaging/invalid-registration-token'         (current Admin SDK)
+   *   - 'NotRegistered'                                (legacy FCM HTTP v1 / GCM)
+   *   - 'InvalidRegistration'                          (legacy GCM)
+   */
+  private async handleSendError(token: string | undefined, err: any): Promise<void> {
+    if (!token) return;
+    const code: string | undefined =
+      err?.code ?? err?.errorInfo?.code ?? err?.error?.code;
+    const messageText: string = String(err?.message ?? '');
+    const STALE_CODES = new Set([
+      'messaging/registration-token-not-registered',
+      'messaging/invalid-registration-token',
+      'NotRegistered',
+      'InvalidRegistration',
+    ]);
+    const isStale =
+      (code && STALE_CODES.has(code)) ||
+      // Legacy SDKs sometimes surface the bare string in the message body.
+      messageText.includes('NotRegistered') ||
+      messageText.includes('InvalidRegistration') ||
+      messageText.includes('registration-token-not-registered') ||
+      messageText.includes('invalid-registration-token');
+    if (!isStale) return;
+    this.logger.warn(
+      `FCM token stale (code=${code ?? 'n/a'}) — clearing User.fcmToken matches for token=${token.substring(0, 12)}…`,
+    );
+    try {
+      const result = await this.prisma.user.updateMany({
+        where: { fcmToken: token },
+        data: { fcmToken: null },
+      });
+      this.logger.warn(`FCM token cleanup: cleared fcmToken on ${result.count} user row(s)`);
+    } catch (cleanupErr) {
+      this.logger.error(`FCM token cleanup failed: ${cleanupErr}`);
+    }
+  }
+
   private init() {
     const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
     const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
@@ -99,6 +143,7 @@ export class FcmService {
       });
     } catch (e) {
       this.logger.error('FCM sendCallInvite error:', e);
+      this.handleSendError(fcmToken, e).catch(() => {});
     }
   }
 
@@ -146,6 +191,7 @@ export class FcmService {
       });
     } catch (e) {
       this.logger.error('FCM sendNewMessage error:', e);
+      this.handleSendError(fcmToken, e).catch(() => {});
     }
   }
 
@@ -166,6 +212,7 @@ export class FcmService {
       });
     } catch (e: any) {
       this.logger.error('FCM sendCalendarInvite error:', e);
+      this.handleSendError(fcmToken, e).catch(() => {});
     }
   }
 
@@ -186,6 +233,7 @@ export class FcmService {
       });
     } catch (e: any) {
       this.logger.error('FCM sendCalendarReminder error:', e);
+      this.handleSendError(fcmToken, e).catch(() => {});
     }
   }
 
@@ -201,7 +249,9 @@ export class FcmService {
           headers: { 'apns-push-type': 'background', 'apns-priority': '5' },
         },
       });
-    } catch (e: any) {}
+    } catch (e: any) {
+      this.handleSendError(fcmToken, e).catch(() => {});
+    }
   }
 
   async sendContactRequest(fcmToken: string, fromName: string): Promise<void> {
@@ -241,6 +291,7 @@ export class FcmService {
       });
     } catch (e) {
       this.logger.error('FCM sendContactRequest error:', e);
+      this.handleSendError(fcmToken, e).catch(() => {});
     }
   }
 
@@ -314,6 +365,7 @@ export class FcmService {
       this.logger.error(
         `FCM sendGroupCallInvite error for ${userId}: ${e?.message ?? e}`,
       );
+      this.handleSendError(fcmToken, e).catch(() => {});
     }
   }
 
@@ -344,6 +396,7 @@ export class FcmService {
       });
     } catch (e) {
       this.logger.error('FCM sendCallCancelled error:', e);
+      this.handleSendError(fcmToken, e).catch(() => {});
     }
   }
 }
