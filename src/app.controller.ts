@@ -18,7 +18,7 @@ export class AppController {
   @Get('.well-known/apple-app-site-association')
   @Header('Content-Type', 'application/json')
   appleAppSiteAssociation() {
-    const paths = ['/oauth/authorize', '/room/*', '/ui/invite*'];
+    const paths = ['/oauth/authorize', '/room/*', '/ui/invite*', '/invite*'];
     return {
       applinks: {
         apps: [],
