@@ -1210,13 +1210,21 @@ export class MessengerGateway
       ]);
       clearTimers();
 
-      // Append output files list (existing behaviour preserved)
+      // Mirror Worker-produced files to an nginx-served path so mobile
+      // clients can actually fetch them (Worker's own /files/ is locked
+      // behind an iptables allowlist).
       let content = text;
       if (outputFiles && outputFiles.length > 0) {
-        const fileList = outputFiles
-          .map((f: any) => `📎 [${f.name}](http://5.101.115.184:3033${f.url})`)
-          .join('\n');
-        content += '\n\n' + fileList;
+        const mirrored = await this.aiAnalyst.mirrorOutputFiles(
+          conversationId,
+          outputFiles,
+        );
+        if (mirrored.length > 0) {
+          const fileList = mirrored
+            .map((f) => `📎 [${f.name}](${f.publicUrl})`)
+            .join('\n');
+          content += '\n\n' + fileList;
+        }
       }
 
       const durationMs = Date.now() - started;
