@@ -931,6 +931,7 @@ export class MessengerGateway
       const submitPromise = this.aiAnalyst.submitTask({
         userId, conversationId, messageText,
         fileUrls: fileUrls.length > 0 ? fileUrls : undefined,
+        onHeartbeat: () => armIdle(),
         onTool: (tool, input) => {
           armIdle();
           const lbl = resolveToolLabel(tool, input);

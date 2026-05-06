@@ -50,6 +50,10 @@ export class AiAnalystService {
     fileUrls?: { url: string; name: string }[];
     onChunk: (text: string) => void;
     onTool?: (tool: string, input: string) => void;
+    // Fires on every Worker SSE event (delta, tool, session, heartbeat,
+    // result, done). Lets callers reset idle-timers during quiet phases
+    // like image generation or `claude --resume` JSONL load.
+    onHeartbeat?: () => void;
   }): Promise<{ text: string; outputFiles: any[] }> {
     // Use conversationId as the Claude Worker sessionId so multi-turn
     // context is preserved across messages in the same analyst chat.
@@ -120,6 +124,8 @@ export class AiAnalystService {
 
         try {
           const ev = JSON.parse(jsonStr);
+          // Any well-formed SSE event from Worker = proof of life.
+          input.onHeartbeat?.();
 
           if (ev.type === 'delta' && ev.text) {
             fullText += ev.text;
