@@ -873,11 +873,35 @@ export class MessengerGateway
     fileUrls: { url: string; name: string }[],
   ): Promise<void> {
     const started = Date.now();
-    // Create the timeout promise synchronously (before any await) so fake timers
-    // in tests can advance past it reliably.
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('AI Analyst timeout (180 s)')), 180_000),
-    );
+    // Idle timeout resets on every chunk/tool event from the Worker. Hard cap
+    // bounds total runtime so a wedged session can't hang forever. Created
+    // synchronously (before any await) so fake timers in tests work reliably.
+    const IDLE_TIMEOUT_MS = 180_000;
+    const HARD_TIMEOUT_MS = 15 * 60 * 1000;
+    let timeoutReject: (err: Error) => void = () => {};
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+    let hardTimer: ReturnType<typeof setTimeout> | null = null;
+    const armIdle = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(
+        () => timeoutReject(new Error('AI Analyst idle timeout (180 s)')),
+        IDLE_TIMEOUT_MS,
+      );
+    };
+    const clearTimers = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      if (hardTimer) clearTimeout(hardTimer);
+      idleTimer = null;
+      hardTimer = null;
+    };
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutReject = reject;
+      armIdle();
+      hardTimer = setTimeout(
+        () => reject(new Error('AI Analyst hard timeout (15 min)')),
+        HARD_TIMEOUT_MS,
+      );
+    });
 
     const lang = await this.getUserLang(userId);
     const counts: Record<ToolKind, number> = { search: 0, file: 0, cmd: 0, image: 0, other: 0 };
@@ -908,11 +932,13 @@ export class MessengerGateway
         userId, conversationId, messageText,
         fileUrls: fileUrls.length > 0 ? fileUrls : undefined,
         onTool: (tool, input) => {
+          armIdle();
           const lbl = resolveToolLabel(tool, input);
           counts[lbl.kind]++;
           emitTyping(lbl.emoji, lbl[lang]);
         },
         onChunk: (chunkText) => {
+          armIdle();
           if (!preparingEmitted) {
             emitTyping(PHASE_LABELS.preparing.emoji, PHASE_LABELS.preparing[lang]);
             preparingEmitted = true;
@@ -923,6 +949,7 @@ export class MessengerGateway
         },
       });
       const { text, outputFiles } = await Promise.race([submitPromise, timeoutPromise]);
+      clearTimers();
 
       // Append output files list (existing behaviour preserved)
       let content = text;
@@ -952,6 +979,7 @@ export class MessengerGateway
         conversationId, messageId: botMsg.id, steps, durationMs,
       });
     } catch (e) {
+      clearTimers();
       const err = e as Error;
       this.logger.error(`[AI Analyst] dispatch failed: ${err.message}`);
       emitTyping(PHASE_LABELS.error.emoji, `${PHASE_LABELS.error[lang]}: ${err.message}`);

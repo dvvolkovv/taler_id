@@ -188,4 +188,33 @@ describe('MessengerGateway._dispatchToAnalyst', () => {
     expect(createArgs[2]).toMatch(/timeout|Ошибка|Error/i);
     jest.useRealTimers();
   });
+
+  it('does not idle-timeout while Worker keeps streaming activity', async () => {
+    jest.useFakeTimers();
+    (mockAnalyst.submitTask as jest.Mock).mockImplementation(async (input) => {
+      // Stream a chunk every 60s for 6 minutes — total runtime exceeds the
+      // legacy 180s wall clock but the idle timer must reset on each chunk
+      // so the task completes successfully.
+      for (let i = 0; i < 6; i++) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 60_000));
+        input.onChunk(`chunk-${i}`);
+      }
+      return { text: 'done', outputFiles: [] };
+    });
+    const p = (gateway as any)._dispatchToAnalyst('user-1', 'conv-1', 'hi', []);
+    for (let i = 0; i < 7; i++) {
+      await Promise.resolve();
+      jest.advanceTimersByTime(60_000);
+      await Promise.resolve();
+    }
+    await p;
+    const errorTyping = emitted.find(
+      (e) => e.event === 'typing' && e.data.typingText?.includes('❌'),
+    );
+    expect(errorTyping).toBeUndefined();
+    const successCall = (mockMessenger.createMessage as jest.Mock).mock.calls[0];
+    expect(successCall[2]).toBe('done');
+    expect(successCall[5]).toBe(true);
+    jest.useRealTimers();
+  });
 });
