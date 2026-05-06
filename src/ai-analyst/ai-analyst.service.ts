@@ -2,11 +2,23 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { v4 as uuidv4 } from 'uuid';
+import * as fs from 'fs';
+import * as path from 'path';
 
 // The Claude Worker is already deployed at 5.101.115.184:3033 as "file-agent".
 // It accepts POST /chat with {message, sessionId} + optional files, returns SSE.
 const CLAUDE_WORKER_URL =
   process.env.CLAUDE_WORKER_URL || 'http://5.101.115.184:3033';
+
+// Where Worker-produced output files are mirrored so mobile clients can fetch
+// them. The Worker's own static `/files/...` is locked behind an iptables
+// allowlist (PROD/DEV only) — phones cannot reach it. We copy files into an
+// nginx-served path on the API host so the chat link actually works.
+const ANALYST_FILES_DIR =
+  process.env.ANALYST_FILES_DIR || '/var/www/recordings/ai-analyst';
+const ANALYST_FILES_PUBLIC_BASE =
+  process.env.ANALYST_FILES_PUBLIC_BASE ||
+  'https://id.taler.tirol/recordings/ai-analyst';
 
 @Injectable()
 export class AiAnalystService {
@@ -150,6 +162,66 @@ export class AiAnalystService {
     }
 
     return { text: fullText, outputFiles };
+  }
+
+  // ── Mirror output files to a public-served path ────────────────
+
+  /**
+   * Downloads each Worker-produced output file via HTTP (PROD/DEV are the
+   * only IPs allowed through the Worker's iptables) and writes it under
+   * `ANALYST_FILES_DIR/<conversationId>/<rel>`. Returns entries with a
+   * publicly reachable URL the mobile client can open.
+   *
+   * Worker `outputFiles[i].url` looks like `/files/<sessionId>/<rel>`. We
+   * preserve the `<rel>` sub-path so files saved into nested directories on
+   * the Worker keep their structure.
+   */
+  async mirrorOutputFiles(
+    conversationId: string,
+    outputFiles: Array<{ name: string; url: string; size?: number }>,
+  ): Promise<Array<{ name: string; publicUrl: string; size?: number }>> {
+    if (!outputFiles || outputFiles.length === 0) return [];
+
+    const targetDir = path.join(ANALYST_FILES_DIR, conversationId);
+    try {
+      await fs.promises.mkdir(targetDir, { recursive: true });
+    } catch (e) {
+      this.logger.error(
+        `mirrorOutputFiles: mkdir ${targetDir} failed: ${(e as Error).message}`,
+      );
+      return [];
+    }
+
+    const out: Array<{ name: string; publicUrl: string; size?: number }> = [];
+    for (const f of outputFiles) {
+      // f.url is the relative path on Worker, e.g. /files/<sid>/dir/file.pptx
+      // f.name is the rel sub-path under outDir, e.g. dir/file.pptx
+      const sourceUrl = `${CLAUDE_WORKER_URL}${f.url}`;
+      const targetPath = path.join(targetDir, f.name);
+
+      try {
+        await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
+        const resp = await fetch(sourceUrl);
+        if (!resp.ok) {
+          this.logger.warn(
+            `mirrorOutputFiles: GET ${sourceUrl} -> ${resp.status}, skipping`,
+          );
+          continue;
+        }
+        const buf = Buffer.from(await resp.arrayBuffer());
+        await fs.promises.writeFile(targetPath, buf);
+        const publicUrl = `${ANALYST_FILES_PUBLIC_BASE}/${conversationId}/${f.name
+          .split('/')
+          .map(encodeURIComponent)
+          .join('/')}`;
+        out.push({ name: f.name, publicUrl, size: f.size });
+      } catch (e) {
+        this.logger.warn(
+          `mirrorOutputFiles: failed to mirror ${f.name}: ${(e as Error).message}`,
+        );
+      }
+    }
+    return out;
   }
 
   // ── Get latest analyst response for voice assistant ─────────────
