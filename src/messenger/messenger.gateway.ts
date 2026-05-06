@@ -1182,6 +1182,7 @@ export class MessengerGateway
         conversationId,
         messageText,
         fileUrls: fileUrls.length > 0 ? fileUrls : undefined,
+        onHeartbeat: () => armIdle(),
         onTool: (tool, input) => {
           armIdle();
           const lbl = resolveToolLabel(tool, input);

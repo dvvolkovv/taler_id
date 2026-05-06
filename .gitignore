@@ -47,3 +47,5 @@ create_admin.js
 
 # Worktrees (isolated feature branches)
 .worktrees/
+
+.superpowers/
