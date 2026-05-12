@@ -40,6 +40,8 @@ public/mobile/
 
 # Backup files
 *.backup
+*.bak
+*.bak.*
 prisma/schema.prisma.bak
 
 # Scripts
