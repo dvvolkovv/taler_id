@@ -1,4 +1,5 @@
 import { Injectable, ForbiddenException, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { FileStorageService } from '../common/file-storage.service';
 
@@ -416,11 +417,17 @@ export class MessengerService {
     if (sepIdx === -1) {
       throw new Error('Invalid sync cursor format');
     }
-    const cursorTs = new Date(cursor.slice(0, sepIdx));
+    const cursorTsStr = cursor.slice(0, sepIdx);
+    const cursorTsDate = new Date(cursorTsStr);
     const cursorId = cursor.slice(sepIdx + 1);
-    if (Number.isNaN(cursorTs.getTime())) {
+    if (Number.isNaN(cursorTsDate.getTime())) {
       throw new Error('Invalid sync cursor timestamp');
     }
+    // Re-format as a safe ISO string (no user-supplied characters in the SQL literal).
+    // sentAt is stored as "timestamp without time zone"; stripping the trailing Z keeps
+    // the comparison in the same naive-timestamp domain and avoids Prisma serializing
+    // the Date as a timestamptz wire type which breaks the PostgreSQL row comparison.
+    const safeCursorTs = cursorTsDate.toISOString().replace('Z', '');
 
     const rows: any[] = await this.prisma.$queryRaw`
       SELECT
@@ -466,7 +473,8 @@ export class MessengerService {
           SELECT 1 FROM "MessageHidden" h
           WHERE h."messageId" = m.id AND h."userId" = ${userId}
         )
-        AND (m."sentAt", m.id) > (${cursorTs}::timestamp, ${cursorId}::text)
+        AND (m."sentAt" > ${Prisma.raw(`'${safeCursorTs}'::timestamp`)}
+          OR (m."sentAt" = ${Prisma.raw(`'${safeCursorTs}'::timestamp`)} AND m.id > ${cursorId}))
       ORDER BY m."sentAt" ASC, m.id ASC
       LIMIT ${cap + 1}
     `;
