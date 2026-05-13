@@ -57,3 +57,67 @@ describe('NotesService.create', () => {
     expect(prisma.note.create).not.toHaveBeenCalled();
   });
 });
+
+describe('NotesService.update', () => {
+  let service: NotesService;
+  let prisma: { note: { findUnique: jest.Mock; update: jest.Mock } };
+
+  beforeEach(async () => {
+    prisma = {
+      note: {
+        findUnique: jest.fn(),
+        update: jest.fn(),
+      },
+    };
+    const mod = await Test.createTestingModule({
+      providers: [
+        NotesService,
+        { provide: PrismaService, useValue: prisma },
+      ],
+    }).compile();
+    service = mod.get(NotesService);
+  });
+
+  it('without expectedUpdatedAt: applies update (LWW, back-compat)', async () => {
+    const now = new Date('2026-05-13T10:00:00Z');
+    prisma.note.findUnique.mockResolvedValue({ id: 'n1', userId: 'u1', updatedAt: now });
+    prisma.note.update.mockResolvedValue({ id: 'n1', userId: 'u1', title: 'new' });
+    const out = await service.update('u1', 'n1', { title: 'new' });
+    expect(prisma.note.update).toHaveBeenCalledWith({ where: { id: 'n1' }, data: { title: 'new' } });
+    expect(out.title).toBe('new');
+  });
+
+  it('with matching expectedUpdatedAt: applies update', async () => {
+    const now = new Date('2026-05-13T10:00:00Z');
+    prisma.note.findUnique.mockResolvedValue({ id: 'n1', userId: 'u1', updatedAt: now });
+    prisma.note.update.mockResolvedValue({ id: 'n1', userId: 'u1', title: 'new' });
+    const out = await service.update('u1', 'n1', { title: 'new', expectedUpdatedAt: now.toISOString() });
+    expect(prisma.note.update).toHaveBeenCalled();
+    expect(out.title).toBe('new');
+  });
+
+  it('with stale expectedUpdatedAt: throws ConflictException with currentNote in payload', async () => {
+    const dbTime = new Date('2026-05-13T10:05:00Z');
+    const clientThought = new Date('2026-05-13T10:00:00Z').toISOString();
+    const current = { id: 'n1', userId: 'u1', updatedAt: dbTime, title: 'on server' };
+    prisma.note.findUnique.mockResolvedValue(current);
+    let thrown: any;
+    try {
+      await service.update('u1', 'n1', { title: 'mine', expectedUpdatedAt: clientThought });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(ConflictException);
+    const response = (thrown as ConflictException).getResponse() as any;
+    expect(response.currentNote).toEqual(current);
+    expect(prisma.note.update).not.toHaveBeenCalled();
+  });
+
+  it('with bogus expectedUpdatedAt string: throws ConflictException (treated as stale)', async () => {
+    const dbTime = new Date('2026-05-13T10:05:00Z');
+    prisma.note.findUnique.mockResolvedValue({ id: 'n1', userId: 'u1', updatedAt: dbTime });
+    await expect(
+      service.update('u1', 'n1', { title: 'mine', expectedUpdatedAt: 'not-a-date' }),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+});

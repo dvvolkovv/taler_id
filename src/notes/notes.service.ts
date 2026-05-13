@@ -50,11 +50,28 @@ export class NotesService {
     });
   }
 
-  async update(userId: string, id: string, data: { title?: string; content?: string }) {
+  async update(
+    userId: string,
+    id: string,
+    data: { title?: string; content?: string; expectedUpdatedAt?: string },
+  ) {
     const note = await this.prisma.note.findUnique({ where: { id } });
     if (!note) throw new NotFoundException('Note not found');
     if (note.userId !== userId) throw new ForbiddenException();
-    return this.prisma.note.update({ where: { id }, data });
+    if (data.expectedUpdatedAt !== undefined) {
+      const expected = new Date(data.expectedUpdatedAt);
+      const sameMs =
+        !Number.isNaN(expected.getTime()) &&
+        expected.getTime() === note.updatedAt.getTime();
+      if (!sameMs) {
+        throw new ConflictException({
+          message: 'Note updated elsewhere',
+          currentNote: note,
+        });
+      }
+    }
+    const { expectedUpdatedAt: _ignored, ...patch } = data;
+    return this.prisma.note.update({ where: { id }, data: patch });
   }
 
   async remove(userId: string, id: string) {
