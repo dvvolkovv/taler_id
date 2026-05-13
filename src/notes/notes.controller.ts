@@ -19,12 +19,19 @@ export class NotesController {
   }
 
   @Post()
-  create(@CurrentUser() user: any, @Body() body: { title: string; content: string; source?: string }) {
+  create(
+    @CurrentUser() user: any,
+    @Body() body: { id?: string; title: string; content: string; source?: string },
+  ) {
     return this.service.create(user.sub, body);
   }
 
   @Patch(':id')
-  update(@CurrentUser() user: any, @Param('id') id: string, @Body() body: { title?: string; content?: string }) {
+  update(
+    @CurrentUser() user: any,
+    @Param('id') id: string,
+    @Body() body: { title?: string; content?: string; expectedUpdatedAt?: string },
+  ) {
     return this.service.update(user.sub, id, body);
   }
 
