@@ -19,7 +19,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const status = exception.getStatus();
     const exceptionResponse = exception.getResponse();
 
-    const errorBody = {
+    const baseBody = {
       statusCode: status,
       timestamp: new Date().toISOString(),
       path: request.url,
@@ -32,6 +32,18 @@ export class HttpExceptionFilter implements ExceptionFilter {
           ? (exceptionResponse as any).error
           : undefined,
     };
+    // Preserve any additional fields on the exception response object so callers
+    // can attach domain context (e.g. ConflictException with a `currentNote`
+    // payload for optimistic-concurrency clients). The base keys above always win.
+    const extras =
+      typeof exceptionResponse === 'object' && exceptionResponse !== null
+        ? Object.fromEntries(
+            Object.entries(exceptionResponse).filter(
+              ([k]) => !['statusCode', 'message', 'error'].includes(k),
+            ),
+          )
+        : {};
+    const errorBody = { ...extras, ...baseBody };
 
     if (status >= 500) {
       this.logger.error(`${request.method} ${request.url} → ${status}`, exception.stack);
