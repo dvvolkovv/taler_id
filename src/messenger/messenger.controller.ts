@@ -113,6 +113,16 @@ export class MessengerController {
     return this.service.getConversations(user.sub);
   }
 
+  @Get('sync')
+  sync(
+    @Query('cursor') cursor: string | undefined,
+    @Query('limit') limit: string | undefined,
+    @CurrentUser() user: any,
+  ) {
+    const parsedLimit = limit ? Math.min(Math.max(parseInt(limit, 10) || 200, 1), 500) : 200;
+    return this.service.sync(user.sub, cursor || undefined, parsedLimit);
+  }
+
   @Get('conversations/:id/messages')
   messages(
     @Param('id') id: string,
