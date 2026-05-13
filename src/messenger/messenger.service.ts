@@ -466,7 +466,7 @@ export class MessengerService {
           SELECT 1 FROM "MessageHidden" h
           WHERE h."messageId" = m.id AND h."userId" = ${userId}
         )
-        AND (m."sentAt", m.id) > (${cursorTs}::timestamptz, ${cursorId}::text)
+        AND (m."sentAt", m.id) > (${cursorTs}::timestamp, ${cursorId}::text)
       ORDER BY m."sentAt" ASC, m.id ASC
       LIMIT ${cap + 1}
     `;
