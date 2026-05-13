@@ -5,6 +5,7 @@ import {
   BadRequestException,
   Logger,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { FileStorageService } from '../common/file-storage.service';
 
@@ -537,6 +538,125 @@ export class MessengerService {
       messages: enriched,
       nextCursor: hasMore ? sliced[limit - 1].id : undefined,
     };
+  }
+
+  async sync(
+    userId: string,
+    cursor?: string,
+    limit = 200,
+  ): Promise<{
+    messages: any[];
+    nextCursor: string | null;
+    hasMore: boolean;
+  }> {
+    const cap = Math.min(Math.max(limit, 1), 500);
+
+    if (!cursor) {
+      const last = await this.prisma.message.findFirst({
+        where: {
+          deletedAt: null,
+          conversation: {
+            participants: { some: { userId } },
+          },
+          NOT: { hiddenFor: { some: { userId } } },
+        },
+        orderBy: [{ sentAt: 'desc' }, { id: 'desc' }],
+        select: { id: true, sentAt: true },
+      });
+      const nextCursor = last
+        ? `${last.sentAt.toISOString()}|${last.id}`
+        : `${new Date().toISOString()}|`;
+      return { messages: [], nextCursor, hasMore: false };
+    }
+
+    const sepIdx = cursor.indexOf('|');
+    if (sepIdx === -1) {
+      throw new Error('Invalid sync cursor format');
+    }
+    const cursorTsStr = cursor.slice(0, sepIdx);
+    const cursorTsDate = new Date(cursorTsStr);
+    const cursorId = cursor.slice(sepIdx + 1);
+    if (Number.isNaN(cursorTsDate.getTime())) {
+      throw new Error('Invalid sync cursor timestamp');
+    }
+    // Re-format as a safe ISO string (no user-supplied characters in the SQL literal).
+    // sentAt is stored as "timestamp without time zone"; stripping the trailing Z keeps
+    // the comparison in the same naive-timestamp domain and avoids Prisma serializing
+    // the Date as a timestamptz wire type which breaks the PostgreSQL row comparison.
+    const safeCursorTs = cursorTsDate.toISOString().replace('Z', '');
+
+    const rows: any[] = await this.prisma.$queryRaw`
+      SELECT
+        m.id,
+        m."conversationId",
+        m."senderId",
+        m.content,
+        m."sentAt",
+        m."isSystem",
+        m."isEdited",
+        m."isDelivered",
+        m."isRead",
+        m."editedAt",
+        m."fileUrl",
+        m."fileName",
+        m."fileSize",
+        m."fileType",
+        m."s3Key",
+        m."thumbnailSmallUrl",
+        m."thumbnailMediumUrl",
+        m."thumbnailLargeUrl",
+        m."fileRecordId",
+        m."threadParentId",
+        m."topicId",
+        m.metadata,
+        u.username AS "senderUsername",
+        p."firstName" AS "senderFirstName",
+        p."lastName" AS "senderLastName",
+        COALESCE(
+          (
+            SELECT json_agg(json_build_object('userId', r."userId", 'emoji', r.emoji))
+            FROM "MessageReaction" r WHERE r."messageId" = m.id
+          ),
+          '[]'::json
+        ) AS reactions
+      FROM "Message" m
+      JOIN "ConversationParticipant" cp
+        ON cp."conversationId" = m."conversationId" AND cp."userId" = ${userId}
+      LEFT JOIN "User" u ON u.id = m."senderId"
+      LEFT JOIN "Profile" p ON p."userId" = u.id
+      WHERE m."deletedAt" IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM "MessageHidden" h
+          WHERE h."messageId" = m.id AND h."userId" = ${userId}
+        )
+        AND (m."sentAt" > ${Prisma.raw(`'${safeCursorTs}'::timestamp`)}
+          OR (m."sentAt" = ${Prisma.raw(`'${safeCursorTs}'::timestamp`)} AND m.id > ${cursorId}))
+      ORDER BY m."sentAt" ASC, m.id ASC
+      LIMIT ${cap + 1}
+    `;
+
+    const hasMore = rows.length > cap;
+    const sliced = hasMore ? rows.slice(0, cap) : rows;
+    const enriched = sliced.map((r: any) => {
+      const firstLast =
+        [r.senderFirstName, r.senderLastName].filter(Boolean).join(' ').trim() ||
+        null;
+      const senderName = firstLast ?? r.senderUsername ?? null;
+      const {
+        senderUsername,
+        senderFirstName,
+        senderLastName,
+        ...rest
+      } = r;
+      return { ...rest, senderName, reactions: r.reactions ?? [] };
+    });
+
+    const last = sliced[sliced.length - 1];
+    const nextCursor = last
+      ? `${(last.sentAt instanceof Date ? last.sentAt : new Date(last.sentAt)).toISOString()}|${last.id}`
+      : cursor;
+
+    return { messages: enriched, nextCursor, hasMore };
   }
 
   async getSharedMedia(
