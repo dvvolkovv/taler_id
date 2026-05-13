@@ -383,6 +383,115 @@ export class MessengerService {
     };
   }
 
+  async sync(
+    userId: string,
+    cursor?: string,
+    limit = 200,
+  ): Promise<{
+    messages: any[];
+    nextCursor: string | null;
+    hasMore: boolean;
+  }> {
+    const cap = Math.min(Math.max(limit, 1), 500);
+
+    if (!cursor) {
+      const last = await this.prisma.message.findFirst({
+        where: {
+          deletedAt: null,
+          conversation: {
+            participants: { some: { userId } },
+          },
+          NOT: { hiddenFor: { some: { userId } } },
+        },
+        orderBy: [{ sentAt: 'desc' }, { id: 'desc' }],
+        select: { id: true, sentAt: true },
+      });
+      const nextCursor = last
+        ? `${last.sentAt.toISOString()}|${last.id}`
+        : `${new Date().toISOString()}|`;
+      return { messages: [], nextCursor, hasMore: false };
+    }
+
+    const sepIdx = cursor.indexOf('|');
+    if (sepIdx === -1) {
+      throw new Error('Invalid sync cursor format');
+    }
+    const cursorTs = new Date(cursor.slice(0, sepIdx));
+    const cursorId = cursor.slice(sepIdx + 1);
+    if (Number.isNaN(cursorTs.getTime())) {
+      throw new Error('Invalid sync cursor timestamp');
+    }
+
+    const rows: any[] = await this.prisma.$queryRaw`
+      SELECT
+        m.id,
+        m."conversationId",
+        m."senderId",
+        m.content,
+        m."sentAt",
+        m."isSystem",
+        m."isEdited",
+        m."isDelivered",
+        m."isRead",
+        m."replyToId",
+        m."fileUrl",
+        m."fileName",
+        m."fileSize",
+        m."fileType",
+        m."thumbnailSmallUrl",
+        m."thumbnailMediumUrl",
+        m."thumbnailLargeUrl",
+        m."clientTempId",
+        m."topicId",
+        u.username AS "senderUsername",
+        p."firstName" AS "senderFirstName",
+        p."lastName" AS "senderLastName",
+        COALESCE(
+          (
+            SELECT json_agg(json_build_object('userId', r."userId", 'emoji', r.emoji))
+            FROM "MessageReaction" r WHERE r."messageId" = m.id
+          ),
+          '[]'::json
+        ) AS reactions
+      FROM "Message" m
+      JOIN "ConversationParticipant" cp
+        ON cp."conversationId" = m."conversationId" AND cp."userId" = ${userId}
+      LEFT JOIN "User" u ON u.id = m."senderId"
+      LEFT JOIN "Profile" p ON p."userId" = u.id
+      WHERE m."deletedAt" IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM "MessageHidden" h
+          WHERE h."messageId" = m.id AND h."userId" = ${userId}
+        )
+        AND (m."sentAt", m.id) > (${cursorTs}::timestamptz, ${cursorId}::text)
+      ORDER BY m."sentAt" ASC, m.id ASC
+      LIMIT ${cap + 1}
+    `;
+
+    const hasMore = rows.length > cap;
+    const sliced = hasMore ? rows.slice(0, cap) : rows;
+    const enriched = sliced.map((r: any) => {
+      const firstLast =
+        [r.senderFirstName, r.senderLastName].filter(Boolean).join(' ').trim() ||
+        null;
+      const senderName = firstLast ?? r.senderUsername ?? null;
+      const {
+        senderUsername,
+        senderFirstName,
+        senderLastName,
+        ...rest
+      } = r;
+      return { ...rest, senderName, reactions: r.reactions ?? [] };
+    });
+
+    const last = sliced[sliced.length - 1];
+    const nextCursor = last
+      ? `${(last.sentAt instanceof Date ? last.sentAt : new Date(last.sentAt)).toISOString()}|${last.id}`
+      : cursor;
+
+    return { messages: enriched, nextCursor, hasMore };
+  }
+
   async getSharedMedia(conversationId: string, userId: string, type?: string, cursor?: string, limit = 50) {
     await this.assertParticipant(conversationId, userId);
     const fileTypes = type === 'documents'
