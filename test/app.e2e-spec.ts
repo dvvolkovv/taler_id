@@ -21,9 +21,7 @@ describe('AppController (e2e)', () => {
   });
 
   it('/ (GET) redirects to UI', () => {
-    return request(app.getHttpServer())
-      .get('/')
-      .expect(302);
+    return request(app.getHttpServer()).get('/').expect(302);
   });
 
   it('/health (GET) returns ok', () => {

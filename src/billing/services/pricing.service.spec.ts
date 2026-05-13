@@ -16,10 +16,7 @@ describe('PricingService', () => {
     };
 
     const moduleRef = await Test.createTestingModule({
-      providers: [
-        PricingService,
-        { provide: PrismaService, useValue: prisma },
-      ],
+      providers: [PricingService, { provide: PrismaService, useValue: prisma }],
     }).compile();
 
     service = moduleRef.get(PricingService);
@@ -65,7 +62,9 @@ describe('PricingService', () => {
     prisma.aiPricebook.findUnique.mockResolvedValue(null);
     prisma.billingConfig.findUnique.mockResolvedValue({ talUsdRate: '11700' });
 
-    await expect(service.calculatePlanckCost('nope', 1)).rejects.toThrow(/unknown feature/i);
+    await expect(service.calculatePlanckCost('nope', 1)).rejects.toThrow(
+      /unknown feature/i,
+    );
   });
 
   it('caches pricebook rows for 60 seconds', async () => {
@@ -89,7 +88,9 @@ describe('PricingService', () => {
       minReservePlanck: 26000000n,
     } as any);
 
-    expect(await service.getMinReservePlanck('voice_assistant')).toBe(26000000n);
+    expect(await service.getMinReservePlanck('voice_assistant')).toBe(
+      26000000n,
+    );
   });
 
   it('returns 0n for units=0', async () => {

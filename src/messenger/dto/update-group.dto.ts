@@ -1,4 +1,10 @@
-import { IsString, IsOptional, IsBoolean, IsNumber, IsIn } from "class-validator";
+import {
+  IsString,
+  IsOptional,
+  IsBoolean,
+  IsNumber,
+  IsIn,
+} from 'class-validator';
 
 export class UpdateGroupDto {
   @IsString()

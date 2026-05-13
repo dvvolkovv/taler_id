@@ -20,7 +20,9 @@ describe('Blockchain KYC flow (E2E)', () => {
   let authToken: string;
   let userId: string;
 
-  const mockAttestVerification = jest.fn().mockResolvedValue({ txHash: '0xdeadbeef' });
+  const mockAttestVerification = jest
+    .fn()
+    .mockResolvedValue({ txHash: '0xdeadbeef' });
   const mockGetOnChain = jest.fn().mockResolvedValue({
     kycStatus: 2,
     kycTimestamp: 1734567890,
@@ -49,7 +51,9 @@ describe('Blockchain KYC flow (E2E)', () => {
       .compile();
 
     app = moduleFixture.createNestApplication();
-    app.useGlobalPipes(new (require('@nestjs/common').ValidationPipe)({ whitelist: true }));
+    app.useGlobalPipes(
+      new (require('@nestjs/common').ValidationPipe)({ whitelist: true }),
+    );
     await app.init();
 
     prisma = app.get(PrismaService);
@@ -99,7 +103,10 @@ describe('Blockchain KYC flow (E2E)', () => {
 
     // Calculate Sumsub HMAC signature
     const secretKey = process.env.SUMSUB_SECRET_KEY || '';
-    const sig = crypto.createHmac('sha256', secretKey).update(webhookBody).digest('hex');
+    const sig = crypto
+      .createHmac('sha256', secretKey)
+      .update(webhookBody)
+      .digest('hex');
 
     const res = await request(app.getHttpServer())
       .post('/kyc/webhook')
@@ -124,8 +131,9 @@ describe('Blockchain KYC flow (E2E)', () => {
   });
 
   it('Step 5: GET /kyc/on-chain/:userId returns mocked on-chain record', async () => {
-    const res = await request(app.getHttpServer())
-      .get('/kyc/on-chain/' + userId);
+    const res = await request(app.getHttpServer()).get(
+      '/kyc/on-chain/' + userId,
+    );
 
     expect(res.status).toBe(200);
     expect(res.body.talerId).toBe(userId);

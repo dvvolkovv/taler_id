@@ -27,7 +27,9 @@ describe('ai-analyst-labels', () => {
 
   describe('refineBashLabel', () => {
     it('recognises generate_image.sh as image', () => {
-      const lbl = refineBashLabel('bash /home/dv/agent-env/bin/generate_image.sh --prompt "cat"');
+      const lbl = refineBashLabel(
+        'bash /home/dv/agent-env/bin/generate_image.sh --prompt "cat"',
+      );
       expect(lbl).not.toBeNull();
       expect(lbl!.kind).toBe('image');
       expect(lbl!.emoji).toBe('🎨');

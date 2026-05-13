@@ -1,4 +1,9 @@
-import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'crypto';
+import {
+  createCipheriv,
+  createDecipheriv,
+  randomBytes,
+  scryptSync,
+} from 'crypto';
 
 const ALG = 'aes-256-gcm';
 const IV_LEN = 12;
@@ -39,7 +44,10 @@ export function decrypt(ciphertextB64: string, secret: string): string {
   }
   const version = buf[0];
   const salt = buf.subarray(VERSION_LEN, VERSION_LEN + SALT_LEN);
-  const iv = buf.subarray(VERSION_LEN + SALT_LEN, VERSION_LEN + SALT_LEN + IV_LEN);
+  const iv = buf.subarray(
+    VERSION_LEN + SALT_LEN,
+    VERSION_LEN + SALT_LEN + IV_LEN,
+  );
   const tag = buf.subarray(
     VERSION_LEN + SALT_LEN + IV_LEN,
     VERSION_LEN + SALT_LEN + IV_LEN + TAG_LEN,

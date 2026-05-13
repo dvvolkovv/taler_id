@@ -35,16 +35,26 @@ export class VideoTranscodeService {
       // Probe codec and determine transcoding strategy
       let codec = '';
       try {
-        const { stdout } = await execFileAsync('ffprobe', [
-          '-v', 'quiet',
-          '-select_streams', 'v:0',
-          '-show_entries', 'stream=codec_name',
-          '-of', 'csv=p=0',
-          inputPath,
-        ], { timeout: 10000 });
+        const { stdout } = await execFileAsync(
+          'ffprobe',
+          [
+            '-v',
+            'quiet',
+            '-select_streams',
+            'v:0',
+            '-show_entries',
+            'stream=codec_name',
+            '-of',
+            'csv=p=0',
+            inputPath,
+          ],
+          { timeout: 10000 },
+        );
         codec = stdout.trim().replace(/[,\s]+$/, '');
       } catch {
-        this.logger.warn(`[transcode] ffprobe failed for ${s3Key}, attempting full transcode`);
+        this.logger.warn(
+          `[transcode] ffprobe failed for ${s3Key}, attempting full transcode`,
+        );
       }
 
       const isAlreadyMp4 = s3Key.toLowerCase().endsWith('.mp4');
@@ -56,32 +66,58 @@ export class VideoTranscodeService {
 
       if (codec === 'h264') {
         // Already H.264 but in MOV container: remux (fast, no re-encode) + normalize audio
-        this.logger.log(`[transcode] ${s3Key} H.264 in MOV, remuxing to MP4 + loudnorm`);
-        await execFileAsync('ffmpeg', [
-          '-i', inputPath,
-          '-c:v', 'copy',
-          '-c:a', 'aac',
-          '-b:a', '128k',
-          '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11',
-          '-movflags', '+faststart',
-          '-y',
-          outputPath,
-        ], { timeout: 300000 });
+        this.logger.log(
+          `[transcode] ${s3Key} H.264 in MOV, remuxing to MP4 + loudnorm`,
+        );
+        await execFileAsync(
+          'ffmpeg',
+          [
+            '-i',
+            inputPath,
+            '-c:v',
+            'copy',
+            '-c:a',
+            'aac',
+            '-b:a',
+            '128k',
+            '-af',
+            'loudnorm=I=-16:TP=-1.5:LRA=11',
+            '-movflags',
+            '+faststart',
+            '-y',
+            outputPath,
+          ],
+          { timeout: 300000 },
+        );
       } else {
         // Full transcode: re-encode video + audio
-        this.logger.log(`[transcode] ${s3Key} codec=${codec}, full transcode to H.264`);
-        await execFileAsync('ffmpeg', [
-          '-i', inputPath,
-          '-c:v', 'libx264',
-          '-preset', 'medium',
-          '-crf', '23',
-          '-c:a', 'aac',
-          '-b:a', '128k',
-          '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11',
-          '-movflags', '+faststart',
-          '-y',
-          outputPath,
-        ], { timeout: 600000 });
+        this.logger.log(
+          `[transcode] ${s3Key} codec=${codec}, full transcode to H.264`,
+        );
+        await execFileAsync(
+          'ffmpeg',
+          [
+            '-i',
+            inputPath,
+            '-c:v',
+            'libx264',
+            '-preset',
+            'medium',
+            '-crf',
+            '23',
+            '-c:a',
+            'aac',
+            '-b:a',
+            '128k',
+            '-af',
+            'loudnorm=I=-16:TP=-1.5:LRA=11',
+            '-movflags',
+            '+faststart',
+            '-y',
+            outputPath,
+          ],
+          { timeout: 600000 },
+        );
       }
 
       if (!fs.existsSync(outputPath)) {
@@ -94,15 +130,21 @@ export class VideoTranscodeService {
 
       // Replace original in S3
       await this.fileStorage.upload(s3Key, outputData, 'video/mp4');
-      this.logger.log(`[transcode] ${s3Key} done: ${inputData.length} → ${newSize} bytes`);
+      this.logger.log(
+        `[transcode] ${s3Key} done: ${inputData.length} → ${newSize} bytes`,
+      );
 
       return { size: newSize };
     } catch (e) {
       this.logger.error(`[transcode] Failed for ${s3Key}:`, e);
       return null;
     } finally {
-      try { fs.unlinkSync(inputPath); } catch {}
-      try { fs.unlinkSync(outputPath); } catch {}
+      try {
+        fs.unlinkSync(inputPath);
+      } catch {}
+      try {
+        fs.unlinkSync(outputPath);
+      } catch {}
     }
   }
 }

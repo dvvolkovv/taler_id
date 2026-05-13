@@ -7,7 +7,10 @@ import { InsufficientFundsException } from '../exceptions/insufficient-funds.exc
 import { FeatureDisabledException } from '../exceptions/feature-disabled.exception';
 import { WalletService } from '../../blockchain/wallet.service';
 
-export type SessionTerminationReason = 'completed' | 'terminated_no_funds' | 'failed';
+export type SessionTerminationReason =
+  | 'completed'
+  | 'terminated_no_funds'
+  | 'failed';
 
 @Injectable()
 export class GatingService {
@@ -40,7 +43,9 @@ export class GatingService {
 
     if (!toggleEnabled) {
       if (enforced) throw new FeatureDisabledException(featureKey);
-      this.log.warn(`[dry-run] feature ${featureKey} disabled for ${userId} — would block`);
+      this.log.warn(
+        `[dry-run] feature ${featureKey} disabled for ${userId} — would block`,
+      );
     }
 
     const minReserve = await this.pricing.getMinReservePlanck(featureKey);
@@ -72,13 +77,18 @@ export class GatingService {
         featureKey,
       });
     } catch (err) {
-      this.log.warn(`emitToUser ai_session_started failed for ${userId}: ${String(err)}`);
+      this.log.warn(
+        `emitToUser ai_session_started failed for ${userId}: ${String(err)}`,
+      );
     }
 
     return session;
   }
 
-  async endSession(sessionId: string, reason: SessionTerminationReason): Promise<void> {
+  async endSession(
+    sessionId: string,
+    reason: SessionTerminationReason,
+  ): Promise<void> {
     const session = await this.prisma.aiSession.update({
       where: { id: sessionId },
       data: { status: reason, endedAt: new Date() },

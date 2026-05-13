@@ -1,13 +1,21 @@
-import { ArgumentsHost, Catch, ExceptionFilter, HttpStatus } from '@nestjs/common';
+import {
+  ArgumentsHost,
+  Catch,
+  ExceptionFilter,
+  HttpStatus,
+} from '@nestjs/common';
 import type { Response } from 'express';
 import { InsufficientFundsException } from '../exceptions/insufficient-funds.exception';
 import { FeatureDisabledException } from '../exceptions/feature-disabled.exception';
 
 @Catch(InsufficientFundsException, FeatureDisabledException)
-export class BillingExceptionFilter
-  implements ExceptionFilter<InsufficientFundsException | FeatureDisabledException>
-{
-  catch(exception: InsufficientFundsException | FeatureDisabledException, host: ArgumentsHost) {
+export class BillingExceptionFilter implements ExceptionFilter<
+  InsufficientFundsException | FeatureDisabledException
+> {
+  catch(
+    exception: InsufficientFundsException | FeatureDisabledException,
+    host: ArgumentsHost,
+  ) {
     const res = host.switchToHttp().getResponse<Response>();
 
     if (exception instanceof InsufficientFundsException) {

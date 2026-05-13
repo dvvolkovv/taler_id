@@ -24,12 +24,13 @@ export class BlockchainController {
         kybStatus: result.kybStatus,
         isActive: result.isActive,
       },
-      statusLabel: {
-        0: 'None',
-        1: 'Pending',
-        2: 'Verified',
-        3: 'Rejected',
-      }[result.kycStatus] ?? 'Unknown',
+      statusLabel:
+        {
+          0: 'None',
+          1: 'Pending',
+          2: 'Verified',
+          3: 'Rejected',
+        }[result.kycStatus] ?? 'Unknown',
     };
   }
 }

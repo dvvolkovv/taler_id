@@ -1,28 +1,36 @@
 import {
-
   Injectable,
   NotFoundException,
   BadRequestException,
   ConflictException,
-} from "@nestjs/common";
-import { PrismaService } from "../prisma/prisma.service";
-import { FileStorageService } from "../common/file-storage.service";
-import { UpdateProfileDto, LinkWalletDto } from "./dto/update-profile.dto";
+} from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { FileStorageService } from '../common/file-storage.service';
+import { UpdateProfileDto, LinkWalletDto } from './dto/update-profile.dto';
 
 @Injectable()
 export class ProfileService {
-  constructor(private prisma: PrismaService, private fileStorage: FileStorageService) {}
+  constructor(
+    private prisma: PrismaService,
+    private fileStorage: FileStorageService,
+  ) {}
 
   async getProfile(userId: string) {
     const profile = await this.prisma.profile.findUnique({
       where: { userId },
     });
-    if (!profile) throw new NotFoundException("Profile not found");
+    if (!profile) throw new NotFoundException('Profile not found');
 
     const kyc = await this.prisma.kycRecord.findUnique({ where: { userId } });
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { email: true, phone: true, emailVerified: true, createdAt: true, username: true },
+      select: {
+        email: true,
+        phone: true,
+        emailVerified: true,
+        createdAt: true,
+        username: true,
+      },
     });
 
     return {
@@ -31,7 +39,7 @@ export class ProfileService {
       email: user?.email,
       phone: user?.phone,
       emailVerified: user?.emailVerified ?? false,
-      kycStatus: kyc?.status || "UNVERIFIED",
+      kycStatus: kyc?.status || 'UNVERIFIED',
       createdAt: user?.createdAt,
       username: user?.username ?? null,
       status: profile.status ?? null,
@@ -115,7 +123,7 @@ export class ProfileService {
       const existing = await this.prisma.user.findFirst({
         where: { phone, NOT: { id: userId } },
       });
-      if (existing) throw new ConflictException("Phone number already in use");
+      if (existing) throw new ConflictException('Phone number already in use');
     }
     await this.prisma.user.update({
       where: { id: userId },
@@ -126,7 +134,9 @@ export class ProfileService {
 
   async linkWallet(userId: string, dto: LinkWalletDto) {
     if (!/^0x[0-9a-fA-F]{40}$/.test(dto.walletAddress)) {
-      throw new BadRequestException("Invalid wallet address. Must be a valid EVM address (0x...)");
+      throw new BadRequestException(
+        'Invalid wallet address. Must be a valid EVM address (0x...)',
+      );
     }
 
     return this.prisma.profile.update({
@@ -145,7 +155,13 @@ export class ProfileService {
   async exportData(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { email: true, phone: true, emailVerified: true, createdAt: true, username: true },
+      select: {
+        email: true,
+        phone: true,
+        emailVerified: true,
+        createdAt: true,
+        username: true,
+      },
     });
     const profile = await this.prisma.profile.findUnique({
       where: { userId },
@@ -153,7 +169,12 @@ export class ProfileService {
     const kyc = await this.prisma.kycRecord.findUnique({ where: { userId } });
     const sessions = await this.prisma.session.findMany({
       where: { userId },
-      select: { deviceInfo: true, ipAddress: true, createdAt: true, lastSeenAt: true },
+      select: {
+        deviceInfo: true,
+        ipAddress: true,
+        createdAt: true,
+        lastSeenAt: true,
+      },
     });
 
     return {
@@ -176,7 +197,15 @@ export class ProfileService {
       this.prisma.session.deleteMany({ where: { userId } }),
       this.prisma.totpSecret.deleteMany({ where: { userId } }),
       this.prisma.profile.deleteMany({ where: { userId } }),
-      this.prisma.user.update({ where: { id: userId }, data: { deletedAt: new Date(), email: null, phone: null, passwordHash: null } }),
+      this.prisma.user.update({
+        where: { id: userId },
+        data: {
+          deletedAt: new Date(),
+          email: null,
+          phone: null,
+          passwordHash: null,
+        },
+      }),
     ]);
 
     return { success: true };
@@ -193,12 +222,15 @@ export class ProfileService {
     return { avatarUrl };
   }
 
-    async updateUsername(userId: string, username: string) {
+  async updateUsername(userId: string, username: string) {
     const existing = await this.prisma.user.findFirst({
       where: { username, NOT: { id: userId } },
     });
     if (existing) throw new ConflictException('Username already taken');
-    await this.prisma.user.update({ where: { id: userId }, data: { username } });
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { username },
+    });
     return { success: true, username };
   }
 

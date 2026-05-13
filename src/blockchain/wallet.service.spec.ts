@@ -37,7 +37,9 @@ describe('WalletService', () => {
           provide: ConfigService,
           useValue: {
             get: jest.fn((k: string) =>
-              k === 'WALLET_ENCRYPTION_KEY' ? 'unit-test-secret-key-32chars-xxxxxxxx' : undefined,
+              k === 'WALLET_ENCRYPTION_KEY'
+                ? 'unit-test-secret-key-32chars-xxxxxxxx'
+                : undefined,
             ),
           },
         },

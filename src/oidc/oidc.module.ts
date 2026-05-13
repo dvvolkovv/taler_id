@@ -22,11 +22,14 @@ import { createOidcProvider } from './oidc-provider.factory.js';
           `${configService.get<string>('baseUrl') || 'http://localhost:3000'}/oauth`;
 
         const cookieKeysStr =
-          configService.get<string>('oidc.cookieKeys') || 'taler-oidc-default-key';
+          configService.get<string>('oidc.cookieKeys') ||
+          'taler-oidc-default-key';
         const cookieKeys = cookieKeysStr.split(',');
 
-        const privateKeyPath = configService.get<string>('jwt.privateKeyPath') || '';
-        const publicKeyPath = configService.get<string>('jwt.publicKeyPath') || '';
+        const privateKeyPath =
+          configService.get<string>('jwt.privateKeyPath') || '';
+        const publicKeyPath =
+          configService.get<string>('jwt.publicKeyPath') || '';
 
         const walletxClientSecret =
           process.env.WALLETX_CLIENT_SECRET || 'walletx_secret_2026';

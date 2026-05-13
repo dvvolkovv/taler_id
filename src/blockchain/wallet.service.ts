@@ -42,7 +42,9 @@ export class WalletService implements OnModuleInit {
     custodialAddress: string;
     balancePlanck: bigint;
   }> {
-    const existing = await this.prisma.userWallet.findUnique({ where: { userId } });
+    const existing = await this.prisma.userWallet.findUnique({
+      where: { userId },
+    });
     if (existing) return existing;
 
     const keyring = await this.ensureKeyring();

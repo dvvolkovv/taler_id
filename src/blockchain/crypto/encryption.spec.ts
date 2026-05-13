@@ -21,7 +21,9 @@ describe('encryption', () => {
 
   it('decrypt throws on wrong secret', () => {
     const ct = encrypt('hello', SECRET);
-    expect(() => decrypt(ct, 'different-secret-of-sufficient-length-xxxxxx')).toThrow();
+    expect(() =>
+      decrypt(ct, 'different-secret-of-sufficient-length-xxxxxx'),
+    ).toThrow();
   });
 
   it('decrypt throws on tampered ciphertext (GCM integrity)', () => {
@@ -41,6 +43,8 @@ describe('encryption', () => {
     const ct = encrypt('hello', SECRET);
     const buf = Buffer.from(ct, 'base64');
     buf[0] = 99; // unsupported version
-    expect(() => decrypt(buf.toString('base64'), SECRET)).toThrow(/unsupported encryption version/);
+    expect(() => decrypt(buf.toString('base64'), SECRET)).toThrow(
+      /unsupported encryption version/,
+    );
   });
 });

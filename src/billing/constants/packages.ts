@@ -39,6 +39,5 @@ export const PACKAGES: BillingPackage[] = [
   },
 ];
 
-export const PACKAGES_BY_ID: Record<string, BillingPackage> = Object.fromEntries(
-  PACKAGES.map((p) => [p.id, p]),
-);
+export const PACKAGES_BY_ID: Record<string, BillingPackage> =
+  Object.fromEntries(PACKAGES.map((p) => [p.id, p]));

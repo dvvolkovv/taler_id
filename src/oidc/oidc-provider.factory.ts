@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import type Redis from 'ioredis';
 import type { PrismaService } from '../prisma/prisma.service';
 import { RedisOidcAdapter } from './adapters/redis-adapter.js';
+import { PrismaClientAdapter } from './adapters/prisma-client-adapter.js';
 
 export interface OidcProviderConfig {
   issuer: string;
@@ -25,37 +26,44 @@ export async function createOidcProvider(config: OidcProviderConfig) {
   jwk.alg = 'RS256';
   jwk.kid = 'taler-id-rsa';
 
-  // Load OAuth clients from database
-  const dbClients = await config.prisma.oAuthClient.findMany();
-  const clients = dbClients.map((c) => ({
-    client_id: c.clientId,
-    client_secret: c.clientId === 'walletx' ? config.walletxClientSecret : c.clientSecret,
-    redirect_uris: c.redirectUris,
-    grant_types: ['authorization_code', 'refresh_token'],
-    response_types: ['code'],
-    scope: c.allowedScopes.join(' '),
-    token_endpoint_auth_method: 'client_secret_basic' as const,
-    client_name: c.name,
-    logo_uri: c.logoUri || undefined,
-  }));
-
   const provider = new Provider(config.issuer, {
-    adapter: (model: string) => new RedisOidcAdapter(model, config.redisClient),
+    adapter: (model: string) => {
+      if (model === 'Client') {
+        return new PrismaClientAdapter(
+          config.prisma,
+          config.walletxClientSecret,
+        );
+      }
+      return new RedisOidcAdapter(model, config.redisClient);
+    },
 
     jwks: { keys: [jwk] },
 
-    clients,
-
     claims: {
       openid: ['sub'],
-      profile: ['name', 'given_name', 'family_name', 'middle_name', 'locale', 'updated_at'],
+      profile: [
+        'name',
+        'given_name',
+        'family_name',
+        'middle_name',
+        'locale',
+        'updated_at',
+      ],
       email: ['email', 'email_verified'],
       phone: ['phone_number', 'phone_number_verified'],
       kyc: ['kyc_status', 'kyc_type', 'kyc_verified_at'],
       wallet: ['wallet_address'],
     },
 
-    scopes: ['openid', 'profile', 'email', 'phone', 'kyc', 'wallet', 'offline_access'],
+    scopes: [
+      'openid',
+      'profile',
+      'email',
+      'phone',
+      'kyc',
+      'wallet',
+      'offline_access',
+    ],
 
     features: {
       devInteractions: { enabled: false },
@@ -112,7 +120,9 @@ export async function createOidcProvider(config: OidcProviderConfig) {
               .filter(Boolean)
               .join(' ');
             result.locale = user.profile.language;
-            result.updated_at = Math.floor(user.profile.updatedAt.getTime() / 1000);
+            result.updated_at = Math.floor(
+              user.profile.updatedAt.getTime() / 1000,
+            );
           }
 
           if (scopes.includes('email')) {

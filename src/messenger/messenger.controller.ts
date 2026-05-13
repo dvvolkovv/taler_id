@@ -1,7 +1,22 @@
 import {
-  Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, UseGuards,
-  UseInterceptors, UploadedFile, ForbiddenException, Logger,
-  Res, Req, StreamableFile, NotFoundException,
+  Controller,
+  Get,
+  Post,
+  Put,
+  Patch,
+  Delete,
+  Body,
+  Param,
+  Query,
+  UseGuards,
+  UseInterceptors,
+  UploadedFile,
+  ForbiddenException,
+  Logger,
+  Res,
+  Req,
+  StreamableFile,
+  NotFoundException,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -47,7 +62,10 @@ export class MessengerController {
    * For images: hash raw pixel data (ignoring EXIF metadata that iOS changes on each export).
    * For everything else: hash the full file bytes.
    */
-  private async computeContentHash(data: Buffer, mimeType: string): Promise<string> {
+  private async computeContentHash(
+    data: Buffer,
+    mimeType: string,
+  ): Promise<string> {
     if (mimeType.startsWith('image/')) {
       try {
         const rawPixels = await sharp(data).raw().toBuffer();
@@ -62,18 +80,29 @@ export class MessengerController {
   // ─── Direct conversations ───
 
   @Post('conversations')
-  async create(@Body('participantId') participantId: string, @CurrentUser() user: any) {
+  async create(
+    @Body('participantId') participantId: string,
+    @CurrentUser() user: any,
+  ) {
     // Check if either user has blocked the other
     const isBlocked = await this.service.isBlockedBy(user.sub, participantId);
     if (isBlocked) throw new ForbiddenException('Нет доступа');
     // Check if there's an existing conversation (bypass contact check)
     // or if they have an accepted contact
-    const hasContact = await this.service.hasContactWith(user.sub, participantId);
+    const hasContact = await this.service.hasContactWith(
+      user.sub,
+      participantId,
+    );
     if (!hasContact) {
       // Check if conversation already exists (legacy contacts from before contact request feature)
-      const existing = await this.service.findExistingDirectConversation(user.sub, participantId);
+      const existing = await this.service.findExistingDirectConversation(
+        user.sub,
+        participantId,
+      );
       if (!existing) {
-        throw new ForbiddenException('Нужно сначала отправить запрос на общение');
+        throw new ForbiddenException(
+          'Нужно сначала отправить запрос на общение',
+        );
       }
     }
     return this.service.getOrCreateDirectConversation(user.sub, participantId);
@@ -102,7 +131,13 @@ export class MessengerController {
     @Query('topicId') topicId: string,
     @CurrentUser() user: any,
   ) {
-    return this.service.getMessages(id, user.sub, cursor, limit ? +limit : 30, topicId);
+    return this.service.getMessages(
+      id,
+      user.sub,
+      cursor,
+      limit ? +limit : 30,
+      topicId,
+    );
   }
 
   @Get('conversations/:id/media')
@@ -114,17 +149,30 @@ export class MessengerController {
     @Query('topicId') topicId: string,
     @CurrentUser() user: any,
   ) {
-    return this.service.getSharedMedia(id, user.sub, type, cursor, limit ? +limit : 50);
+    return this.service.getSharedMedia(
+      id,
+      user.sub,
+      type,
+      cursor,
+      limit ? +limit : 50,
+    );
   }
 
   // ─── Group conversations ───
 
   @Post('conversations/group')
   async createGroup(@Body() dto: CreateGroupDto, @CurrentUser() user: any) {
-    const conv = await this.service.createGroupConversation(user.sub, dto.name, dto.participantIds);
+    const conv = await this.service.createGroupConversation(
+      user.sub,
+      dto.name,
+      dto.participantIds,
+    );
     // Notify all participants about the new group
     for (const pid of conv.participantIds) {
-      this.gateway.emitToUser(pid, 'group_created', { conversationId: conv.id, name: dto.name });
+      this.gateway.emitToUser(pid, 'group_created', {
+        conversationId: conv.id,
+        name: dto.name,
+      });
     }
     return conv;
   }
@@ -140,12 +188,20 @@ export class MessengerController {
     @Body() dto: AddMembersDto,
     @CurrentUser() user: any,
   ) {
-    const newIds = await this.service.addGroupMembers(id, user.sub, dto.userIds);
+    const newIds = await this.service.addGroupMembers(
+      id,
+      user.sub,
+      dto.userIds,
+    );
     if (newIds.length > 0) {
-      await this.gateway.emitToConversationParticipants(id, 'group_member_added', {
-        conversationId: id,
-        userIds: newIds,
-      });
+      await this.gateway.emitToConversationParticipants(
+        id,
+        'group_member_added',
+        {
+          conversationId: id,
+          userIds: newIds,
+        },
+      );
       // Also notify newly added users so they refresh their conversation list
       for (const uid of newIds) {
         this.gateway.emitToUser(uid, 'group_created', { conversationId: id });
@@ -161,10 +217,14 @@ export class MessengerController {
     @CurrentUser() user: any,
   ) {
     await this.service.removeGroupMember(id, user.sub, uid);
-    await this.gateway.emitToConversationParticipants(id, 'group_member_removed', {
-      conversationId: id,
-      userId: uid,
-    });
+    await this.gateway.emitToConversationParticipants(
+      id,
+      'group_member_removed',
+      {
+        conversationId: id,
+        userId: uid,
+      },
+    );
     // Also notify removed user
     this.gateway.emitToUser(uid, 'group_member_removed', {
       conversationId: id,
@@ -179,12 +239,21 @@ export class MessengerController {
     @Body() dto: ChangeGroupRoleDto,
     @CurrentUser() user: any,
   ) {
-    const result = await this.service.changeGroupMemberRole(id, user.sub, uid, dto.role);
-    await this.gateway.emitToConversationParticipants(id, 'group_role_changed', {
-      conversationId: id,
-      userId: uid,
-      newRole: dto.role,
-    });
+    const result = await this.service.changeGroupMemberRole(
+      id,
+      user.sub,
+      uid,
+      dto.role,
+    );
+    await this.gateway.emitToConversationParticipants(
+      id,
+      'group_role_changed',
+      {
+        conversationId: id,
+        userId: uid,
+        newRole: dto.role,
+      },
+    );
     return result;
   }
 
@@ -225,10 +294,14 @@ export class MessengerController {
   @Post('conversations/:id/leave')
   async leaveGroup(@Param('id') id: string, @CurrentUser() user: any) {
     await this.service.leaveGroup(id, user.sub);
-    await this.gateway.emitToConversationParticipants(id, 'group_member_removed', {
-      conversationId: id,
-      userId: user.sub,
-    });
+    await this.gateway.emitToConversationParticipants(
+      id,
+      'group_member_removed',
+      {
+        conversationId: id,
+        userId: user.sub,
+      },
+    );
   }
 
   @Delete('conversations/:id')
@@ -237,14 +310,19 @@ export class MessengerController {
     const members = await this.service.getGroupMembers(id, user.sub);
     await this.service.deleteGroup(id, user.sub);
     for (const m of members) {
-      this.gateway.emitToUser(m.userId, 'group_deleted', { conversationId: id });
+      this.gateway.emitToUser(m.userId, 'group_deleted', {
+        conversationId: id,
+      });
     }
   }
 
   // ─── Contact requests ───
 
   @Post('contacts/request')
-  async sendContactRequest(@Body('receiverId') receiverId: string, @CurrentUser() user: any) {
+  async sendContactRequest(
+    @Body('receiverId') receiverId: string,
+    @CurrentUser() user: any,
+  ) {
     const result = await this.service.sendContactRequest(user.sub, receiverId);
     // If auto-accepted (reverse request existed), notify about acceptance
     if ('conversationId' in result) {
@@ -265,7 +343,9 @@ export class MessengerController {
     // Send FCM push to receiver
     const receiverFcmToken = await this.service.getFcmToken(receiverId);
     if (receiverFcmToken) {
-      this.fcmService.sendContactRequest(receiverFcmToken, result.senderName).catch(() => {});
+      this.fcmService
+        .sendContactRequest(receiverFcmToken, result.senderName)
+        .catch(() => {});
     }
     return result;
   }
@@ -285,9 +365,11 @@ export class MessengerController {
     return this.service.getContactStatus(user.sub, userId);
   }
 
-
   @Patch('contacts/requests/:id/accept')
-  async acceptContactRequest(@Param('id') id: string, @CurrentUser() user: any) {
+  async acceptContactRequest(
+    @Param('id') id: string,
+    @CurrentUser() user: any,
+  ) {
     const result = await this.service.acceptContactRequest(id, user.sub);
     // Notify sender that request was accepted
     this.gateway.emitToUser(result.senderId, 'contact_request_accepted', {
@@ -299,20 +381,37 @@ export class MessengerController {
     const senderFcmToken = await this.service.getFcmToken(result.senderId);
     if (senderFcmToken) {
       const acceptorName = await this.service.getUserDisplayName(user.sub);
-      this.fcmService.sendNewMessage(senderFcmToken, 'Запрос принят', acceptorName + ' принял(а) ваш запрос на общение', result.conversationId).catch(() => {});
+      this.fcmService
+        .sendNewMessage(
+          senderFcmToken,
+          'Запрос принят',
+          acceptorName + ' принял(а) ваш запрос на общение',
+          result.conversationId,
+        )
+        .catch(() => {});
     }
     return result;
   }
 
   @Patch('contacts/requests/:id/reject')
-  async rejectContactRequest(@Param('id') id: string, @CurrentUser() user: any) {
+  async rejectContactRequest(
+    @Param('id') id: string,
+    @CurrentUser() user: any,
+  ) {
     const result = await this.service.rejectContactRequest(id, user.sub);
     // Send FCM push to sender about rejection
     if (result?.senderId) {
       const senderFcmToken = await this.service.getFcmToken(result.senderId);
       if (senderFcmToken) {
         const rejecterName = await this.service.getUserDisplayName(user.sub);
-        this.fcmService.sendNewMessage(senderFcmToken, 'Запрос отклонён', rejecterName + ' отклонил(а) ваш запрос на общение', '').catch(() => {});
+        this.fcmService
+          .sendNewMessage(
+            senderFcmToken,
+            'Запрос отклонён',
+            rejecterName + ' отклонил(а) ваш запрос на общение',
+            '',
+          )
+          .catch(() => {});
       }
     }
     return result;
@@ -320,21 +419,24 @@ export class MessengerController {
 
   // ─── Contact Aliases ───
 
-  @Get("contacts/aliases")
+  @Get('contacts/aliases')
   getAliases(@CurrentUser() user: any) {
     return this.service.getContactAliases(user.sub);
   }
 
-  @Put("contacts/aliases/:targetId")
-  setAlias(@CurrentUser() user: any, @Param("targetId") targetId: string, @Body("customName") customName: string) {
+  @Put('contacts/aliases/:targetId')
+  setAlias(
+    @CurrentUser() user: any,
+    @Param('targetId') targetId: string,
+    @Body('customName') customName: string,
+  ) {
     return this.service.setContactAlias(user.sub, targetId, customName);
   }
 
-  @Delete("contacts/aliases/:targetId")
-  removeAlias(@CurrentUser() user: any, @Param("targetId") targetId: string) {
+  @Delete('contacts/aliases/:targetId')
+  removeAlias(@CurrentUser() user: any, @Param('targetId') targetId: string) {
     return this.service.removeContactAlias(user.sub, targetId);
   }
-
 
   // ─── Contact delete & block ───
 
@@ -355,13 +457,15 @@ export class MessengerController {
 
   @Get('contacts/:userId/block')
   isBlocked(@CurrentUser() user: any, @Param('userId') userId: string) {
-    return this.service.isBlockedBy(user.sub, userId).then(blocked => ({ blocked }));
+    return this.service
+      .isBlockedBy(user.sub, userId)
+      .then((blocked) => ({ blocked }));
   }
 
   // ─── Message search ───
 
-  @Get("messages/search")
-  searchMessages(@Query("q") q: string, @CurrentUser() user: any) {
+  @Get('messages/search')
+  searchMessages(@Query('q') q: string, @CurrentUser() user: any) {
     return this.service.searchMessages(q, user.sub);
   }
 
@@ -383,7 +487,9 @@ export class MessengerController {
     }),
   )
   async uploadFile(@UploadedFile() file: Express.Multer.File) {
-    if (!file) { throw new Error("No file uploaded"); }
+    if (!file) {
+      throw new Error('No file uploaded');
+    }
     const ext = extname(file.originalname);
     const s3Key = `files/${uuidv4()}${ext}`;
 
@@ -407,48 +513,81 @@ export class MessengerController {
 
     try {
       if (fileType === 'image') {
-        const thumbs = await this.thumbnailService.generateImageThumbnails(file.buffer);
+        const thumbs = await this.thumbnailService.generateImageThumbnails(
+          file.buffer,
+        );
         if (thumbs.small) {
           thumbnailSmallKey = `thumbs/${uuidv4()}_s.webp`;
-          await this.fileStorage.upload(thumbnailSmallKey, thumbs.small, 'image/webp');
+          await this.fileStorage.upload(
+            thumbnailSmallKey,
+            thumbs.small,
+            'image/webp',
+          );
           thumbnailSmallUrl = this.fileStorage.getPublicUrl(thumbnailSmallKey);
         }
         if (thumbs.medium) {
           thumbnailMediumKey = `thumbs/${uuidv4()}_m.webp`;
-          await this.fileStorage.upload(thumbnailMediumKey, thumbs.medium, 'image/webp');
-          thumbnailMediumUrl = this.fileStorage.getPublicUrl(thumbnailMediumKey);
+          await this.fileStorage.upload(
+            thumbnailMediumKey,
+            thumbs.medium,
+            'image/webp',
+          );
+          thumbnailMediumUrl =
+            this.fileStorage.getPublicUrl(thumbnailMediumKey);
         }
         if (thumbs.large) {
           thumbnailLargeKey = `thumbs/${uuidv4()}_l.webp`;
-          await this.fileStorage.upload(thumbnailLargeKey, thumbs.large, 'image/webp');
+          await this.fileStorage.upload(
+            thumbnailLargeKey,
+            thumbs.large,
+            'image/webp',
+          );
           thumbnailLargeUrl = this.fileStorage.getPublicUrl(thumbnailLargeKey);
         }
       } else if (fileType === 'video') {
-        const thumbs = await this.thumbnailService.generateVideoThumbnail(file.buffer);
+        const thumbs = await this.thumbnailService.generateVideoThumbnail(
+          file.buffer,
+        );
         if (thumbs.medium) {
           thumbnailMediumKey = `thumbs/${uuidv4()}_m.webp`;
-          await this.fileStorage.upload(thumbnailMediumKey, thumbs.medium, 'image/webp');
-          thumbnailMediumUrl = this.fileStorage.getPublicUrl(thumbnailMediumKey);
+          await this.fileStorage.upload(
+            thumbnailMediumKey,
+            thumbs.medium,
+            'image/webp',
+          );
+          thumbnailMediumUrl =
+            this.fileStorage.getPublicUrl(thumbnailMediumKey);
         }
       }
     } catch (e) {
-      this.logger.error('Thumbnail generation failed, continuing without thumbnails:', e);
+      this.logger.error(
+        'Thumbnail generation failed, continuing without thumbnails:',
+        e,
+      );
     }
 
     // File deduplication: compute content hash (pixel-based for images)
     const sha256 = await this.computeContentHash(file.buffer, file.mimetype);
-    this.logger.log(`[upload] content hash=${sha256} size=${file.size} mime=${file.mimetype}`);
+    this.logger.log(
+      `[upload] content hash=${sha256} size=${file.size} mime=${file.mimetype}`,
+    );
     let fileRecordId: string | undefined;
 
-    const existingRecord = await this.prisma.fileRecord.findUnique({ where: { sha256 } });
+    const existingRecord = await this.prisma.fileRecord.findUnique({
+      where: { sha256 },
+    });
     if (existingRecord) {
       // Duplicate found: increment refCount, delete just-uploaded S3 objects, use existing record's data
-      await this.prisma.fileRecord.update({ where: { id: existingRecord.id }, data: { refCount: { increment: 1 } } });
+      await this.prisma.fileRecord.update({
+        where: { id: existingRecord.id },
+        data: { refCount: { increment: 1 } },
+      });
       // Delete the just-uploaded objects
       try {
         await this.fileStorage.delete(s3Key);
         if (thumbnailSmallKey) await this.fileStorage.delete(thumbnailSmallKey);
-        if (thumbnailMediumKey) await this.fileStorage.delete(thumbnailMediumKey);
+        if (thumbnailMediumKey)
+          await this.fileStorage.delete(thumbnailMediumKey);
         if (thumbnailLargeKey) await this.fileStorage.delete(thumbnailLargeKey);
       } catch (e) {
         this.logger.error('Failed to delete duplicate S3 objects:', e);
@@ -460,9 +599,15 @@ export class MessengerController {
         fileSize: file.size,
         fileType,
         s3Key: existingRecord.s3Key,
-        thumbnailSmallUrl: existingRecord.thumbnailSmall ? this.fileStorage.getPublicUrl(existingRecord.thumbnailSmall) : undefined,
-        thumbnailMediumUrl: existingRecord.thumbnailMedium ? this.fileStorage.getPublicUrl(existingRecord.thumbnailMedium) : undefined,
-        thumbnailLargeUrl: existingRecord.thumbnailLarge ? this.fileStorage.getPublicUrl(existingRecord.thumbnailLarge) : undefined,
+        thumbnailSmallUrl: existingRecord.thumbnailSmall
+          ? this.fileStorage.getPublicUrl(existingRecord.thumbnailSmall)
+          : undefined,
+        thumbnailMediumUrl: existingRecord.thumbnailMedium
+          ? this.fileStorage.getPublicUrl(existingRecord.thumbnailMedium)
+          : undefined,
+        thumbnailLargeUrl: existingRecord.thumbnailLarge
+          ? this.fileStorage.getPublicUrl(existingRecord.thumbnailLarge)
+          : undefined,
         fileRecordId,
       };
     }
@@ -483,14 +628,17 @@ export class MessengerController {
 
     // Background video transcoding (fire-and-forget)
     if (fileType === 'video') {
-      this.videoTranscode.transcodeToH264(s3Key).then(async (result) => {
-        if (result) {
-          await this.prisma.fileRecord.update({
-            where: { id: fileRecord.id },
-            data: { size: result.size, mimeType: 'video/mp4' },
-          });
-        }
-      }).catch((e) => this.logger.error('Background transcode failed:', e));
+      this.videoTranscode
+        .transcodeToH264(s3Key)
+        .then(async (result) => {
+          if (result) {
+            await this.prisma.fileRecord.update({
+              where: { id: fileRecord.id },
+              data: { size: result.size, mimeType: 'video/mp4' },
+            });
+          }
+        })
+        .catch((e) => this.logger.error('Background transcode failed:', e));
     }
 
     return {
@@ -516,29 +664,43 @@ export class MessengerController {
   ) {
     if (!key) throw new ForbiddenException('key is required');
     try {
-      const { stream, contentType: rawType, contentLength } = await this.fileStorage.getObject(key);
+      const {
+        stream,
+        contentType: rawType,
+        contentLength,
+      } = await this.fileStorage.getObject(key);
       // S3 returns application/octet-stream for files without extension.
       // Derive MIME from the key so iOS AVPlayer can handle the stream.
       let contentType = rawType;
-      if (!rawType || rawType === "application/octet-stream") {
-        const ext = key.split(".").pop()?.toLowerCase() ?? "";
+      if (!rawType || rawType === 'application/octet-stream') {
+        const ext = key.split('.').pop()?.toLowerCase() ?? '';
         const mimeMap: Record<string, string> = {
-          mp4: "video/mp4", mov: "video/quicktime", m4a: "audio/mp4",
-          mp3: "audio/mpeg", jpg: "image/jpeg", jpeg: "image/jpeg",
-          png: "image/png", gif: "image/gif", webp: "image/webp",
-          webm: "video/webm", avi: "video/x-msvideo", pdf: "application/pdf",
+          mp4: 'video/mp4',
+          mov: 'video/quicktime',
+          m4a: 'audio/mp4',
+          mp3: 'audio/mpeg',
+          jpg: 'image/jpeg',
+          jpeg: 'image/jpeg',
+          png: 'image/png',
+          gif: 'image/gif',
+          webp: 'image/webp',
+          webm: 'video/webm',
+          avi: 'video/x-msvideo',
+          pdf: 'application/pdf',
         };
         if (mimeMap[ext]) contentType = mimeMap[ext];
       }
       // Last resort: look up the Message that references this key
       // and map its fileType field to a MIME.
-      if (contentType === "application/octet-stream") {
+      if (contentType === 'application/octet-stream') {
         try {
           const msg = await this.service.findMessageByFileKey(key);
           if (msg?.fileType) {
             const ftMap: Record<string, string> = {
-              video: "video/mp4", video_note: "video/mp4",
-              image: "image/jpeg", audio: "audio/mpeg",
+              video: 'video/mp4',
+              video_note: 'video/mp4',
+              image: 'image/jpeg',
+              audio: 'audio/mpeg',
             };
             if (ftMap[msg.fileType]) contentType = ftMap[msg.fileType];
           }
@@ -553,7 +715,7 @@ export class MessengerController {
       const headers: Record<string, string | number> = {
         'Content-Type': contentType,
         'Cache-Control': 'public, max-age=604800, immutable',
-        'ETag': etag,
+        ETag: etag,
       };
       if (contentLength) headers['Content-Length'] = contentLength;
       res.set(headers);
@@ -580,7 +742,10 @@ export class MessengerController {
   ) {
     const ext = extname(body.fileName);
     const s3Key = `files/${uuidv4()}${ext}`;
-    const uploadId = await this.fileStorage.createMultipartUpload(s3Key, body.mimeType);
+    const uploadId = await this.fileStorage.createMultipartUpload(
+      s3Key,
+      body.mimeType,
+    );
 
     // S3 minimum part size is 5MB (except last part)
     const partSize = 5 * 1024 * 1024;
@@ -619,7 +784,12 @@ export class MessengerController {
     if (!raw) throw new NotFoundException('Upload not found or expired');
     const state = JSON.parse(raw);
 
-    const etag = await this.fileStorage.uploadPart(state.s3Key, uploadId, partNumber, chunk.buffer);
+    const etag = await this.fileStorage.uploadPart(
+      state.s3Key,
+      uploadId,
+      partNumber,
+      chunk.buffer,
+    );
 
     state.parts.push({ PartNumber: partNumber, ETag: etag });
     await this.redis.setEx(`chunked:${uploadId}`, 86400, JSON.stringify(state));
@@ -637,7 +807,11 @@ export class MessengerController {
     state.parts.sort((a: any, b: any) => a.PartNumber - b.PartNumber);
 
     // Complete S3 multipart upload
-    await this.fileStorage.completeMultipartUpload(state.s3Key, uploadId, state.parts);
+    await this.fileStorage.completeMultipartUpload(
+      state.s3Key,
+      uploadId,
+      state.parts,
+    );
 
     const fileUrl = this.fileStorage.getPublicUrl(state.s3Key);
 
@@ -664,28 +838,50 @@ export class MessengerController {
         fileData = Buffer.concat(chunks);
 
         if (fileType === 'image') {
-          const thumbs = await this.thumbnailService.generateImageThumbnails(fileData);
+          const thumbs =
+            await this.thumbnailService.generateImageThumbnails(fileData);
           if (thumbs.small) {
             thumbnailSmallKey = `thumbs/${uuidv4()}_s.webp`;
-            await this.fileStorage.upload(thumbnailSmallKey, thumbs.small, 'image/webp');
-            thumbnailSmallUrl = this.fileStorage.getPublicUrl(thumbnailSmallKey);
+            await this.fileStorage.upload(
+              thumbnailSmallKey,
+              thumbs.small,
+              'image/webp',
+            );
+            thumbnailSmallUrl =
+              this.fileStorage.getPublicUrl(thumbnailSmallKey);
           }
           if (thumbs.medium) {
             thumbnailMediumKey = `thumbs/${uuidv4()}_m.webp`;
-            await this.fileStorage.upload(thumbnailMediumKey, thumbs.medium, 'image/webp');
-            thumbnailMediumUrl = this.fileStorage.getPublicUrl(thumbnailMediumKey);
+            await this.fileStorage.upload(
+              thumbnailMediumKey,
+              thumbs.medium,
+              'image/webp',
+            );
+            thumbnailMediumUrl =
+              this.fileStorage.getPublicUrl(thumbnailMediumKey);
           }
           if (thumbs.large) {
             thumbnailLargeKey = `thumbs/${uuidv4()}_l.webp`;
-            await this.fileStorage.upload(thumbnailLargeKey, thumbs.large, 'image/webp');
-            thumbnailLargeUrl = this.fileStorage.getPublicUrl(thumbnailLargeKey);
+            await this.fileStorage.upload(
+              thumbnailLargeKey,
+              thumbs.large,
+              'image/webp',
+            );
+            thumbnailLargeUrl =
+              this.fileStorage.getPublicUrl(thumbnailLargeKey);
           }
         } else if (fileType === 'video') {
-          const thumbs = await this.thumbnailService.generateVideoThumbnail(fileData);
+          const thumbs =
+            await this.thumbnailService.generateVideoThumbnail(fileData);
           if (thumbs.medium) {
             thumbnailMediumKey = `thumbs/${uuidv4()}_m.webp`;
-            await this.fileStorage.upload(thumbnailMediumKey, thumbs.medium, 'image/webp');
-            thumbnailMediumUrl = this.fileStorage.getPublicUrl(thumbnailMediumKey);
+            await this.fileStorage.upload(
+              thumbnailMediumKey,
+              thumbs.medium,
+              'image/webp',
+            );
+            thumbnailMediumUrl =
+              this.fileStorage.getPublicUrl(thumbnailMediumKey);
           }
         }
       }
@@ -710,17 +906,27 @@ export class MessengerController {
 
     if (fileData) {
       const sha256 = await this.computeContentHash(fileData, state.mimeType);
-      this.logger.log(`[chunked-complete] content hash=${sha256} size=${state.fileSize} mime=${state.mimeType}`);
-      const existingRecord = await this.prisma.fileRecord.findUnique({ where: { sha256 } });
+      this.logger.log(
+        `[chunked-complete] content hash=${sha256} size=${state.fileSize} mime=${state.mimeType}`,
+      );
+      const existingRecord = await this.prisma.fileRecord.findUnique({
+        where: { sha256 },
+      });
 
       if (existingRecord) {
         // Duplicate found: increment refCount, delete just-uploaded S3 objects
-        await this.prisma.fileRecord.update({ where: { id: existingRecord.id }, data: { refCount: { increment: 1 } } });
+        await this.prisma.fileRecord.update({
+          where: { id: existingRecord.id },
+          data: { refCount: { increment: 1 } },
+        });
         try {
           await this.fileStorage.delete(state.s3Key);
-          if (thumbnailSmallKey) await this.fileStorage.delete(thumbnailSmallKey);
-          if (thumbnailMediumKey) await this.fileStorage.delete(thumbnailMediumKey);
-          if (thumbnailLargeKey) await this.fileStorage.delete(thumbnailLargeKey);
+          if (thumbnailSmallKey)
+            await this.fileStorage.delete(thumbnailSmallKey);
+          if (thumbnailMediumKey)
+            await this.fileStorage.delete(thumbnailMediumKey);
+          if (thumbnailLargeKey)
+            await this.fileStorage.delete(thumbnailLargeKey);
         } catch (e) {
           this.logger.error('Failed to delete duplicate S3 objects:', e);
         }
@@ -735,9 +941,15 @@ export class MessengerController {
           fileSize: state.fileSize,
           fileType,
           s3Key: existingRecord.s3Key,
-          thumbnailSmallUrl: existingRecord.thumbnailSmall ? this.fileStorage.getPublicUrl(existingRecord.thumbnailSmall) : undefined,
-          thumbnailMediumUrl: existingRecord.thumbnailMedium ? this.fileStorage.getPublicUrl(existingRecord.thumbnailMedium) : undefined,
-          thumbnailLargeUrl: existingRecord.thumbnailLarge ? this.fileStorage.getPublicUrl(existingRecord.thumbnailLarge) : undefined,
+          thumbnailSmallUrl: existingRecord.thumbnailSmall
+            ? this.fileStorage.getPublicUrl(existingRecord.thumbnailSmall)
+            : undefined,
+          thumbnailMediumUrl: existingRecord.thumbnailMedium
+            ? this.fileStorage.getPublicUrl(existingRecord.thumbnailMedium)
+            : undefined,
+          thumbnailLargeUrl: existingRecord.thumbnailLarge
+            ? this.fileStorage.getPublicUrl(existingRecord.thumbnailLarge)
+            : undefined,
           fileRecordId,
         };
       }
@@ -758,14 +970,17 @@ export class MessengerController {
 
       // Background video transcoding (fire-and-forget)
       if (fileType === 'video') {
-        this.videoTranscode.transcodeToH264(state.s3Key).then(async (result) => {
-          if (result) {
-            await this.prisma.fileRecord.update({
-              where: { id: fileRecord.id },
-              data: { size: result.size, mimeType: 'video/mp4' },
-            });
-          }
-        }).catch((e) => this.logger.error('Background transcode failed:', e));
+        this.videoTranscode
+          .transcodeToH264(state.s3Key)
+          .then(async (result) => {
+            if (result) {
+              await this.prisma.fileRecord.update({
+                where: { id: fileRecord.id },
+                data: { size: result.size, mimeType: 'video/mp4' },
+              });
+            }
+          })
+          .catch((e) => this.logger.error('Background transcode failed:', e));
       }
     }
 
@@ -807,13 +1022,9 @@ export class MessengerController {
     return { ok: true };
   }
 
-
-
-
-
   // ─── Saved Messages ───
 
-  @Post("saved")
+  @Post('saved')
   async getOrCreateSaved(@CurrentUser() user: any) {
     const convId = await this.service.getOrCreateSavedChat(user.sub);
     return { conversationId: convId };
@@ -821,7 +1032,7 @@ export class MessengerController {
 
   // ─── AI Analyst ───
 
-  @Post("ai-analyst")
+  @Post('ai-analyst')
   async getOrCreateAiAnalyst(@CurrentUser() user: any) {
     const convId = await this.service.getOrCreateAiAnalystChat(user.sub);
     return { conversationId: convId };
@@ -829,11 +1040,11 @@ export class MessengerController {
 
   // ─── Channels ───
 
-  @Get("channels")
+  @Get('channels')
   async listChannels(
-    @Query("q") q: string | undefined,
-    @Query("limit") limit: string | undefined,
-    @Query("offset") offset: string | undefined,
+    @Query('q') q: string | undefined,
+    @Query('limit') limit: string | undefined,
+    @Query('offset') offset: string | undefined,
     @CurrentUser() user: any,
   ) {
     return this.service.listChannels(
@@ -844,35 +1055,35 @@ export class MessengerController {
     );
   }
 
-  @Get("channels/:id")
-  async getChannelDetails(@Param("id") id: string, @CurrentUser() user: any) {
+  @Get('channels/:id')
+  async getChannelDetails(@Param('id') id: string, @CurrentUser() user: any) {
     return this.service.getChannelDetails(id, user.sub);
   }
 
-  @Patch("channels/:id")
+  @Patch('channels/:id')
   async updateChannel(
-    @Param("id") id: string,
+    @Param('id') id: string,
     @Body() body: { name?: string; description?: string; avatarUrl?: string },
     @CurrentUser() user: any,
   ) {
     return this.service.updateChannel(id, user.sub, body);
   }
 
-  @Delete("channels/:id")
-  async deleteChannel(@Param("id") id: string, @CurrentUser() user: any) {
+  @Delete('channels/:id')
+  async deleteChannel(@Param('id') id: string, @CurrentUser() user: any) {
     return this.service.deleteChannel(id, user.sub);
   }
 
-  @Post("channels/:id/post")
+  @Post('channels/:id/post')
   async postToChannel(
-    @Param("id") id: string,
-    @Body("content") content: string,
+    @Param('id') id: string,
+    @Body('content') content: string,
     @CurrentUser() user: any,
   ) {
     const result = await this.service.postToChannel(id, user.sub, content);
     const full = await this.service.getMessageById(result.messageId);
     if (full) {
-      this.gateway.server.to(id).emit("new_message", {
+      this.gateway.server.to(id).emit('new_message', {
         ...full,
         senderName: await this.service.getUserDisplayName(user.sub),
         reactions: [],
@@ -881,40 +1092,47 @@ export class MessengerController {
     return result;
   }
 
-  @Post("channels")
+  @Post('channels')
   async createChannel(
-    @Body("name") name: string,
-    @Body("description") description: string,
-    @Body("avatarUrl") avatarUrl: string,
+    @Body('name') name: string,
+    @Body('description') description: string,
+    @Body('avatarUrl') avatarUrl: string,
     @CurrentUser() user: any,
   ) {
     return this.service.createChannel(user.sub, name, description, avatarUrl);
   }
 
-  @Post("channels/:id/subscribe")
-  async subscribe(@Param("id") id: string, @CurrentUser() user: any) {
+  @Post('channels/:id/subscribe')
+  async subscribe(@Param('id') id: string, @CurrentUser() user: any) {
     return this.service.subscribeToChannel(id, user.sub);
   }
 
-  @Delete("channels/:id/subscribe")
-  async unsubscribe(@Param("id") id: string, @CurrentUser() user: any) {
+  @Delete('channels/:id/subscribe')
+  async unsubscribe(@Param('id') id: string, @CurrentUser() user: any) {
     return this.service.unsubscribeFromChannel(id, user.sub);
   }
 
   // ─── Polls ───
 
-  @Post("conversations/:id/poll")
+  @Post('conversations/:id/poll')
   async createPoll(
-    @Param("id") id: string,
-    @Body("question") question: string,
-    @Body("options") options: string[],
-    @Body("isAnonymous") isAnonymous: boolean,
-    @Body("isMultiple") isMultiple: boolean,
+    @Param('id') id: string,
+    @Body('question') question: string,
+    @Body('options') options: string[],
+    @Body('isAnonymous') isAnonymous: boolean,
+    @Body('isMultiple') isMultiple: boolean,
     @CurrentUser() user: any,
   ) {
-    const result = await this.service.createPoll(id, user.sub, question, options, isAnonymous, isMultiple);
+    const result = await this.service.createPoll(
+      id,
+      user.sub,
+      question,
+      options,
+      isAnonymous,
+      isMultiple,
+    );
     // Emit to conversation via gateway
-    this.gateway.server.to(id).emit("new_message", {
+    this.gateway.server.to(id).emit('new_message', {
       ...result.message,
       senderName: await this.service.getUserDisplayName(user.sub),
       reactions: [],
@@ -923,35 +1141,42 @@ export class MessengerController {
     return result;
   }
 
-  @Post("polls/:optionId/vote")
-  async votePoll(@Param("optionId") optionId: string, @CurrentUser() user: any) {
+  @Post('polls/:optionId/vote')
+  async votePoll(
+    @Param('optionId') optionId: string,
+    @CurrentUser() user: any,
+  ) {
     return this.service.votePoll(optionId, user.sub);
   }
 
-  @Get("messages/:messageId/poll")
-  async getPoll(@Param("messageId") messageId: string) {
+  @Get('messages/:messageId/poll')
+  async getPoll(@Param('messageId') messageId: string) {
     return this.service.getPollByMessageId(messageId);
   }
 
   // ─── Threads ───
 
-  @Get("conversations/:convId/messages/:msgId/thread")
-  async getThread(@Param("convId") convId: string, @Param("msgId") msgId: string) {
+  @Get('conversations/:convId/messages/:msgId/thread')
+  async getThread(
+    @Param('convId') convId: string,
+    @Param('msgId') msgId: string,
+  ) {
     const replies = await this.service.getThreadReplies(msgId);
-    return replies.map(r => ({
+    return replies.map((r) => ({
       ...r,
       senderName: r.sender?.profile?.firstName
-        ? r.sender.profile.firstName + (r.sender.profile.lastName ? " " + r.sender.profile.lastName : "")
-        : r.sender?.username || "User",
+        ? r.sender.profile.firstName +
+          (r.sender.profile.lastName ? ' ' + r.sender.profile.lastName : '')
+        : r.sender?.username || 'User',
       senderAvatar: r.sender?.profile?.avatarUrl || null,
     }));
   }
 
-  @Post("conversations/:convId/messages/:msgId/thread")
+  @Post('conversations/:convId/messages/:msgId/thread')
   async sendThreadReply(
-    @Param("convId") convId: string,
-    @Param("msgId") msgId: string,
-    @Body("content") content: string,
+    @Param('convId') convId: string,
+    @Param('msgId') msgId: string,
+    @Body('content') content: string,
     @CurrentUser() user: any,
   ) {
     return this.service.sendThreadReply(convId, user.sub, content, msgId);
@@ -959,23 +1184,26 @@ export class MessengerController {
 
   // ─── Topics ───
 
-  @Get("conversations/:id/topics")
-  async getTopics(@Param("id") id: string) {
+  @Get('conversations/:id/topics')
+  async getTopics(@Param('id') id: string) {
     return this.service.getTopics(id);
   }
 
-  @Post("conversations/:id/topics")
+  @Post('conversations/:id/topics')
   async createTopic(
-    @Param("id") id: string,
-    @Body("title") title: string,
-    @Body("icon") icon: string,
+    @Param('id') id: string,
+    @Body('title') title: string,
+    @Body('icon') icon: string,
     @CurrentUser() user: any,
   ) {
     return this.service.createTopic(id, user.sub, title, icon);
   }
 
-  @Delete("topics/:topicId")
-  async deleteTopic(@Param("topicId") topicId: string, @CurrentUser() user: any) {
+  @Delete('topics/:topicId')
+  async deleteTopic(
+    @Param('topicId') topicId: string,
+    @CurrentUser() user: any,
+  ) {
     await this.service.deleteTopic(topicId, user.sub);
     return { ok: true };
   }

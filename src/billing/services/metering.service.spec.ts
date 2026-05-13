@@ -24,7 +24,11 @@ describe('MeteringService', () => {
       },
       usageLog: { create: jest.fn() },
     };
-    pricing = { calculatePlanckCost: jest.fn(), getMinReservePlanck: jest.fn(), getConfig: jest.fn() };
+    pricing = {
+      calculatePlanckCost: jest.fn(),
+      getMinReservePlanck: jest.fn(),
+      getConfig: jest.fn(),
+    };
     ledger = { debit: jest.fn(), getBalance: jest.fn() };
     gating = { endSession: jest.fn() };
     gateway = { emitToUser: jest.fn() };
@@ -66,12 +70,18 @@ describe('MeteringService', () => {
 
     await service.tick();
 
-    expect(pricing.calculatePlanckCost).toHaveBeenCalledWith('voice_assistant', 0.5); // 30s = 0.5 min
+    expect(pricing.calculatePlanckCost).toHaveBeenCalledWith(
+      'voice_assistant',
+      0.5,
+    ); // 30s = 0.5 min
     expect(ledger.debit).toHaveBeenCalledWith(
       'u1',
       12_820_000n,
       'SPEND',
-      expect.objectContaining({ featureKey: 'voice_assistant', sessionId: 's1' }),
+      expect.objectContaining({
+        featureKey: 'voice_assistant',
+        sessionId: 's1',
+      }),
     );
     expect(prisma.aiSession.updateMany).toHaveBeenCalledWith({
       where: { id: 's1', lastMeteredAt: startedAt, status: 'active' },
@@ -79,7 +89,9 @@ describe('MeteringService', () => {
     });
     expect(prisma.aiSession.update).toHaveBeenCalledWith({
       where: { id: 's1' },
-      data: expect.objectContaining({ totalSpentPlanck: { increment: 12_820_000n } }),
+      data: expect.objectContaining({
+        totalSpentPlanck: { increment: 12_820_000n },
+      }),
     });
     expect(prisma.usageLog.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -114,12 +126,16 @@ describe('MeteringService', () => {
     await service.tick();
 
     expect(gating.endSession).toHaveBeenCalledWith('s1', 'terminated_no_funds');
-    expect(gateway.emitToUser).toHaveBeenCalledWith('u1', 'ai_session_terminated', {
-      sessionId: 's1',
-      reason: 'no_funds',
-      featureKey: 'voice_assistant',
-      contextRef: 'room42',
-    });
+    expect(gateway.emitToUser).toHaveBeenCalledWith(
+      'u1',
+      'ai_session_terminated',
+      {
+        sessionId: 's1',
+        reason: 'no_funds',
+        featureKey: 'voice_assistant',
+        contextRef: 'room42',
+      },
+    );
   });
 
   it('emits low_balance_warning when balance < 3× minReserve', async () => {
@@ -159,7 +175,9 @@ describe('MeteringService', () => {
     ]);
     pricing.calculatePlanckCost.mockResolvedValue(1_000_000n);
     pricing.getConfig.mockResolvedValue({ billingEnforced: false });
-    ledger.debit.mockRejectedValue(new InsufficientFundsException('voice_assistant', 1n, 0n));
+    ledger.debit.mockRejectedValue(
+      new InsufficientFundsException('voice_assistant', 1n, 0n),
+    );
 
     await service.tick();
 

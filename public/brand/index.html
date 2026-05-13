@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Brand Assets — Taler ID</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --primary: #167EF2;
+      --primary-dark: #1570D6;
+      --accent: #FBBF24;
+      --bg: #0A0E1A;
+      --bg-elevated: #161B2C;
+      --fg: #F5F7FA;
+      --fg-muted: #8A92A6;
+      --border: #232A40;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 16px;
+      line-height: 1.6;
+    }
+    a { color: var(--primary); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 0.9em;
+    }
+
+    /* Top nav (mirrors oauth-guide.html) */
+    .nav {
+      background: var(--bg-elevated);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 24px;
+    }
+    .nav-inner {
+      max-width: 960px;
+      margin: 0 auto;
+      display: flex;
+      gap: 24px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .nav-title {
+      font-weight: 700;
+      color: var(--fg);
+    }
+
+    /* Page container */
+    .container {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 48px 24px;
+    }
+    h1 { font-size: 36px; font-weight: 700; margin: 0 0 8px; }
+    h2 { font-size: 24px; font-weight: 600; margin: 48px 0 16px; padding-top: 24px; border-top: 1px solid var(--border); }
+    h2:first-of-type { border-top: none; padding-top: 0; }
+    .lead { color: var(--fg-muted); font-size: 18px; margin: 0 0 32px; }
+
+    /* Logo section */
+    .logo-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+    }
+    @media (max-width: 640px) {
+      .logo-grid { grid-template-columns: 1fr; }
+    }
+    .logo-card {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      text-align: center;
+    }
+    .logo-preview {
+      width: 100%;
+      aspect-ratio: 1;
+      max-width: 240px;
+      margin: 0 auto 16px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    .logo-preview--light { background: #FFFFFF; }
+    .logo-preview--dark { background: var(--bg); border: 1px solid var(--border); }
+    .logo-preview img { max-width: 80%; max-height: 80%; }
+    .logo-meta { color: var(--fg-muted); font-size: 14px; margin-bottom: 12px; }
+    .download-btn {
+      display: inline-block;
+      padding: 8px 16px;
+      background: var(--primary);
+      color: #FFFFFF;
+      border-radius: 6px;
+      font-weight: 500;
+      font-size: 14px;
+    }
+    .download-btn:hover { background: var(--primary-dark); text-decoration: none; }
+
+    /* Colors section */
+    .color-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 16px;
+    }
+    .color-card {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .color-swatch {
+      height: 96px;
+      width: 100%;
+    }
+    .color-meta {
+      padding: 12px 16px;
+    }
+    .color-name {
+      font-weight: 600;
+      font-size: 14px;
+      margin-bottom: 4px;
+    }
+    .color-hex {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--fg-muted);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+    }
+    .copy-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--fg-muted);
+      border-radius: 4px;
+      padding: 2px 8px;
+      font-size: 11px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .copy-btn:hover {
+      color: var(--fg);
+      border-color: var(--primary);
+    }
+    .copy-btn.copied {
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+
+    /* Typography section */
+    .type-card {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 16px;
+    }
+    .type-name {
+      font-size: 14px;
+      color: var(--fg-muted);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+    .type-sample {
+      margin-bottom: 24px;
+    }
+    .type-sample-32 { font-size: 32px; line-height: 1.2; font-weight: 600; }
+    .type-sample-16 { font-size: 16px; line-height: 1.5; margin-top: 8px; }
+    .type-sample-14 { font-size: 14px; line-height: 1.5; color: var(--fg-muted); margin-top: 4px; }
+    .type-sample-mono { font-family: 'JetBrains Mono', monospace; font-size: 14px; }
+
+    .code-block {
+      position: relative;
+      background: #05070D;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      padding-right: 80px;
+      margin-top: 12px;
+      overflow-x: auto;
+    }
+    .code-block pre {
+      margin: 0;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      color: var(--fg);
+      white-space: pre;
+    }
+    .code-block .copy-btn {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+    }
+
+    /* Sign-in button library (Phase 0 — Inter, no glyph yet) */
+    .signin-btn {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      font-weight: 600;
+      border-radius: 8px;
+      border: 1px solid #167EF2;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      text-decoration: none;
+      transition: background 120ms ease;
+      user-select: none;
+      box-sizing: border-box;
+    }
+    .signin-btn:hover { text-decoration: none; }
+    .signin-btn--regular { height: 44px; padding: 0 16px; font-size: 14px; }
+    .signin-btn--large { height: 56px; padding: 0 24px; font-size: 16px; }
+    .signin-btn--light { background: #FFFFFF; color: #167EF2; }
+    .signin-btn--light:hover { background: #EFF6FF; }
+    .signin-btn--dark { background: #167EF2; color: #FFFFFF; }
+    .signin-btn--dark:hover { background: #1570D6; border-color: #1570D6; }
+
+    /* Button preview cards */
+    .btn-card {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 16px;
+    }
+    .btn-card-title {
+      font-size: 14px;
+      color: var(--fg-muted);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      margin-bottom: 16px;
+    }
+    .btn-preview-light, .btn-preview-dark {
+      padding: 32px;
+      border-radius: 8px;
+      text-align: center;
+      margin-bottom: 12px;
+    }
+    .btn-preview-light { background: #F5F7FA; }
+    .btn-preview-dark { background: #0A0E1A; border: 1px solid var(--border); }
+  </style>
+</head>
+<body>
+  <div class="nav">
+    <div class="nav-inner">
+      <span class="nav-title">Taler ID — Brand Assets</span>
+      <a href="/oauth-guide.html">← Integration guide</a>
+    </div>
+  </div>
+
+  <div class="container">
+    <h1>Brand Assets</h1>
+    <p class="lead">Logos, colors, typography, and ready-to-use buttons for integrating "Sign in with Taler ID".</p>
+
+    <h2>Logo</h2>
+    <div class="logo-grid">
+      <div class="logo-card">
+        <div class="logo-preview logo-preview--dark">
+          <img src="/brand/logo-light.png" alt="Taler ID logo (light)">
+        </div>
+        <div class="logo-meta">1024 × 1024 px, PNG · Use on dark backgrounds</div>
+        <a class="download-btn" href="/brand/logo-light.png" download>Download PNG</a>
+      </div>
+      <div class="logo-card">
+        <div class="logo-preview logo-preview--light">
+          <img src="/brand/logo-dark.png" alt="Taler ID logo (dark)">
+        </div>
+        <div class="logo-meta">1024 × 1024 px, PNG · Use on light backgrounds</div>
+        <a class="download-btn" href="/brand/logo-dark.png" download>Download PNG</a>
+      </div>
+    </div>
+
+    <h2>Colors</h2>
+    <div class="color-grid">
+      <div class="color-card">
+        <div class="color-swatch" style="background: #167EF2"></div>
+        <div class="color-meta">
+          <div class="color-name">Taler Blue</div>
+          <div class="color-hex"><code>#167EF2</code><button class="copy-btn" data-copy="#167EF2">Copy</button></div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background: #1570D6"></div>
+        <div class="color-meta">
+          <div class="color-name">Taler Blue Dark</div>
+          <div class="color-hex"><code>#1570D6</code><button class="copy-btn" data-copy="#1570D6">Copy</button></div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background: #FBBF24"></div>
+        <div class="color-meta">
+          <div class="color-name">Taler Gold</div>
+          <div class="color-hex"><code>#FBBF24</code><button class="copy-btn" data-copy="#FBBF24">Copy</button></div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background: #0A0E1A; border-bottom: 1px solid #232A40"></div>
+        <div class="color-meta">
+          <div class="color-name">Background Dark</div>
+          <div class="color-hex"><code>#0A0E1A</code><button class="copy-btn" data-copy="#0A0E1A">Copy</button></div>
+        </div>
+      </div>
+      <div class="color-card">
+        <div class="color-swatch" style="background: #F5F7FA"></div>
+        <div class="color-meta">
+          <div class="color-name">Foreground Light</div>
+          <div class="color-hex"><code>#F5F7FA</code><button class="copy-btn" data-copy="#F5F7FA">Copy</button></div>
+        </div>
+      </div>
+    </div>
+
+    <h2>Typography</h2>
+    <div class="type-card">
+      <div class="type-name">Inter — UI text</div>
+      <div class="type-sample">
+        <div class="type-sample-32">Sign in with Taler ID</div>
+        <div class="type-sample-16">Body text uses Inter at 16 px with 1.5 line-height for readability.</div>
+        <div class="type-sample-14">Smaller hints and metadata sit at 14 px in muted color.</div>
+      </div>
+      <div class="code-block">
+        <button class="copy-btn" data-copy-target="font-inter">Copy</button>
+        <pre id="font-inter">&lt;link rel="preconnect" href="https://fonts.googleapis.com"&gt;
+&lt;link rel="preconnect" href="https://fonts.gstatic.com" crossorigin&gt;
+&lt;link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet"&gt;</pre>
+      </div>
+    </div>
+
+    <div class="type-card">
+      <div class="type-name">JetBrains Mono — Code</div>
+      <div class="type-sample">
+        <div class="type-sample-mono">curl -X POST https://id.taler.tirol/oauth/register</div>
+      </div>
+      <div class="code-block">
+        <button class="copy-btn" data-copy-target="font-mono">Copy</button>
+        <pre id="font-mono">&lt;link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"&gt;</pre>
+      </div>
+    </div>
+
+    <h2>Buttons</h2>
+    <p class="lead" style="font-size: 16px; margin-bottom: 24px;">Drop these "Sign in with Taler ID" buttons into your app. The CSS block below covers all four variants — paste it once, then use the per-variant HTML.</p>
+
+    <div class="btn-card">
+      <div class="btn-card-title">Shared CSS — paste once</div>
+      <div class="code-block">
+        <button class="copy-btn" data-copy-target="shared-css">Copy</button>
+        <pre id="shared-css">.signin-btn {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-weight: 600;
+  border-radius: 8px;
+  border: 1px solid #167EF2;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  transition: background 120ms ease;
+  user-select: none;
+  box-sizing: border-box;
+}
+.signin-btn:hover { text-decoration: none; }
+.signin-btn--regular { height: 44px; padding: 0 16px; font-size: 14px; }
+.signin-btn--large   { height: 56px; padding: 0 24px; font-size: 16px; }
+.signin-btn--light          { background: #FFFFFF; color: #167EF2; }
+.signin-btn--light:hover    { background: #EFF6FF; }
+.signin-btn--dark           { background: #167EF2; color: #FFFFFF; }
+.signin-btn--dark:hover     { background: #1570D6; border-color: #1570D6; }</pre>
+      </div>
+    </div>
+
+    <div class="btn-card">
+      <div class="btn-card-title">Light · Regular (44 px)</div>
+      <div class="btn-preview-light">
+        <a href="#" class="signin-btn signin-btn--regular signin-btn--light">Sign in with Taler ID</a>
+      </div>
+      <div class="code-block">
+        <button class="copy-btn" data-copy-target="btn-light-regular">Copy</button>
+        <pre id="btn-light-regular">&lt;a href="https://id.taler.tirol/oauth/auth?..." class="signin-btn signin-btn--regular signin-btn--light"&gt;Sign in with Taler ID&lt;/a&gt;</pre>
+      </div>
+    </div>
+
+    <div class="btn-card">
+      <div class="btn-card-title">Light · Large (56 px)</div>
+      <div class="btn-preview-light">
+        <a href="#" class="signin-btn signin-btn--large signin-btn--light">Sign in with Taler ID</a>
+      </div>
+      <div class="code-block">
+        <button class="copy-btn" data-copy-target="btn-light-large">Copy</button>
+        <pre id="btn-light-large">&lt;a href="https://id.taler.tirol/oauth/auth?..." class="signin-btn signin-btn--large signin-btn--light"&gt;Sign in with Taler ID&lt;/a&gt;</pre>
+      </div>
+    </div>
+
+    <div class="btn-card">
+      <div class="btn-card-title">Dark · Regular (44 px)</div>
+      <div class="btn-preview-dark">
+        <a href="#" class="signin-btn signin-btn--regular signin-btn--dark">Sign in with Taler ID</a>
+      </div>
+      <div class="code-block">
+        <button class="copy-btn" data-copy-target="btn-dark-regular">Copy</button>
+        <pre id="btn-dark-regular">&lt;a href="https://id.taler.tirol/oauth/auth?..." class="signin-btn signin-btn--regular signin-btn--dark"&gt;Sign in with Taler ID&lt;/a&gt;</pre>
+      </div>
+    </div>
+
+    <div class="btn-card">
+      <div class="btn-card-title">Dark · Large (56 px)</div>
+      <div class="btn-preview-dark">
+        <a href="#" class="signin-btn signin-btn--large signin-btn--dark">Sign in with Taler ID</a>
+      </div>
+      <div class="code-block">
+        <button class="copy-btn" data-copy-target="btn-dark-large">Copy</button>
+        <pre id="btn-dark-large">&lt;a href="https://id.taler.tirol/oauth/auth?..." class="signin-btn signin-btn--large signin-btn--dark"&gt;Sign in with Taler ID&lt;/a&gt;</pre>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    document.querySelectorAll('.copy-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const text = btn.dataset.copy
+          ?? document.getElementById(btn.dataset.copyTarget)?.textContent
+          ?? '';
+        if (!text) return;
+        try {
+          await navigator.clipboard.writeText(text);
+          const originalText = btn.textContent;
+          btn.textContent = 'Copied!';
+          btn.classList.add('copied');
+          setTimeout(() => {
+            btn.textContent = originalText;
+            btn.classList.remove('copied');
+          }, 1200);
+        } catch (err) {
+          console.error('Copy failed', err);
+          btn.textContent = 'Press Ctrl+C';
+        }
+      });
+    });
+  </script>
+</body>
+</html>

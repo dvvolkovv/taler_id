@@ -22,7 +22,9 @@ async function main() {
         created++;
         if (created % 10 === 0) console.log(`...${created}`);
       } catch (err) {
-        console.error(`failed to create wallet for user ${u.id}: ${String(err)}`);
+        console.error(
+          `failed to create wallet for user ${u.id}: ${String(err)}`,
+        );
       }
     }
     console.log(`created ${created} wallets`);

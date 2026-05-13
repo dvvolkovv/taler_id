@@ -1,134 +1,237 @@
-import { Body, Controller, Post, Get, Delete, Param, Query, UseGuards, UseFilters, Headers, UseInterceptors, UploadedFile, HttpException, HttpStatus } from "@nestjs/common";
-import { FileInterceptor } from "@nestjs/platform-express";
-import { VoiceService } from "./voice.service";
-import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
-import { CurrentUser } from "../common/decorators/current-user.decorator";
-import { FileStorageService } from "../common/file-storage.service";
-import { BillingExceptionFilter } from "../billing/filters/billing-exception.filter";
-import { GatingService } from "../billing/services/gating.service";
-import { MeteringService } from "../billing/services/metering.service";
+import {
+  Body,
+  Controller,
+  Post,
+  Get,
+  Delete,
+  Param,
+  Query,
+  UseGuards,
+  UseFilters,
+  Headers,
+  UseInterceptors,
+  UploadedFile,
+  HttpException,
+  HttpStatus,
+  Req,
+  HttpCode,
+  Logger,
+  Inject,
+  forwardRef,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { WebhookReceiver } from 'livekit-server-sdk';
+import { VoiceService } from './voice.service';
+import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { FileStorageService } from '../common/file-storage.service';
+import { BillingExceptionFilter } from '../billing/filters/billing-exception.filter';
+import { GatingService } from '../billing/services/gating.service';
+import { MeteringService } from '../billing/services/metering.service';
+import { GroupCallService } from './group-call/group-call.service';
 
-@Controller("voice")
+@Controller('voice')
 export class VoiceController {
+  private readonly webhookReceiver = new WebhookReceiver(
+    process.env.LIVEKIT_API_KEY ?? 'lkdevkey',
+    process.env.LIVEKIT_API_SECRET ?? 'lkSecret2024TalerID',
+  );
+  private readonly webhookLogger = new Logger('LiveKitWebhook');
+
   constructor(
     private readonly service: VoiceService,
     private readonly fileStorage: FileStorageService,
     private readonly gating: GatingService,
     private readonly metering: MeteringService,
+    @Inject(forwardRef(() => GroupCallService))
+    private readonly groupCallService: GroupCallService,
   ) {}
 
-  @Post("rooms")
+  /**
+   * LiveKit webhook receiver. The LiveKit server is configured (server-side,
+   * outside this repo) with `webhook.urls = [https://id.taler.tirol/voice/livekit-webhook]`
+   * and signs every payload with the same API key/secret pair we use to mint
+   * AccessTokens. `WebhookReceiver.receive` verifies the JWT in the
+   * `Authorization` header against the raw body, so we MUST read the unparsed
+   * body — `main.ts` enables `rawBody: true` globally so `req.rawBody` is a
+   * Buffer that we stringify here.
+   *
+   * Phase 1 only consumes `participant_left` for `group-*` rooms. Other event
+   * types (room_started, room_finished, track_published, recording_*) are
+   * acknowledged with 200 but ignored — future phases (recording mgmt,
+   * end-of-call analytics) will hook in without changing the verify path.
+   *
+   * Always return 200 to LiveKit, even on signature-verify failure: LiveKit
+   * retries 4xx/5xx aggressively, and we'd rather log the bad signature than
+   * be stuck in a retry loop. Internal handler errors are also caught so a
+   * single broken event can't poison subsequent ones.
+   */
+  @Post('livekit-webhook')
+  @HttpCode(200)
+  async livekitWebhook(
+    @Req() req: any,
+    @Headers('authorization') authz: string,
+  ) {
+    let event: any;
+    try {
+      const body =
+        req.rawBody?.toString('utf8') ?? JSON.stringify(req.body ?? {});
+      event = await this.webhookReceiver.receive(body, authz);
+    } catch (e: any) {
+      this.webhookLogger.warn(
+        `Webhook signature verify failed: ${e?.message ?? e}`,
+      );
+      return { ok: false };
+    }
+
+    this.webhookLogger.debug(
+      `webhook event=${event.event} room=${event.room?.name}`,
+    );
+
+    if (
+      event.event === 'participant_left' &&
+      typeof event.room?.name === 'string' &&
+      event.room.name.startsWith('group-') &&
+      event.participant?.identity
+    ) {
+      const callId = event.room.name.replace(/^group-/, '');
+      const userId = event.participant.identity;
+      try {
+        await this.groupCallService.handleLivekitParticipantLeft(
+          callId,
+          userId,
+        );
+      } catch (e: any) {
+        this.webhookLogger.error(
+          `handleLivekitParticipantLeft failed for ${callId}/${userId}: ${e?.message ?? e}`,
+        );
+      }
+    }
+
+    return { ok: true };
+  }
+
+  @Post('rooms')
   @UseGuards(JwtAuthGuard)
   createRoom(
-    @Body("withAi") withAi: boolean,
-    @Body("conversationId") conversationId: string | undefined,
+    @Body('withAi') withAi: boolean,
+    @Body('conversationId') conversationId: string | undefined,
     @CurrentUser() user: any,
-    @Headers("authorization") authHeader: string,
+    @Headers('authorization') authHeader: string,
   ) {
-    const userToken = authHeader ? authHeader.replace("Bearer ", "") : undefined;
+    const userToken = authHeader
+      ? authHeader.replace('Bearer ', '')
+      : undefined;
     // Default to NO ai assistant for regular person-to-person calls. Clients
     // that actually want the gpt-realtime assistant in the room (assistant
     // screen, etc.) already pass withAi:true explicitly. This prevents the
     // old livekit-ai-agent from colliding with the new ai-twin-agent.
     const includeAi = withAi === true;
-    return this.service.createRoom(user.sub, includeAi, userToken, conversationId);
+    return this.service.createRoom(
+      user.sub,
+      includeAi,
+      userToken,
+      conversationId,
+    );
   }
 
-  @Get("rooms/my")
+  @Get('rooms/my')
   @UseGuards(JwtAuthGuard)
   getMyRoom(@CurrentUser() user: any) {
     return this.service.getOrCreatePersonalRoom(user.sub);
   }
 
-  @Post("rooms/temporary")
+  @Post('rooms/temporary')
   @UseGuards(JwtAuthGuard)
   createTemporaryRoom(
-    @Body("title") title: string | undefined,
-    @Body("password") password: string | undefined,
+    @Body('title') title: string | undefined,
+    @Body('password') password: string | undefined,
     @CurrentUser() user: any,
   ) {
     return this.service.createTemporaryRoom(user.sub, title, password);
   }
 
-  @Delete("rooms/temporary/:code")
+  @Delete('rooms/temporary/:code')
   @UseGuards(JwtAuthGuard)
   deactivateTemporaryRoom(
-    @Param("code") code: string,
+    @Param('code') code: string,
     @CurrentUser() user: any,
   ) {
     return this.service.deactivateTemporaryRoom(code, user.sub);
   }
 
-  @Post("rooms/public")
+  @Post('rooms/public')
   @UseGuards(JwtAuthGuard)
   createPublicRoom(
-    @Body("title") title: string | undefined,
-    @Body("password") password: string | undefined,
+    @Body('title') title: string | undefined,
+    @Body('password') password: string | undefined,
     @CurrentUser() user: any,
   ) {
     return this.service.createPublicRoom(user.sub, title, password);
   }
 
-  @Get("rooms/public/:code")
-  getPublicRoom(@Param("code") code: string) {
+  @Get('rooms/public/:code')
+  getPublicRoom(@Param('code') code: string) {
     return this.service.getPublicRoom(code);
   }
 
-  @Post("rooms/public/:code/join")
+  @Post('rooms/public/:code/join')
   joinPublicRoom(
-    @Param("code") code: string,
-    @Body("name") name: string,
-    @Body("password") password: string | undefined,
+    @Param('code') code: string,
+    @Body('name') name: string,
+    @Body('password') password: string | undefined,
   ) {
-    return this.service.joinPublicRoom(code, name || "Guest", password);
+    return this.service.joinPublicRoom(code, name || 'Guest', password);
   }
 
-  @Post("rooms/public/:code/join-auth")
+  @Post('rooms/public/:code/join-auth')
   @UseGuards(JwtAuthGuard)
   joinPublicRoomAuth(
-    @Param("code") code: string,
-    @Body("password") password: string | undefined,
+    @Param('code') code: string,
+    @Body('password') password: string | undefined,
     @CurrentUser() user: any,
   ) {
     return this.service.joinPublicRoomAuth(code, user.sub, password);
   }
 
-  @Post("rooms/:name/join")
+  @Post('rooms/:name/join')
   @UseGuards(JwtAuthGuard)
-  joinRoom(@Param("name") name: string, @CurrentUser() user: any) {
+  joinRoom(@Param('name') name: string, @CurrentUser() user: any) {
     return this.service.joinRoom(name, user.sub);
   }
 
-  @Post("session")
+  @Post('session')
   @UseGuards(JwtAuthGuard)
   @UseFilters(BillingExceptionFilter)
   createVoiceSession(@CurrentUser() user: any) {
     return this.service.createVoiceSession(user.sub);
   }
 
-  @Post("session/:sessionId/close")
+  @Post('session/:sessionId/close')
   @UseGuards(JwtAuthGuard)
   @UseFilters(BillingExceptionFilter)
   async closeVoiceSession(
     @CurrentUser() user: any,
-    @Param("sessionId") sessionId: string,
+    @Param('sessionId') sessionId: string,
     @Body() body: { durationSec: number },
   ) {
     const rawDuration = (body as { durationSec?: unknown })?.durationSec;
     const durationSec =
-      typeof rawDuration === "number" && Number.isFinite(rawDuration) && rawDuration >= 0
+      typeof rawDuration === 'number' &&
+      Number.isFinite(rawDuration) &&
+      rawDuration >= 0
         ? rawDuration
         : 0;
     await this.service.closeVoiceSession(user.sub, sessionId, durationSec);
     return { ok: true };
   }
 
-  @Get("call-history")
+  @Get('call-history')
   @UseGuards(JwtAuthGuard)
   getCallHistory(
     @CurrentUser() user: any,
-    @Query("page") page?: string,
-    @Query("limit") limit?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
   ) {
     return this.service.getCallHistory(
       user.sub,
@@ -137,13 +240,9 @@ export class VoiceController {
     );
   }
 
-
-  @Get("call-history/:id")
+  @Get('call-history/:id')
   @UseGuards(JwtAuthGuard)
-  getCallDetail(
-    @Param("id") id: string,
-    @CurrentUser() user: any,
-  ) {
+  getCallDetail(@Param('id') id: string, @CurrentUser() user: any) {
     return this.service.getCallDetail(id, user.sub);
   }
 
@@ -157,10 +256,11 @@ export class VoiceController {
    * agent isn't a human user. The secret lives in AI_TWIN_CALLBACK_SECRET
    * on both the backend and the agent .env.
    */
-  @Post("ai-twin/callback")
+  @Post('ai-twin/callback')
   async aiTwinCallback(
-    @Headers("x-ai-twin-secret") secret: string,
-    @Body() body: {
+    @Headers('x-ai-twin-secret') secret: string,
+    @Body()
+    body: {
       roomName: string;
       transcript: unknown;
       summary: string;
@@ -173,20 +273,20 @@ export class VoiceController {
     const expected = process.env.AI_TWIN_CALLBACK_SECRET;
     if (!expected) {
       throw new HttpException(
-        "AI twin callback not configured on server",
+        'AI twin callback not configured on server',
         HttpStatus.SERVICE_UNAVAILABLE,
       );
     }
     if (!secret || secret !== expected) {
-      throw new HttpException("Invalid secret", HttpStatus.UNAUTHORIZED);
+      throw new HttpException('Invalid secret', HttpStatus.UNAUTHORIZED);
     }
     if (!body?.roomName) {
-      throw new HttpException("roomName required", HttpStatus.BAD_REQUEST);
+      throw new HttpException('roomName required', HttpStatus.BAD_REQUEST);
     }
     await this.service.saveAiTwinCallData(
       body.roomName,
       body.transcript ?? null,
-      body.summary ?? "",
+      body.summary ?? '',
     );
 
     // Finalize billing: agent's reported duration is authoritative over the
@@ -197,7 +297,7 @@ export class VoiceController {
     const MAX_UNITS_PER_REPORT = 24 * 60; // mirror ReportUsageDto cap on /metering/report
     if (
       body.billingSessionId &&
-      typeof body.units === "number" &&
+      typeof body.units === 'number' &&
       Number.isFinite(body.units) &&
       body.units >= 0
     ) {
@@ -206,14 +306,14 @@ export class VoiceController {
         await this.metering.reportUsage(
           body.billingSessionId,
           safeUnits,
-          "ai-twin-agent",
+          'ai-twin-agent',
         );
       } catch (_) {
         // reportUsage throws on unknown sessionId — swallow to keep the
         // agent callback idempotent. The core transcript save already succeeded.
       }
       await this.gating
-        .endSession(body.billingSessionId, "completed")
+        .endSession(body.billingSessionId, 'completed')
         .catch(() => {});
     }
 
@@ -222,99 +322,99 @@ export class VoiceController {
 
   // ─── Meeting Recorder (no auth — protected by roomName UUID) ───
 
-  @Post("rooms/:roomName/recorder/start")
-  startRecorder(@Param("roomName") roomName: string, @Body() body: any) {
+  @Post('rooms/:roomName/recorder/start')
+  startRecorder(@Param('roomName') roomName: string, @Body() body: any) {
     return this.service.startRecorder(roomName, body?.withAi !== false);
   }
 
-  @Post("rooms/:roomName/recorder/stop")
-  stopRecorder(@Param("roomName") roomName: string) {
+  @Post('rooms/:roomName/recorder/stop')
+  stopRecorder(@Param('roomName') roomName: string) {
     return this.service.stopRecorder(roomName);
   }
 
-  @Get("rooms/:roomName/recorder/status")
-  getRecorderStatus(@Param("roomName") roomName: string) {
+  @Get('rooms/:roomName/recorder/status')
+  getRecorderStatus(@Param('roomName') roomName: string) {
     return this.service.getRecorderStatus(roomName);
   }
 
   // ─── E2EE ───
 
-  @Post("rooms/:roomName/disable-e2ee")
+  @Post('rooms/:roomName/disable-e2ee')
   @UseGuards(JwtAuthGuard)
-  disableE2EE(@Param("roomName") roomName: string) {
+  disableE2EE(@Param('roomName') roomName: string) {
     return this.service.disableE2EE(roomName);
   }
 
   // ─── Voice Translator ───
 
-  @Get("translator/languages")
+  @Get('translator/languages')
   getTranslatorLanguages() {
     return this.service.getTranslatorLanguages();
   }
 
-  @Post("rooms/:roomName/translator/start")
+  @Post('rooms/:roomName/translator/start')
   @UseGuards(JwtAuthGuard)
-  startTranslator(@Param("roomName") roomName: string) {
+  startTranslator(@Param('roomName') roomName: string) {
     return this.service.startTranslator(roomName);
   }
 
-  @Post("rooms/:roomName/translator/stop")
+  @Post('rooms/:roomName/translator/stop')
   @UseGuards(JwtAuthGuard)
-  stopTranslator(@Param("roomName") roomName: string) {
+  stopTranslator(@Param('roomName') roomName: string) {
     return this.service.stopTranslator(roomName);
   }
 
-  @Post("rooms/:roomName/set-lang")
+  @Post('rooms/:roomName/set-lang')
   @UseGuards(JwtAuthGuard)
   setTranslatorLang(
-    @Param("roomName") roomName: string,
-    @Body("lang") lang: string,
-    @Body("sourceLang") sourceLang: string,
+    @Param('roomName') roomName: string,
+    @Body('lang') lang: string,
+    @Body('sourceLang') sourceLang: string,
     @CurrentUser() user: any,
   ) {
     return this.service.setTranslatorLang(roomName, user.sub, lang, sourceLang);
   }
 
-  @Get("rooms/:roomName/translator/status")
-  getTranslatorStatus(@Param("roomName") roomName: string) {
+  @Get('rooms/:roomName/translator/status')
+  getTranslatorStatus(@Param('roomName') roomName: string) {
     return this.service.getTranslatorStatus(roomName);
   }
 
   // ─── Public Translator (no auth — protected by roomName UUID) ───
 
-  @Post("rooms/:roomName/translator/public/start")
-  startTranslatorPublic(@Param("roomName") roomName: string) {
+  @Post('rooms/:roomName/translator/public/start')
+  startTranslatorPublic(@Param('roomName') roomName: string) {
     return this.service.startTranslator(roomName);
   }
 
-  @Post("rooms/:roomName/translator/public/stop")
-  stopTranslatorPublic(@Param("roomName") roomName: string) {
+  @Post('rooms/:roomName/translator/public/stop')
+  stopTranslatorPublic(@Param('roomName') roomName: string) {
     return this.service.stopTranslator(roomName);
   }
 
-  @Post("rooms/:roomName/set-lang-public")
+  @Post('rooms/:roomName/set-lang-public')
   setTranslatorLangPublic(
-    @Param("roomName") roomName: string,
-    @Body("identity") identity: string,
-    @Body("lang") lang: string,
-    @Body("sourceLang") sourceLang: string,
+    @Param('roomName') roomName: string,
+    @Body('identity') identity: string,
+    @Body('lang') lang: string,
+    @Body('sourceLang') sourceLang: string,
   ) {
     return this.service.setTranslatorLangByIdentity(roomName, identity, lang);
   }
 
   // ─── Meeting Summaries ───
 
-  @Post("meetings/save")
+  @Post('meetings/save')
   saveMeetingSummary(@Body() data: any) {
     return this.service.saveMeetingSummary(data);
   }
 
-  @Get("meetings")
+  @Get('meetings')
   @UseGuards(JwtAuthGuard)
   getMeetingSummaries(
     @CurrentUser() user: any,
-    @Query("page") page?: string,
-    @Query("limit") limit?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
   ) {
     return this.service.getMeetingSummaries(
       user.sub,
@@ -323,25 +423,25 @@ export class VoiceController {
     );
   }
 
-  @Get("meetings/shared/:id")
-  getSharedMeetingSummary(@Param("id") id: string) {
+  @Get('meetings/shared/:id')
+  getSharedMeetingSummary(@Param('id') id: string) {
     return this.service.getMeetingSummary(id);
   }
 
-  @Get("meetings/:id")
+  @Get('meetings/:id')
   @UseGuards(JwtAuthGuard)
-  getMeetingSummary(@Param("id") id: string) {
+  getMeetingSummary(@Param('id') id: string) {
     return this.service.getMeetingSummary(id);
   }
 
   // ─── Meeting Recordings ───
 
-  @Get("recordings")
+  @Get('recordings')
   @UseGuards(JwtAuthGuard)
   getMeetingRecordings(
     @CurrentUser() user: any,
-    @Query("page") page?: string,
-    @Query("limit") limit?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
   ) {
     return this.service.getMeetingRecordings(
       user.sub,
@@ -352,34 +452,38 @@ export class VoiceController {
 
   // ─── Recording Upload (S3) ───
 
-  @Post("recordings/upload")
-  @UseInterceptors(FileInterceptor("file"))
+  @Post('recordings/upload')
+  @UseInterceptors(FileInterceptor('file'))
   async uploadRecording(@UploadedFile() file: any) {
     const key = `recordings/${Date.now()}-${file.originalname}`;
-    await this.fileStorage.upload(key, file.buffer, file.mimetype || "audio/mpeg");
+    await this.fileStorage.upload(
+      key,
+      file.buffer,
+      file.mimetype || 'audio/mpeg',
+    );
     const url = this.fileStorage.getPublicUrl(key);
     return { url, key };
   }
 
   // ─── Post-hoc Transcription ───
 
-  @Post("recordings/:id/transcribe")
+  @Post('recordings/:id/transcribe')
   @UseGuards(JwtAuthGuard)
   @UseFilters(BillingExceptionFilter)
-  async transcribeRecording(@Param("id") id: string, @CurrentUser() user: any) {
+  async transcribeRecording(@Param('id') id: string, @CurrentUser() user: any) {
     return this.service.transcribeExistingRecording(user.sub, id);
   }
   // ─── Hold Music ───
 
-  @Post("rooms/:roomName/hold-music/start")
+  @Post('rooms/:roomName/hold-music/start')
   @UseGuards(JwtAuthGuard)
-  startHoldMusic(@Param("roomName") roomName: string) {
+  startHoldMusic(@Param('roomName') roomName: string) {
     return this.service.startHoldMusic(roomName);
   }
 
-  @Post("rooms/:roomName/hold-music/stop")
+  @Post('rooms/:roomName/hold-music/stop')
   @UseGuards(JwtAuthGuard)
-  stopHoldMusic(@Param("roomName") roomName: string) {
+  stopHoldMusic(@Param('roomName') roomName: string) {
     return this.service.stopHoldMusic(roomName);
   }
 }

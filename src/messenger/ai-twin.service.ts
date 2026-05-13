@@ -143,7 +143,11 @@ export class AiTwinService implements OnModuleInit, OnModuleDestroy {
    */
   async schedulePending(input: PendingPayload): Promise<void> {
     const deadline = Date.now() + input.timeoutSeconds * 1000;
-    const member = this.memberKey(input.roomName, input.callerId, input.calleeId);
+    const member = this.memberKey(
+      input.roomName,
+      input.callerId,
+      input.calleeId,
+    );
     const meta = JSON.stringify(input);
 
     const client = this.redis.getClient();
@@ -418,9 +422,7 @@ export class AiTwinService implements OnModuleInit, OnModuleDestroy {
           select: { id: true },
         });
         if (session) {
-          await this.gating
-            .endSession(session.id, 'completed')
-            .catch(() => {});
+          await this.gating.endSession(session.id, 'completed').catch(() => {});
         }
       } catch (e) {
         this.logger.warn(

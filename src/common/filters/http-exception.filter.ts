@@ -46,9 +46,14 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const errorBody = { ...extras, ...baseBody };
 
     if (status >= 500) {
-      this.logger.error(`${request.method} ${request.url} → ${status}`, exception.stack);
+      this.logger.error(
+        `${request.method} ${request.url} → ${status}`,
+        exception.stack,
+      );
     } else if (status === 401 || status === 403) {
-      this.logger.warn(`${request.method} ${request.url} → ${status} from ${request.ip}`);
+      this.logger.warn(
+        `${request.method} ${request.url} → ${status} from ${request.ip}`,
+      );
     }
 
     response.status(status).json(errorBody);

@@ -72,7 +72,11 @@ describe('GatingService', () => {
     ledger.getBalance.mockResolvedValue(100_000_000n);
     prisma.aiSession.create.mockResolvedValue({ id: 's1', status: 'active' });
 
-    const session = await service.startSession('u1', 'voice_assistant', 'room42');
+    const session = await service.startSession(
+      'u1',
+      'voice_assistant',
+      'room42',
+    );
 
     expect(prisma.aiSession.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -84,10 +88,14 @@ describe('GatingService', () => {
       select: { id: true },
     });
     expect(session.id).toBe('s1');
-    expect(gateway.emitToUser).toHaveBeenCalledWith('u1', 'ai_session_started', {
-      sessionId: 's1',
-      featureKey: 'voice_assistant',
-    });
+    expect(gateway.emitToUser).toHaveBeenCalledWith(
+      'u1',
+      'ai_session_started',
+      {
+        sessionId: 's1',
+        featureKey: 'voice_assistant',
+      },
+    );
   });
 
   it('treats missing toggle row as enabled (default-on)', async () => {
@@ -154,11 +162,15 @@ describe('GatingService', () => {
 
     await service.endSession('s1', 'terminated_no_funds');
 
-    expect(gateway.emitToUser).toHaveBeenCalledWith('u1', 'ai_session_terminated', {
-      sessionId: 's1',
-      reason: 'no_funds',
-      featureKey: 'voice_assistant',
-    });
+    expect(gateway.emitToUser).toHaveBeenCalledWith(
+      'u1',
+      'ai_session_terminated',
+      {
+        sessionId: 's1',
+        reason: 'no_funds',
+        featureKey: 'voice_assistant',
+      },
+    );
   });
 
   it('endSession emits ai_session_terminated with reason=failed on failed', async () => {
@@ -170,10 +182,14 @@ describe('GatingService', () => {
 
     await service.endSession('s9', 'failed');
 
-    expect(gateway.emitToUser).toHaveBeenCalledWith('u9', 'ai_session_terminated', {
-      sessionId: 's9',
-      reason: 'failed',
-      featureKey: 'ai_twin',
-    });
+    expect(gateway.emitToUser).toHaveBeenCalledWith(
+      'u9',
+      'ai_session_terminated',
+      {
+        sessionId: 's9',
+        reason: 'failed',
+        featureKey: 'ai_twin',
+      },
+    );
   });
 });

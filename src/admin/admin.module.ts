@@ -7,10 +7,7 @@ import { BlockchainModule } from '../blockchain/blockchain.module';
 // PrismaModule is @Global - no need to import here
 
 @Module({
-  imports: [
-    JwtModule.register({}),
-    BlockchainModule,
-  ],
+  imports: [JwtModule.register({}), BlockchainModule],
   controllers: [AdminController],
   providers: [AdminService, AdminGuard],
 })

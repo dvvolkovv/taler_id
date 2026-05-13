@@ -1,6 +1,15 @@
 import {
-  Controller, Get, Post, Patch, Delete, Param, Query, Body,
-  UseGuards, HttpCode, HttpStatus,
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Delete,
+  Param,
+  Query,
+  Body,
+  UseGuards,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
 import { AdminService } from './admin.service';
 import { AdminGuard } from './admin.guard';
@@ -71,7 +80,11 @@ export class AdminController {
     @Query('page') page = '1',
     @Query('limit') limit = '20',
   ) {
-    return this.adminService.getTenants(search, parseInt(page), parseInt(limit));
+    return this.adminService.getTenants(
+      search,
+      parseInt(page),
+      parseInt(limit),
+    );
   }
 
   @Get('tenants/:id')

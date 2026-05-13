@@ -21,7 +21,12 @@ export class EmailService {
     });
   }
 
-  async sendInvite(to: string, tenantName: string, inviteToken: string, inviterName: string): Promise<void> {
+  async sendInvite(
+    to: string,
+    tenantName: string,
+    inviteToken: string,
+    inviterName: string,
+  ): Promise<void> {
     const baseUrl = this.config.get<string>('baseUrl');
     const acceptUrl = `${baseUrl}/ui/invite.html?token=${inviteToken}`;
     await this.transporter.sendMail({
@@ -49,12 +54,18 @@ export class EmailService {
     this.logger.log(`OTP sent to ${to}`);
   }
 
-  async sendKycStatusUpdate(to: string, status: 'VERIFIED' | 'REJECTED', reason?: string): Promise<void> {
+  async sendKycStatusUpdate(
+    to: string,
+    status: 'VERIFIED' | 'REJECTED',
+    reason?: string,
+  ): Promise<void> {
     const isVerified = status === 'VERIFIED';
     await this.transporter.sendMail({
       from: `"Taler ID KYC" <${this.config.get('email.smtp.user')}>`,
       to,
-      subject: isVerified ? 'Верификация успешна — Taler ID' : 'Верификация отклонена — Taler ID',
+      subject: isVerified
+        ? 'Верификация успешна — Taler ID'
+        : 'Верификация отклонена — Taler ID',
       html: isVerified
         ? '<h2 style="color:#27ae60">Верификация пройдена!</h2><p>Ваша личность подтверждена.</p>'
         : `<h2 style="color:#e74c3c">Верификация отклонена</h2>${reason ? '<p>Причина: ' + reason + '</p>' : ''}`,
@@ -64,7 +75,9 @@ export class EmailService {
   async verifyConnection(): Promise<boolean> {
     try {
       await this.transporter.verify();
-      this.logger.log(`SMTP connected: ${this.config.get('email.smtp.host')}:${this.config.get('email.smtp.port')}`);
+      this.logger.log(
+        `SMTP connected: ${this.config.get('email.smtp.host')}:${this.config.get('email.smtp.port')}`,
+      );
       return true;
     } catch (err) {
       this.logger.error(`SMTP connection failed: ${(err as Error).message}`);
