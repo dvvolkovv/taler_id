@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ForbiddenException,
+  ConflictException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -21,9 +26,22 @@ export class NotesService {
     return note;
   }
 
-  async create(userId: string, data: { title: string; content: string; source?: string }) {
+  async create(
+    userId: string,
+    data: { id?: string; title: string; content: string; source?: string },
+  ) {
+    if (data.id) {
+      const existing = await this.prisma.note.findUnique({ where: { id: data.id } });
+      if (existing) {
+        if (existing.userId !== userId) {
+          throw new ConflictException('Note id already used by another account');
+        }
+        return existing;
+      }
+    }
     return this.prisma.note.create({
       data: {
+        ...(data.id ? { id: data.id } : {}),
         userId,
         title: data.title,
         content: data.content,
