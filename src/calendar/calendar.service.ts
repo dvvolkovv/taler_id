@@ -260,6 +260,20 @@ export class CalendarService {
     const event = await this.prisma.calendarEvent.findUnique({ where: { id } });
     if (!event) throw new NotFoundException('Event not found');
     if (event.userId !== userId) throw new ForbiddenException();
+
+    if (data.expectedUpdatedAt !== undefined) {
+      const expected = new Date(data.expectedUpdatedAt);
+      const sameMs =
+        !Number.isNaN(expected.getTime()) &&
+        expected.getTime() === event.updatedAt.getTime();
+      if (!sameMs) {
+        throw new ConflictException({
+          message: 'Event updated elsewhere',
+          currentEvent: event,
+        });
+      }
+    }
+
     const updateData: any = {};
     if (data.title !== undefined) updateData.title = data.title;
     if (data.description !== undefined)

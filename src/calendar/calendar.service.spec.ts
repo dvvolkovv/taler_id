@@ -66,3 +66,68 @@ describe('CalendarService.create', () => {
     expect(prisma.calendarEvent.create).not.toHaveBeenCalled();
   });
 });
+
+describe('CalendarService.update', () => {
+  let service: CalendarService;
+  let prisma: any;
+
+  beforeEach(async () => {
+    prisma = {
+      calendarEvent: {
+        findUnique: jest.fn(),
+        update: jest.fn(),
+      },
+    };
+    const mod = await Test.createTestingModule({
+      providers: [
+        CalendarService,
+        { provide: PrismaService, useValue: prisma },
+        { provide: FcmService, useValue: { sendCalendarInvite: jest.fn() } },
+      ],
+    }).compile();
+    service = mod.get(CalendarService);
+  });
+
+  it('without expectedUpdatedAt: applies update (LWW, back-compat)', async () => {
+    const now = new Date('2026-05-14T10:00:00Z');
+    prisma.calendarEvent.findUnique.mockResolvedValue({ id: 'e1', userId: 'u1', updatedAt: now });
+    prisma.calendarEvent.update.mockResolvedValue({ id: 'e1', userId: 'u1', title: 'new' });
+    const out = await service.update('u1', 'e1', { title: 'new' });
+    expect(prisma.calendarEvent.update).toHaveBeenCalled();
+    expect(out.title).toBe('new');
+  });
+
+  it('with matching expectedUpdatedAt: applies update', async () => {
+    const now = new Date('2026-05-14T10:00:00Z');
+    prisma.calendarEvent.findUnique.mockResolvedValue({ id: 'e1', userId: 'u1', updatedAt: now });
+    prisma.calendarEvent.update.mockResolvedValue({ id: 'e1', userId: 'u1', title: 'new' });
+    const out = await service.update('u1', 'e1', { title: 'new', expectedUpdatedAt: now.toISOString() });
+    expect(prisma.calendarEvent.update).toHaveBeenCalled();
+    expect(out.title).toBe('new');
+  });
+
+  it('with stale expectedUpdatedAt: throws ConflictException with currentEvent in response', async () => {
+    const dbTime = new Date('2026-05-14T10:05:00Z');
+    const clientTs = new Date('2026-05-14T10:00:00Z').toISOString();
+    const current = { id: 'e1', userId: 'u1', updatedAt: dbTime, title: 'on server' };
+    prisma.calendarEvent.findUnique.mockResolvedValue(current);
+    let thrown: any;
+    try {
+      await service.update('u1', 'e1', { title: 'mine', expectedUpdatedAt: clientTs });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(ConflictException);
+    const resp = (thrown as ConflictException).getResponse() as any;
+    expect(resp.currentEvent).toEqual(current);
+    expect(prisma.calendarEvent.update).not.toHaveBeenCalled();
+  });
+
+  it('with bogus expectedUpdatedAt string: throws ConflictException', async () => {
+    const dbTime = new Date('2026-05-14T10:05:00Z');
+    prisma.calendarEvent.findUnique.mockResolvedValue({ id: 'e1', userId: 'u1', updatedAt: dbTime });
+    await expect(
+      service.update('u1', 'e1', { title: 'mine', expectedUpdatedAt: 'not-a-date' }),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+});
