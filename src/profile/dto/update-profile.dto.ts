@@ -79,6 +79,10 @@ export class UpdateProfileDto {
   @MaxLength(100)
   @IsOptional()
   aiTwinVoiceId?: string;
+
+  @IsIn(['EVERYONE', 'CONTACTS', 'NOBODY'])
+  @IsOptional()
+  lastSeenPrivacy?: 'EVERYONE' | 'CONTACTS' | 'NOBODY';
 }
 
 export class LinkWalletDto {

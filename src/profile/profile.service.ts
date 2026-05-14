@@ -98,6 +98,7 @@ export class ProfileService {
         aiTwinTimeoutSeconds: dto.aiTwinTimeoutSeconds,
         aiTwinPrompt: dto.aiTwinPrompt,
         aiTwinVoiceId: dto.aiTwinVoiceId,
+        lastSeenPrivacy: dto.lastSeenPrivacy,
       },
       create: {
         userId,
@@ -114,6 +115,7 @@ export class ProfileService {
         aiTwinTimeoutSeconds: dto.aiTwinTimeoutSeconds,
         aiTwinPrompt: dto.aiTwinPrompt,
         aiTwinVoiceId: dto.aiTwinVoiceId,
+        lastSeenPrivacy: dto.lastSeenPrivacy,
       },
     });
   }
