@@ -13,7 +13,7 @@ describe('PresenceService', () => {
   };
 
   const mockExists = jest.fn();
-  mockRedis.getClient.mockReturnValue({ exists: mockExists });
+  const mockSet = jest.fn();
 
   const mockPrisma = {
     profile: {
@@ -27,6 +27,9 @@ describe('PresenceService', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    // Re-bind the redis client mock each test so a future
+    // jest.resetAllMocks() wouldn't strip the return value.
+    mockRedis.getClient.mockReturnValue({ exists: mockExists, set: mockSet });
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         PresenceService,
@@ -39,23 +42,23 @@ describe('PresenceService', () => {
 
   describe('ping', () => {
     it('sets Redis online key with 90s TTL', async () => {
-      mockRedis.get.mockResolvedValue(null);
+      mockSet.mockResolvedValue('OK');
       await service.ping('user-a');
       expect(mockRedis.setEx).toHaveBeenCalledWith('presence:online:user-a', 90, '1');
     });
 
-    it('writes Profile.lastSeenAt + dbwrite throttle key on first call', async () => {
-      mockRedis.get.mockResolvedValue(null);
+    it('writes Profile.lastSeenAt + atomically acquires dbwrite throttle key on first call', async () => {
+      mockSet.mockResolvedValue('OK');
       await service.ping('user-a');
+      expect(mockSet).toHaveBeenCalledWith('presence:dbwrite:user-a', '1', 'EX', 60, 'NX');
       expect(mockPrisma.profile.update).toHaveBeenCalledWith({
         where: { userId: 'user-a' },
         data: { lastSeenAt: expect.any(Date) },
       });
-      expect(mockRedis.setEx).toHaveBeenCalledWith('presence:dbwrite:user-a', 60, '1');
     });
 
-    it('skips Profile update when throttle key exists', async () => {
-      mockRedis.get.mockResolvedValue('1');
+    it('skips Profile update when atomic SET NX returns null (throttle key already exists)', async () => {
+      mockSet.mockResolvedValue(null);
       await service.ping('user-a');
       expect(mockPrisma.profile.update).not.toHaveBeenCalled();
     });

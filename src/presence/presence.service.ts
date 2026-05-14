@@ -17,10 +17,13 @@ export class PresenceService {
 
   async ping(userId: string): Promise<void> {
     await this.redis.setEx(`presence:online:${userId}`, 90, '1');
-    const throttleKey = `presence:dbwrite:${userId}`;
-    const throttled = await this.redis.get(throttleKey);
-    if (throttled) return;
-    await this.redis.setEx(throttleKey, 60, '1');
+    // Atomic SET NX EX: only the first concurrent pinger acquires the DB-write
+    // slot for the 60s throttle window; others early-return. Matches the idiom
+    // used in group-call.service.ts.
+    const acquired = await this.redis
+      .getClient()
+      .set(`presence:dbwrite:${userId}`, '1', 'EX', 60, 'NX');
+    if (acquired !== 'OK') return;
     await this.prisma.profile.update({
       where: { userId },
       data: { lastSeenAt: new Date() },
