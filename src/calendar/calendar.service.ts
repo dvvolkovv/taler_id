@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   ForbiddenException,
+  ConflictException,
   Logger,
 } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
@@ -153,6 +154,7 @@ export class CalendarService {
   async create(
     userId: string,
     data: {
+      id?: string;
       title: string;
       description?: string;
       type: string;
@@ -170,8 +172,21 @@ export class CalendarService {
       } | null;
     },
   ) {
+    if (data.id) {
+      const existing = await this.prisma.calendarEvent.findUnique({
+        where: { id: data.id },
+      });
+      if (existing) {
+        if (existing.userId !== userId) {
+          throw new ConflictException('Event id already used by another account');
+        }
+        return existing;
+      }
+    }
+
     const event = await this.prisma.calendarEvent.create({
       data: {
+        ...(data.id ? { id: data.id } : {}),
         userId,
         title: data.title,
         description: data.description ?? null,
