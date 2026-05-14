@@ -28,6 +28,7 @@ import { OutboundBotModule } from './outbound-bot/outbound-bot.module';
 import { DeviceKeysModule } from './device-keys/device-keys.module';
 import { BillingModule } from './billing/billing.module';
 import { OAuthMobileModule } from './oauth-mobile/oauth-mobile.module';
+import { PresenceModule } from './presence/presence.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import configuration from './config/configuration';
 
@@ -114,6 +115,7 @@ import configuration from './config/configuration';
     DeviceKeysModule,
     BillingModule,
     OAuthMobileModule,
+    PresenceModule,
   ],
   controllers: [AppController],
   providers: [
