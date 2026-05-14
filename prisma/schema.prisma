@@ -80,12 +80,14 @@ model Profile {
   createdAt            DateTime   @default(now())
   updatedAt            DateTime   @updatedAt
   personalRoomCode     String?    @unique
-  aiTwinEnabled        Boolean    @default(false)
-  aiTwinTimeoutSeconds Int        @default(30)
-  aiTwinPrompt         String?    @db.Text
+  aiTwinEnabled        Boolean         @default(false)
+  aiTwinTimeoutSeconds Int             @default(30)
+  aiTwinPrompt         String?         @db.Text
   aiTwinVoiceId        String?
+  lastSeenAt           DateTime?
+  lastSeenPrivacy      LastSeenPrivacy @default(EVERYONE)
   documents            Document[]
-  user                 User       @relation(fields: [userId], references: [id])
+  user                 User            @relation(fields: [userId], references: [id])
 }
 
 model Document {
@@ -314,6 +316,12 @@ enum KycStatus {
   PENDING
   VERIFIED
   REJECTED
+}
+
+enum LastSeenPrivacy {
+  EVERYONE
+  CONTACTS
+  NOBODY
 }
 
 enum KycType {
