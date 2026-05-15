@@ -242,7 +242,12 @@ export class ProfileService {
     return { success: true, username };
   }
 
-  async getPublicProfile(userId: string) {
+  async getPublicProfile(userIdOrUsername: string) {
+    // Accept either a userId (UUID) or a username — share links of the form
+    // https://id.taler.tirol/u/<username> pass the username here.
+    const userId = await resolveUserIdOrUsername(this.prisma, userIdOrUsername);
+    if (!userId) throw new NotFoundException('Profile not found');
+
     const [profile, user] = await Promise.all([
       this.prisma.profile.findUnique({
         where: { userId },
@@ -253,7 +258,7 @@ export class ProfileService {
         select: { username: true },
       }),
     ]);
-    return { ...profile, username: user?.username ?? null, userId };
+    return { ...profile, username: user?.username ?? null, userId, id: userId };
   }
 
   // ── Video Backgrounds ──────────────────────────────────────────────
