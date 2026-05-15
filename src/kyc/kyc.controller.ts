@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Req, UseGuards, Logger } from '@nestjs/common';
+import { Controller, Post, Get, Req, UseGuards, Logger, Query } from '@nestjs/common';
 import { SkipThrottle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { KycService } from './kyc.service';
@@ -17,8 +17,11 @@ export class KycController {
 
   @Post('start')
   @UseGuards(JwtAuthGuard)
-  startKyc(@CurrentUser() user: any) {
-    return this.kycService.startKyc(user.sub);
+  startKyc(
+    @CurrentUser() user: any,
+    @Query('platform') platform?: 'mobile' | 'desktop',
+  ) {
+    return this.kycService.startKyc(user.sub, platform ?? 'mobile');
   }
 
   @Get('status')

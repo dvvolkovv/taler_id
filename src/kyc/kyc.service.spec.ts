@@ -3,6 +3,7 @@ import { KycService } from './kyc.service';
 import { BlockchainService } from '../blockchain/blockchain.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConfigService } from '@nestjs/config';
+import { EmailService } from '../email/email.service';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import * as crypto from 'crypto';
 
@@ -28,11 +29,23 @@ const mockConfig = {
   }),
 };
 
+const mockEmail = {
+  sendKycStatusUpdate: jest.fn().mockResolvedValue(undefined),
+  sendInvite: jest.fn().mockResolvedValue(undefined),
+  sendOtp: jest.fn().mockResolvedValue(undefined),
+};
+
 describe('KycService', () => {
   let service: KycService;
+  let originalEnv: NodeJS.ProcessEnv;
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    // Override Sumsub env vars so service uses mock paths (test_token triggers mock branches)
+    originalEnv = { ...process.env };
+    process.env.SUMSUB_APP_TOKEN = 'test_token';
+    process.env.SUMSUB_SECRET_KEY = 'test_secret';
+    process.env.SUMSUB_WEBHOOK_SECRET = 'test_secret';
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         KycService,
@@ -47,9 +60,15 @@ describe('KycService', () => {
             isConnected: false,
           },
         },
+        { provide: EmailService, useValue: mockEmail },
       ],
     }).compile();
     service = module.get<KycService>(KycService);
+  });
+
+  afterEach(() => {
+    // Restore original env
+    process.env = originalEnv;
   });
 
   describe('getKycStatus', () => {
@@ -119,11 +138,17 @@ describe('KycService', () => {
 
       mockPrisma.kycRecord.findFirst.mockResolvedValue({
         id: 'k1',
+        userId: 'user-verified',
         sumsubApplicantId: 'sumsub-1',
       });
       mockPrisma.kycRecord.update.mockResolvedValue({
         id: 'k1',
+        userId: 'user-verified',
         status: 'VERIFIED',
+      });
+      mockPrisma.user.findUnique.mockResolvedValue({
+        id: 'user-verified',
+        email: 'verified@example.com',
       });
 
       const result = await service.handleWebhook(body, sig);
@@ -150,11 +175,17 @@ describe('KycService', () => {
 
       mockPrisma.kycRecord.findFirst.mockResolvedValue({
         id: 'k2',
+        userId: 'user-rejected',
         sumsubApplicantId: 'sumsub-2',
       });
       mockPrisma.kycRecord.update.mockResolvedValue({
         id: 'k2',
+        userId: 'user-rejected',
         status: 'REJECTED',
+      });
+      mockPrisma.user.findUnique.mockResolvedValue({
+        id: 'user-rejected',
+        email: 'rejected@example.com',
       });
 
       const result = await service.handleWebhook(body, sig);
@@ -286,6 +317,61 @@ describe('KycService', () => {
 
       const result = await service.startKyc('user-3');
       expect(result.status).toBe('PENDING');
+    });
+
+    it('defaults to mobile platform when no platform param is given', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({
+        id: 'user-1',
+        email: 'test@example.com',
+        phone: null,
+      });
+      mockPrisma.kycRecord.upsert.mockResolvedValue({
+        userId: 'user-1',
+        sumsubApplicantId: 'mock_applicant_user-1',
+        status: 'PENDING',
+      });
+
+      const result = await service.startKyc('user-1');
+      expect(result.platform).toBe('mobile');
+      expect('sdkToken' in result).toBe(true);
+      expect('webSdkUrl' in result).toBe(false);
+    });
+
+    it('returns webSdkUrl for desktop platform', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({
+        id: 'user-4',
+        email: 'desktop@example.com',
+        phone: null,
+      });
+      mockPrisma.kycRecord.upsert.mockResolvedValue({
+        userId: 'user-4',
+        sumsubApplicantId: 'mock_applicant_user-4',
+        status: 'PENDING',
+      });
+
+      const result = await service.startKyc('user-4', 'desktop');
+      expect(result.platform).toBe('desktop');
+      expect('webSdkUrl' in result).toBe(true);
+      expect((result as any).webSdkUrl).toContain('sumsub.com');
+      expect('sdkToken' in result).toBe(false);
+    });
+
+    it('mobile platform explicitly passed returns sdkToken not webSdkUrl', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({
+        id: 'user-5',
+        email: 'mobile@example.com',
+        phone: null,
+      });
+      mockPrisma.kycRecord.upsert.mockResolvedValue({
+        userId: 'user-5',
+        sumsubApplicantId: 'mock_applicant_user-5',
+        status: 'PENDING',
+      });
+
+      const result = await service.startKyc('user-5', 'mobile');
+      expect(result.platform).toBe('mobile');
+      expect('sdkToken' in result).toBe(true);
+      expect('webSdkUrl' in result).toBe(false);
     });
   });
 });

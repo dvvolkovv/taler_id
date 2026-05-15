@@ -21,7 +21,13 @@ export class KycService {
     private email: EmailService,
   ) {}
 
-  async startKyc(userId: string) {
+  async startKyc(
+    userId: string,
+    platform: 'mobile' | 'desktop' = 'mobile',
+  ): Promise<
+    | { platform: 'mobile'; sumsubApplicantId: string; sdkToken: string; status: string }
+    | { platform: 'desktop'; sumsubApplicantId: string; webSdkUrl: string; status: string }
+  > {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new NotFoundException('User not found');
 
@@ -37,10 +43,26 @@ export class KycService {
       update: { sumsubApplicantId: applicantId, status: 'PENDING' },
     });
 
-    // Get SDK token for frontend (pass our externalUserId, not Sumsub applicantId)
+    if (platform === 'desktop') {
+      // Get Web SDK link for desktop (returns a one-time-use URL)
+      const webSdkUrl = await this.getSumsubWebSdkLink(userId);
+      return {
+        platform: 'desktop' as const,
+        sumsubApplicantId: applicantId,
+        webSdkUrl,
+        status: 'PENDING',
+      };
+    }
+
+    // Get SDK token for mobile frontend (pass our externalUserId, not Sumsub applicantId)
     const sdkToken = await this.getSumsubSdkToken(userId);
 
-    return { sumsubApplicantId: applicantId, sdkToken, status: 'PENDING' };
+    return {
+      platform: 'mobile' as const,
+      sumsubApplicantId: applicantId,
+      sdkToken,
+      status: 'PENDING',
+    };
   }
 
   async getKycStatus(userId: string) {
@@ -354,6 +376,53 @@ export class KycService {
     if (!response.ok)
       throw new BadRequestException('Sumsub fetch error: ' + data.description);
     return data.id;
+  }
+
+  private async getSumsubWebSdkLink(externalUserId: string): Promise<string> {
+    const appToken = process.env.SUMSUB_APP_TOKEN || '';
+    const secretKey = process.env.SUMSUB_SECRET_KEY || '';
+    const baseUrl = process.env.SUMSUB_BASE_URL || 'https://api.sumsub.com';
+
+    // In test/dev mode, return a mock Web SDK URL
+    if (appToken === 'test_token' || !appToken) {
+      return (
+        'https://api.sumsub.com/idensic/l/mock_websdk_' +
+        externalUserId.substring(0, 8)
+      );
+    }
+
+    const levelName = process.env.SUMSUB_LEVEL_NAME || 'basic-kyc-level';
+    const ttlInSecs = 3600;
+    const ts = Math.floor(Date.now() / 1000).toString();
+    const method = 'POST';
+    const urlPath =
+      '/resources/sdkIntegrations/levels/' +
+      levelName +
+      '/websdkLink?externalUserId=' +
+      externalUserId +
+      '&ttlInSecs=' +
+      ttlInSecs;
+
+    const signature = crypto
+      .createHmac('sha256', secretKey)
+      .update(ts + method + urlPath)
+      .digest('hex');
+
+    const response = await fetch(baseUrl + urlPath, {
+      method,
+      headers: {
+        'X-App-Token': appToken,
+        'X-App-Access-Sig': signature,
+        'X-App-Access-Ts': ts,
+      },
+    });
+
+    const data: any = await response.json();
+    if (!response.ok)
+      throw new BadRequestException(
+        'Sumsub webSdkLink error: ' + data.description,
+      );
+    return data.url;
   }
 
   private async getSumsubSdkToken(externalUserId: string): Promise<string> {
