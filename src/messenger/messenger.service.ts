@@ -8,6 +8,7 @@ import {
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { FileStorageService } from '../common/file-storage.service';
+import { resolveUserIdOrUsername } from '../common/utils/user-id.util';
 
 @Injectable()
 export class MessengerService {
@@ -1716,7 +1717,7 @@ export class MessengerService {
 
   async getContactStatus(
     myId: string,
-    targetId: string,
+    targetIdOrUsername: string,
   ): Promise<{
     isContact: boolean;
     pendingRequest: 'sent' | 'received' | null;
@@ -1724,6 +1725,18 @@ export class MessengerService {
     isBlocked: boolean;
     iBlockedThem: boolean;
   }> {
+    // Accept either a userId (UUID) or a username — share-link deep-link
+    // (https://id.taler.tirol/u/<username>) hits this endpoint with username.
+    const targetId = await resolveUserIdOrUsername(this.prisma, targetIdOrUsername);
+    if (!targetId) {
+      return {
+        isContact: false,
+        pendingRequest: null,
+        requestId: null,
+        isBlocked: false,
+        iBlockedThem: false,
+      };
+    }
     const [req, block, iBlock] = await Promise.all([
       this.prisma.contactRequest.findFirst({
         where: {

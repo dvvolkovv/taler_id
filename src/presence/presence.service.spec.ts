@@ -23,6 +23,14 @@ describe('PresenceService', () => {
     contactRequest: {
       findFirst: jest.fn(),
     },
+    user: {
+      // Helper resolveUserIdOrUsername falls through to user.findUnique
+      // when the input isn't a UUID. Tests use short labels ('target', 'user-a')
+      // that look like usernames, so we echo the input as the resolved id.
+      findUnique: jest.fn().mockImplementation(({ where }) =>
+        Promise.resolve({ id: where.username }),
+      ),
+    },
   };
 
   beforeEach(async () => {
@@ -30,6 +38,11 @@ describe('PresenceService', () => {
     // Re-bind the redis client mock each test so a future
     // jest.resetAllMocks() wouldn't strip the return value.
     mockRedis.getClient.mockReturnValue({ exists: mockExists, set: mockSet });
+    // mockImplementation survives clearAllMocks (which clears call history
+    // but keeps implementations); re-bind anyway for resetAllMocks safety.
+    mockPrisma.user.findUnique.mockImplementation(({ where }) =>
+      Promise.resolve({ id: where.username }),
+    );
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         PresenceService,

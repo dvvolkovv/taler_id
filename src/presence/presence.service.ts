@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
+import { resolveUserIdOrUsername } from '../common/utils/user-id.util';
 
 export interface PresenceResult {
   isOnline: boolean | null;
@@ -30,7 +31,12 @@ export class PresenceService {
     });
   }
 
-  async getPresence(viewerId: string, targetUserId: string): Promise<PresenceResult> {
+  async getPresence(viewerId: string, targetIdOrUsername: string): Promise<PresenceResult> {
+    // Accept either a userId (UUID) or a username — share-link deep-link
+    // (https://id.taler.tirol/u/<username>) hits this endpoint with username.
+    const targetUserId = await resolveUserIdOrUsername(this.prisma, targetIdOrUsername);
+    if (!targetUserId) return { isOnline: null, lastSeenAt: null, hidden: true };
+
     const profile = await this.prisma.profile.findUnique({
       where: { userId: targetUserId },
       select: { lastSeenPrivacy: true, lastSeenAt: true },

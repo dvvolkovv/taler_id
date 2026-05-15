@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { FileStorageService } from '../common/file-storage.service';
+import { resolveUserIdOrUsername } from '../common/utils/user-id.util';
 import { UpdateProfileDto, LinkWalletDto } from './dto/update-profile.dto';
 
 @Injectable()
@@ -15,7 +16,12 @@ export class ProfileService {
     private fileStorage: FileStorageService,
   ) {}
 
-  async getProfile(userId: string) {
+  async getProfile(userIdOrUsername: string) {
+    // Accept either a userId (UUID) or a username — share links of the form
+    // https://id.taler.tirol/u/<username> pass the username here.
+    const userId = await resolveUserIdOrUsername(this.prisma, userIdOrUsername);
+    if (!userId) throw new NotFoundException('Profile not found');
+
     const profile = await this.prisma.profile.findUnique({
       where: { userId },
     });
