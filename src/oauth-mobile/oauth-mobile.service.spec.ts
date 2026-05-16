@@ -1,8 +1,52 @@
 import { Test } from '@nestjs/testing';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { OAuthMobileService, mergeScopes } from './oauth-mobile.service';
+import { OAuthMobileService, mergeScopes, validateRedirectUri } from './oauth-mobile.service';
 import { OidcService } from '../oidc/oidc.service';
 import { PrismaService } from '../prisma/prisma.service';
+
+describe('validateRedirectUri', () => {
+  it('accepts exact-match registered URI for non-desktop client', () => {
+    const client = { redirectUris: ['https://example.com/cb'], isDesktopClient: false };
+    expect(validateRedirectUri(client, 'https://example.com/cb')).toBe(true);
+  });
+
+  it('rejects unknown redirect_uri for non-desktop client', () => {
+    const client = { redirectUris: ['https://example.com/cb'], isDesktopClient: false };
+    expect(validateRedirectUri(client, 'http://127.0.0.1:54321/cb')).toBe(false);
+  });
+
+  it('accepts any 127.0.0.1 port for desktop client', () => {
+    const client = { redirectUris: [], isDesktopClient: true };
+    expect(validateRedirectUri(client, 'http://127.0.0.1:54321/cb')).toBe(true);
+    expect(validateRedirectUri(client, 'http://127.0.0.1:1/cb')).toBe(true);
+    expect(validateRedirectUri(client, 'http://127.0.0.1:65535/cb')).toBe(true);
+  });
+
+  it('rejects HTTPS loopback for desktop client (RFC 8252 specifies HTTP only)', () => {
+    const client = { redirectUris: [], isDesktopClient: true };
+    expect(validateRedirectUri(client, 'https://127.0.0.1:54321/cb')).toBe(false);
+  });
+
+  it('rejects non-loopback for desktop client', () => {
+    const client = { redirectUris: [], isDesktopClient: true };
+    expect(validateRedirectUri(client, 'http://example.com/cb')).toBe(false);
+    expect(validateRedirectUri(client, 'http://localhost/cb')).toBe(false);
+    expect(validateRedirectUri(client, 'http://192.168.1.1:54321/cb')).toBe(false);
+  });
+
+  it('rejects malformed URI', () => {
+    const client = { redirectUris: [], isDesktopClient: true };
+    expect(validateRedirectUri(client, 'not-a-url')).toBe(false);
+  });
+
+  it('accepts exact-match registered URI for desktop client (fallback)', () => {
+    const client = {
+      redirectUris: ['https://myapp.example.com/callback'],
+      isDesktopClient: true,
+    };
+    expect(validateRedirectUri(client, 'https://myapp.example.com/callback')).toBe(true);
+  });
+});
 
 describe('OAuthMobileService.getGrantInfo', () => {
   let svc: OAuthMobileService;
@@ -15,7 +59,10 @@ describe('OAuthMobileService.getGrantInfo', () => {
       Client: { find: jest.fn() },
     };
     oidc = { getProvider: jest.fn(() => providerMock) } as any;
-    prisma = { oAuthGrant: { findFirst: jest.fn() } } as any;
+    prisma = {
+      oAuthGrant: { findFirst: jest.fn() },
+      oAuthClient: { findUnique: jest.fn().mockResolvedValue({ isDesktopClient: false }) },
+    } as any;
     const moduleRef = await Test.createTestingModule({
       providers: [
         OAuthMobileService,
@@ -53,6 +100,25 @@ describe('OAuthMobileService.getGrantInfo', () => {
     await expect(promise).rejects.toMatchObject({
       response: { error: 'redirect_uri_mismatch' },
     });
+  });
+
+  it('allows 127.0.0.1:* redirect for desktop client', async () => {
+    providerMock.Client.find.mockResolvedValue({
+      clientId: 'desktop-app',
+      clientName: 'Desktop App',
+      redirectUris: [],
+      scope: 'profile email',
+      tokenEndpointAuthMethod: 'none',
+    });
+    (prisma.oAuthClient as any).findUnique.mockResolvedValue({ isDesktopClient: true });
+    (prisma.oAuthGrant as any).findFirst.mockResolvedValue(null);
+
+    const result = await svc.getGrantInfo('user-1', {
+      ...baseParams,
+      client_id: 'desktop-app',
+      redirect_uri: 'http://127.0.0.1:52437/cb',
+    });
+    expect(result.client_name).toBe('Desktop App');
   });
 
   it('throws BadRequestException with error=invalid_scope when scope not subset of allowed', async () => {
@@ -191,6 +257,9 @@ describe('OAuthMobileService.approve', () => {
         findFirst: jest.fn().mockResolvedValue(null),
         upsert: jest.fn().mockResolvedValue({ id: 'grant-row-1' }),
       },
+      oAuthClient: {
+        findUnique: jest.fn().mockResolvedValue({ isDesktopClient: false }),
+      },
     };
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -284,6 +353,25 @@ describe('OAuthMobileService.approve', () => {
     await expect(promise).rejects.toMatchObject({
       response: { error: 'redirect_uri_mismatch' },
     });
+  });
+
+  it('accepts 127.0.0.1 loopback redirect for desktop client in approve', async () => {
+    providerMock.Client.find.mockResolvedValue({
+      clientId: 'desktop-app',
+      clientName: 'Desktop App',
+      redirectUris: [],
+      scope: 'profile email openid',
+      tokenEndpointAuthMethod: 'none',
+    });
+    prisma.oAuthClient.findUnique.mockResolvedValue({ isDesktopClient: true });
+    prisma.oAuthGrant.findFirst.mockResolvedValue(null);
+
+    const result = await svc.approve('user-1', {
+      ...baseParams,
+      client_id: 'desktop-app',
+      redirect_uri: 'http://127.0.0.1:52437/cb',
+    });
+    expect(result.redirect_uri).toMatch(/^http:\/\/127\.0\.0\.1:52437\/cb\?code=/);
   });
 });
 

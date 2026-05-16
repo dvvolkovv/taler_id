@@ -24,6 +24,42 @@ interface OidcClientMetadata {
   tokenEndpointAuthMethod: string;
 }
 
+/**
+ * Validates whether a redirect_uri is allowed for the given client.
+ *
+ * RFC 8252 §7.3 — Native apps (isDesktopClient=true) may use any loopback port:
+ *   "the authorization server MUST allow any port to be specified at the time of
+ *    the request for loopback IP redirect URIs, to accommodate clients that obtain
+ *    an available ephemeral port from the operating system at the time of the request."
+ *
+ * Only http://127.0.0.1:<any port>/... is permitted; HTTPS loopback and
+ * non-loopback hosts are rejected.
+ */
+export function validateRedirectUri(
+  client: { redirectUris: string[]; isDesktopClient: boolean },
+  redirectUri: string,
+): boolean {
+  // Always allow exact-match registered URIs regardless of client type.
+  if ((client.redirectUris ?? []).includes(redirectUri)) {
+    return true;
+  }
+
+  if (client.isDesktopClient) {
+    try {
+      const url = new URL(redirectUri);
+      // RFC 8252: native apps may use loopback IP (127.0.0.1) with any port.
+      // Protocol must be http: (not https: — no TLS on loopback per the RFC).
+      if (url.hostname === '127.0.0.1' && url.protocol === 'http:') {
+        return true;
+      }
+    } catch (_) {
+      // Malformed URI — fall through to reject.
+    }
+  }
+
+  return false;
+}
+
 @Injectable()
 export class OAuthMobileService {
   constructor(
@@ -112,8 +148,18 @@ export class OAuthMobileService {
       throw new NotFoundException({ error: 'unknown_client' });
     }
 
-    const allowedRedirectUris: string[] = client.redirectUris ?? [];
-    if (!allowedRedirectUris.includes(params.redirect_uri)) {
+    // Fetch isDesktopClient directly from Prisma — oidc-provider may not
+    // surface unknown fields through its Client wrapper.
+    const dbClient = await this.prisma.oAuthClient.findUnique({
+      where: { clientId: params.client_id },
+      select: { isDesktopClient: true },
+    });
+    const isDesktopClient = dbClient?.isDesktopClient ?? false;
+
+    if (!validateRedirectUri(
+      { redirectUris: client.redirectUris, isDesktopClient },
+      params.redirect_uri,
+    )) {
       throw new BadRequestException({ error: 'redirect_uri_mismatch' });
     }
 

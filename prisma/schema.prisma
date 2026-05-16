@@ -149,17 +149,18 @@ model AuditLog {
 }
 
 model OAuthClient {
-  id            String   @id @default(uuid())
-  clientId      String   @unique
-  clientSecret  String
-  name          String
-  redirectUris  String[]
-  allowedScopes String[]
-  logoUri       String?
-  userId        String?
-  user          User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id              String   @id @default(uuid())
+  clientId        String   @unique
+  clientSecret    String
+  name            String
+  redirectUris    String[]
+  isDesktopClient Boolean  @default(false)
+  allowedScopes   String[]
+  logoUri         String?
+  userId          String?
+  user            User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   @@index([userId])
 }
