@@ -68,8 +68,8 @@ export class AppController {
   appVersion(@Query('flavor') flavor?: string) {
     const isDev = flavor === 'dev';
     const latest = isDev
-      ? { version: '1.0.73', build: 178 }
-      : { version: '1.0.72', build: 165 };
+      ? { version: '1.0.76', build: 168 }
+      : { version: '1.0.76', build: 168 };
     return {
       ios: { ...latest, required: false },
       android: { ...latest, required: false },
@@ -87,6 +87,62 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.0.76',
+    build: 168,
+    date: '2026-05-18',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.0.76\n\n' +
+      'Выход из аккаунта:\n' +
+      '• На logout стираются все следы прошлого пользователя — отзывается FCM-токен, ' +
+      'снимаются зависшие CallKit оверлеи, очищаются маппинги контактов в mesh и ' +
+      'локальная история сообщений. Перелогин под другой аккаунт больше не показывает ' +
+      'имена предыдущего юзера в списке контактов и групповых звонках.\n\n' +
+      'AI-ассистент:\n' +
+      '• Бэкенд /voice/session переехал на GA Realtime API.\n' +
+      '• Модель ассистента обновлена до gpt-realtime-mini-2025-12-15.',
+    notes_en:
+      'Release 1.0.76\n\n' +
+      'Sign-out cleanup:\n' +
+      '• Logout now wipes every trace of the previous user — FCM token is revoked, ' +
+      'stuck CallKit overlays are dismissed, mesh contact mappings are cleared, ' +
+      "and local message history is purged. Re-login under a different account no longer " +
+      "shows the prior user's names in contacts or group calls.\n\n" +
+      'AI assistant:\n' +
+      '• Backend /voice/session migrated to the GA Realtime API.\n' +
+      '• Assistant model upgraded to gpt-realtime-mini-2025-12-15.',
+  },
+  {
+    version: '1.0.74',
+    build: 167,
+    date: '2026-05-15',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.0.74\n\n' +
+      'Десктоп:\n' +
+      '• Первый официальный релиз приложений для macOS, Windows и Linux. ' +
+      'Скачать на https://id.taler.tirol\n\n' +
+      'Обновления внутри приложения:\n' +
+      '• Когда выходит новая версия, баннер показывает changelog ' +
+      '(а не просто "доступно обновление").\n' +
+      '• На Android APK теперь скачивается прямо из приложения без перехода в браузер.\n' +
+      '• Эндпоинт /app/version отдаёт релизы с раздельным таргетом для dev/prod флейворов.\n\n' +
+      'AI-ассистент:\n' +
+      '• Знает о текущей версии и changelog — можно спросить "что нового в этой версии?".',
+    notes_en:
+      'Release 1.0.74\n\n' +
+      'Desktop:\n' +
+      '• First official release of macOS, Windows and Linux desktop apps. ' +
+      'Download from https://id.taler.tirol\n\n' +
+      'In-app updates:\n' +
+      '• Update banner now shows the changelog when a new version is available, ' +
+      'instead of a generic "update available" prompt.\n' +
+      '• Android APK now downloads in-app without bouncing through the browser.\n' +
+      '• /app/version endpoint returns releases with per-flavor (dev/prod) update target.\n\n' +
+      'AI assistant:\n' +
+      '• Knows the current version and changelog — ask "what is new in this release?".',
+  },
   {
     version: '1.0.73',
     build: 178,
