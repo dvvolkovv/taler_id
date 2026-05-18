@@ -1,4 +1,4 @@
-import { Controller, Get, Header, Redirect } from '@nestjs/common';
+import { Controller, Get, Header, Query, Redirect } from '@nestjs/common';
 
 @Controller()
 export class AppController {
@@ -65,14 +65,102 @@ export class AppController {
   }
 
   @Get('app/version')
-  appVersion() {
+  appVersion(@Query('flavor') flavor?: string) {
+    const isDev = flavor === 'dev';
+    const latest = isDev
+      ? { version: '1.0.73', build: 178 }
+      : { version: '1.0.72', build: 165 };
     return {
-      ios: { version: '1.0.36', build: 122, required: false },
-      android: { version: '1.0.36', build: 122, required: false },
+      ios: { ...latest, required: false },
+      android: { ...latest, required: false },
       updateUrl: {
         ios: 'https://apps.apple.com/app/taler-id/id6741208498',
-        android: 'https://id.taler.tirol/download/taler-id.apk',
+        android: isDev
+          ? 'https://id.taler.tirol/download/taler-id-dev.apk'
+          : 'https://id.taler.tirol/download/taler-id.apk',
       },
+      releases: APP_RELEASES,
     };
   }
 }
+
+// Append entries on top whenever a new version ships.
+// Keep notes user-facing (no internal jargon, no commit hashes).
+const APP_RELEASES = [
+  {
+    version: '1.0.73',
+    build: 178,
+    date: '2026-05-15',
+    flavor: 'dev',
+    notes_ru:
+      'Релиз 1.0.73 (тестовая сборка)\n\n' +
+      'Групповые звонки по локальной сети (mesh):\n' +
+      '• Стабилизация аудио в групповых звонках iOS↔Android\n' +
+      '• Дозапись микрофона в фиксированные 20-мс блоки против щелчков\n' +
+      '• Авто-восстановление аудиосессии после CallKit\n\n' +
+      'Сообщения:\n' +
+      '• Размер шрифта плитки «Избранное» выровнен с остальными чатами',
+    notes_en:
+      'Release 1.0.73 (beta)\n\n' +
+      'Mesh group calls:\n' +
+      '• Audio stability across iOS↔Android peers\n' +
+      '• Mic capture rebuffered into fixed 20 ms chunks to remove clicks\n' +
+      '• Audio session auto-recovery after CallKit cycles\n\n' +
+      'Messenger:\n' +
+      '• Saved chat tile typography aligned with the rest of the chat list',
+  },
+  {
+    version: '1.0.72',
+    build: 165,
+    date: '2026-05-14',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.0.72\n\n' +
+      'Чат:\n' +
+      '• Новое: время в сети\n' +
+      '  — В шапке чата и в профиле собеседника: «в сети» или «был(а) в сети 15 мин назад»\n' +
+      '  — Обновляется автоматически каждые 30 секунд\n' +
+      '  — Настройка приватности в «Изменить профиль → Конфиденциальность»: Все / Только контакты / Никто',
+    notes_en:
+      'Release 1.0.72\n\n' +
+      'Chat:\n' +
+      '• New: last-seen indicator\n' +
+      '  — Chat header and user profile show "online" or "last seen 15 min ago"\n' +
+      '  — Auto-refresh every 30 seconds\n' +
+      '  — Privacy controls in "Edit profile → Privacy": Everyone / Contacts / Nobody',
+  },
+  {
+    version: '1.0.71',
+    build: 164,
+    date: '2026-05-14',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.0.71\n\n' +
+      'Офлайн-режим:\n' +
+      '• Заметки — создание, редактирование, удаление работают без интернета\n' +
+      '• Календарь — события создаются/редактируются офлайн, конфликты решаются через диалог\n' +
+      '• Контакты — приём и отклонение заявок работают офлайн\n' +
+      '• Избранное — мгновенный вход в Сохранённые после первого онлайн-открытия\n\n' +
+      'Мессенджер:\n' +
+      '• AI-ассистент: ответы фоновых задач доставляются через delta-sync, нет потерь при кратком офлайне\n' +
+      '• Чат: переподключение сокета при перелогине в другой аккаунт\n\n' +
+      'Звонки (групповые mesh):\n' +
+      '• Mesh group voice room v1 — групповой звонок 2–5 участников по локальной сети\n' +
+      '• Late-joiner audio isolation, per-peer Noise сессии\n' +
+      '• Стабильность: CallKit роутинг, lobby flow, GMCEnded маршруты',
+    notes_en:
+      'Release 1.0.71\n\n' +
+      'Offline mode:\n' +
+      '• Notes — create, edit, delete work offline\n' +
+      '• Calendar — events create/edit offline, conflicts resolved via dialog\n' +
+      '• Contacts — accept and reject requests work offline\n' +
+      '• Favorites — instant entry into Saved Messages after first online open\n\n' +
+      'Messenger:\n' +
+      '• AI assistant: background-task replies delivered via delta-sync, no loss after brief offline\n' +
+      '• Chat: socket reconnect on relogin into a different account\n\n' +
+      'Mesh group calls:\n' +
+      '• Mesh group voice room v1 — 2-5 peers over LAN\n' +
+      '• Late-joiner audio isolation, per-peer Noise sessions\n' +
+      '• Stability: CallKit routing, lobby flow, GMCEnded routes',
+  },
+];
