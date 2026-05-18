@@ -339,11 +339,8 @@ export class VoiceService {
     );
 
     try {
-      // GA Realtime API (gpt-realtime-2): endpoint /v1/realtime/client_secrets,
-      // session config wrapped under `session`, voice inside audio.output,
-      // response has a flat `value` (no `client_secret` wrapper).
       const response = await fetch(
-        'https://api.openai.com/v1/realtime/client_secrets',
+        'https://api.openai.com/v1/realtime/sessions',
         {
           method: 'POST',
           headers: {
@@ -351,13 +348,10 @@ export class VoiceService {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            session: {
-              type: 'realtime',
-              model: 'gpt-realtime-2',
-              audio: { output: { voice: 'marin' } },
-              instructions:
-                'Ты — голосовой ассистент Taler ID. Помогай пользователям с их цифровой идентификацией, статусом KYC-верификации и данными профиля. Будь краток и полезен. Отвечай на русском языке. Ты можешь использовать инструменты для чтения или обновления профиля пользователя.',
-            },
+            model: 'gpt-realtime-mini',
+            voice: 'marin',
+            instructions:
+              'Ты — голосовой ассистент Taler ID. Помогай пользователям с их цифровой идентификацией, статусом KYC-верификации и данными профиля. Будь краток и полезен. Отвечай на русском языке. Ты можешь использовать инструменты для чтения или обновления профиля пользователя.',
           }),
         },
       );
@@ -367,7 +361,7 @@ export class VoiceService {
       }
       const data = (await response.json()) as any;
       return {
-        clientSecret: data.value as string,
+        clientSecret: data.client_secret.value as string,
         billingSessionId: billingSession.id,
       };
     } catch (err) {
