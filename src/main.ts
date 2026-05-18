@@ -586,7 +586,7 @@ async function bootstrap() {
       return;
     }
     wss.handleUpgrade(req, socket, head, (clientWs) => {
-      const model = url.searchParams.get('model') ?? 'gpt-realtime-mini';
+      const model = url.searchParams.get('model') ?? 'gpt-realtime-mini-2025-12-15';
       const openaiWs = new WebSocket(
         'wss://api.openai.com/v1/realtime?model=' + model,
         {
