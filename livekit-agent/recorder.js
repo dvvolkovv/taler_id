@@ -167,8 +167,27 @@ async function startRecording(roomName, withAi = true) {
     }
   });
 
-  // Connect to room (no audio publishing — silent observer)
-  await room.connect(LK_URL, token);
+  // Connect to room (no audio publishing — silent observer).
+  // Timeout guards against a known @livekit/rtc-node bug where the low-level
+  // Connect callback fires but the JS Promise never resolves — that would
+  // leave the session pending forever and produce an empty recording (the
+  // 2026-05-18 prod incident on personal-c79530ed-36fc367a).
+  const CONNECT_TIMEOUT_MS = 15000;
+  try {
+    await Promise.race([
+      room.connect(LK_URL, token),
+      new Promise((_, reject) => setTimeout(
+        () => reject(new Error('LiveKit connect timed out after ' + CONNECT_TIMEOUT_MS + 'ms')),
+        CONNECT_TIMEOUT_MS,
+      )),
+    ]);
+  } catch (e) {
+    recorderSessions.delete(roomName);
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+    try { room.disconnect(); } catch (_) {}
+    console.error('[RECORDER] Connect failed for', roomName + ':', e.message);
+    throw e;
+  }
   console.log('[RECORDER] Connected to room:', roomName);
 
   // ── Capture already-published tracks (participants who joined before the recorder) ──
@@ -258,7 +277,40 @@ async function processAndSave(session) {
   console.log('[RECORDER] Processing', byIdentity.size, 'participants (' + trackAudio.size + ' tracks),', durationSec, 'seconds');
 
   if (byIdentity.size === 0) {
-    console.log('[RECORDER] No audio recorded — skipping');
+    // Fail-loud: leave a row in MeetingSummary so the user sees that their
+    // recording attempt landed somewhere instead of vanishing. Previously
+    // a silent `skipping` log meant nothing surfaced in the UI when the
+    // recorder failed to connect to LiveKit or all participants left
+    // before publishing any track.
+    console.log('[RECORDER] No audio recorded — saving failed_no_audio meeting summary');
+    const failureNote =
+      'Запись не записалась: recorder не получил аудио из комнаты. ' +
+      'Возможные причины: recorder не успел подключиться к LiveKit, ' +
+      'или в комнате не было ни одного участника, публикующего звук. ' +
+      'Попробуй начать запись ещё раз.';
+    try {
+      const r = await fetch(`${BACKEND_URL}/api/voice/meetings/save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          roomName,
+          transcript: '',
+          summary: failureNote,
+          keyPoints: [],
+          actionItems: [],
+          decisions: [],
+          participants: [],
+          participantIds: [],
+          durationSec,
+          status: 'failed_no_audio',
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      console.log('[RECORDER] Saved failed_no_audio meeting summary:', d.id || '(no id)');
+    } catch (e) {
+      console.warn('[RECORDER] Failed to save failed_no_audio summary:', e.message);
+    }
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
     recorderSessions.delete(roomName);
     return;
   }
