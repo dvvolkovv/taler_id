@@ -337,7 +337,7 @@ async function processAndSave(session) {
         participants: participants0,
         participantIds: participantIds0,
         durationSec,
-        status: 'done',
+        status: 'processing',
       }),
     });
     const d = await r.json();
