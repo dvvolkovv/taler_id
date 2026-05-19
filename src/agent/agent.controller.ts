@@ -16,6 +16,7 @@ export class AgentController {
     @CurrentUser() user: any,
     @Body() body: RunAgentRequestDto,
   ): Promise<RunAgentResponseDto> {
+    this.logger.debug(`agent.run user=${user?.sub}`);
     return this.agent.runAgent({
       goal: body.goal,
       userId: user?.sub,

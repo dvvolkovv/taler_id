@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { exec } from 'node:child_process';
+import { promisify } from 'node:util';
 import { RunAgentResponseDto } from './dto/run-agent-response.dto';
 
 interface RunAgentInput {
@@ -23,60 +24,49 @@ export class AgentService {
 
     const cmd = this.buildSshCommand(input.goal);
     const start = Date.now();
+    // Lazy promisify so Jest mocks of node:child_process apply per-call
+    const execAsync = promisify(exec);
 
-    return new Promise((resolve) => {
-      exec(cmd, { timeout: this.TIMEOUT_MS, maxBuffer: this.MAX_BUFFER }, (err, result: any) => {
-        const durationMs = Date.now() - start;
-
-        if (!err) {
-          // result may be a string (promisify) or object with stdout/stderr (raw exec)
-          const stdout = typeof result === 'object' && result !== null
-            ? (result.stdout ?? result)
-            : (result ?? '');
-          const stderr = typeof result === 'object' && result !== null
-            ? (result.stderr ?? '')
-            : '';
-
-          if (stderr) {
-            this.logger.warn(`claude stderr: ${String(stderr).slice(0, 500)}`);
-          }
-
-          resolve({
-            finalText: String(stdout).trim(),
-            toolCalls: [],
-            aborted: false,
-            conversationId: input.conversationId,
-            durationMs,
-          });
-          return;
-        }
-
-        // Error path
-        const isTimeout =
-          (err as any).killed === true && (err as any).signal === 'SIGTERM';
-        const exitCode = (err as any).code;
-        const reason = isTimeout
-          ? `timeout after ${this.TIMEOUT_MS}ms`
-          : exitCode != null
-          ? `exit ${exitCode}`
-          : 'unknown';
-
-        const stderr = ((err as any).stderr || '').toString().slice(0, 500);
-        const stdout = ((err as any).stdout || '').toString().slice(0, 500);
-
-        this.logger.error(
-          `agent.run failed user=${input.userId} reason="${reason}" stderr="${stderr}"`,
-        );
-
-        resolve({
-          finalText: `(aborted: ${reason}) ${stderr || stdout}`.trim(),
-          toolCalls: [],
-          aborted: true,
-          conversationId: input.conversationId,
-          durationMs,
-        });
+    try {
+      const { stdout, stderr } = await execAsync(cmd, {
+        timeout: this.TIMEOUT_MS,
+        maxBuffer: this.MAX_BUFFER,
       });
-    });
+
+      if (stderr) {
+        this.logger.warn(`claude stderr: ${stderr.toString().slice(0, 500)}`);
+      }
+
+      return {
+        finalText: stdout.toString().trim(),
+        toolCalls: [],
+        aborted: false,
+        conversationId: input.conversationId,
+        durationMs: Date.now() - start,
+      };
+    } catch (err: any) {
+      const durationMs = Date.now() - start;
+      const reason =
+        err.killed && err.signal === 'SIGTERM'
+          ? `timeout after ${this.TIMEOUT_MS}ms`
+          : err.code != null
+          ? `exit ${err.code}`
+          : 'unknown';
+      const stderr = (err.stderr || '').toString().slice(0, 500);
+      const stdout = (err.stdout || '').toString().slice(0, 500);
+
+      this.logger.error(
+        `agent.run failed user=${input.userId} reason="${reason}" stderr="${stderr}"`,
+      );
+
+      return {
+        finalText: `(aborted: ${reason}) ${stderr || stdout}`.trim(),
+        toolCalls: [],
+        aborted: true,
+        conversationId: input.conversationId,
+        durationMs,
+      };
+    }
   }
 
   /**
@@ -85,12 +75,19 @@ export class AgentService {
    *
    * Goal is escaped to be safe inside the OUTER single-quoted shell string
    * AND inside the INNER double-quoted claude argument. Strategy:
-   *   1. Replace any double-quote with \" (escapes within inner double-quoted arg)
-   *   2. Replace any single-quote with '\\'' (POSIX trick to close, escape, reopen
+   *   1. Escape backslashes first (must be first to avoid double-escaping)
+   *   2. Escape double-quotes with \" (safe inside inner double-quoted arg)
+   *   3. Escape backticks with \` (prevents command substitution in inner context)
+   *   4. Escape $ with \$ (prevents variable/command expansion in inner context)
+   *   5. Escape single-quotes with '\\'' (POSIX trick: close, escape, reopen
    *      the outer single-quoted string)
    */
   private buildSshCommand(goal: string): string {
-    const innerEscaped = goal.replace(/"/g, '\\"');
+    const innerEscaped = goal
+      .replace(/\\/g, '\\\\')   // backslash MUST be first
+      .replace(/"/g, '\\"')      // double-quote
+      .replace(/`/g, '\\`')      // backtick
+      .replace(/\$/g, '\\$');    // dollar sign
     const outerEscaped = innerEscaped.replace(/'/g, "'\\''");
     return `ssh -o BatchMode=yes ${this.ANALYST_HOST} 'claude --print --output-format text -- "${outerEscaped}"'`;
   }
