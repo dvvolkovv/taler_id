@@ -15,10 +15,10 @@ const CLAUDE_WORKER_URL =
 // allowlist (PROD/DEV only) — phones cannot reach it. We copy files into an
 // nginx-served path on the API host so the chat link actually works.
 const ANALYST_FILES_DIR =
-  process.env.ANALYST_FILES_DIR || '/var/www/recordings/ai-analyst';
+  process.env.ANALYST_FILES_DIR || '/var/www/ai-analyst';
 const ANALYST_FILES_PUBLIC_BASE =
   process.env.ANALYST_FILES_PUBLIC_BASE ||
-  'https://id.taler.tirol/recordings/ai-analyst';
+  'https://id.taler.tirol/ai-analyst';
 
 @Injectable()
 export class AiAnalystService {
