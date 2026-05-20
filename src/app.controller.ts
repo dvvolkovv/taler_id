@@ -68,8 +68,8 @@ export class AppController {
   appVersion(@Query('flavor') flavor?: string) {
     const isDev = flavor === 'dev';
     const latest = isDev
-      ? { version: '1.0.77', build: 169 }
-      : { version: '1.0.77', build: 169 };
+      ? { version: '1.0.78', build: 170 }
+      : { version: '1.0.78', build: 170 };
     return {
       ios: { ...latest, required: false },
       android: { ...latest, required: false },
@@ -87,6 +87,43 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.0.78',
+    build: 170,
+    date: '2026-05-20',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.0.78\n\n' +
+      '🌍 22 новых языка интерфейса:\n' +
+      '中文 (китайский), हिन्दी (хинди), Español, العربية (арабский), বাংলা (бенгали), ' +
+      'Português, اردو (урду), Bahasa Indonesia, Deutsch, 日本語, Français, मराठी (маратхи), ' +
+      'తెలుగు (телугу), Türkçe, தமிழ் (тамильский), Tiếng Việt, 한국어, Italiano, ' +
+      'فارسی (фарси), ਪੰਜਾਬੀ (панджаби), Hausa (хауса, Нигерия), Slovenčina.\n' +
+      'Всего 24 языка интерфейса (было 2). Меняется в Настройки → Язык.\n\n' +
+      '🎙️ AI-ассистент следует языку приложения:\n' +
+      'Раньше ассистент всегда говорил по-русски (если ru) или по-английски (для всех остальных). ' +
+      'Теперь промпт динамический — выбираешь Español в настройках, ассистент отвечает на испанском. ' +
+      'Whisper-транскрипция и до этого корректно подхватывала локаль — теперь обратная сторона тоже выровнена.\n\n' +
+      'Качество переводов:\n' +
+      'Переводы машинные (GPT-4o) — для первого шипа OK, перед следующим релизом будут полированы носителями. ' +
+      'Названия брендов (Taler ID, KYC, Gmail, WhatsApp и т.д.) и плейсхолдеры в строках сохранены как есть.',
+    notes_en:
+      'Release 1.0.78\n\n' +
+      '🌍 22 new UI languages:\n' +
+      '中文 (Mandarin), हिन्दी (Hindi), Español, العربية (Arabic), বাংলা (Bengali), ' +
+      'Português, اردو (Urdu), Bahasa Indonesia, Deutsch, 日本語, Français, मराठी (Marathi), ' +
+      'తెలుగు (Telugu), Türkçe, தமிழ் (Tamil), Tiếng Việt, 한국어, Italiano, ' +
+      'فارسی (Persian), ਪੰਜਾਬੀ (Punjabi), Hausa (Nigeria), Slovenčina.\n' +
+      '24 UI languages total (was 2). Settings → Language.\n\n' +
+      '🎙️ AI assistant follows the app language:\n' +
+      'Previously the assistant always responded in Russian (locale ru) or English (everything else). ' +
+      'Now the system prompt is locale-aware — pick Español in settings and the assistant replies in Spanish. ' +
+      'Whisper input was already pinned to the app locale — this completes the round-trip.\n\n' +
+      'Translation quality:\n' +
+      'Translations are machine-generated (GPT-4o) — good enough to ship, will be reviewed by native ' +
+      'speakers before the next release. Brand names (Taler ID, KYC, Gmail, WhatsApp etc.) and string ' +
+      'placeholders preserved verbatim.',
+  },
   {
     version: '1.0.77',
     build: 169,
