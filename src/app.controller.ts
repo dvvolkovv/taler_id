@@ -68,8 +68,8 @@ export class AppController {
   appVersion(@Query('flavor') flavor?: string) {
     const isDev = flavor === 'dev';
     const latest = isDev
-      ? { version: '1.0.76', build: 168 }
-      : { version: '1.0.76', build: 168 };
+      ? { version: '1.0.77', build: 169 }
+      : { version: '1.0.77', build: 169 };
     return {
       ios: { ...latest, required: false },
       android: { ...latest, required: false },
@@ -87,6 +87,46 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.0.77',
+    build: 169,
+    date: '2026-05-20',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.0.77\n\n' +
+      'AI-ассистент дотягивается до соседних мессенджеров и почты:\n' +
+      '• Android: ассистент видит уведомления WhatsApp и Telegram и может ' +
+      'на них отвечать за тебя (только после ручного включения доступа к уведомлениям в системе).\n' +
+      '• Gmail: ассистент подключается через OAuth и работает со всеми твоими почтами — ' +
+      'может читать письма, искать по теме/отправителю/телу, отвечать и отправлять новые.\n' +
+      '• Бот «Ассистент» в чатах получил кнопку микрофона в шапке — мгновенный переход в голосовой режим.\n\n' +
+      'Десктоп:\n' +
+      '• Тап по «Ассистент» в левой панели сразу запускает голосовую сессию (без промежуточного «колеса»).\n' +
+      '• В левую панель добавлены Notes, Contacts, Profile — теперь вся навигация в одном месте.\n' +
+      '• В чате Enter отправляет сообщение, Cmd/Ctrl+Enter переносит строку.\n' +
+      '• Сообщения в мессенджере подгружаются сразу при открытии экрана (без переключения вкладок).\n' +
+      '• Новый онбординг под десктоп с кликабельными подсказками для системных настроек.\n\n' +
+      'AI-аналитик:\n' +
+      '• Сгенерированные PDF/отчёты теперь правильно прикладываются к сообщению ' +
+      '(раньше ассистент говорил «приложил», а файла не было).',
+    notes_en:
+      'Release 1.0.77\n\n' +
+      'AI assistant reaches into neighbouring messengers and email:\n' +
+      '• Android: the assistant sees WhatsApp and Telegram notifications and can reply on your behalf ' +
+      '(after you grant notification access in system settings).\n' +
+      '• Gmail: the assistant connects via OAuth and works across all your inboxes — ' +
+      'read messages, search by subject/sender/body, reply and compose new mail.\n' +
+      '• The Assistant bot in chats got a microphone button in the title bar — one-tap into voice mode.\n\n' +
+      'Desktop:\n' +
+      '• Clicking "Assistant" in the left rail starts a voice session immediately (no more orbital wheel).\n' +
+      '• Notes, Contacts and Profile are now in the left rail — all navigation in one place.\n' +
+      '• In chat, Enter sends, Cmd/Ctrl+Enter inserts a newline.\n' +
+      '• Messages now load instantly when you open the messenger tab.\n' +
+      '• New desktop onboarding with clickable links to system settings.\n\n' +
+      'AI analyst:\n' +
+      '• Generated PDFs and reports are now correctly attached to the message ' +
+      '(previously the assistant claimed to attach a file but nothing came through).',
+  },
   {
     version: '1.0.76',
     build: 168,
