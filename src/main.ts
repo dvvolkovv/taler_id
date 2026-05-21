@@ -598,11 +598,80 @@ async function bootstrap() {
           },
         },
       );
+      // Beta→GA session.update shape transform. Shipped 1.0.78 clients still
+      // send the flat beta layout (voice, input_audio_format, turn_detection
+      // at session root); GA wants everything nested under `audio.input`/
+      // `audio.output`. Rewrite on the fly so existing TestFlight/APK builds
+      // keep working. A native GA-shape session.update passes through unchanged.
+      const transformSessionUpdate = (raw: any): any => {
+        if (raw?.type !== 'session.update' || !raw.session) return raw;
+        const s = raw.session;
+        // Already GA-shape (has `audio` block or `type: 'realtime'`): pass through.
+        if (s.audio || s.type === 'realtime' || s.output_modalities) return raw;
+        // Detect any beta-only field to decide whether to migrate.
+        const hasBetaFields =
+          'voice' in s ||
+          'input_audio_format' in s ||
+          'output_audio_format' in s ||
+          'input_audio_transcription' in s ||
+          'turn_detection' in s ||
+          'modalities' in s;
+        if (!hasBetaFields) return raw;
+        const ga: any = { type: 'realtime' };
+        if (s.instructions) ga.instructions = s.instructions;
+        if (s.tools) ga.tools = s.tools;
+        if (s.tool_choice) ga.tool_choice = s.tool_choice;
+        if (s.temperature !== undefined) ga.temperature = s.temperature;
+        if (s.max_response_output_tokens !== undefined) {
+          ga.max_response_output_tokens = s.max_response_output_tokens;
+        }
+        // modalities → output_modalities (audio always present, text optional)
+        if (Array.isArray(s.modalities)) {
+          ga.output_modalities = s.modalities.includes('audio')
+            ? ['audio']
+            : ['text'];
+        }
+        const audio: any = {};
+        const inputAudio: any = {};
+        if (s.input_audio_format === 'pcm16') {
+          inputAudio.format = { type: 'audio/pcm', rate: 24000 };
+        }
+        if (s.input_audio_transcription) {
+          inputAudio.transcription = s.input_audio_transcription;
+        }
+        if (s.turn_detection) inputAudio.turn_detection = s.turn_detection;
+        if (Object.keys(inputAudio).length) audio.input = inputAudio;
+        const outputAudio: any = {};
+        if (s.output_audio_format === 'pcm16') {
+          outputAudio.format = { type: 'audio/pcm', rate: 24000 };
+        }
+        if (s.voice) outputAudio.voice = s.voice;
+        if (Object.keys(outputAudio).length) audio.output = outputAudio;
+        if (Object.keys(audio).length) ga.audio = audio;
+        return { ...raw, session: ga };
+      };
+
       // Buffer messages from client until OpenAI WS is ready to avoid dropping session.update
       const clientMessageQueue: any[] = [];
       let openaiReady = false;
       let sessionConfigured = false;
       clientWs.on('message', (data: any, isBinary: boolean) => {
+        // Apply the beta→GA shim to non-binary JSON events. Binary frames
+        // are raw PCM audio and pass through unchanged.
+        let outData: any = data;
+        let outBin = isBinary;
+        if (!isBinary) {
+          try {
+            const parsed = JSON.parse(data.toString());
+            const transformed = transformSessionUpdate(parsed);
+            if (transformed !== parsed) {
+              outData = JSON.stringify(transformed);
+              outBin = false;
+            }
+          } catch (_) {
+            // not JSON, pass through
+          }
+        }
         const forwardToOpenAI = (d: any, bin: boolean) => {
           if (openaiWs.readyState === WebSocket.OPEN) {
             openaiWs.send(bin ? d : d.toString(), { binary: bin });
@@ -610,24 +679,24 @@ async function bootstrap() {
         };
         if (openaiReady) {
           if (sessionConfigured) {
-            forwardToOpenAI(data, isBinary);
+            forwardToOpenAI(outData, outBin);
           } else {
             // Wait for session.updated before forwarding audio to OpenAI
             try {
-              const parsed = JSON.parse(data.toString());
+              const parsed = JSON.parse(outData.toString());
               if (parsed.type !== 'input_audio_buffer.append') {
-                forwardToOpenAI(data, isBinary);
+                forwardToOpenAI(outData, outBin);
               }
             } catch (_) {
-              forwardToOpenAI(data, isBinary);
+              forwardToOpenAI(outData, outBin);
             }
           }
         } else {
           // Only queue config messages (session.update, etc.), drop audio until OpenAI is ready
           try {
-            const parsed = JSON.parse(data.toString());
+            const parsed = JSON.parse(outData.toString());
             if (parsed.type !== 'input_audio_buffer.append') {
-              clientMessageQueue.push({ data, isBinary });
+              clientMessageQueue.push({ data: outData, isBinary: outBin });
             }
           } catch (_) {}
         }
