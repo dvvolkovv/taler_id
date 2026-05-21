@@ -713,14 +713,13 @@ async function bootstrap() {
           }
         }
         openaiWs.on('message', (data: any, isBinary: boolean) => {
+          let outData = data;
+          let outBin = isBinary;
           try {
             const ev = JSON.parse(data.toString());
             if (ev.type === 'session.updated') {
               sessionConfigured = true;
-              Logger.log(
-                'session.updated received from OpenAI',
-                'RealtimeProxy',
-              );
+              Logger.log('session.updated received from OpenAI', 'RealtimeProxy');
             }
             if (ev.type === 'session.created') {
               Logger.log(
@@ -728,19 +727,38 @@ async function bootstrap() {
                 'RealtimeProxy',
               );
             }
-            // Temporary diagnostic for the GA migration (1.0.78 cycle):
-            // log any error frame OpenAI sends back so we can see why the
-            // assistant goes silent after Whisper transcribes user speech.
             if (ev.type === 'error') {
               Logger.warn(
                 'OpenAI WS error event: ' + JSON.stringify(ev.error || ev),
                 'RealtimeProxy',
               );
             }
+            // Temp diagnostic: print each event type from OpenAI so we can see
+            // if GA renamed response.audio.delta → response.output_audio.delta
+            // etc. — silent assistant on 1.0.78 likely means the mobile client
+            // doesn't recognise the new event names.
+            console.log('[PROXY] openai msg:', ev.type);
+            // GA → beta event name rewrite for shipped 1.0.78 clients. GA
+            // renamed the audio/transcript response stream events; the mobile
+            // handler still listens on the beta names.
+            const GA_TO_BETA_EVENT_RENAME: Record<string, string> = {
+              'response.output_audio.delta': 'response.audio.delta',
+              'response.output_audio.done': 'response.audio.done',
+              'response.output_audio_transcript.delta':
+                'response.audio_transcript.delta',
+              'response.output_audio_transcript.done':
+                'response.audio_transcript.done',
+            };
+            const renamed = GA_TO_BETA_EVENT_RENAME[ev.type];
+            if (renamed) {
+              ev.type = renamed;
+              outData = JSON.stringify(ev);
+              outBin = false;
+            }
           } catch (_) {}
           if (clientWs.readyState === WebSocket.OPEN)
-            clientWs.send(isBinary ? data : data.toString(), {
-              binary: isBinary,
+            clientWs.send(outBin ? outData : outData.toString(), {
+              binary: outBin,
             });
         });
       });
