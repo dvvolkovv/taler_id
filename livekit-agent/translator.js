@@ -83,12 +83,12 @@ function createRealtimeSession(sourceLang, targetLang, onAudioDelta, onError) {
   const tag = `${sourceLang}→${targetLang}`;
   console.log(`[TRANSLATOR] Opening WS for ${tag}`);
 
+  // GA Realtime API (post 2026-05-20). Do NOT send OpenAI-Beta header — GA rejects it.
   const ws = new WebSocket(
     'wss://api.openai.com/v1/realtime?model=gpt-realtime-mini',
     {
       headers: {
         Authorization: `Bearer ${OPENAI_KEY}`,
-        'OpenAI-Beta': 'realtime=v1',
       },
     }
   );
@@ -98,10 +98,11 @@ function createRealtimeSession(sourceLang, targetLang, onAudioDelta, onError) {
 
   ws.on('open', () => {
     console.log(`[TRANSLATOR] WS opened for ${tag}`);
+    // GA session.update shape: audio.input/output nested, output_modalities top-level.
     ws.send(JSON.stringify({
       type: 'session.update',
       session: {
-        modalities: ['audio', 'text'],
+        type: 'realtime',
         instructions: [
           `TRANSLATE ONLY. OUTPUT NOTHING EXCEPT THE TRANSLATION.`,
           ``,
@@ -129,13 +130,19 @@ function createRealtimeSession(sourceLang, targetLang, onAudioDelta, onError) {
           `Output (if target=English): "Good afternoon, how are you feeling?"`,
           `Input: "Can you help me?" (if target=English and speech is already English) → SILENCE`,
         ].join('\n'),
-        temperature: 0.6,
-        voice: LANG_VOICES[targetLang] || 'alloy',
-        input_audio_format: 'pcm16',
-        output_audio_format: 'pcm16',
-        input_audio_transcription: { model: 'whisper-1' },
-        // Manual mode: no server_vad → responses are NEVER interrupted by new speech
-        turn_detection: null,
+        output_modalities: ['audio'],
+        audio: {
+          input: {
+            format: { type: 'audio/pcm', rate: 24000 },
+            transcription: { model: 'whisper-1' },
+            // Manual mode: no server_vad → responses are NEVER interrupted by new speech
+            turn_detection: null,
+          },
+          output: {
+            format: { type: 'audio/pcm', rate: 24000 },
+            voice: LANG_VOICES[targetLang] || 'alloy',
+          },
+        },
       },
     }));
   });
@@ -144,7 +151,8 @@ function createRealtimeSession(sourceLang, targetLang, onAudioDelta, onError) {
     try {
       const event = JSON.parse(raw.toString());
 
-      if (event.type !== 'response.audio.delta') {
+      // GA renamed audio events: response.audio.* → response.output_audio.*
+      if (event.type !== 'response.output_audio.delta') {
         console.log(`[TRANSLATOR] [${tag}] event: ${event.type}`);
       }
 
@@ -159,7 +167,7 @@ function createRealtimeSession(sourceLang, targetLang, onAudioDelta, onError) {
         ws._responding = true;
       }
 
-      if (event.type === 'response.audio.delta' && event.delta) {
+      if (event.type === 'response.output_audio.delta' && event.delta) {
         if (!ws._audioStartLogged) {
           ws._audioStartLogged = true;
           console.log(`[TRANSLATOR] [${tag}] >>> AUDIO OUTPUT STARTED`);
@@ -167,7 +175,7 @@ function createRealtimeSession(sourceLang, targetLang, onAudioDelta, onError) {
         onAudioDelta(Buffer.from(event.delta, 'base64'));
       }
 
-      if (event.type === 'response.audio.done') {
+      if (event.type === 'response.output_audio.done') {
         ws._audioStartLogged = false;
       }
 
@@ -188,7 +196,7 @@ function createRealtimeSession(sourceLang, targetLang, onAudioDelta, onError) {
         if (isHallucination(heard)) console.log(`[TRANSLATOR] [${tag}] FILTERED: hallucination`);
       }
 
-      if (event.type === 'response.audio_transcript.done' && event.transcript) {
+      if (event.type === 'response.output_audio_transcript.done' && event.transcript) {
         console.log(`[TRANSLATOR] [${tag}] translated: "${event.transcript.trim()}"`);
       }
 
@@ -647,4 +655,82 @@ function getTranslatorLanguages() {
   return SUPPORTED_LANGS.map(code => ({ code, name: LANG_NATIVE_NAMES[code] || LANG_NAMES[code] }));
 }
 
-module.exports = { startTranslator, stopTranslator, updateParticipantLang, getTranslatorStatus, getTranslatorLanguages };
+// ─── Selftest ─────────────────────────────────────────────
+//
+// Opens a brief WS to OpenAI Realtime with the EXACT session.update shape
+// the translator uses, waits for `session.updated`. Catches OpenAI Realtime
+// API regressions (header rejection, schema mismatch, model deprecation)
+// without needing LiveKit / real audio / a running room.
+async function selftest() {
+  if (!OPENAI_KEY) return { ok: false, reason: 'OPENAI_API_KEY not set' };
+  return await new Promise((resolve) => {
+    let resolved = false;
+    const finish = (result) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timer);
+      try { ws.close(); } catch (_) {}
+      resolve(result);
+    };
+
+    const ws = new WebSocket(
+      'wss://api.openai.com/v1/realtime?model=gpt-realtime-mini',
+      { headers: { Authorization: `Bearer ${OPENAI_KEY}` } },
+    );
+
+    const timer = setTimeout(
+      () => finish({ ok: false, reason: 'timeout: no session.updated within 10s' }),
+      10000,
+    );
+
+    let sessionUpdated = false;
+
+    ws.on('open', () => {
+      ws.send(JSON.stringify({
+        type: 'session.update',
+        session: {
+          type: 'realtime',
+          instructions: 'TRANSLATE ONLY. Source=auto, target=English.',
+          output_modalities: ['audio'],
+          audio: {
+            input: {
+              format: { type: 'audio/pcm', rate: 24000 },
+              transcription: { model: 'whisper-1' },
+              turn_detection: null,
+            },
+            output: {
+              format: { type: 'audio/pcm', rate: 24000 },
+              voice: 'alloy',
+            },
+          },
+        },
+      }));
+    });
+
+    ws.on('message', (raw) => {
+      try {
+        const ev = JSON.parse(raw.toString());
+        if (ev.type === 'session.updated') {
+          sessionUpdated = true;
+          finish({ ok: true, reason: 'session.updated received' });
+        }
+        if (ev.type === 'error') {
+          finish({
+            ok: false,
+            reason: 'OpenAI error: ' + JSON.stringify(ev.error || ev),
+          });
+        }
+      } catch (_) { /* ignore */ }
+    });
+
+    ws.on('error', (err) => finish({ ok: false, reason: 'ws error: ' + err.message }));
+
+    ws.on('close', (code) => {
+      if (!sessionUpdated) {
+        finish({ ok: false, reason: 'ws closed code=' + code + ' before session.updated' });
+      }
+    });
+  });
+}
+
+module.exports = { startTranslator, stopTranslator, updateParticipantLang, getTranslatorStatus, getTranslatorLanguages, selftest };

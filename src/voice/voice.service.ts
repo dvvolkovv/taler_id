@@ -785,6 +785,18 @@ export class VoiceService {
     }
   }
 
+  // Post-deploy smoke: proxies to livekit-ai-agent's /translator/selftest,
+  // which opens a brief WS to OpenAI Realtime with the translator's exact
+  // session.update shape. Returns { ok, reason, latencyMs }.
+  async translatorSelftest() {
+    try {
+      const res = await fetch(AI_AGENT_URL + '/translator/selftest');
+      return await res.json();
+    } catch (e) {
+      return { ok: false, reason: 'agent unreachable: ' + (e as Error).message };
+    }
+  }
+
   // ─── Meeting Recorder ───
 
   async startRecorder(roomName: string, withAi = true) {
