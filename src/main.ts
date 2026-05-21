@@ -716,6 +716,15 @@ async function bootstrap() {
           try {
             const ev = JSON.parse(data.toString());
             if (ev.type === 'session.updated') sessionConfigured = true;
+            // Temporary diagnostic for the GA migration (1.0.78 cycle):
+            // log any error frame OpenAI sends back so we can see why the
+            // assistant goes silent after Whisper transcribes user speech.
+            if (ev.type === 'error') {
+              Logger.warn(
+                'OpenAI WS error event: ' + JSON.stringify(ev.error || ev),
+                'RealtimeProxy',
+              );
+            }
           } catch (_) {}
           if (clientWs.readyState === WebSocket.OPEN)
             clientWs.send(isBinary ? data : data.toString(), {
