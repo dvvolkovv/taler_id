@@ -715,7 +715,19 @@ async function bootstrap() {
         openaiWs.on('message', (data: any, isBinary: boolean) => {
           try {
             const ev = JSON.parse(data.toString());
-            if (ev.type === 'session.updated') sessionConfigured = true;
+            if (ev.type === 'session.updated') {
+              sessionConfigured = true;
+              Logger.log(
+                'session.updated received from OpenAI',
+                'RealtimeProxy',
+              );
+            }
+            if (ev.type === 'session.created') {
+              Logger.log(
+                'session.created from OpenAI (model=' + (ev.session?.model || '?') + ')',
+                'RealtimeProxy',
+              );
+            }
             // Temporary diagnostic for the GA migration (1.0.78 cycle):
             // log any error frame OpenAI sends back so we can see why the
             // assistant goes silent after Whisper transcribes user speech.
