@@ -339,8 +339,12 @@ export class VoiceService {
     );
 
     try {
+      // GA Realtime API: ephemeral key is minted via /v1/realtime/client_secrets
+      // (the old /v1/realtime/sessions endpoint was deprecated 2026-05-20).
+      // Response shape changed: top-level { value, expires_at } instead of
+      // { client_secret: { value } }.
       const response = await fetch(
-        'https://api.openai.com/v1/realtime/sessions',
+        'https://api.openai.com/v1/realtime/client_secrets',
         {
           method: 'POST',
           headers: {
@@ -348,10 +352,15 @@ export class VoiceService {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            model: 'gpt-realtime-mini-2025-12-15',
-            voice: 'marin',
-            instructions:
-              'Ты — голосовой ассистент Taler ID. Помогай пользователям с их цифровой идентификацией, статусом KYC-верификации и данными профиля. Будь краток и полезен. Отвечай на русском языке. Ты можешь использовать инструменты для чтения или обновления профиля пользователя.',
+            session: {
+              type: 'realtime',
+              model: 'gpt-realtime-mini-2025-12-15',
+              audio: {
+                output: { voice: 'marin' },
+              },
+              instructions:
+                'Ты — голосовой ассистент Taler ID. Помогай пользователям с их цифровой идентификацией, статусом KYC-верификации и данными профиля. Будь краток и полезен. Отвечай на русском языке. Ты можешь использовать инструменты для чтения или обновления профиля пользователя.',
+            },
           }),
         },
       );
@@ -361,7 +370,7 @@ export class VoiceService {
       }
       const data = (await response.json()) as any;
       return {
-        clientSecret: data.client_secret.value as string,
+        clientSecret: data.value as string,
         billingSessionId: billingSession.id,
       };
     } catch (err) {
