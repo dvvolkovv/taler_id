@@ -3,7 +3,7 @@ const express = require('express');
 const { AccessToken } = require('livekit-server-sdk');
 const WebSocket = require('ws');
 const { startRecording, stopRecording, getRecordingStatus } = require('./recorder');
-const { startTranslator, stopTranslator, updateParticipantLang, getTranslatorStatus, getTranslatorLanguages } = require('./translator');
+const { startTranslator, stopTranslator, updateParticipantLang, getTranslatorStatus, getTranslatorLanguages, selftest: translatorSelftest } = require('./translator');
 const { startHoldMusic, stopHoldMusic, getHoldMusicStatus } = require('./hold-music');
 
 let livekitRtc = null;
@@ -127,6 +127,19 @@ app.get('/translator/languages', (req, res) => {
 
 app.get('/translator/status/:roomName', (req, res) => {
   res.json(getTranslatorStatus(req.params.roomName));
+});
+
+// Post-deploy smoke for translator's OpenAI Realtime pipeline.
+// Opens a brief WS to OpenAI with the exact session.update shape the
+// translator uses and waits for `session.updated`. No LiveKit needed.
+app.get('/translator/selftest', async (req, res) => {
+  try {
+    const t0 = Date.now();
+    const result = await translatorSelftest();
+    res.json({ ...result, latencyMs: Date.now() - t0 });
+  } catch (e) {
+    res.status(500).json({ ok: false, reason: e.message });
+  }
 });
 
 // ═══════════════════════════════════════════

@@ -380,6 +380,11 @@ export class VoiceController {
     return this.service.getTranslatorStatus(roomName);
   }
 
+  @Get('translator/selftest')
+  translatorSelftest() {
+    return this.service.translatorSelftest();
+  }
+
   // ─── Public Translator (no auth — protected by roomName UUID) ───
 
   @Post('rooms/:roomName/translator/public/start')
