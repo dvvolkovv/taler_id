@@ -587,12 +587,14 @@ async function bootstrap() {
     }
     wss.handleUpgrade(req, socket, head, (clientWs) => {
       const model = url.searchParams.get('model') ?? 'gpt-realtime-mini-2025-12-15';
+      // GA Realtime WS endpoint — the OpenAI-Beta: realtime=v1 header was
+      // removed when the API graduated (2026-05-20). Sending it on GA
+      // closes the socket immediately after connect.
       const openaiWs = new WebSocket(
         'wss://api.openai.com/v1/realtime?model=' + model,
         {
           headers: {
             Authorization: 'Bearer ' + process.env.OPENAI_API_KEY,
-            'OpenAI-Beta': 'realtime=v1',
           },
         },
       );
