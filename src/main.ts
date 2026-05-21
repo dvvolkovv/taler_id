@@ -733,11 +733,6 @@ async function bootstrap() {
                 'RealtimeProxy',
               );
             }
-            // Temp diagnostic: print each event type from OpenAI so we can see
-            // if GA renamed response.audio.delta → response.output_audio.delta
-            // etc. — silent assistant on 1.0.78 likely means the mobile client
-            // doesn't recognise the new event names.
-            console.log('[PROXY] openai msg:', ev.type);
             // GA → beta event name rewrite for shipped 1.0.78 clients. GA
             // renamed the audio/transcript response stream events; the mobile
             // handler still listens on the beta names.
