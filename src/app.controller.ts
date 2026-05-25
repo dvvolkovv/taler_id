@@ -78,8 +78,8 @@ export class AppController {
   appVersion(@Query('flavor') flavor?: string) {
     const isDev = flavor === 'dev';
     const latest = isDev
-      ? { version: '1.0.78', build: 170 }
-      : { version: '1.0.78', build: 170 };
+      ? { version: '1.0.79', build: 171 }
+      : { version: '1.0.79', build: 171 };
     return {
       ios: { ...latest, required: false },
       android: { ...latest, required: false },
@@ -97,6 +97,27 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.0.79',
+    build: 171,
+    date: '2026-05-25',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.0.79\n\n' +
+      'Десктоп-фиксы:\n' +
+      '• Входящие звонки на macOS/Linux/Windows теперь показывают диалог с кнопками «Ответить» / «Отклонить». ' +
+      'Раньше сокет получал call_invite, но UI был только в мобильном dashboard — на десктопе пропускали звонок молча.\n' +
+      '• Правый клик по сообщению в чате открывает меню действий (ответить, скопировать, переслать, удалить и т.д.). ' +
+      'Раньше работал только long-press, которого на десктопе с мышкой нет.',
+    notes_en:
+      'Release 1.0.79\n\n' +
+      'Desktop fixes:\n' +
+      '• Incoming calls on macOS/Linux/Windows now show an in-app dialog with Accept / Decline. ' +
+      'Previously the socket received call_invite but the UI was only wired in the mobile dashboard — ' +
+      'desktop missed calls silently.\n' +
+      '• Right-click on a chat message now opens the actions sheet (reply, copy, forward, delete, etc.). ' +
+      'Previously only long-press worked, which mice cannot trigger on desktop.',
+  },
   {
     version: '1.0.78',
     build: 170,
