@@ -108,7 +108,11 @@ const APP_RELEASES = [
       '• Входящие звонки на macOS/Linux/Windows теперь показывают диалог с кнопками «Ответить» / «Отклонить». ' +
       'Раньше сокет получал call_invite, но UI был только в мобильном dashboard — на десктопе пропускали звонок молча.\n' +
       '• Правый клик по сообщению в чате открывает меню действий (ответить, скопировать, переслать, удалить и т.д.). ' +
-      'Раньше работал только long-press, которого на десктопе с мышкой нет.',
+      'Раньше работал только long-press, которого на десктопе с мышкой нет.\n\n' +
+      'Исправления:\n' +
+      '• На экране сброса и смены пароля показывалась ошибка «PIN-коды не совпадают» вместо «Пароли не совпадают». Поправили.\n' +
+      '• Гостевая ссылка на комнату звонка вида /room/<код> снова открывается в браузере — раньше из браузера выдавалось «Комната не найдена».\n' +
+      '• В окне звонка имя собеседника берётся из username, если в профиле не заполнены имя и фамилия. Раньше показывался UUID.',
     notes_en:
       'Release 1.0.79\n\n' +
       'Desktop fixes:\n' +
@@ -116,7 +120,11 @@ const APP_RELEASES = [
       'Previously the socket received call_invite but the UI was only wired in the mobile dashboard — ' +
       'desktop missed calls silently.\n' +
       '• Right-click on a chat message now opens the actions sheet (reply, copy, forward, delete, etc.). ' +
-      'Previously only long-press worked, which mice cannot trigger on desktop.',
+      'Previously only long-press worked, which mice cannot trigger on desktop.\n\n' +
+      'Fixes:\n' +
+      '• Reset-password and change-password screens showed "PINs don\'t match" instead of "Passwords don\'t match". Fixed.\n' +
+      '• Guest link to a call room /room/<code> opens in the browser again — previously the web client showed "Room not found".\n' +
+      '• In-call participant name now falls back to username when first/last name are empty, instead of showing the UUID.',
   },
   {
     version: '1.0.78',
