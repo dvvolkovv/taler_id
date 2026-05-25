@@ -609,13 +609,14 @@ export class VoiceService {
   }
 
   private async makeToken(room: string, identity: string) {
-    const profile = await this.prisma.profile.findUnique({
-      where: { userId: identity },
+    const user = await this.prisma.user.findUnique({
+      where: { id: identity },
+      include: { profile: { select: { firstName: true, lastName: true } } },
     });
-    const displayName = profile
-      ? `${profile.firstName ?? ''} ${profile.lastName ?? ''}`.trim() ||
-        identity
-      : identity;
+    const fullName = user
+      ? `${user.profile?.firstName ?? ''} ${user.profile?.lastName ?? ''}`.trim()
+      : '';
+    const displayName = fullName || user?.username || identity;
     const at = new AccessToken(LK_API_KEY, LK_API_SECRET, {
       identity,
       name: displayName,

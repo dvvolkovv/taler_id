@@ -1,10 +1,20 @@
-import { Controller, Get, Header, Query, Redirect } from '@nestjs/common';
+import { Controller, Get, Header, Param, Query, Redirect, Res } from '@nestjs/common';
+import type { Response } from 'express';
+import { join } from 'path';
 
 @Controller()
 export class AppController {
   @Get()
   @Redirect('/ui/index.html')
   root() {}
+
+  // Guest invite landing for a voice call room — served on /room/<code>
+  // so links shared from the mobile call screen open the LiveKit web client
+  // (public/room.html) for users without the app installed.
+  @Get('room/:code')
+  roomPage(@Param('code') _code: string, @Res() res: Response) {
+    res.sendFile(join(__dirname, '..', 'public', 'room.html'));
+  }
 
   @Get('health')
   health() {
