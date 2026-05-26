@@ -7,8 +7,9 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { AuditLogInterceptor } from './common/interceptors/audit-log.interceptor';
 import { PrismaService } from './prisma/prisma.service';
 import { OIDC_PROVIDER } from './oidc/oidc.service';
+import { GatingService } from './billing/services/gating.service';
 import { WebSocket, WebSocketServer } from 'ws';
-import { verify } from 'jsonwebtoken';
+import { verify, type JwtPayload } from 'jsonwebtoken';
 import * as fs from 'fs';
 import { json } from 'express';
 
@@ -559,6 +560,30 @@ async function bootstrap() {
   // --- WebSocket Proxy: /voice/realtime-proxy -> OpenAI Realtime ---
   const wss = new WebSocketServer({ noServer: true });
   const httpServer = app.getHttpServer();
+  const gatingService = app.get(GatingService);
+
+  // Idempotent zombie-session reaper: called from WS cleanup so a network drop
+  // / app crash stops the billing cron from draining the wallet forever.
+  // See incident 2026-05-26 (vdv): 10 active voice_assistant sessions tickled
+  // backend-cron for 5–8 days each because closeVoiceSession HTTP was never
+  // hit. Ownership check guards against a client passing someone else's id.
+  const closeBillingSession = async (sessionId: string, userId: string) => {
+    try {
+      const session = await prismaService.aiSession.findUnique({
+        where: { id: sessionId },
+        select: { userId: true, status: true },
+      });
+      if (!session || session.userId !== userId) return;
+      if (session.status !== 'active') return;
+      await gatingService.endSession(sessionId, 'completed');
+    } catch (err) {
+      Logger.warn(
+        `WS-cleanup endSession failed for ${sessionId}: ${String(err)}`,
+        'RealtimeProxy',
+      );
+    }
+  };
+
   httpServer.prependListener('upgrade', (req: any, socket: any, head: any) => {
     console.log('[PROXY] upgrade req:', req.url?.substring(0, 50));
     const urlStr = req.url as string;
@@ -578,13 +603,19 @@ async function bootstrap() {
       process.env.JWT_PUBLIC_KEY_PATH as string,
       'utf8',
     );
+    let userIdFromToken: string | null = null;
     try {
-      verify(token, jwtPublicKey, { algorithms: ['RS256'] });
+      const payload = verify(token, jwtPublicKey, {
+        algorithms: ['RS256'],
+      }) as JwtPayload & { sub?: string };
+      userIdFromToken =
+        typeof payload?.sub === 'string' ? payload.sub : null;
     } catch {
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
       socket.destroy();
       return;
     }
+    const billingSessionId = url.searchParams.get('billingSessionId');
     wss.handleUpgrade(req, socket, head, (clientWs) => {
       const model = url.searchParams.get('model') ?? 'gpt-realtime-mini-2025-12-15';
       // GA Realtime WS endpoint — the OpenAI-Beta: realtime=v1 header was
@@ -764,6 +795,9 @@ async function bootstrap() {
         try {
           if (clientWs.readyState === WebSocket.OPEN) clientWs.close();
         } catch (e) {}
+        if (billingSessionId && userIdFromToken) {
+          void closeBillingSession(billingSessionId, userIdFromToken);
+        }
       };
       clientWs.on('close', cleanup);
       openaiWs.on('close', cleanup);
