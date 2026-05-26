@@ -21,6 +21,18 @@ export interface MeteringGateway {
 // web_search / meeting_summary are one-shot debits done by their owning service.
 const MINUTE_BASED = new Set(['voice_assistant', 'ai_twin', 'outbound_call']);
 
+// Hard upper bound per session. If a client never calls closeVoiceSession
+// (app crash, network loss, old build without billingSessionId in the WS
+// URL, browser tab closed) the cron would keep tickling the wallet
+// forever — the 2026-05-26 zombie sweep found 155 sessions older than 7
+// days. The reaper terminates anything past this age unconditionally,
+// independent of client cooperation.
+const MAX_SESSION_HOURS: Record<string, number> = {
+  voice_assistant: 2,
+  ai_twin: 1,
+  outbound_call: 1,
+};
+
 @Injectable()
 export class MeteringService {
   private readonly log = new Logger(MeteringService.name);
@@ -45,6 +57,29 @@ export class MeteringService {
       if (!MINUTE_BASED.has(s.featureKey)) continue;
 
       const now = new Date();
+
+      // Stale-session reaper: any session older than its feature's hard cap
+      // is terminated before we look at metering. Runs inside tick() so the
+      // existing 10-second cron does the sweep without a second @Interval.
+      const maxHours = MAX_SESSION_HOURS[s.featureKey];
+      if (maxHours) {
+        const ageHours =
+          (now.getTime() - s.startedAt.getTime()) / 3_600_000;
+        if (ageHours > maxHours) {
+          try {
+            await this.gating.endSession(s.id, 'terminated_stale');
+            this.log.warn(
+              `reaped stale ${s.featureKey} session ${s.id} for user ${s.userId} (age ${ageHours.toFixed(1)}h, cap ${maxHours}h)`,
+            );
+          } catch (err) {
+            this.log.warn(
+              `reaper failed for session ${s.id}: ${String(err)}`,
+            );
+          }
+          continue;
+        }
+      }
+
       const oldLastMeteredAt = new Date(s.lastMeteredAt);
       const elapsedMs = now.getTime() - oldLastMeteredAt.getTime();
       const elapsedMinutes = elapsedMs / 60_000;

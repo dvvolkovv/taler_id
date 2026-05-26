@@ -10,6 +10,7 @@ import { WalletService } from '../../blockchain/wallet.service';
 export type SessionTerminationReason =
   | 'completed'
   | 'terminated_no_funds'
+  | 'terminated_stale'
   | 'failed';
 
 @Injectable()
@@ -100,7 +101,12 @@ export class GatingService {
       try {
         this.gateway.emitToUser(session.userId, 'ai_session_terminated', {
           sessionId,
-          reason: reason === 'terminated_no_funds' ? 'no_funds' : 'failed',
+          reason:
+            reason === 'terminated_no_funds'
+              ? 'no_funds'
+              : reason === 'terminated_stale'
+                ? 'stale'
+                : 'failed',
           featureKey: session.featureKey,
         });
       } catch (err) {
