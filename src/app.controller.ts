@@ -78,8 +78,8 @@ export class AppController {
   appVersion(@Query('flavor') flavor?: string) {
     const isDev = flavor === 'dev';
     const latest = isDev
-      ? { version: '1.0.79', build: 171 }
-      : { version: '1.0.79', build: 171 };
+      ? { version: '1.0.80', build: 172 }
+      : { version: '1.0.80', build: 172 };
     return {
       ios: { ...latest, required: false },
       android: { ...latest, required: false },
@@ -97,6 +97,34 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.0.80',
+    build: 172,
+    date: '2026-05-26',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.0.80\n\n' +
+      'Биллинг — закрыли утечку с «висящими» сессиями ассистента:\n' +
+      '• Если приложение упало или потерялась сеть прямо во время разговора с AI-ассистентом, ' +
+      'на сервере оставалась «активная» сессия — сервер продолжал каждые 10 секунд списывать с баланса, ' +
+      'хотя пользователя уже не было. У отдельных аккаунтов накопилось до 10 параллельных таких сессий ' +
+      'возрастом до месяца. На проде в момент выкатки разово закрыто ~190 таких зомби-сессий.\n' +
+      'Что починили:\n' +
+      '  (1) когда WebSocket рвётся, сервер сразу закрывает биллинг-сессию;\n' +
+      '  (2) если по какой-то причине не закрылась — серверный «жнец» добивает её принудительно по таймауту ' +
+      '(2 часа для голосового ассистента, 1 час для AI-двойника и outbound-звонков).',
+    notes_en:
+      'Release 1.0.80\n\n' +
+      'Billing — closed a leak with "stuck" assistant sessions:\n' +
+      '• If the app crashed or the network dropped mid-conversation with the AI assistant, ' +
+      'the server kept the session marked active and the cron kept debiting the wallet every 10 s ' +
+      'long after the user was gone. Some accounts accumulated up to 10 parallel stuck sessions ' +
+      'as old as a month. ~190 such zombies were swept at rollout on PROD.\n' +
+      'What we fixed:\n' +
+      '  (1) WebSocket drop now ends the billing session immediately on the server;\n' +
+      '  (2) hard server-side cap as a safety net — 2 h for voice assistant, 1 h for AI twin ' +
+      'and outbound calls.',
+  },
   {
     version: '1.0.79',
     build: 171,
