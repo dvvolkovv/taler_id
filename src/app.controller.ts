@@ -78,8 +78,8 @@ export class AppController {
   appVersion(@Query('flavor') flavor?: string) {
     const isDev = flavor === 'dev';
     const latest = isDev
-      ? { version: '1.0.80', build: 172 }
-      : { version: '1.0.80', build: 172 };
+      ? { version: '1.0.81', build: 173 }
+      : { version: '1.0.81', build: 173 };
     return {
       ios: { ...latest, required: false },
       android: { ...latest, required: false },
@@ -97,6 +97,22 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.0.81',
+    build: 173,
+    date: '2026-05-25',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.0.81\n\n' +
+      'Исправления:\n' +
+      '• iOS: восстановление пароля теперь работает на iPhone с iOS 26 — ' +
+      'устранили зависание при вводе email (мешала автозаполнение iOS 26, блокировавшая запрос).',
+    notes_en:
+      'Release 1.0.81\n\n' +
+      'Bug fixes:\n' +
+      '• iOS: password recovery now works on iPhone with iOS 26 — ' +
+      'fixed a freeze when entering email (iOS 26 AutoFill discovery was blocking the request).',
+  },
   {
     version: '1.0.80',
     build: 172,
