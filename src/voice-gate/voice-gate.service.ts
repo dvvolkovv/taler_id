@@ -2,7 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 import FormData from 'form-data';
-import { ManaxJobResponse, ManaxSpeakerEmbedding } from './voice-gate.types';
+import { cosine } from './cosine';
+import { ManaxJobResponse, ManaxSpeakerEmbedding, OwnerVerifyResult } from './voice-gate.types';
 
 export interface EmbedResult {
   embedding: number[] | null;
@@ -17,11 +18,30 @@ export class VoiceGateService {
   private readonly log = new Logger('VoiceGateService');
   private readonly baseUrl: string;
   private readonly apiKey: string;
+  private readonly threshold: number;
   private readonly timeoutMs = 2000;
 
   constructor(private readonly config: ConfigService) {
     this.baseUrl = config.get<string>('MANAX_BASE_URL', 'http://127.0.0.1:8791');
     this.apiKey = config.get<string>('MANAX_API_KEY', '');
+    this.threshold = parseFloat(config.get<string>('OWNER_VOICE_THRESHOLD', '0.5'));
+  }
+
+  async verify(audio: Buffer, ownerEmbedding: number[]): Promise<OwnerVerifyResult> {
+    if (!ownerEmbedding || ownerEmbedding.length === 0) {
+      return { isOwner: null };
+    }
+    const emb = await this.embedAudio(audio);
+    if (emb.embedding === null) {
+      return { isOwner: null, audioSec: emb.audioSec, manaxLatencyMs: emb.manaxLatencyMs };
+    }
+    const sim = cosine(emb.embedding, ownerEmbedding);
+    return {
+      isOwner: sim >= this.threshold,
+      similarity: sim,
+      audioSec: emb.audioSec,
+      manaxLatencyMs: emb.manaxLatencyMs,
+    };
   }
 
   async embedAudio(audio: Buffer): Promise<EmbedResult> {

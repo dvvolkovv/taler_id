@@ -69,3 +69,53 @@ describe('VoiceGateService.embedAudio', () => {
     expect(result.error).toBe('manax_unavailable');
   });
 });
+
+describe('VoiceGateService.verify', () => {
+  let service: VoiceGateService;
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        VoiceGateService,
+        { provide: ConfigService, useValue: mockConfig },
+      ],
+    }).compile();
+    service = module.get(VoiceGateService);
+  });
+
+  it('returns isOwner=true when cosine >= threshold', async () => {
+    mockedAxios.post.mockResolvedValueOnce({
+      status: 200,
+      data: { jobId: 'j', status: 'completed', result: { speakerEmbeddings: [{ speakerId: 's', vector: [1, 0, 0], coverageFraction: 1 }] } },
+    });
+    const r = await service.verify(Buffer.alloc(32_000), [1, 0, 0]);
+    expect(r.isOwner).toBe(true);
+    expect(r.similarity).toBeCloseTo(1.0, 6);
+  });
+
+  it('returns isOwner=false when cosine < threshold', async () => {
+    mockedAxios.post.mockResolvedValueOnce({
+      status: 200,
+      data: { jobId: 'j', status: 'completed', result: { speakerEmbeddings: [{ speakerId: 's', vector: [0, 1, 0], coverageFraction: 1 }] } },
+    });
+    const r = await service.verify(Buffer.alloc(32_000), [1, 0, 0]);
+    expect(r.isOwner).toBe(false);
+    expect(r.similarity).toBeCloseTo(0.0, 6);
+  });
+
+  it('returns isOwner=null (fail-open) when Manax returns no embedding', async () => {
+    mockedAxios.post.mockResolvedValueOnce({
+      status: 200,
+      data: { jobId: 'j', status: 'completed', result: { speakerEmbeddings: [] } },
+    });
+    const r = await service.verify(Buffer.alloc(32_000), [1, 0, 0]);
+    expect(r.isOwner).toBeNull();
+  });
+
+  it('returns isOwner=null when ownerEmbedding is empty', async () => {
+    const r = await service.verify(Buffer.alloc(32_000), []);
+    expect(r.isOwner).toBeNull();
+    expect(mockedAxios.post).not.toHaveBeenCalled();
+  });
+});
