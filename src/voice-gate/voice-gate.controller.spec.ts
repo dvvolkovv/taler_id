@@ -130,6 +130,17 @@ describe('VoiceGateController.enroll', () => {
       controller.enroll({ user: { sub: 'u1' } } as any, file),
     ).rejects.toMatchObject({ status: 503 });
   });
+
+  it('returns 503 when manax_unavailable', async () => {
+    const file = fakeFile(0, 22);
+    mockService.enroll.mockResolvedValueOnce({ ok: false, error: 'manax_unavailable' });
+    await expect(
+      controller.enroll({ user: { sub: 'u1' } } as any, file),
+    ).rejects.toMatchObject({
+      response: { ok: false, error: 'manax_unavailable' },
+      status: 503,
+    });
+  });
 });
 
 describe('VoiceGateController.deleteOwner', () => {
