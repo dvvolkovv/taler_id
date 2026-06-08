@@ -539,7 +539,8 @@ async function bootstrap() {
       req.url.startsWith('/interaction') ||
       req.url.startsWith('/register') ||
       req.url.startsWith('/clients') ||
-      req.url.startsWith('/mobile')
+      req.url.startsWith('/mobile') ||
+      req.url.startsWith('/account')
     ) {
       return next();
     }
