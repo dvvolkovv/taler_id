@@ -10,7 +10,6 @@ export const SELF_REGISTRATION_ALLOWED_SCOPES = [
   'email',
   'offline_access',
 ] as const;
-export const MAX_CLIENTS_PER_USER = 10;
 
 const DEFAULT_SCOPES = 'openid profile email offline_access';
 
@@ -41,14 +40,6 @@ export class OAuthRegistrationService {
       throw new ForbiddenException({
         error: 'email_not_verified',
         error_description: 'Verify your email address before registering OAuth clients.',
-      });
-    }
-
-    const existingCount = await this.prisma.oAuthClient.count({ where: { userId } });
-    if (existingCount >= MAX_CLIENTS_PER_USER) {
-      throw new ForbiddenException({
-        error: 'client_limit_exceeded',
-        error_description: `You may register at most ${MAX_CLIENTS_PER_USER} OAuth clients. Delete unused ones first.`,
       });
     }
 

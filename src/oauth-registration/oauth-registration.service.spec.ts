@@ -1,5 +1,5 @@
 import { ForbiddenException, NotFoundException, ConflictException } from '@nestjs/common';
-import { OAuthRegistrationService, MAX_CLIENTS_PER_USER, SELF_REGISTRATION_ALLOWED_SCOPES } from './oauth-registration.service';
+import { OAuthRegistrationService, SELF_REGISTRATION_ALLOWED_SCOPES } from './oauth-registration.service';
 
 const buildPrismaMock = (overrides: Partial<{
   user: any;
@@ -72,15 +72,6 @@ describe('OAuthRegistrationService', () => {
     it('treats missing user row as unverified (defensive)', async () => {
       const prisma = buildPrismaMock();
       prisma.user.findUnique.mockResolvedValueOnce(null);
-      const svc = new OAuthRegistrationService(prisma);
-
-      await expect(
-        svc.register('user-1', { client_name: 'Demo', redirect_uris: ['https://x/cb'] }, '127.0.0.1', 'jest'),
-      ).rejects.toBeInstanceOf(ForbiddenException);
-    });
-
-    it('rejects when user already has MAX_CLIENTS_PER_USER clients', async () => {
-      const prisma = buildPrismaMock({ count: MAX_CLIENTS_PER_USER });
       const svc = new OAuthRegistrationService(prisma);
 
       await expect(
