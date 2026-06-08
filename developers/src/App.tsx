@@ -1,6 +1,7 @@
 import { useTalerIdAuth } from '@taler-id/oauth-client/react';
-import { LoginGate } from './pages/LoginGate';
 import { ClientsList } from './pages/ClientsList';
+import { EmailVerifyGate } from './pages/EmailVerifyGate';
+import { LoginGate } from './pages/LoginGate';
 
 export function App() {
   const { isAuthenticated, isLoading } = useTalerIdAuth();
@@ -12,5 +13,9 @@ export function App() {
     );
   }
   if (!isAuthenticated) return <LoginGate />;
-  return <ClientsList />;
+  return (
+    <EmailVerifyGate>
+      <ClientsList />
+    </EmailVerifyGate>
+  );
 }

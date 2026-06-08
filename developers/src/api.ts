@@ -79,3 +79,33 @@ export const rotateSecret = (getToken: GetToken, clientId: string) =>
   call<RotateResponse>(getToken, `/oauth/clients/${clientId}/rotate-secret`, {
     method: 'POST',
   });
+
+// --- Email verification (used by EmailVerifyGate) ---
+
+export interface AccountInfo {
+  email: string | null;
+  emailVerified: boolean;
+}
+
+export interface SendVerifyResponse {
+  sent: boolean;
+  alreadyVerified?: boolean;
+}
+
+export interface ConfirmVerifyResponse {
+  verified: boolean;
+}
+
+export const getAccount = (getToken: GetToken) =>
+  call<AccountInfo>(getToken, '/oauth/account');
+
+export const sendEmailVerification = (getToken: GetToken) =>
+  call<SendVerifyResponse>(getToken, '/oauth/account/email-verify/send', {
+    method: 'POST',
+  });
+
+export const confirmEmailVerification = (getToken: GetToken, code: string) =>
+  call<ConfirmVerifyResponse>(getToken, '/oauth/account/email-verify/confirm', {
+    method: 'POST',
+    body: JSON.stringify({ code }),
+  });
