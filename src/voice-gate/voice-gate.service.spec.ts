@@ -119,3 +119,68 @@ describe('VoiceGateService.verify', () => {
     expect(mockedAxios.post).not.toHaveBeenCalled();
   });
 });
+
+describe('VoiceGateService.enroll', () => {
+  let service: VoiceGateService;
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [VoiceGateService, { provide: ConfigService, useValue: mockConfig }],
+    }).compile();
+    service = module.get(VoiceGateService);
+  });
+
+  it('returns ok=true with embedding from Manax on success', async () => {
+    mockedAxios.post.mockResolvedValueOnce({
+      status: 200,
+      data: { jobId: 'j', status: 'completed', result: { durationSec: 22.4, speakerEmbeddings: [{ speakerId: 'spk_abc', vector: [0.1, 0.2, 0.3], coverageFraction: 0.95 }] } },
+    });
+    const r = await service.enroll(Buffer.alloc(1000));
+    expect(r.ok).toBe(true);
+    expect(r.speakerId).toBe('spk_abc');
+    expect(r.embedding).toEqual([0.1, 0.2, 0.3]);
+    expect(r.embeddingDim).toBe(3);
+    expect(r.audioSec).toBeCloseTo(22.4);
+  });
+
+  it('returns no_speech_detected when Manax returns 0 embeddings', async () => {
+    mockedAxios.post.mockResolvedValueOnce({
+      status: 200,
+      data: { jobId: 'j', status: 'completed', result: { speakerEmbeddings: [] } },
+    });
+    const r = await service.enroll(Buffer.alloc(1000));
+    expect(r.ok).toBe(false);
+    expect(r.error).toBe('no_speech_detected');
+  });
+
+  it('returns manax_unavailable on HTTP failure', async () => {
+    mockedAxios.post.mockRejectedValueOnce(new Error('boom'));
+    const r = await service.enroll(Buffer.alloc(1000));
+    expect(r.ok).toBe(false);
+    expect(r.error).toBe('manax_unavailable');
+  });
+});
+
+describe('VoiceGateService feature-disabled', () => {
+  function disabledStub() {
+    return {
+      get: jest.fn((k: string, fallback?: any) =>
+        k === 'OWNER_VOICE_ENABLED' ? 'false' : fallback,
+      ),
+    };
+  }
+
+  it('returns feature_disabled from enroll() when OWNER_VOICE_ENABLED=false', async () => {
+    const svc = new VoiceGateService(disabledStub() as any);
+    const r = await svc.enroll(Buffer.alloc(1000));
+    expect(r.ok).toBe(false);
+    expect(r.error).toBe('feature_disabled');
+  });
+
+  it('returns isOwner=null from verify() when feature is disabled', async () => {
+    const svc = new VoiceGateService(disabledStub() as any);
+    const r = await svc.verify(Buffer.alloc(32_000), [1, 0, 0]);
+    expect(r.isOwner).toBeNull();
+  });
+});

@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 import FormData from 'form-data';
 import { cosine } from './cosine';
-import { ManaxJobResponse, ManaxSpeakerEmbedding, OwnerVerifyResult } from './voice-gate.types';
+import { ManaxJobResponse, ManaxSpeakerEmbedding, OwnerEnrollResult, OwnerVerifyResult } from './voice-gate.types';
 
 export interface EmbedResult {
   embedding: number[] | null;
@@ -19,16 +19,42 @@ export class VoiceGateService {
   private readonly baseUrl: string;
   private readonly apiKey: string;
   private readonly threshold: number;
+  private readonly enabled: boolean;
   private readonly timeoutMs = 2000;
 
   constructor(private readonly config: ConfigService) {
     this.baseUrl = config.get<string>('MANAX_BASE_URL', 'http://127.0.0.1:8791');
     this.apiKey = config.get<string>('MANAX_API_KEY', '');
     this.threshold = parseFloat(config.get<string>('OWNER_VOICE_THRESHOLD', '0.5'));
+    this.enabled = config.get<string>('OWNER_VOICE_ENABLED', 'true') !== 'false';
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  async enroll(audio: Buffer): Promise<OwnerEnrollResult> {
+    if (!this.enabled) {
+      return { ok: false, error: 'feature_disabled' };
+    }
+    const emb = await this.embedAudio(audio);
+    if (emb.error === 'manax_unavailable') {
+      return { ok: false, error: 'manax_unavailable' };
+    }
+    if (emb.embedding === null) {
+      return { ok: false, error: 'no_speech_detected' };
+    }
+    return {
+      ok: true,
+      speakerId: emb.speakerId,
+      embedding: emb.embedding,
+      embeddingDim: emb.embedding.length,
+      audioSec: emb.audioSec,
+    };
   }
 
   async verify(audio: Buffer, ownerEmbedding: number[]): Promise<OwnerVerifyResult> {
-    if (!ownerEmbedding || ownerEmbedding.length === 0) {
+    if (!this.enabled || !ownerEmbedding || ownerEmbedding.length === 0) {
       return { isOwner: null };
     }
     const emb = await this.embedAudio(audio);
