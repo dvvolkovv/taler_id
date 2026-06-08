@@ -57,7 +57,7 @@ export function ClientsList() {
           <div>
             <h1 style={{ margin: 0, fontSize: 22 }}>Your OAuth clients</h1>
             <p style={{ color: 'var(--fg-muted)', marginTop: 4, marginBottom: 0, fontSize: 13 }}>
-              {clients.length} of 10 used. Email-verified accounts only.
+              {clients.length} of 10 used.
             </p>
           </div>
           <button className="btn-primary" onClick={() => setCreateOpen(true)}>+ Register new client</button>
