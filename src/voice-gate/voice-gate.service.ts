@@ -21,7 +21,7 @@ export class VoiceGateService {
   private readonly threshold: number;
   private readonly enabled: boolean;
   private readonly verifyTimeoutMs = 2000;   // per 1-sec window — short
-  private readonly enrollTimeoutMs = 90_000; // 15-30 sec audio + cold model load (~30s) + queue backlog
+  private readonly enrollTimeoutMs = 180_000; // 15-30 sec audio + cold model load (~30s) + queue backlog
 
   constructor(private readonly config: ConfigService) {
     this.baseUrl = config.get<string>('MANAX_BASE_URL', 'http://127.0.0.1:8791');
