@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "Profile" ADD COLUMN "ownerSpeakerId" TEXT,
+ADD COLUMN "ownerEmbedding" DOUBLE PRECISION[] DEFAULT ARRAY[]::DOUBLE PRECISION[];

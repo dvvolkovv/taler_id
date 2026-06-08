@@ -86,6 +86,8 @@ model Profile {
   aiTwinVoiceId        String?
   lastSeenAt           DateTime?
   lastSeenPrivacy      LastSeenPrivacy @default(EVERYONE)
+  ownerSpeakerId       String?
+  ownerEmbedding       Float[]         @default([])
   documents            Document[]
   user                 User            @relation(fields: [userId], references: [id])
 }
