@@ -199,7 +199,7 @@ Manax returns `JobResponse` with `result.speakerEmbeddings[0].vector` (192 float
 
 `mode=enroll` is the lightest pipeline that still computes ECAPA. We deliberately avoid `mode=all` for per-window verify because it would run the full pyannote diarization on a 1-sec chunk — wasteful and slower.
 
-**Pre-implementation verification step**: before wiring the proxy, confirm that `mode=enroll` actually returns `result.speakerEmbeddings` populated (not just stores them internally). Run a one-shot curl against Manax on DEV with a real WAV. If `mode=enroll` doesn't return embeddings in the response, fall back to `mode=all` and accept the latency hit (likely 100–300 ms more per window on this audio length).
+**Verified 2026-06-08**: `mode=enroll` against Manax v3.6.1 on DEV (98 sec Russian WAV) returns `result.speakerEmbeddings[0].vector` with `dim=192`, `embeddingBackend=speechbrain-ecapa`, `asrBackend=disabled`. `coverageFraction` field is `null` for enroll mode — the `pickBestEmbedding` `?? 0` fallback is sufficient.
 
 ### 5.3 Cosine similarity
 
