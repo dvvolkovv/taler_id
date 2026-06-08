@@ -1,7 +1,9 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
   HttpException,
   HttpStatus,
   Post,
@@ -81,5 +83,15 @@ export class VoiceGateController {
         ? HttpStatus.UNPROCESSABLE_ENTITY
         : HttpStatus.BAD_REQUEST;
     throw new HttpException({ ok: false, error: result.error }, code);
+  }
+
+  @Delete('owner')
+  @HttpCode(204)
+  async deleteOwner(@Req() req: any) {
+    const userId = req.user.sub;
+    await this.prisma.profile.update({
+      where: { userId },
+      data: { ownerSpeakerId: null, ownerEmbedding: [] },
+    });
   }
 }

@@ -131,3 +131,31 @@ describe('VoiceGateController.enroll', () => {
     ).rejects.toMatchObject({ status: 503 });
   });
 });
+
+describe('VoiceGateController.deleteOwner', () => {
+  let controller: VoiceGateController;
+  const mockPrisma = {
+    profile: { findUnique: jest.fn(), update: jest.fn() },
+  };
+  const mockService = { isEnabled: jest.fn(() => true), enroll: jest.fn() };
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    const module: TestingModule = await Test.createTestingModule({
+      controllers: [VoiceGateController],
+      providers: [
+        { provide: VoiceGateService, useValue: mockService },
+        { provide: PrismaService, useValue: mockPrisma },
+      ],
+    }).compile();
+    controller = module.get(VoiceGateController);
+  });
+
+  it('clears ownerSpeakerId and ownerEmbedding on the profile', async () => {
+    await controller.deleteOwner({ user: { sub: 'u1' } } as any);
+    expect(mockPrisma.profile.update).toHaveBeenCalledWith({
+      where: { userId: 'u1' },
+      data: { ownerSpeakerId: null, ownerEmbedding: [] },
+    });
+  });
+});
