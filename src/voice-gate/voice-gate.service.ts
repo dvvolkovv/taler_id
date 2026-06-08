@@ -20,7 +20,8 @@ export class VoiceGateService {
   private readonly apiKey: string;
   private readonly threshold: number;
   private readonly enabled: boolean;
-  private readonly timeoutMs = 2000;
+  private readonly verifyTimeoutMs = 2000;   // per 1-sec window — short
+  private readonly enrollTimeoutMs = 30_000; // 15-30 sec audio + model load — long
 
   constructor(private readonly config: ConfigService) {
     this.baseUrl = config.get<string>('MANAX_BASE_URL', 'http://127.0.0.1:8791');
@@ -37,7 +38,7 @@ export class VoiceGateService {
     if (!this.enabled) {
       return { ok: false, error: 'feature_disabled' };
     }
-    const emb = await this.embedAudio(audio);
+    const emb = await this.embedAudio(audio, this.enrollTimeoutMs);
     if (emb.error === 'manax_unavailable') {
       return { ok: false, error: 'manax_unavailable' };
     }
@@ -57,7 +58,7 @@ export class VoiceGateService {
     if (!this.enabled || !ownerEmbedding || ownerEmbedding.length === 0) {
       return { isOwner: null };
     }
-    const emb = await this.embedAudio(audio);
+    const emb = await this.embedAudio(audio, this.verifyTimeoutMs);
     if (emb.embedding === null) {
       return { isOwner: null, audioSec: emb.audioSec, manaxLatencyMs: emb.manaxLatencyMs };
     }
@@ -70,7 +71,7 @@ export class VoiceGateService {
     };
   }
 
-  async embedAudio(audio: Buffer): Promise<EmbedResult> {
+  async embedAudio(audio: Buffer, timeoutMs = this.verifyTimeoutMs): Promise<EmbedResult> {
     const form = new FormData();
     form.append('audioFile', audio, { filename: 'audio.wav', contentType: 'audio/wav' });
     form.append('requestJson', JSON.stringify({ mode: 'enroll', language: 'ru' }));
@@ -82,7 +83,7 @@ export class VoiceGateService {
         form,
         {
           headers: { ...form.getHeaders(), 'X-Api-Key': this.apiKey },
-          timeout: this.timeoutMs,
+          timeout: timeoutMs,
           maxContentLength: 5_000_000,
         },
       );
