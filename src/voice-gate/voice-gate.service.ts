@@ -90,14 +90,16 @@ export class VoiceGateService {
       if (!jobId) {
         return { embedding: null, error: 'manax_unavailable', manaxLatencyMs: Date.now() - start };
       }
-      // poll
-      const pollIntervalMs = 250;
+      // Poll with backoff. Status GETs count against Manax's request rate
+      // budget; spamming them at 250ms eats the quota in a few seconds.
       const deadline = start + timeoutMs;
+      let pollIntervalMs = 500;
       while (Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, pollIntervalMs));
+        pollIntervalMs = Math.min(pollIntervalMs * 1.5, 2000);
         const statusResp = await axios.get<{ status: string }>(
           `${this.baseUrl}/api/v1/jobs/${jobId}/status`,
-          { headers: { 'X-Api-Key': this.apiKey }, timeout: 2000 },
+          { headers: { 'X-Api-Key': this.apiKey }, timeout: 5000 },
         );
         const s = statusResp.data.status;
         if (s === 'completed' || s === 'failed') {
