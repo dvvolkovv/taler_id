@@ -19,6 +19,15 @@ const mockConfig = {
   }),
 };
 
+// embedAudio is now async-polling: POST submit → GET status → GET full job.
+// This helper sets up the 3-call mock chain for a successful poll.
+function mockJobCompleted(jobBody: any) {
+  mockedAxios.post.mockResolvedValueOnce({ status: 202, data: { jobId: 'j-mock' } });
+  mockedAxios.get
+    .mockResolvedValueOnce({ status: 200, data: { status: 'completed' } })
+    .mockResolvedValueOnce({ status: 200, data: jobBody });
+}
+
 describe('VoiceGateService.embedAudio', () => {
   let service: VoiceGateService;
 
@@ -34,18 +43,15 @@ describe('VoiceGateService.embedAudio', () => {
   });
 
   it('extracts the highest-coverage embedding from a successful Manax response', async () => {
-    mockedAxios.post.mockResolvedValueOnce({
-      status: 200,
-      data: {
-        jobId: 'j1',
-        status: 'completed',
-        result: {
-          durationSec: 1.0,
-          speakerEmbeddings: [
-            { speakerId: 'spk_a', vector: [0.1, 0.2], coverageFraction: 0.4 },
-            { speakerId: 'spk_b', vector: [0.7, 0.8], coverageFraction: 0.9 },
-          ],
-        },
+    mockJobCompleted({
+      jobId: 'j-mock',
+      status: 'completed',
+      result: {
+        durationSec: 1.0,
+        speakerEmbeddings: [
+          { speakerId: 'spk_a', vector: [0.1, 0.2], coverageFraction: 0.4 },
+          { speakerId: 'spk_b', vector: [0.7, 0.8], coverageFraction: 0.9 },
+        ],
       },
     });
     const result = await service.embedAudio(Buffer.from('fake wav'));
@@ -54,16 +60,23 @@ describe('VoiceGateService.embedAudio', () => {
   });
 
   it('returns null embedding when Manax returns no embeddings', async () => {
-    mockedAxios.post.mockResolvedValueOnce({
-      status: 200,
-      data: { jobId: 'j1', status: 'completed', result: { speakerEmbeddings: [] } },
-    });
+    mockJobCompleted({ jobId: 'j-mock', status: 'completed', result: { speakerEmbeddings: [] } });
     const result = await service.embedAudio(Buffer.from('fake wav'));
     expect(result.embedding).toBeNull();
   });
 
   it('returns null embedding when Manax HTTP fails (fail-open)', async () => {
     mockedAxios.post.mockRejectedValueOnce(new Error('ECONNREFUSED'));
+    const result = await service.embedAudio(Buffer.from('fake wav'));
+    expect(result.embedding).toBeNull();
+    expect(result.error).toBe('manax_unavailable');
+  });
+
+  it('returns manax_unavailable when Manax job ends in failed status', async () => {
+    mockedAxios.post.mockResolvedValueOnce({ status: 202, data: { jobId: 'j-mock' } });
+    mockedAxios.get
+      .mockResolvedValueOnce({ status: 200, data: { status: 'failed' } })
+      .mockResolvedValueOnce({ status: 200, data: { jobId: 'j-mock', status: 'failed', error: 'boom' } });
     const result = await service.embedAudio(Buffer.from('fake wav'));
     expect(result.embedding).toBeNull();
     expect(result.error).toBe('manax_unavailable');
@@ -85,9 +98,9 @@ describe('VoiceGateService.verify', () => {
   });
 
   it('returns isOwner=true when cosine >= threshold', async () => {
-    mockedAxios.post.mockResolvedValueOnce({
-      status: 200,
-      data: { jobId: 'j', status: 'completed', result: { speakerEmbeddings: [{ speakerId: 's', vector: [1, 0, 0], coverageFraction: 1 }] } },
+    mockJobCompleted({
+      jobId: 'j-mock', status: 'completed',
+      result: { speakerEmbeddings: [{ speakerId: 's', vector: [1, 0, 0], coverageFraction: 1 }] },
     });
     const r = await service.verify(Buffer.alloc(32_000), [1, 0, 0]);
     expect(r.isOwner).toBe(true);
@@ -95,9 +108,9 @@ describe('VoiceGateService.verify', () => {
   });
 
   it('returns isOwner=false when cosine < threshold', async () => {
-    mockedAxios.post.mockResolvedValueOnce({
-      status: 200,
-      data: { jobId: 'j', status: 'completed', result: { speakerEmbeddings: [{ speakerId: 's', vector: [0, 1, 0], coverageFraction: 1 }] } },
+    mockJobCompleted({
+      jobId: 'j-mock', status: 'completed',
+      result: { speakerEmbeddings: [{ speakerId: 's', vector: [0, 1, 0], coverageFraction: 1 }] },
     });
     const r = await service.verify(Buffer.alloc(32_000), [1, 0, 0]);
     expect(r.isOwner).toBe(false);
@@ -105,10 +118,7 @@ describe('VoiceGateService.verify', () => {
   });
 
   it('returns isOwner=null (fail-open) when Manax returns no embedding', async () => {
-    mockedAxios.post.mockResolvedValueOnce({
-      status: 200,
-      data: { jobId: 'j', status: 'completed', result: { speakerEmbeddings: [] } },
-    });
+    mockJobCompleted({ jobId: 'j-mock', status: 'completed', result: { speakerEmbeddings: [] } });
     const r = await service.verify(Buffer.alloc(32_000), [1, 0, 0]);
     expect(r.isOwner).toBeNull();
   });
@@ -132,9 +142,9 @@ describe('VoiceGateService.enroll', () => {
   });
 
   it('returns ok=true with embedding from Manax on success', async () => {
-    mockedAxios.post.mockResolvedValueOnce({
-      status: 200,
-      data: { jobId: 'j', status: 'completed', result: { durationSec: 22.4, speakerEmbeddings: [{ speakerId: 'spk_abc', vector: [0.1, 0.2, 0.3], coverageFraction: 0.95 }] } },
+    mockJobCompleted({
+      jobId: 'j-mock', status: 'completed',
+      result: { durationSec: 22.4, speakerEmbeddings: [{ speakerId: 'spk_abc', vector: [0.1, 0.2, 0.3], coverageFraction: 0.95 }] },
     });
     const r = await service.enroll(Buffer.alloc(1000));
     expect(r.ok).toBe(true);
@@ -145,10 +155,7 @@ describe('VoiceGateService.enroll', () => {
   });
 
   it('returns no_speech_detected when Manax returns 0 embeddings', async () => {
-    mockedAxios.post.mockResolvedValueOnce({
-      status: 200,
-      data: { jobId: 'j', status: 'completed', result: { speakerEmbeddings: [] } },
-    });
+    mockJobCompleted({ jobId: 'j-mock', status: 'completed', result: { speakerEmbeddings: [] } });
     const r = await service.enroll(Buffer.alloc(1000));
     expect(r.ok).toBe(false);
     expect(r.error).toBe('no_speech_detected');

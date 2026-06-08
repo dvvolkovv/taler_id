@@ -72,33 +72,59 @@ export class VoiceGateService {
   }
 
   async embedAudio(audio: Buffer, timeoutMs = this.verifyTimeoutMs): Promise<EmbedResult> {
+    // Manax sync endpoint /api/v1/audio/upload-all-in-one hangs in practice;
+    // submit to async /jobs/upload-all-in-one and poll status until terminal.
     const form = new FormData();
     form.append('audioFile', audio, { filename: 'audio.wav', contentType: 'audio/wav' });
     form.append('requestJson', JSON.stringify({ mode: 'enroll', language: 'ru' }));
 
     const start = Date.now();
+    const headers = { ...form.getHeaders(), 'X-Api-Key': this.apiKey };
     try {
-      const resp = await axios.post<ManaxJobResponse>(
-        `${this.baseUrl}/api/v1/audio/upload-all-in-one`,
+      const submitResp = await axios.post<{ jobId: string }>(
+        `${this.baseUrl}/api/v1/jobs/upload-all-in-one`,
         form,
-        {
-          headers: { ...form.getHeaders(), 'X-Api-Key': this.apiKey },
-          timeout: timeoutMs,
-          maxContentLength: 5_000_000,
-        },
+        { headers, timeout: 5000, maxContentLength: 5_000_000 },
       );
-      const latency = Date.now() - start;
-      const embs = resp.data.result?.speakerEmbeddings ?? [];
-      if (embs.length === 0) {
-        return { embedding: null, error: 'no_speech_detected', manaxLatencyMs: latency };
+      const jobId = submitResp.data.jobId;
+      if (!jobId) {
+        return { embedding: null, error: 'manax_unavailable', manaxLatencyMs: Date.now() - start };
       }
-      const best = this.pickBestEmbedding(embs);
-      return {
-        embedding: best.vector,
-        speakerId: best.speakerId,
-        audioSec: resp.data.result?.durationSec,
-        manaxLatencyMs: latency,
-      };
+      // poll
+      const pollIntervalMs = 250;
+      const deadline = start + timeoutMs;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, pollIntervalMs));
+        const statusResp = await axios.get<{ status: string }>(
+          `${this.baseUrl}/api/v1/jobs/${jobId}/status`,
+          { headers: { 'X-Api-Key': this.apiKey }, timeout: 2000 },
+        );
+        const s = statusResp.data.status;
+        if (s === 'completed' || s === 'failed') {
+          const resultResp = await axios.get<ManaxJobResponse>(
+            `${this.baseUrl}/api/v1/jobs/${jobId}`,
+            { headers: { 'X-Api-Key': this.apiKey }, timeout: 5000 },
+          );
+          const latency = Date.now() - start;
+          if (s === 'failed') {
+            this.log.warn(`Manax job ${jobId} failed: ${resultResp.data.error ?? '?'}`);
+            return { embedding: null, error: 'manax_unavailable', manaxLatencyMs: latency };
+          }
+          const embs = resultResp.data.result?.speakerEmbeddings ?? [];
+          if (embs.length === 0) {
+            return { embedding: null, error: 'no_speech_detected', manaxLatencyMs: latency };
+          }
+          const best = this.pickBestEmbedding(embs);
+          return {
+            embedding: best.vector,
+            speakerId: best.speakerId,
+            audioSec: resultResp.data.result?.durationSec,
+            manaxLatencyMs: latency,
+          };
+        }
+      }
+      this.log.warn(`Manax job ${jobId} timed out after ${timeoutMs}ms`);
+      return { embedding: null, error: 'manax_unavailable', manaxLatencyMs: Date.now() - start };
     } catch (e: any) {
       this.log.warn(`Manax unavailable, fail-open: ${e.message}`);
       return { embedding: null, error: 'manax_unavailable', manaxLatencyMs: Date.now() - start };
