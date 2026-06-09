@@ -12,6 +12,8 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { verify, type JwtPayload } from 'jsonwebtoken';
 import * as fs from 'fs';
 import { json } from 'express';
+import { VoiceGateService } from './voice-gate/voice-gate.service';
+import { PcmWindow, wrapWav16kMono } from './voice-gate/pcm-window';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
@@ -559,6 +561,12 @@ async function bootstrap() {
     'Bootstrap',
   );
   // --- WebSocket Proxy: /voice/realtime-proxy -> OpenAI Realtime ---
+  const voiceGate = app.get(VoiceGateService);
+  const ownerVoiceWindowMs = parseFloat(
+    process.env.OWNER_VOICE_WINDOW_MS ?? '1000',
+  );
+  // 16 samples/ms × 2 bytes per int16 = 32 bytes/ms PCM; round to whole sample
+  const ownerVoiceWindowBytes = Math.round(ownerVoiceWindowMs * 32);
   const wss = new WebSocketServer({ noServer: true });
   const httpServer = app.getHttpServer();
   const gatingService = app.get(GatingService);
@@ -619,6 +627,32 @@ async function bootstrap() {
     const billingSessionId = url.searchParams.get('billingSessionId');
     wss.handleUpgrade(req, socket, head, (clientWs) => {
       const model = url.searchParams.get('model') ?? 'gpt-realtime-mini-2025-12-15';
+      // Per-session voice-gate state
+      let ownerEmbedding: number[] = [];
+      let responseInFlight = false;
+      const pcmWindow = new PcmWindow(ownerVoiceWindowBytes);
+      let verifyInFlight = false;
+
+      if (voiceGate.isEnabled() && userIdFromToken) {
+        prismaService.profile
+          .findUnique({ where: { userId: userIdFromToken } })
+          .then((p) => {
+            ownerEmbedding = (p as any)?.ownerEmbedding ?? [];
+            if (ownerEmbedding.length === 0) {
+              Logger.warn(
+                `proxy: owner not enrolled (userId=${userIdFromToken}), gating skipped`,
+                'RealtimeProxy',
+              );
+            }
+          })
+          .catch((e: any) =>
+            Logger.warn(
+              `proxy: load ownerEmbedding failed: ${e.message}`,
+              'RealtimeProxy',
+            ),
+          );
+      }
+
       // GA Realtime WS endpoint — the OpenAI-Beta: realtime=v1 header was
       // removed when the API graduated (2026-05-20). Sending it on GA
       // closes the socket immediately after connect.
@@ -732,6 +766,73 @@ async function bootstrap() {
             }
           } catch (_) {}
         }
+        // Voice-gate tap (added in 2.3): extract base64 PCM from
+        // input_audio_buffer.append frames, accumulate into a 1-sec window,
+        // verify against owner embedding via the local sidecar. On non-owner
+        // verdict, inject retract events into the OpenAI socket.
+        if (
+          voiceGate.isEnabled() &&
+          ownerEmbedding.length > 0 &&
+          !isBinary &&
+          !verifyInFlight
+        ) {
+          try {
+            const parsed = JSON.parse(data.toString());
+            if (
+              parsed.type === 'input_audio_buffer.append' &&
+              typeof parsed.audio === 'string'
+            ) {
+              const window = pcmWindow.appendBase64(parsed.audio);
+              if (window) {
+                verifyInFlight = true;
+                const wav = wrapWav16kMono(window);
+                voiceGate
+                  .verify(wav, ownerEmbedding)
+                  .then((verdict) => {
+                    verifyInFlight = false;
+                    Logger.log(
+                      JSON.stringify({
+                        ns: 'voice-gate.verify',
+                        userId: userIdFromToken,
+                        cosine: verdict.similarity ?? null,
+                        verdict:
+                          verdict.isOwner === true
+                            ? 'owner'
+                            : verdict.isOwner === false
+                            ? 'non_owner'
+                            : 'fail_open',
+                        audioSec: verdict.audioSec ?? null,
+                        embedLatencyMs: verdict.manaxLatencyMs ?? null,
+                      }),
+                      'voice-gate.verify',
+                    );
+                    if (
+                      verdict.isOwner === false &&
+                      openaiWs.readyState === WebSocket.OPEN
+                    ) {
+                      openaiWs.send(
+                        JSON.stringify({ type: 'input_audio_buffer.clear' }),
+                      );
+                      if (responseInFlight) {
+                        openaiWs.send(
+                          JSON.stringify({ type: 'response.cancel' }),
+                        );
+                      }
+                    }
+                  })
+                  .catch((e: any) => {
+                    verifyInFlight = false;
+                    Logger.warn(
+                      `voice-gate verify exception: ${e.message}`,
+                      'RealtimeProxy',
+                    );
+                  });
+              }
+            }
+          } catch {
+            // ignore parse errors; not all messages are JSON we care about
+          }
+        }
       });
       openaiWs.on('open', () => {
         openaiReady = true;
@@ -752,6 +853,13 @@ async function bootstrap() {
             if (ev.type === 'session.updated') {
               sessionConfigured = true;
               Logger.log('session.updated received from OpenAI', 'RealtimeProxy');
+            }
+            if (ev.type === 'response.created') responseInFlight = true;
+            if (
+              ev.type === 'response.done' ||
+              ev.type === 'response.cancelled'
+            ) {
+              responseInFlight = false;
             }
             if (ev.type === 'session.created') {
               Logger.log(
