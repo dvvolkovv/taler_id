@@ -19,9 +19,12 @@ export class KycController {
   @UseGuards(JwtAuthGuard)
   startKyc(
     @CurrentUser() user: any,
-    @Query('platform') platform?: 'mobile' | 'desktop',
+    // `platform` is accepted for backwards compatibility with mobile clients
+    // ≤1.0.82 but no longer affects the response — WebSDK is the only flow now
+    // (mock_ss does not support native SumSub SDKs).
+    @Query('platform') _platform?: 'mobile' | 'desktop',
   ) {
-    return this.kycService.startKyc(user.sub, platform ?? 'mobile');
+    return this.kycService.startKyc(user.sub);
   }
 
   @Get('status')

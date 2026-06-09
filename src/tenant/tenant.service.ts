@@ -14,7 +14,6 @@ import {
   InviteMemberDto,
   ChangeRoleDto,
 } from './dto/create-tenant.dto';
-import * as crypto from 'crypto';
 import { EmailService } from '../email/email.service';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -107,66 +106,42 @@ export class TenantService {
     });
     if (!tenant) throw new NotFoundException('Tenant not found');
 
-    const appToken = this.config.get<string>('sumsub.appToken');
-    const isMock = !appToken || appToken === 'test_token';
+    const baseUrl = (
+      this.config.get<string>('sumsub.baseUrl') ??
+      'https://mockss-test.up.railway.app'
+    ).replace(/\/$/, '');
+    const kybLevel =
+      this.config.get<string>('sumsub.kybLevelName') ?? 'basic-kyb-level';
+    const ttlInSecs =
+      this.config.get<number>('sumsub.ttlInSecs') ?? 600;
 
-    let applicantId: string;
-    let sdkToken: string;
-
-    if (isMock) {
-      // Mock mode: return null token so frontend shows status update, not Sumsub SDK
-      await this.prisma.tenant.update({
-        where: { id: tenantId },
-        data: { kybStatus: KycStatus.PENDING },
-      });
-      return { sdkToken: null };
-    } else {
-      // Get SDK token directly — Sumsub creates company applicant automatically via SDK.
-      // basic-kyb-level is read-only (can't pre-create applicants via API).
-      // userId=tenantId becomes externalUserId in Sumsub for webhook matching.
-      const secretKey = this.config.get<string>('sumsub.secretKey') ?? '';
-      const baseUrl =
-        this.config.get<string>('sumsub.baseUrl') ?? 'https://api.sumsub.com';
-      const kybLevel =
-        this.config.get<string>('sumsub.kybLevelName') ?? 'basic-kyb-level';
-
-      const ts = Math.floor(Date.now() / 1000).toString();
-      // IMPORTANT: no body in request, no body in signature — Sumsub requires exact match
-      const tokenPath = `/resources/accessTokens?userId=${tenantId}&levelName=${kybLevel}&ttlInSecs=3600`;
-      const tokenSig = crypto
-        .createHmac('sha256', secretKey)
-        .update(ts + 'POST' + tokenPath)
-        .digest('hex');
-      const tokenResp = await fetch(`${baseUrl}${tokenPath}`, {
-        method: 'POST',
-        headers: {
-          'X-App-Token': appToken,
-          'X-App-Access-Sig': tokenSig,
-          'X-App-Access-Ts': ts,
-        },
-        // No body — including a body breaks signature verification
-      });
-      if (!tokenResp.ok) {
-        const err = await tokenResp.json();
-        throw new BadRequestException(
-          'Failed to get KYB token: ' +
-            (err.description || JSON.stringify(err)),
-        );
-      }
-      const tokenData = await tokenResp.json();
-      sdkToken = tokenData.token;
-      applicantId = ''; // will be set when webhook arrives with externalUserId=tenantId
+    const tokenResp = await fetch(`${baseUrl}/resources/accessTokens/sdk`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId: tenantId,
+        levelName: kybLevel,
+        ttlInSecs,
+      }),
+    });
+    if (!tokenResp.ok) {
+      const err: any = await tokenResp.json().catch(() => ({}));
+      throw new BadRequestException(
+        'Failed to get KYB token: ' +
+          (err.description || err.detail || tokenResp.statusText),
+      );
     }
+    const tokenData: any = await tokenResp.json();
+    const sdkToken: string = tokenData.token;
+    const webSdkUrl = `${baseUrl}/idensic/sdk/checkup?accessToken=${encodeURIComponent(sdkToken)}`;
 
     await this.prisma.tenant.update({
       where: { id: tenantId },
-      data: {
-        ...(applicantId ? { sumsubApplicantId: applicantId } : {}),
-        kybStatus: KycStatus.PENDING,
-      },
+      data: { kybStatus: KycStatus.PENDING },
     });
 
-    return { sdkToken };
+    // sdkToken kept for backwards-compatibility; new clients use webSdkUrl.
+    return { sdkToken, webSdkUrl, sdkBaseUrl: baseUrl };
   }
 
   async handleKybWebhook(payload: any) {

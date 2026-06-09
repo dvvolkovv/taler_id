@@ -254,42 +254,90 @@ describe('KycService', () => {
   });
 
   describe('startKyc', () => {
-    it('creates applicant and returns PENDING status when user is found', async () => {
+    const mockBaseUrl = 'https://mockss-test.up.railway.app';
+    let originalFetch: typeof fetch;
+
+    function mockFetchSequence(responses: Array<{ ok: boolean; body: any }>) {
+      const queue = [...responses];
+      (global as any).fetch = jest.fn(async () => {
+        const next = queue.shift();
+        if (!next) throw new Error('Unexpected extra fetch call');
+        return {
+          ok: next.ok,
+          json: async () => next.body,
+          statusText: next.ok ? 'OK' : 'Bad Request',
+        };
+      });
+    }
+
+    beforeEach(() => {
+      originalFetch = global.fetch;
+      process.env.SUMSUB_BASE_URL = mockBaseUrl;
+      process.env.SUMSUB_LEVEL_NAME = 'trientes-kyc-level';
+      process.env.SUMSUB_TTL_SECS = '600';
+    });
+
+    afterEach(() => {
+      global.fetch = originalFetch;
+    });
+
+    it('issues token, resolves applicantId, upserts record, returns webSdkUrl', async () => {
       mockPrisma.user.findUnique.mockResolvedValue({
         id: 'user-1',
         email: 'test@example.com',
         phone: null,
       });
-      mockPrisma.kycRecord.upsert.mockResolvedValue({
-        userId: 'user-1',
-        sumsubApplicantId: 'mock_applicant_user-1',
-        status: 'PENDING',
-      });
+      mockPrisma.kycRecord.upsert.mockResolvedValue({});
+      mockFetchSequence([
+        { ok: true, body: { token: '_act-sbx-abc123', userId: 'user-1' } },
+        {
+          ok: true,
+          body: {
+            id: 'applicant-uuid-1',
+            createdAt: '2026-06-09T00:00:00Z',
+            externalUserId: 'user-1',
+            info: {},
+            review: { reviewStatus: 'init' },
+          },
+        },
+      ]);
 
       const result = await service.startKyc('user-1');
+
       expect(result.status).toBe('PENDING');
-      expect(result.sumsubApplicantId).toMatch(/^mock_applicant_/);
-      expect(result.sdkToken).toMatch(/^mock_sdk_token_/);
+      expect(result.applicantId).toBe('applicant-uuid-1');
+      expect(result.sumsubApplicantId).toBe('applicant-uuid-1');
+      expect(result.sdkBaseUrl).toBe(mockBaseUrl);
+      expect(result.webSdkUrl).toBe(
+        `${mockBaseUrl}/idensic/sdk/checkup?accessToken=${encodeURIComponent('_act-sbx-abc123')}`,
+      );
+      expect(result.expiresAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     });
 
-    it('upserts kycRecord with PENDING status', async () => {
+    it('upserts kycRecord with PENDING status and resolved applicantId', async () => {
       mockPrisma.user.findUnique.mockResolvedValue({
         id: 'user-2',
         email: 'second@example.com',
         phone: null,
       });
-      mockPrisma.kycRecord.upsert.mockResolvedValue({
-        userId: 'user-2',
-        sumsubApplicantId: 'mock_applicant_user-2',
-        status: 'PENDING',
-      });
+      mockPrisma.kycRecord.upsert.mockResolvedValue({});
+      mockFetchSequence([
+        { ok: true, body: { token: 'tok2', userId: 'user-2' } },
+        { ok: true, body: { id: 'applicant-2', externalUserId: 'user-2' } },
+      ]);
 
       await service.startKyc('user-2');
       expect(mockPrisma.kycRecord.upsert).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { userId: 'user-2' },
-          create: expect.objectContaining({ status: 'PENDING' }),
-          update: expect.objectContaining({ status: 'PENDING' }),
+          create: expect.objectContaining({
+            status: 'PENDING',
+            sumsubApplicantId: 'applicant-2',
+          }),
+          update: expect.objectContaining({
+            status: 'PENDING',
+            sumsubApplicantId: 'applicant-2',
+          }),
         }),
       );
     });
@@ -303,75 +351,51 @@ describe('KycService', () => {
       expect(mockPrisma.kycRecord.upsert).not.toHaveBeenCalled();
     });
 
-    it('uses phone as identifier when email is null', async () => {
+    it('throws BadRequestException when token issuance fails', async () => {
       mockPrisma.user.findUnique.mockResolvedValue({
         id: 'user-3',
-        email: null,
-        phone: '+1234567890',
-      });
-      mockPrisma.kycRecord.upsert.mockResolvedValue({
-        userId: 'user-3',
-        sumsubApplicantId: 'mock_applicant_user-3',
-        status: 'PENDING',
-      });
-
-      const result = await service.startKyc('user-3');
-      expect(result.status).toBe('PENDING');
-    });
-
-    it('defaults to mobile platform when no platform param is given', async () => {
-      mockPrisma.user.findUnique.mockResolvedValue({
-        id: 'user-1',
-        email: 'test@example.com',
+        email: 'x@y.z',
         phone: null,
       });
-      mockPrisma.kycRecord.upsert.mockResolvedValue({
-        userId: 'user-1',
-        sumsubApplicantId: 'mock_applicant_user-1',
-        status: 'PENDING',
-      });
+      mockFetchSequence([
+        { ok: false, body: { description: 'rate limit' } },
+      ]);
 
-      const result = await service.startKyc('user-1');
-      expect(result.platform).toBe('mobile');
-      expect('sdkToken' in result).toBe(true);
-      expect('webSdkUrl' in result).toBe(false);
+      await expect(service.startKyc('user-3')).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(mockPrisma.kycRecord.upsert).not.toHaveBeenCalled();
     });
 
-    it('returns webSdkUrl for desktop platform', async () => {
+    it('uses configured levelName when issuing token', async () => {
+      process.env.SUMSUB_LEVEL_NAME = 'enhanced-kyc-level';
       mockPrisma.user.findUnique.mockResolvedValue({
         id: 'user-4',
-        email: 'desktop@example.com',
+        email: 'a@b.c',
         phone: null,
       });
-      mockPrisma.kycRecord.upsert.mockResolvedValue({
-        userId: 'user-4',
-        sumsubApplicantId: 'mock_applicant_user-4',
-        status: 'PENDING',
-      });
+      mockPrisma.kycRecord.upsert.mockResolvedValue({});
+      const fetchMock = jest.fn().mockImplementation((async (
+        _url: string,
+        init?: RequestInit,
+      ) => {
+        if (init?.method === 'POST') {
+          const body = JSON.parse(init.body as string);
+          expect(body.levelName).toBe('enhanced-kyc-level');
+          return {
+            ok: true,
+            json: async () => ({ token: 't', userId: 'user-4' }),
+          };
+        }
+        return {
+          ok: true,
+          json: async () => ({ id: 'app-4', externalUserId: 'user-4' }),
+        };
+      }) as any);
+      (global as any).fetch = fetchMock;
 
-      const result = await service.startKyc('user-4', 'desktop');
-      expect(result.platform).toBe('desktop');
-      expect('webSdkUrl' in result).toBe(true);
-      expect((result as any).webSdkUrl).toContain('sumsub.com');
-      expect('sdkToken' in result).toBe(false);
-    });
-
-    it('mobile platform explicitly passed returns sdkToken not webSdkUrl', async () => {
-      mockPrisma.user.findUnique.mockResolvedValue({
-        id: 'user-5',
-        email: 'mobile@example.com',
-        phone: null,
-      });
-      mockPrisma.kycRecord.upsert.mockResolvedValue({
-        userId: 'user-5',
-        sumsubApplicantId: 'mock_applicant_user-5',
-        status: 'PENDING',
-      });
-
-      const result = await service.startKyc('user-5', 'mobile');
-      expect(result.platform).toBe('mobile');
-      expect('sdkToken' in result).toBe(true);
-      expect('webSdkUrl' in result).toBe(false);
+      await service.startKyc('user-4');
+      expect(fetchMock).toHaveBeenCalled();
     });
   });
 });

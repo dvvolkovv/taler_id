@@ -10,6 +10,16 @@ import { PrismaService } from '../prisma/prisma.service';
 import * as crypto from 'crypto';
 import { EmailService } from '../email/email.service';
 
+export interface StartKycResponse {
+  applicantId: string;
+  webSdkUrl: string;
+  sdkBaseUrl: string;
+  status: string;
+  expiresAt: string;
+  /** legacy alias for older mobile clients (≤1.0.82) */
+  sumsubApplicantId: string;
+}
+
 @Injectable()
 export class KycService {
   private readonly logger = new Logger(KycService.name);
@@ -21,21 +31,30 @@ export class KycService {
     private email: EmailService,
   ) {}
 
-  async startKyc(
-    userId: string,
-    platform: 'mobile' | 'desktop' = 'mobile',
-  ): Promise<
-    | { platform: 'mobile'; sumsubApplicantId: string; sdkToken: string; status: string }
-    | { platform: 'desktop'; sumsubApplicantId: string; webSdkUrl: string; status: string }
-  > {
+  private get baseUrl(): string {
+    return (
+      process.env.SUMSUB_BASE_URL || 'https://mockss-test.up.railway.app'
+    ).replace(/\/$/, '');
+  }
+
+  private get levelName(): string {
+    return process.env.SUMSUB_LEVEL_NAME || 'trientes-kyc-level';
+  }
+
+  private get ttlInSecs(): number {
+    const raw = parseInt(process.env.SUMSUB_TTL_SECS || '600', 10);
+    return Number.isFinite(raw) && raw >= 60 && raw <= 3600 ? raw : 600;
+  }
+
+  async startKyc(userId: string): Promise<StartKycResponse> {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new NotFoundException('User not found');
 
-    // Create Sumsub applicant
-    const applicantId = await this.createSumsubApplicant(
-      userId,
-      user.email || user.phone || '',
-    );
+    const token = await this.issueAccessToken(userId);
+
+    // Mock auto-creates the applicant on first token issue. Resolve its id so
+    // we can correlate webhooks → KycRecord.
+    const applicantId = await this.getApplicantByExternalId(userId);
 
     await this.prisma.kycRecord.upsert({
       where: { userId },
@@ -43,25 +62,19 @@ export class KycService {
       update: { sumsubApplicantId: applicantId, status: 'PENDING' },
     });
 
-    if (platform === 'desktop') {
-      // Get Web SDK link for desktop (returns a one-time-use URL)
-      const webSdkUrl = await this.getSumsubWebSdkLink(userId);
-      return {
-        platform: 'desktop' as const,
-        sumsubApplicantId: applicantId,
-        webSdkUrl,
-        status: 'PENDING',
-      };
-    }
-
-    // Get SDK token for mobile frontend (pass our externalUserId, not Sumsub applicantId)
-    const sdkToken = await this.getSumsubSdkToken(userId);
+    const sdkBaseUrl = this.baseUrl;
+    const webSdkUrl = `${sdkBaseUrl}/idensic/sdk/checkup?accessToken=${encodeURIComponent(token)}`;
+    const expiresAt = new Date(
+      Date.now() + this.ttlInSecs * 1000,
+    ).toISOString();
 
     return {
-      platform: 'mobile' as const,
+      applicantId,
       sumsubApplicantId: applicantId,
-      sdkToken,
+      webSdkUrl,
+      sdkBaseUrl,
       status: 'PENDING',
+      expiresAt,
     };
   }
 
@@ -76,7 +89,8 @@ export class KycService {
   }
 
   async handleWebhook(body: Buffer, signature: string) {
-    // Verify Sumsub webhook signature only if SUMSUB_WEBHOOK_SECRET is configured
+    // Verify webhook signature only if SUMSUB_WEBHOOK_SECRET is configured.
+    // Mock_ss may or may not sign — keep the path optional.
     const webhookSecret = process.env.SUMSUB_WEBHOOK_SECRET || '';
     if (webhookSecret) {
       const expectedSignature = crypto
@@ -85,7 +99,7 @@ export class KycService {
         .digest('hex');
       if (signature !== expectedSignature) {
         this.logger.warn(
-          `Webhook sig mismatch: received="${signature}" expected="${expectedSignature}" secret_len=${webhookSecret.length} body_len=${body.length}`,
+          `KYC webhook sig mismatch: received="${signature}" expected="${expectedSignature}" secret_len=${webhookSecret.length} body_len=${body.length}`,
         );
         throw new BadRequestException('Invalid webhook signature');
       }
@@ -113,7 +127,6 @@ export class KycService {
           include: { user: { select: { id: true } } },
         });
 
-        // Send email notification (async, non-blocking)
         this.prisma.user
           .findUnique({ where: { id: updated.userId } })
           .then((u) => {
@@ -124,7 +137,6 @@ export class KycService {
           })
           .catch(() => {});
 
-        // Attest KYC verification on Taler blockchain (async, non-blocking)
         this.blockchain
           .attestVerification(updated.userId, 2)
           .then((result) => {
@@ -146,7 +158,6 @@ export class KycService {
           where: { id: kyc.id },
           data: { status: 'REJECTED', rejectionReason: reason },
         });
-        // Send rejection email (async, non-blocking)
         this.prisma.user
           .findUnique({ where: { id: kyc.userId } })
           .then((u) => {
@@ -173,12 +184,16 @@ export class KycService {
       throw new NotFoundException('KYC record not found');
     }
 
-    const appToken = process.env.SUMSUB_APP_TOKEN || '';
-    const secretKey = process.env.SUMSUB_SECRET_KEY || '';
-    const baseUrl = process.env.SUMSUB_BASE_URL || 'https://api.sumsub.com';
-
-    // In test/dev mode, return mock data
-    if (appToken === 'test_token' || !appToken) {
+    let applicantData: any;
+    try {
+      applicantData = await this.apiGet(
+        `/resources/applicants/${kyc.sumsubApplicantId}/one`,
+      );
+    } catch (e) {
+      this.logger.warn(
+        `Failed to fetch applicant ${kyc.sumsubApplicantId}: ${e}`,
+      );
+      // Graceful fallback: return what we have in DB
       return {
         applicantId: kyc.sumsubApplicantId,
         createdAt: kyc.createdAt.toISOString(),
@@ -202,22 +217,10 @@ export class KycService {
       };
     }
 
-    // Fetch applicant info from Sumsub
-    const applicantData = await this.sumsubApiGet(
-      `/resources/applicants/${kyc.sumsubApplicantId}/one`,
-      appToken,
-      secretKey,
-      baseUrl,
-    );
-
-    // Fetch document check status
     let docStatus: any = {};
     try {
-      docStatus = await this.sumsubApiGet(
+      docStatus = await this.apiGet(
         `/resources/applicants/${kyc.sumsubApplicantId}/requiredIdDocsStatus`,
-        appToken,
-        secretKey,
-        baseUrl,
       );
     } catch (e) {
       this.logger.warn(
@@ -273,194 +276,45 @@ export class KycService {
     };
   }
 
-  private async sumsubApiGet(
-    urlPath: string,
-    appToken: string,
-    secretKey: string,
-    baseUrl: string,
-  ): Promise<any> {
-    const ts = Math.floor(Date.now() / 1000).toString();
-    const signature = crypto
-      .createHmac('sha256', secretKey)
-      .update(ts + 'GET' + urlPath)
-      .digest('hex');
-
-    const response = await fetch(baseUrl + urlPath, {
-      method: 'GET',
-      headers: {
-        'X-App-Token': appToken,
-        'X-App-Access-Sig': signature,
-        'X-App-Access-Ts': ts,
-      },
+  private async issueAccessToken(externalUserId: string): Promise<string> {
+    const url = `${this.baseUrl}/resources/accessTokens/sdk`;
+    const body = JSON.stringify({
+      userId: externalUserId,
+      levelName: this.levelName,
+      ttlInSecs: this.ttlInSecs,
     });
 
-    const data = await response.json();
-    if (!response.ok) {
-      throw new BadRequestException('Sumsub API error: ' + data.description);
-    }
-    return data;
-  }
-
-  private async createSumsubApplicant(
-    userId: string,
-    email: string,
-  ): Promise<string> {
-    const appToken = process.env.SUMSUB_APP_TOKEN || '';
-    const secretKey = process.env.SUMSUB_SECRET_KEY || '';
-    const baseUrl = process.env.SUMSUB_BASE_URL || 'https://api.sumsub.com';
-
-    const ts = Math.floor(Date.now() / 1000).toString();
-    const method = 'POST';
-    const urlPath = '/resources/applicants?levelName=basic-kyc-level';
-    const body = JSON.stringify({ externalUserId: userId, email });
-
-    const signature = crypto
-      .createHmac('sha256', secretKey)
-      .update(ts + method + urlPath + body)
-      .digest('hex');
-
-    // In test/dev mode, return a mock applicant ID
-    if (appToken === 'test_token' || !appToken) {
-      return 'mock_applicant_' + userId.substring(0, 8);
-    }
-
-    const response = await fetch(baseUrl + urlPath, {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-        'X-App-Token': appToken,
-        'X-App-Access-Sig': signature,
-        'X-App-Access-Ts': ts,
-      },
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body,
     });
 
     const data: any = await response.json();
     if (!response.ok) {
-      // If applicant already exists, fetch their Sumsub ID
-      if (data.description && data.description.includes('already exists')) {
-        return this.getSumsubApplicantByExternalId(
-          userId,
-          appToken,
-          secretKey,
-          baseUrl,
-        );
-      }
-      throw new BadRequestException('Sumsub error: ' + data.description);
-    }
-    return data.id;
-  }
-
-  private async getSumsubApplicantByExternalId(
-    externalUserId: string,
-    appToken: string,
-    secretKey: string,
-    baseUrl: string,
-  ): Promise<string> {
-    const ts = Math.floor(Date.now() / 1000).toString();
-    const urlPath = `/resources/applicants/-;externalUserId=${externalUserId}/one`;
-    const signature = crypto
-      .createHmac('sha256', secretKey)
-      .update(ts + 'GET' + urlPath)
-      .digest('hex');
-
-    const response = await fetch(baseUrl + urlPath, {
-      method: 'GET',
-      headers: {
-        'X-App-Token': appToken,
-        'X-App-Access-Sig': signature,
-        'X-App-Access-Ts': ts,
-      },
-    });
-    const data: any = await response.json();
-    if (!response.ok)
-      throw new BadRequestException('Sumsub fetch error: ' + data.description);
-    return data.id;
-  }
-
-  private async getSumsubWebSdkLink(externalUserId: string): Promise<string> {
-    const appToken = process.env.SUMSUB_APP_TOKEN || '';
-    const secretKey = process.env.SUMSUB_SECRET_KEY || '';
-    const baseUrl = process.env.SUMSUB_BASE_URL || 'https://api.sumsub.com';
-
-    // In test/dev mode, return a mock Web SDK URL
-    if (appToken === 'test_token' || !appToken) {
-      return (
-        'https://api.sumsub.com/idensic/l/mock_websdk_' +
-        externalUserId.substring(0, 8)
-      );
-    }
-
-    const levelName = process.env.SUMSUB_LEVEL_NAME || 'basic-kyc-level';
-    const ttlInSecs = 3600;
-    const ts = Math.floor(Date.now() / 1000).toString();
-    const method = 'POST';
-    const urlPath =
-      '/resources/sdkIntegrations/levels/' +
-      levelName +
-      '/websdkLink?externalUserId=' +
-      externalUserId +
-      '&ttlInSecs=' +
-      ttlInSecs;
-
-    const signature = crypto
-      .createHmac('sha256', secretKey)
-      .update(ts + method + urlPath)
-      .digest('hex');
-
-    const response = await fetch(baseUrl + urlPath, {
-      method,
-      headers: {
-        'X-App-Token': appToken,
-        'X-App-Access-Sig': signature,
-        'X-App-Access-Ts': ts,
-      },
-    });
-
-    const data: any = await response.json();
-    if (!response.ok)
       throw new BadRequestException(
-        'Sumsub webSdkLink error: ' + data.description,
+        'KYC token error: ' + (data.description || data.detail || response.statusText),
       );
-    return data.url;
+    }
+    return data.token;
   }
 
-  private async getSumsubSdkToken(externalUserId: string): Promise<string> {
-    const appToken = process.env.SUMSUB_APP_TOKEN || '';
-    const secretKey = process.env.SUMSUB_SECRET_KEY || '';
-    const baseUrl = process.env.SUMSUB_BASE_URL || 'https://api.sumsub.com';
+  private async getApplicantByExternalId(
+    externalUserId: string,
+  ): Promise<string> {
+    const urlPath = `/resources/applicants/-;externalUserId=${encodeURIComponent(externalUserId)}/one`;
+    const data = await this.apiGet(urlPath);
+    return data.id;
+  }
 
-    // In test/dev mode, return a mock SDK token
-    if (appToken === 'test_token' || !appToken) {
-      return 'mock_sdk_token_' + externalUserId;
+  private async apiGet(urlPath: string): Promise<any> {
+    const response = await fetch(this.baseUrl + urlPath, { method: 'GET' });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new BadRequestException(
+        'KYC API error: ' + (data.description || data.detail || response.statusText),
+      );
     }
-
-    const levelName = process.env.SUMSUB_LEVEL_NAME || 'basic-kyc-level';
-    const ts = Math.floor(Date.now() / 1000).toString();
-    const method = 'POST';
-    const urlPath =
-      '/resources/accessTokens?userId=' +
-      externalUserId +
-      '&ttlInSecs=600&levelName=' +
-      levelName;
-
-    const signature = crypto
-      .createHmac('sha256', secretKey)
-      .update(ts + method + urlPath)
-      .digest('hex');
-
-    const response = await fetch(baseUrl + urlPath, {
-      method,
-      headers: {
-        'X-App-Token': appToken,
-        'X-App-Access-Sig': signature,
-        'X-App-Access-Ts': ts,
-      },
-    });
-
-    const data: any = await response.json();
-    if (!response.ok)
-      throw new BadRequestException('Sumsub token error: ' + data.description);
-    return data.token;
+    return data;
   }
 }
