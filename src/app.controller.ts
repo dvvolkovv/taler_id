@@ -78,8 +78,8 @@ export class AppController {
   appVersion(@Query('flavor') flavor?: string) {
     const isDev = flavor === 'dev';
     const latest = isDev
-      ? { version: '1.0.81', build: 173 }
-      : { version: '1.0.81', build: 173 };
+      ? { version: '1.0.82', build: 174 }
+      : { version: '1.0.82', build: 174 };
     return {
       ios: { ...latest, required: false },
       android: { ...latest, required: false },
@@ -97,6 +97,24 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.0.82',
+    build: 174,
+    date: '2026-06-08',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.0.82\n\n' +
+      'Новое:\n' +
+      '• Подтверждение email — на экране Профиля появилась плашка для тех, у кого email ещё не подтверждён. ' +
+      'Нажми «Подтвердить» — придёт 6-значный код на твою почту, введи его, и плашка исчезнет. ' +
+      'Подтверждение нужно, чтобы можно было восстановить пароль и получать сервисные уведомления.',
+    notes_en:
+      'Release 1.0.82\n\n' +
+      'New:\n' +
+      '• Email verification — Profile now shows a banner if your email is not yet verified. ' +
+      'Tap "Verify", a 6-digit code arrives in your inbox; enter it and the banner clears. ' +
+      'Verification is required for password recovery and service notifications.',
+  },
   {
     version: '1.0.81',
     build: 173,
