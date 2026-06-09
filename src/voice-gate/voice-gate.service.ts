@@ -1,31 +1,39 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
+import { randomBytes } from 'crypto';
 import FormData from 'form-data';
 import { cosine } from './cosine';
-import { ManaxJobResponse, ManaxSpeakerEmbedding, OwnerEnrollResult, OwnerVerifyResult } from './voice-gate.types';
+import { OwnerEnrollResult, OwnerVerifyResult } from './voice-gate.types';
 
 export interface EmbedResult {
   embedding: number[] | null;
-  speakerId?: string;
   audioSec?: number;
-  manaxLatencyMs?: number;
-  error?: 'manax_unavailable' | 'no_speech_detected';
+  embedLatencyMs?: number;
+  error?: 'embed_unavailable' | 'no_speech_detected';
 }
 
+/**
+ * Returns 192-dim ECAPA embedding for arbitrary audio by calling the local
+ * voice-embed-service sidecar (PM2 process at 127.0.0.1:18082 on DEV). The
+ * sidecar wraps speechbrain/spkrec-ecapa-voxceleb and is fast: tens of ms
+ * inference for 1-sec windows, ~4 sec for 98-sec audio.
+ *
+ * Fail-open posture: any HTTP error or empty embedding returns
+ * isOwner=null from verify(), so the assistant session keeps working
+ * without gating rather than breaking when the sidecar is down.
+ */
 @Injectable()
 export class VoiceGateService {
   private readonly log = new Logger('VoiceGateService');
   private readonly baseUrl: string;
-  private readonly apiKey: string;
   private readonly threshold: number;
   private readonly enabled: boolean;
-  private readonly verifyTimeoutMs = 2000;   // per 1-sec window — short
-  private readonly enrollTimeoutMs = 180_000; // 15-30 sec audio + cold model load (~30s) + queue backlog
+  private readonly verifyTimeoutMs = 2000;
+  private readonly enrollTimeoutMs = 15_000;
 
   constructor(private readonly config: ConfigService) {
-    this.baseUrl = config.get<string>('MANAX_BASE_URL', 'http://127.0.0.1:8791');
-    this.apiKey = config.get<string>('MANAX_API_KEY', '');
+    this.baseUrl = config.get<string>('VOICE_EMBED_URL', 'http://127.0.0.1:18082');
     this.threshold = parseFloat(config.get<string>('OWNER_VOICE_THRESHOLD', '0.5'));
     this.enabled = config.get<string>('OWNER_VOICE_ENABLED', 'true') !== 'false';
   }
@@ -39,7 +47,7 @@ export class VoiceGateService {
       return { ok: false, error: 'feature_disabled' };
     }
     const emb = await this.embedAudio(audio, this.enrollTimeoutMs);
-    if (emb.error === 'manax_unavailable') {
+    if (emb.error === 'embed_unavailable') {
       return { ok: false, error: 'manax_unavailable' };
     }
     if (emb.embedding === null) {
@@ -47,7 +55,7 @@ export class VoiceGateService {
     }
     return {
       ok: true,
-      speakerId: emb.speakerId,
+      speakerId: `spk_${randomBytes(10).toString('hex')}`,
       embedding: emb.embedding,
       embeddingDim: emb.embedding.length,
       audioSec: emb.audioSec,
@@ -60,82 +68,48 @@ export class VoiceGateService {
     }
     const emb = await this.embedAudio(audio, this.verifyTimeoutMs);
     if (emb.embedding === null) {
-      return { isOwner: null, audioSec: emb.audioSec, manaxLatencyMs: emb.manaxLatencyMs };
+      return { isOwner: null, audioSec: emb.audioSec, manaxLatencyMs: emb.embedLatencyMs };
     }
     const sim = cosine(emb.embedding, ownerEmbedding);
     return {
       isOwner: sim >= this.threshold,
       similarity: sim,
       audioSec: emb.audioSec,
-      manaxLatencyMs: emb.manaxLatencyMs,
+      manaxLatencyMs: emb.embedLatencyMs,
     };
   }
 
   async embedAudio(audio: Buffer, timeoutMs = this.verifyTimeoutMs): Promise<EmbedResult> {
-    // Manax sync endpoint /api/v1/audio/upload-all-in-one hangs in practice;
-    // submit to async /jobs/upload-all-in-one and poll status until terminal.
     const form = new FormData();
-    form.append('audioFile', audio, { filename: 'audio.wav', contentType: 'audio/wav' });
-    form.append('requestJson', JSON.stringify({ mode: 'enroll', language: 'ru' }));
-
+    form.append('audio', audio, { filename: 'audio.wav', contentType: 'audio/wav' });
     const start = Date.now();
-    const headers = { ...form.getHeaders(), 'X-Api-Key': this.apiKey };
     try {
-      const submitResp = await axios.post<{ jobId: string }>(
-        `${this.baseUrl}/api/v1/jobs/upload-all-in-one`,
+      const resp = await axios.post<{ vector: number[]; dim: number; audioSec: number }>(
+        `${this.baseUrl}/embed`,
         form,
-        { headers, timeout: 5000, maxContentLength: 5_000_000 },
+        {
+          headers: form.getHeaders(),
+          timeout: timeoutMs,
+          maxContentLength: 5_000_000,
+        },
       );
-      const jobId = submitResp.data.jobId;
-      if (!jobId) {
-        return { embedding: null, error: 'manax_unavailable', manaxLatencyMs: Date.now() - start };
+      const latency = Date.now() - start;
+      if (!resp.data?.vector || resp.data.vector.length === 0) {
+        return { embedding: null, error: 'no_speech_detected', embedLatencyMs: latency };
       }
-      // Poll with backoff. Status GETs count against Manax's request rate
-      // budget; spamming them at 250ms eats the quota in a few seconds.
-      const deadline = start + timeoutMs;
-      let pollIntervalMs = 500;
-      while (Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, pollIntervalMs));
-        pollIntervalMs = Math.min(pollIntervalMs * 1.5, 2000);
-        const statusResp = await axios.get<{ status: string }>(
-          `${this.baseUrl}/api/v1/jobs/${jobId}/status`,
-          { headers: { 'X-Api-Key': this.apiKey }, timeout: 5000 },
-        );
-        const s = statusResp.data.status;
-        if (s === 'completed' || s === 'failed') {
-          const resultResp = await axios.get<ManaxJobResponse>(
-            `${this.baseUrl}/api/v1/jobs/${jobId}`,
-            { headers: { 'X-Api-Key': this.apiKey }, timeout: 5000 },
-          );
-          const latency = Date.now() - start;
-          if (s === 'failed') {
-            this.log.warn(`Manax job ${jobId} failed: ${resultResp.data.error ?? '?'}`);
-            return { embedding: null, error: 'manax_unavailable', manaxLatencyMs: latency };
-          }
-          const embs = resultResp.data.result?.speakerEmbeddings ?? [];
-          if (embs.length === 0) {
-            return { embedding: null, error: 'no_speech_detected', manaxLatencyMs: latency };
-          }
-          const best = this.pickBestEmbedding(embs);
-          return {
-            embedding: best.vector,
-            speakerId: best.speakerId,
-            audioSec: resultResp.data.result?.durationSec,
-            manaxLatencyMs: latency,
-          };
-        }
-      }
-      this.log.warn(`Manax job ${jobId} timed out after ${timeoutMs}ms`);
-      return { embedding: null, error: 'manax_unavailable', manaxLatencyMs: Date.now() - start };
+      return {
+        embedding: resp.data.vector,
+        audioSec: resp.data.audioSec,
+        embedLatencyMs: latency,
+      };
     } catch (e: any) {
-      this.log.warn(`Manax unavailable, fail-open: ${e.message}`);
-      return { embedding: null, error: 'manax_unavailable', manaxLatencyMs: Date.now() - start };
+      // HTTP 422 from sidecar means audio is too short for ECAPA — treat
+      // as no_speech_detected rather than embed_unavailable.
+      if (e.response?.status === 422) {
+        return { embedding: null, error: 'no_speech_detected', embedLatencyMs: Date.now() - start };
+      }
+      this.log.warn(`voice-embed-service unavailable, fail-open: ${e.message}`);
+      return { embedding: null, error: 'embed_unavailable', embedLatencyMs: Date.now() - start };
     }
-  }
-
-  private pickBestEmbedding(embs: ManaxSpeakerEmbedding[]): ManaxSpeakerEmbedding {
-    return embs.reduce((best, cur) =>
-      (cur.coverageFraction ?? 0) > (best.coverageFraction ?? 0) ? cur : best,
-    );
   }
 }
