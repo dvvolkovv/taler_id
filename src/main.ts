@@ -633,6 +633,11 @@ async function bootstrap() {
       const pcmWindow = new PcmWindow(ownerVoiceWindowBytes);
       let verifyInFlight = false;
 
+      // Known race: fire-and-forget Prisma.findUnique here means audio frames
+      // arriving in the first ~tens of ms have `ownerEmbedding.length === 0`
+      // and bypass the gate. Acceptable for the experimental flag — a brief
+      // non-owner exposure window is better than blocking the user's first
+      // word behind a DB roundtrip.
       if (voiceGate.isEnabled() && userIdFromToken) {
         prismaService.profile
           .findUnique({ where: { userId: userIdFromToken } })
@@ -726,11 +731,14 @@ async function bootstrap() {
         // are raw PCM audio and pass through unchanged.
         let outData: any = data;
         let outBin = isBinary;
+        // Parse JSON once at the top; reuse for shim, gating, and voice-gate
+        // tap downstream. Audio frames at 50/s make per-message work matter.
+        let parsedClient: any = null;
         if (!isBinary) {
           try {
-            const parsed = JSON.parse(data.toString());
-            const transformed = transformSessionUpdate(parsed);
-            if (transformed !== parsed) {
+            parsedClient = JSON.parse(data.toString());
+            const transformed = transformSessionUpdate(parsedClient);
+            if (transformed !== parsedClient) {
               outData = JSON.stringify(transformed);
               outBin = false;
             }
@@ -773,16 +781,15 @@ async function bootstrap() {
         if (
           voiceGate.isEnabled() &&
           ownerEmbedding.length > 0 &&
-          !isBinary &&
+          parsedClient &&
           !verifyInFlight
         ) {
           try {
-            const parsed = JSON.parse(data.toString());
             if (
-              parsed.type === 'input_audio_buffer.append' &&
-              typeof parsed.audio === 'string'
+              parsedClient.type === 'input_audio_buffer.append' &&
+              typeof parsedClient.audio === 'string'
             ) {
-              const window = pcmWindow.appendBase64(parsed.audio);
+              const window = pcmWindow.appendBase64(parsedClient.audio);
               if (window) {
                 verifyInFlight = true;
                 const wav = wrapWav16kMono(window);
