@@ -34,12 +34,15 @@ export default () => ({
       pass: process.env.SMTP_PASS || '',
     },
   },
+  // KYC config (we run against an internal mock_ss service — SumSub-compatible
+  // wire contract, no HMAC, no app token; the env names keep the `SUMSUB_`
+  // prefix to avoid breaking existing infra/scripts/secrets).
   sumsub: {
-    appToken: process.env.SUMSUB_APP_TOKEN || '',
-    secretKey: process.env.SUMSUB_SECRET_KEY || '',
-    baseUrl: process.env.SUMSUB_BASE_URL || 'https://api.sumsub.com',
-    levelName: process.env.SUMSUB_LEVEL_NAME || 'basic-kyc-level',
+    baseUrl:
+      process.env.SUMSUB_BASE_URL || 'https://mockss-test.up.railway.app',
+    levelName: process.env.SUMSUB_LEVEL_NAME || 'trientes-kyc-level',
     kybLevelName: process.env.SUMSUB_KYB_LEVEL_NAME || 'basic-kyb-level',
+    ttlInSecs: parseInt(process.env.SUMSUB_TTL_SECS || '600', 10) || 600,
     webhookSecret: process.env.SUMSUB_WEBHOOK_SECRET || '',
   },
 });

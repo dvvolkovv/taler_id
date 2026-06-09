@@ -78,8 +78,8 @@ export class AppController {
   appVersion(@Query('flavor') flavor?: string) {
     const isDev = flavor === 'dev';
     const latest = isDev
-      ? { version: '1.0.81', build: 173 }
-      : { version: '1.0.81', build: 173 };
+      ? { version: '1.0.83', build: 175 }
+      : { version: '1.0.83', build: 175 };
     return {
       ios: { ...latest, required: false },
       android: { ...latest, required: false },
@@ -97,6 +97,46 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.0.83',
+    build: 175,
+    date: '2026-06-09',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.0.83\n\n' +
+      'Android — починили обновление приложения.\n' +
+      'Раньше при апдейте бывала мутная ошибка «Приложение не установлено, так как оно конфликтует с другим пакетом» — без подсказки что делать. Теперь:\n' +
+      '• Когда такая проблема возникает, приложение показывает понятную инструкцию: «Удали старую версию через Настройки → Приложения → Taler ID, открой папку Загрузки в файловом менеджере и тапни talerid-X.Y.Z.apk». Этот шаг нужен один раз.\n' +
+      '• Сам APK обновления автоматически кладётся в публичную папку «Загрузки» — можно установить вручную из любого файлового менеджера, если автоматическая установка не пошла.\n' +
+      '• Установка идёт через системный установщик Android с понятными сообщениями об ошибках, а не через сторонний просмотрщик файлов.\n\n' +
+      'Проверка личности (KYC) — теперь открывается во встроенном WebView, а не через отдельную нативную библиотеку. Пользовательский опыт тот же: документы, селфи, анкета.',
+    notes_en:
+      'Release 1.0.83\n\n' +
+      'Android — fixed app update flow.\n' +
+      'Previously app updates could fail with an opaque "App not installed because it conflicts with another package" error — no hint how to recover. Now:\n' +
+      '• When this happens, the app shows clear instructions: "Uninstall via Settings → Apps → Taler ID, open the Downloads folder in your file manager, and tap talerid-X.Y.Z.apk." This step is only needed once.\n' +
+      '• The update APK is now automatically saved to your public Downloads folder — you can install it manually from any file manager if the in-app install doesn\'t work.\n' +
+      '• Installation now goes through Android\'s system installer with clear error messages, instead of a third-party file opener.\n\n' +
+      'Identity verification (KYC) — now opens in an embedded WebView instead of a separate native library. Same user experience: documents, selfie, questionnaire.',
+  },
+  {
+    version: '1.0.82',
+    build: 174,
+    date: '2026-06-08',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.0.82\n\n' +
+      'Новое:\n' +
+      '• Подтверждение email — на экране Профиля появилась плашка для тех, у кого email ещё не подтверждён. ' +
+      'Нажми «Подтвердить» — придёт 6-значный код на твою почту, введи его, и плашка исчезнет. ' +
+      'Подтверждение нужно, чтобы можно было восстановить пароль и получать сервисные уведомления.',
+    notes_en:
+      'Release 1.0.82\n\n' +
+      'New:\n' +
+      '• Email verification — Profile now shows a banner if your email is not yet verified. ' +
+      'Tap "Verify", a 6-digit code arrives in your inbox; enter it and the banner clears. ' +
+      'Verification is required for password recovery and service notifications.',
+  },
   {
     version: '1.0.81',
     build: 173,
