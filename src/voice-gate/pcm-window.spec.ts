@@ -1,4 +1,4 @@
-import { PcmWindow } from './pcm-window';
+import { PcmWindow, wrapWav16kMono } from './pcm-window';
 
 describe('PcmWindow', () => {
   it('does not emit before window is full', () => {
@@ -23,5 +23,21 @@ describe('PcmWindow', () => {
   it('handles invalid base64 gracefully (returns null)', () => {
     const w = new PcmWindow(1000);
     expect(w.appendBase64('!!!not base64!!!')).toBeNull();
+  });
+});
+
+describe('wrapWav16kMono', () => {
+  it('produces a 44-byte RIFF header + the original PCM payload', () => {
+    const pcm = Buffer.alloc(32_000); // 1 sec of audio
+    const wav = wrapWav16kMono(pcm);
+    expect(wav.length).toBe(44 + 32_000);
+    expect(wav.slice(0, 4).toString()).toBe('RIFF');
+    expect(wav.slice(8, 12).toString()).toBe('WAVE');
+    // sample rate at bytes 24..28 little-endian → 16000
+    expect(wav.readUInt32LE(24)).toBe(16000);
+    // bits per sample at bytes 34..36 → 16
+    expect(wav.readUInt16LE(34)).toBe(16);
+    // num channels at bytes 22..24 → 1
+    expect(wav.readUInt16LE(22)).toBe(1);
   });
 });
