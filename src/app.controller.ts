@@ -78,8 +78,8 @@ export class AppController {
   appVersion(@Query('flavor') flavor?: string) {
     const isDev = flavor === 'dev';
     const latest = isDev
-      ? { version: '1.0.83', build: 175 }
-      : { version: '1.0.83', build: 175 };
+      ? { version: '1.0.85', build: 178 }
+      : { version: '1.0.85', build: 178 };
     return {
       ios: { ...latest, required: false },
       android: { ...latest, required: false },
@@ -97,6 +97,50 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.0.85',
+    build: 178,
+    date: '2026-06-10',
+    flavor: 'both',
+    notes_ru:
+      'Hotfix 1.0.85\n\n' +
+      'Контакты — починили подтверждение запроса в дружбу из вкладки «Контакты».\n' +
+      'Раньше: если ты нажимал «Принять» во вкладке Контакты, локально запрос отмечался принятым, но фактически на сервер не уходил — отправитель не видел, что его приняли. Обходной путь был один: открыть профиль через чат и принять оттуда.\n\n' +
+      'Теперь:\n' +
+      '• Подтверждение/отклонение из вкладки Контакты сразу долетает до бэка\n' +
+      '• Любые операции, которые попали в локальную очередь синхронизации, дополнительно дренируются при возвращении из фона — на случай, если ты успел свернуть приложение до того, как они ушли\n\n' +
+      'Авторизация — для пользователей с заглавными буквами в email (например, Name@mail.com) восстановление пароля и вход теперь работают в любом регистре. Раньше можно было войти только если ты вводил email точно как при регистрации.',
+    notes_en:
+      'Hotfix 1.0.85\n\n' +
+      'Contacts — fixed accepting a friend request from the Contacts tab.\n' +
+      'Previously: tapping "Accept" inside the Contacts tab marked the request accepted locally but never reached the server — the sender did not see the acceptance. The only workaround was to open the profile via Chat and accept from there.\n\n' +
+      'Now:\n' +
+      '• Accepting/rejecting from the Contacts tab reaches the backend immediately\n' +
+      '• Any operations queued in the local sync outbox are additionally drained when the app comes back from the background — in case you backgrounded before they had a chance to flush\n\n' +
+      'Authentication — for accounts whose email contains capital letters (e.g. Name@mail.com), password recovery and login now accept any letter case. Previously you could only log in with the exact casing you used at sign-up.',
+  },
+  {
+    version: '1.0.84',
+    build: 177,
+    date: '2026-06-10',
+    flavor: 'both',
+    notes_ru:
+      'Hotfix 1.0.84\n\n' +
+      'Android — починили белый экран при первом запуске после обновления.\n' +
+      'У части пользователей после установки 1.0.83 приложение открывалось пустым белым экраном и не реагировало. Причина: системный ключ шифрования (AndroidKeyStore) на устройстве становился невалидным после некоторых системных событий (биометрия, смена пароля, бэкап/рестор), и приложение не могло прочитать сохранённые данные → падало до отрисовки UI.\n\n' +
+      'Теперь:\n' +
+      '• При обнаружении испорченных данных secure storage автоматически очищается и приложение продолжает запуск\n' +
+      '• Пользователю может потребоваться повторный вход (логин + пароль) — это часть фикса\n' +
+      '• Цена компромисса: один раз залогиниться заново; альтернатива — белый экран до переустановки',
+    notes_en:
+      'Hotfix 1.0.84\n\n' +
+      'Android — fixed white screen on first launch after update.\n' +
+      'Some users saw a blank white screen after updating to 1.0.83. Cause: the system encryption key (AndroidKeyStore) was invalidated by certain system events (biometric re-enroll, lock-screen change, backup/restore), so the app couldn\'t read its saved data → crashed before rendering UI.\n\n' +
+      'Now:\n' +
+      '• When corrupted secure-storage data is detected, it is wiped automatically and the app continues launching\n' +
+      '• You may need to log in again (email + password) — that is part of the fix\n' +
+      '• Trade-off: one extra login; alternative was a white screen requiring reinstall',
+  },
   {
     version: '1.0.83',
     build: 175,
