@@ -51,3 +51,6 @@ create_admin.js
 .worktrees/
 
 .superpowers/
+
+# JWT signing keys live on hosts only, never in git (rotated 2026-06-10)
+keys/
