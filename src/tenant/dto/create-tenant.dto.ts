@@ -5,6 +5,10 @@ import {
   IsUrl,
   MaxLength,
 } from 'class-validator';
+import { Transform } from 'class-transformer';
+
+const normalizeEmail = ({ value }: { value: unknown }) =>
+  typeof value === 'string' ? value.trim().toLowerCase() : value;
 
 export class CreateTenantDto {
   @IsString()
@@ -26,6 +30,7 @@ export class CreateTenantDto {
 
   @IsOptional()
   @IsEmail()
+  @Transform(normalizeEmail)
   email?: string;
 
   @IsOptional()
@@ -54,6 +59,7 @@ export class UpdateTenantDto {
 
   @IsOptional()
   @IsEmail()
+  @Transform(normalizeEmail)
   email?: string;
 
   @IsOptional()
@@ -63,6 +69,7 @@ export class UpdateTenantDto {
 
 export class InviteMemberDto {
   @IsEmail()
+  @Transform(normalizeEmail)
   email: string;
 
   @IsString()

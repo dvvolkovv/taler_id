@@ -20,7 +20,10 @@ export class AdminService {
   ) {}
 
   async adminLogin(email: string, password: string) {
-    const user = await this.prisma.user.findUnique({ where: { email } });
+    const normalized = email?.trim().toLowerCase();
+    const user = await this.prisma.user.findUnique({
+      where: { email: normalized },
+    });
     if (!user || !user.passwordHash)
       throw new BadRequestException('Invalid credentials');
     if (!user.isAdmin) throw new BadRequestException('Not an admin');
