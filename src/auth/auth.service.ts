@@ -43,10 +43,12 @@ export class AuthService {
       throw new BadRequestException('Email or phone is required');
     }
 
+    const email = dto.email?.trim().toLowerCase();
+
     // Check duplicates
-    if (dto.email) {
+    if (email) {
       const existing = await this.prisma.user.findUnique({
-        where: { email: dto.email },
+        where: { email },
       });
       if (existing) throw new ConflictException('Email already registered');
     }
@@ -63,7 +65,7 @@ export class AuthService {
 
     const user = await this.prisma.user.create({
       data: {
-        email: dto.email,
+        email,
         phone: dto.phone,
         passwordHash,
         username: dto.username,
@@ -86,9 +88,11 @@ export class AuthService {
   }
 
   async login(dto: LoginDto, ip: string, userAgent: string) {
+    const email = dto.email?.trim().toLowerCase();
+
     // Build OR conditions without undefined
     const orConditions: any[] = [];
-    if (dto.email) orConditions.push({ email: dto.email });
+    if (email) orConditions.push({ email });
     if (dto.phone) orConditions.push({ phone: dto.phone });
 
     const user = await this.prisma.user.findFirst({
@@ -454,28 +458,34 @@ export class AuthService {
   // ── Password Reset ──
 
   async forgotPassword(email: string) {
-    const user = await this.prisma.user.findUnique({ where: { email } });
+    const normalized = email?.trim().toLowerCase();
+    if (!normalized) return { sent: true };
+
+    const user = await this.prisma.user.findUnique({
+      where: { email: normalized },
+    });
     // Always return success to prevent email enumeration
     if (!user) return { sent: true };
 
     const code = Math.floor(100000 + Math.random() * 900000).toString();
-    await this.redis.setEx(`pwd_reset:${email}`, 600, code);
-    await this.emailService.sendOtp(email, code, 'Password reset');
+    await this.redis.setEx(`pwd_reset:${normalized}`, 600, code);
+    await this.emailService.sendOtp(normalized, code, 'Password reset');
     await this.auditLog(user.id, 'PASSWORD_RESET_REQUESTED', '', '');
     return { sent: true };
   }
 
   async verifyForgotCode(email: string, code: string) {
-    const stored = await this.redis.get(`pwd_reset:${email}`);
+    const normalized = email?.trim().toLowerCase() ?? '';
+    const stored = await this.redis.get(`pwd_reset:${normalized}`);
     if (!stored || stored !== code) {
       throw new BadRequestException('Invalid or expired code');
     }
 
-    await this.redis.del(`pwd_reset:${email}`);
+    await this.redis.del(`pwd_reset:${normalized}`);
 
     // Create a short-lived reset token (10 min)
     const resetToken = this.jwtService.sign(
-      { email, purpose: 'password_reset' },
+      { email: normalized, purpose: 'password_reset' },
       { privateKey: this.privateKey, algorithm: 'RS256', expiresIn: '10m' },
     );
 
@@ -532,9 +542,8 @@ export class AuthService {
       throw new BadRequestException('Invalid token purpose');
     }
 
-    const user = await this.prisma.user.findUnique({
-      where: { email: payload.email },
-    });
+    const email = String(payload.email ?? '').trim().toLowerCase();
+    const user = await this.prisma.user.findUnique({ where: { email } });
     if (!user) throw new BadRequestException('User not found');
 
     const bcryptRounds =

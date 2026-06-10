@@ -202,9 +202,11 @@ export class TenantService {
       throw new ForbiddenException('Cannot invite as OWNER');
     }
 
+    const inviteEmail = dto.email.trim().toLowerCase();
+
     // Check if user already exists
     const existingUser = await this.prisma.user.findFirst({
-      where: { email: dto.email },
+      where: { email: inviteEmail },
     });
 
     if (existingUser) {
@@ -226,7 +228,7 @@ export class TenantService {
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
     const token = uuidv4();
     const invite = await this.prisma.pendingInvite.create({
-      data: { tenantId, email: dto.email, role, expiresAt, token },
+      data: { tenantId, email: inviteEmail, role, expiresAt, token },
     });
 
     // Send invite email (non-blocking)
@@ -240,14 +242,14 @@ export class TenantService {
     });
     this.email
       .sendInvite(
-        dto.email,
+        inviteEmail,
         tenant?.name ?? tenantId,
         invite.token,
         inviter?.email ?? 'Taler ID',
       )
       .catch(() => {});
 
-    return { type: 'invited', inviteToken: invite.token, email: dto.email };
+    return { type: 'invited', inviteToken: invite.token, email: inviteEmail };
   }
 
   async acceptInvite(token: string, userId: string) {
