@@ -33,6 +33,11 @@ import { UpdateGroupDto } from './dto/update-group.dto';
 import { AddMembersDto } from './dto/add-members.dto';
 import { ChangeGroupRoleDto } from './dto/change-role.dto';
 import { FileStorageService } from '../common/file-storage.service';
+import {
+  isInlineSafeMime,
+  isAllowedDownloadKey,
+  attachmentFilenameFromKey,
+} from '../common/safe-mime';
 import { ThumbnailService } from '../common/thumbnail.service';
 import { Public } from '../common/decorators/public.decorator';
 import { RedisService } from '../redis/redis.service';
@@ -663,6 +668,7 @@ export class MessengerController {
     @Res({ passthrough: true }) res: Response,
   ) {
     if (!key) throw new ForbiddenException('key is required');
+    if (!isAllowedDownloadKey(key)) throw new NotFoundException('File not found');
     try {
       const {
         stream,
@@ -712,8 +718,15 @@ export class MessengerController {
         res.status(304).end();
         return;
       }
+      // Stored XSS protection: only render whitelisted media types inline;
+      // anything else (text/html, image/svg+xml, unknown) is forced to download.
+      const inline = isInlineSafeMime(contentType);
       const headers: Record<string, string | number> = {
-        'Content-Type': contentType,
+        'Content-Type': inline ? contentType : 'application/octet-stream',
+        'Content-Disposition': inline
+          ? 'inline'
+          : `attachment; filename="${attachmentFilenameFromKey(key)}"`,
+        'X-Content-Type-Options': 'nosniff',
         'Cache-Control': 'public, max-age=604800, immutable',
         ETag: etag,
       };
