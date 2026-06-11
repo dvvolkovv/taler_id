@@ -21,6 +21,7 @@ const LK_API_KEY = process.env.LIVEKIT_API_KEY || 'lkdevkey';
 const LK_API_SECRET = process.env.LIVEKIT_API_SECRET || 'lkSecret2024TalerID';
 const OPENAI_KEY = process.env.OPENAI_API_KEY;
 const BACKEND_URL = process.env.BACKEND_URL || 'https://id.taler.tirol';
+const RECORDER_SECRET = process.env.RECORDER_SHARED_SECRET || '';
 const RECORDINGS_DIR = process.env.RECORDINGS_DIR || '/var/www/recordings';
 
 const SAMPLE_RATE = 48000; // LiveKit default
@@ -291,7 +292,7 @@ async function processAndSave(session) {
     try {
       const r = await fetch(`${BACKEND_URL}/api/voice/meetings/save`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-recorder-secret': RECORDER_SECRET },
         body: JSON.stringify({
           roomName,
           transcript: '',
@@ -326,7 +327,7 @@ async function processAndSave(session) {
   try {
     const r = await fetch(`${BACKEND_URL}/voice/meetings/save`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-recorder-secret': RECORDER_SECRET },
       body: JSON.stringify({
         roomName,
         transcript: '',
@@ -460,6 +461,7 @@ async function processAndSave(session) {
 
         const uploadRes = await fetch(`${BACKEND_URL}/voice/recordings/upload`, {
           method: 'POST',
+          headers: { 'x-recorder-secret': RECORDER_SECRET },
           body: formData,
         });
 
@@ -505,7 +507,7 @@ async function processAndSave(session) {
     try {
       const res = await fetch(`${BACKEND_URL}/voice/meetings/save`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-recorder-secret': RECORDER_SECRET },
         body: JSON.stringify(payload),
       });
       const data = await res.json();
