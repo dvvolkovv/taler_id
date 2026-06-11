@@ -23,6 +23,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { WebhookReceiver } from 'livekit-server-sdk';
 import { VoiceService } from './voice.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { RecorderSecretGuard } from './guards/recorder-secret.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { FileStorageService } from '../common/file-storage.service';
 import { BillingExceptionFilter } from '../billing/filters/billing-exception.filter';
@@ -410,6 +411,7 @@ export class VoiceController {
   // ─── Meeting Summaries ───
 
   @Post('meetings/save')
+  @UseGuards(RecorderSecretGuard)
   saveMeetingSummary(@Body() data: any) {
     return this.service.saveMeetingSummary(data);
   }
@@ -458,6 +460,7 @@ export class VoiceController {
   // ─── Recording Upload (S3) ───
 
   @Post('recordings/upload')
+  @UseGuards(RecorderSecretGuard)
   @UseInterceptors(FileInterceptor('file'))
   async uploadRecording(@UploadedFile() file: any) {
     const key = `recordings/${Date.now()}-${file.originalname}`;
