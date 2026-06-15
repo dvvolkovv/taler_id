@@ -78,8 +78,8 @@ export class AppController {
   appVersion(@Query('flavor') flavor?: string) {
     const isDev = flavor === 'dev';
     const latest = isDev
-      ? { version: '1.0.85', build: 178 }
-      : { version: '1.0.85', build: 178 };
+      ? { version: '1.0.86', build: 179 }
+      : { version: '1.0.86', build: 179 };
     return {
       ios: { ...latest, required: false },
       android: { ...latest, required: false },
@@ -97,6 +97,32 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.0.86',
+    build: 179,
+    date: '2026-06-15',
+    flavor: 'both',
+    notes_ru:
+      'Hotfix 1.0.86\n\n' +
+      'Мессенджер — починили «фантомные» сообщения, которые отправлялись от твоего имени после смены аккаунта или повторного логина.\n' +
+      'Симптом: открываешь приложение, а в чатах с твоего телефона уходят какие-то старые черновики, которых ты сейчас не писал. На Android было заметно особенно — телефон выступал инициатором.\n\n' +
+      'Что было: локальная очередь неотправленных сообщений (черновики, которые ставились в очередь при потере сети) переживала logout. На следующем логине очередь сливалась под токеном нового аккаунта.\n\n' +
+      'Что сделали:\n' +
+      '• При logout очередь черновиков теперь полностью очищается\n' +
+      '• На реконнекте сокета учитываем кому реально принадлежит черновик — чужие выкидываются, не отправляются\n' +
+      '• Черновики старше 7 дней автоматически удаляются\n' +
+      '• Подтверждение от сервера теперь надёжно снимает запись из очереди даже для файловых сообщений и отредактированного текста (раньше там была хрупкая дедупликация по содержимому)',
+    notes_en:
+      'Hotfix 1.0.86\n\n' +
+      'Messenger — fixed "phantom" messages that were being sent under your account after a logout or re-login.\n' +
+      'Symptom: you open the app and see your device sending old drafts you didn\'t write right now. Especially visible on Android — the phone showed up as initiator.\n\n' +
+      'Root cause: the local outgoing-message queue (drafts saved while offline) survived logout. On the next sign-in it was flushed under the new account\'s JWT.\n\n' +
+      'Changes:\n' +
+      '• On logout the draft queue is fully wiped\n' +
+      '• Socket reconnect now checks draft ownership — drafts from a previous account are evicted, never transmitted\n' +
+      '• Drafts older than 7 days are removed automatically\n' +
+      '• Server-side acknowledgement now reliably drains the queue even for file messages and edited bodies (previously dedup relied on a fragile content match)',
+  },
   {
     version: '1.0.85',
     build: 178,
