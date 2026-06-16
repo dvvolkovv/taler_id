@@ -1,4 +1,4 @@
-import { DynamicModule, Logger, Module, forwardRef } from '@nestjs/common';
+import { DynamicModule, Global, Logger, Module, forwardRef } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { PrismaModule } from '../prisma/prisma.module';
 import { RedisModule } from '../redis/redis.module';
@@ -8,6 +8,7 @@ import { InformerBotService } from './informer-bot.service';
 import { InformerClient } from './informer.client';
 import { InformerWatcher } from './informer.watcher';
 
+@Global()
 @Module({})
 export class InformerBotModule {
   static register(): DynamicModule {
@@ -18,10 +19,11 @@ export class InformerBotModule {
       logger.warn(
         'INFORMER_API_KEY/SECRET not set — module disabled (controller, watcher, /profile/me flag will all reflect this).',
       );
-      return { module: InformerBotModule };
+      return { module: InformerBotModule, global: true };
     }
     return {
       module: InformerBotModule,
+      global: true,
       imports: [
         ConfigModule,
         PrismaModule,
