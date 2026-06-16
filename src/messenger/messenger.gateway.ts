@@ -724,6 +724,33 @@ export class MessengerGateway
     this.logger.log(
       `[call_ended] from=${client.data.userId} room=${payload.roomName} conv=${payload.conversationId}`,
     );
+
+    // Atomic dedup: both initiator and callee often emit call_ended within
+    // milliseconds of each other (e.g. timeout on caller side + reject on
+    // callee side). Previously the check-then-act on callLog.endedAt raced
+    // and BOTH handlers passed the gate, producing duplicate "Пропущенный
+    // звонок" system messages and double FCM pushes. SETNX with 1-hour TTL
+    // is per-room and lets only the first call_ended do the side effects.
+    const dedupKey = `call:ended:${payload.roomName}`;
+    const acquired = await this.redis.setNxEx(dedupKey, 3600, '1');
+    if (!acquired) {
+      this.logger.log(
+        `[call_ended] duplicate for ${payload.roomName} — emitting socket event only, skipping side effects`,
+      );
+      // Still emit call_ended to whoever may need it for UI cleanup, but
+      // do not create another missed-call message or push FCM again.
+      const dupParticipants = await this.service.getParticipants(
+        payload.conversationId,
+      );
+      for (const p of dupParticipants) {
+        this.server.to(`user:${p.userId}`).emit('call_ended', {
+          roomName: payload.roomName,
+          fromUserId: client.data.userId,
+        });
+      }
+      return;
+    }
+
     // Cancel any pending AI twin fallback — the call is over.
     this.aiTwin.cancelPending(payload.roomName).catch(() => {});
     const msgConvType = await this.service.getConversationType(
