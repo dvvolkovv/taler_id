@@ -78,8 +78,8 @@ export class AppController {
   appVersion(@Query('flavor') flavor?: string) {
     const isDev = flavor === 'dev';
     const latest = isDev
-      ? { version: '1.0.88', build: 181 }
-      : { version: '1.0.88', build: 181 };
+      ? { version: '1.0.88', build: 185 }
+      : { version: '1.0.88', build: 185 };
     return {
       ios: { ...latest, required: false },
       android: { ...latest, required: false },
@@ -99,7 +99,7 @@ export class AppController {
 const APP_RELEASES = [
   {
     version: '1.0.88',
-    build: 181,
+    build: 185,
     date: '2026-06-16',
     flavor: 'both',
     notes_ru:
