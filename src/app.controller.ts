@@ -78,8 +78,8 @@ export class AppController {
   appVersion(@Query('flavor') flavor?: string) {
     const isDev = flavor === 'dev';
     const latest = isDev
-      ? { version: '1.0.86', build: 179 }
-      : { version: '1.0.86', build: 179 };
+      ? { version: '1.0.87', build: 180 }
+      : { version: '1.0.87', build: 180 };
     return {
       ios: { ...latest, required: false },
       android: { ...latest, required: false },
@@ -97,6 +97,26 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.0.87',
+    build: 180,
+    date: '2026-06-16',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.0.87\n\n' +
+      'Заметки — починили «зомби-заметки», которые возвращались после удаления.\n' +
+      'Симптом: удаляешь заметку из списка, делаешь pull-to-refresh — заметка снова в списке. Со второй попытки удаляется как надо. Причина: pull-to-refresh успевал притянуть актуальный список с сервера ДО того как DELETE-запрос на удаление туда долетал, и локально заметка восстанавливалась обратно. Теперь refresh пропускает сущности с неотправленными outbox-операциями.\n\n' +
+      'Синхронный перевод в звонке:\n' +
+      '• Появилась явная кнопка «Выключить переводчик» в выпадашке выбора языка (раньше для отключения нужно было тапнуть текущий язык второй раз — не очевидно).\n' +
+      '• Громкость голоса собеседника автоматически приглушается до 25% пока работает переводчик, а голос переводчика поднимается до 100%. Когда переводчик выключаешь — громкость собеседника возвращается в норму.',
+    notes_en:
+      'Release 1.0.87\n\n' +
+      'Notes — fixed "zombie notes" that reappeared after deletion.\n' +
+      'Symptom: you delete a note from the list, pull-to-refresh — and the note is back. Deleting it a second time works. Root cause: pull-to-refresh fetched the up-to-date server list BEFORE the queued DELETE request reached the server, so the still-present server copy was upserted back locally. refresh() now skips entities with pending/inflight outbox ops.\n\n' +
+      'Synchronous call translation:\n' +
+      '• New explicit "Turn off translator" entry in the language picker bottom sheet (previously the only way to disable was to tap the already-selected language a second time — undiscoverable).\n' +
+      '• While the translator is active, peer voices are auto-ducked to 25% volume and the translator track is boosted to 100% so the translation is intelligible. Turning the translator off restores peer volume to 100%.',
+  },
   {
     version: '1.0.86',
     build: 179,
