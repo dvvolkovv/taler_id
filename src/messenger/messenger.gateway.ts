@@ -7,13 +7,14 @@ import {
   ConnectedSocket,
   MessageBody,
 } from '@nestjs/websockets';
-import { Logger, OnModuleInit } from '@nestjs/common';
+import { Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { ConfigService } from '@nestjs/config';
 import { MessengerService } from './messenger.service';
 import { AiTwinService } from './ai-twin.service';
 import { AiAnalystService } from '../ai-analyst/ai-analyst.service';
 import { OutboundBotService } from '../outbound-bot/outbound-bot.service';
+import { InformerBotService } from '../informer-bot/informer-bot.service';
 import { FcmService } from '../common/fcm.service';
 import { ApnsService } from '../common/apns.service';
 import * as jwt from 'jsonwebtoken';
@@ -45,6 +46,7 @@ export class MessengerGateway
     private readonly aiTwin: AiTwinService,
     private readonly aiAnalyst: AiAnalystService,
     private readonly outboundBot: OutboundBotService,
+    @Optional() private readonly informerBot?: InformerBotService,
   ) {
     const publicKeyPath =
       this.configService.get<string>('jwt.publicKeyPath') ?? '';
@@ -362,6 +364,17 @@ export class MessengerGateway
           topicId: payload.topicId,
           fileUrls: recentFiles.length > 0 ? recentFiles : undefined,
         });
+        return;
+      }
+
+      if (msgConvType === 'AI_INFORMER') {
+        if (this.informerBot) {
+          this.informerBot.handleUserMessage(
+            client.data.userId,
+            payload.conversationId,
+            payload.content || '',
+          );
+        }
         return;
       }
 
