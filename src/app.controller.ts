@@ -78,8 +78,8 @@ export class AppController {
   appVersion(@Query('flavor') flavor?: string) {
     const isDev = flavor === 'dev';
     const latest = isDev
-      ? { version: '1.0.88', build: 185 }
-      : { version: '1.0.88', build: 185 };
+      ? { version: '1.0.89', build: 186 }
+      : { version: '1.0.89', build: 186 };
     return {
       ios: { ...latest, required: false },
       android: { ...latest, required: false },
@@ -97,6 +97,26 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.0.89',
+    build: 186,
+    date: '2026-06-16',
+    flavor: 'both',
+    notes_ru:
+      'Hotfix 1.0.89\n\n' +
+      'Звонки — пропущенный звонок больше не дублируется в чате.\n' +
+      'Симптом: один реальный звонок, который никто не взял, оставлял в переписке **два** одинаковых сообщения «📞 Пропущенный звонок» (и заодно «Нет ответа» в шапке вызова показывалось дважды). Причина: при разрыве звонка клиент рассылал событие call_ended по нескольким каналам (socket + HTTP fallback, плюс по триггерам от CallKit/LiveKit/кнопки), а на сервере проверка «уже обработали?» делалась неатомарно — оба обработчика проходили, оба создавали системное сообщение.\n\n' +
+      'Что починили:\n' +
+      '• Сервер: атомарный SETNX-гейт на roomName — первое событие call_ended делает всё (запись endedAt, missed-call сообщение, FCM-пуш), последующие игнорируются как дубликаты.\n' +
+      '• Мобила: добавили per-screen флаг — call_ended уходит на бэкенд ровно один раз за весь жизненный цикл экрана звонка, даже если за время разрыва успели сработать и CallKit-событие, и кнопка «отбой», и room.disconnected от LiveKit.',
+    notes_en:
+      'Hotfix 1.0.89\n\n' +
+      'Calls — missed-call message no longer duplicates in the chat.\n' +
+      'Symptom: one missed call left TWO "📞 Missed call" system messages in the conversation, and the call screen showed "No answer" twice. Root cause: client sent call_ended via several paths (socket + HTTP fallback, plus triggers from CallKit / LiveKit / red button), and the server check on "already processed?" was a non-atomic check-then-act — both handlers passed the gate and both ran the side effects.\n\n' +
+      'Fixes:\n' +
+      '• Server: atomic SETNX gate per roomName — only the first call_ended runs side effects (endedAt update, missed-call message insert, FCM cancel push); subsequent duplicates are ignored.\n' +
+      '• Mobile: per-screen flag ensures call_ended is sent to the backend exactly once for the lifetime of the call screen, regardless of how many triggers fire during hangup.',
+  },
   {
     version: '1.0.88',
     build: 185,
