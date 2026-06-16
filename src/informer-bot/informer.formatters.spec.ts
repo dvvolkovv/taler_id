@@ -119,7 +119,7 @@ describe('formatNewOperatorWalletAlert', () => {
     expect(md).toContain('TGkEaodwbZWd8Sg7wGoRQU5tHYwhTWM9ZG');
     expect(md).toContain('tron');
     expect(md).toContain('usdt');
-    expect(md).toContain('[ACTION:OPERATOR_WALLETS]');
-    expect(md).toContain('[ACTION:GATEWAY_WALLETS]');
+    expect(md).toContain('[ACTION:📋 Все ожидающие]');
+    expect(md).toContain('[ACTION:🏦 Балансы gateway]');
   });
 });

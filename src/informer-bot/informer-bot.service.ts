@@ -127,10 +127,25 @@ export class InformerBotService {
   }
 
   parseActionCode(content: string): ActionCode | null {
-    const m = content.match(/\[ACTION:(?:RETRY:)?([A-Z_]+)\]/);
-    if (!m) return null;
-    const code = m[1] as ActionCode;
-    return (ACTION_CODES as readonly string[]).includes(code) ? code : null;
+    // Two input shapes are supported because the mobile [ACTION:...] renderer
+    // sends the EXACT text inside the brackets as the message content. The
+    // legacy code-style payloads (OPERATOR_WALLETS) keep working for tests
+    // and any external integrations; the new human-label buttons land here
+    // as plain strings like "📋 Кошельки оператора" or "🔄 Повторить
+    // OPERATOR_WALLETS".
+    const lower = content.toLowerCase();
+    // Direct code matches (also handles "[ACTION:OPERATOR_WALLETS]" or
+    // "[ACTION:RETRY:OPERATOR_WALLETS]" patterns).
+    if (lower.includes('operator_wallets') || lower.includes('кошельки оператора') || lower.includes('все ожидающие')) {
+      return 'OPERATOR_WALLETS';
+    }
+    if (lower.includes('mini_acquiring') || lower.includes('mini-acquiring')) {
+      return 'MINI_ACQUIRING';
+    }
+    if (lower.includes('gateway_wallets') || lower.includes('gateway') || lower.includes('системные кошельки')) {
+      return 'GATEWAY_WALLETS';
+    }
+    return null;
   }
 
   errorToMessage(e: unknown, retryCode?: string): string {
