@@ -84,6 +84,7 @@ model Profile {
   aiTwinTimeoutSeconds Int             @default(30)
   aiTwinPrompt         String?         @db.Text
   aiTwinVoiceId        String?
+  informerAccess       Boolean         @default(false)
   lastSeenAt           DateTime?
   lastSeenPrivacy      LastSeenPrivacy @default(EVERYONE)
   ownerSpeakerId       String?
@@ -354,6 +355,7 @@ enum ConvType {
   SAVED
   AI_ANALYST
   AI_OUTBOUND
+  AI_INFORMER
 }
 
 model CallLog {
@@ -836,4 +838,17 @@ model GroupCallInvite {
 
   @@unique([groupCallId, userId])
   @@index([userId, status])
+}
+
+model InformerSeenWallet {
+  id          String   @id @default(cuid())
+  address     String
+  network     String
+  token       String
+  amount      String
+  firstSeenAt DateTime @default(now())
+  notifiedAt  DateTime @default(now())
+
+  @@unique([address, network, token])
+  @@index([firstSeenAt])
 }
