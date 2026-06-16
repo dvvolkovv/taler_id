@@ -49,6 +49,11 @@ export class ProfileService {
       createdAt: user?.createdAt,
       username: user?.username ?? null,
       status: profile.status ?? null,
+      availableBots: {
+        analyst: true,
+        outbound: true,
+        informer: profile.informerAccess === true,
+      },
     };
   }
 
