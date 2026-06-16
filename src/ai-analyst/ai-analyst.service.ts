@@ -74,34 +74,35 @@ export class AiAnalystService {
     const sessionId = input.conversationId;
 
     // Build multipart form if there are files, otherwise plain JSON.
-    let response: Response;
-
-    if (input.fileUrls && input.fileUrls.length > 0) {
-      // Download files from our S3 / public URLs and forward to Claude Worker
-      const formData = new FormData();
-      formData.append('message', input.messageText);
-      formData.append('sessionId', sessionId);
-
-      for (const file of input.fileUrls) {
-        try {
-          const fileResp = await fetch(file.url);
-          if (fileResp.ok) {
-            const blob = await fileResp.blob();
-            formData.append('files', blob, file.name);
+    // The first POST + status-check is wrapped in a small retry: a transient
+    // 502/503 (worker just restarted / behind PM2 restart window) or a
+    // network reset would otherwise surface to the user as "AI не отвечает".
+    // We only retry the OPEN of the stream — once the SSE body has started
+    // being read, retrying would replay onChunk side-effects.
+    const openStream = async (): Promise<Response> => {
+      if (input.fileUrls && input.fileUrls.length > 0) {
+        const formData = new FormData();
+        formData.append('message', input.messageText);
+        formData.append('sessionId', sessionId);
+        for (const file of input.fileUrls) {
+          try {
+            const fileResp = await fetch(file.url);
+            if (fileResp.ok) {
+              const blob = await fileResp.blob();
+              formData.append('files', blob, file.name);
+            }
+          } catch (e) {
+            this.logger.warn(
+              `Failed to download file ${file.name}: ${(e as Error).message}`,
+            );
           }
-        } catch (e) {
-          this.logger.warn(
-            `Failed to download file ${file.name}: ${(e as Error).message}`,
-          );
         }
+        return fetch(`${CLAUDE_WORKER_URL}/chat`, {
+          method: 'POST',
+          body: formData,
+        });
       }
-
-      response = await fetch(`${CLAUDE_WORKER_URL}/chat`, {
-        method: 'POST',
-        body: formData,
-      });
-    } else {
-      response = await fetch(`${CLAUDE_WORKER_URL}/chat`, {
+      return fetch(`${CLAUDE_WORKER_URL}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -109,11 +110,43 @@ export class AiAnalystService {
           sessionId,
         }),
       });
-    }
+    };
 
-    if (!response.ok) {
-      const errText = await response.text().catch(() => 'unknown error');
-      throw new Error(`Claude Worker returned ${response.status}: ${errText}`);
+    let response: Response | null = null;
+    const backoffs = [500, 1500, 4500];
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < backoffs.length + 1; attempt++) {
+      try {
+        const r = await openStream();
+        if (r.ok) {
+          response = r;
+          lastErr = null;
+          break;
+        }
+        response = r;
+        // Only retry 5xx / connection-style failures — 4xx are caller bugs
+        // (bad payload, auth on the analyst box) and won't be helped by a
+        // retry.
+        const transient =
+          response.status >= 500 && response.status < 600;
+        const errText = await response.text().catch(() => 'unknown error');
+        lastErr = new Error(
+          `Claude Worker returned ${response.status}: ${errText}`,
+        );
+        if (!transient) break;
+      } catch (e) {
+        lastErr = e;
+      }
+      if (attempt >= backoffs.length) break;
+      const delay = backoffs[attempt];
+      this.logger.warn(
+        `Claude Worker open failed (attempt ${attempt + 1}/${backoffs.length + 1}), retrying in ${delay}ms: ${(lastErr as Error)?.message}`,
+      );
+      await new Promise((r) => setTimeout(r, delay));
+    }
+    if (lastErr || !response) {
+      const err = lastErr ?? new Error('Claude Worker unavailable');
+      throw err instanceof Error ? err : new Error(String(err));
     }
 
     // Parse SSE stream
