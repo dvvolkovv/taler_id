@@ -5,10 +5,13 @@ import {
   GatewaySystemWalletBalances,
 } from './informer.types';
 
+// Human-readable labels in brackets so the mobile renderer (which uses the
+// captured text as the button label) shows friendly buttons. Parser does
+// substring matching to map back to action codes.
 export const OPERATOR_BUTTONS =
-  '[ACTION:OPERATOR_WALLETS] 📋 Кошельки, требующие оператора\n' +
-  '[ACTION:MINI_ACQUIRING] 💰 Балансы mini-acquiring\n' +
-  '[ACTION:GATEWAY_WALLETS] 🏦 Системные кошельки gateway';
+  '[ACTION:📋 Кошельки оператора]\n' +
+  '[ACTION:💰 Балансы mini-acquiring]\n' +
+  '[ACTION:🏦 Системные кошельки gateway]';
 
 function formatRow(item: OperatorRequiredItem): string {
   const at = item.created_at.replace('T', ' ').replace('Z', ' UTC');
@@ -49,7 +52,15 @@ export function formatMiniAcquiringBalances(
   for (const chain of data.chains) {
     const flag = chain.supported ? '' : ' _(не поддерживается)_';
     blocks.push(`### ${chain.chain}${flag}`);
-    for (const role of chain.roles) {
+    // Non-EVM chains (Bitcoin, Litecoin, Polkadot, Taler) may omit `roles`
+    // entirely. Skip them with a marker instead of crashing the whole reply.
+    const roles = Array.isArray(chain.roles) ? chain.roles : [];
+    if (roles.length === 0) {
+      blocks.push('_(нет ролей в ответе API)_');
+      blocks.push('');
+      continue;
+    }
+    for (const role of roles) {
       if (role.error) {
         blocks.push(`- **${role.role}**: ⚠️ ${role.error}`);
         continue;
@@ -117,8 +128,8 @@ export function formatNewOperatorWalletAlert(
     `Сумма: \`${item.withdraw_amount}\``,
     `Создан: ${at}`,
     '',
-    '[ACTION:OPERATOR_WALLETS] 📋 Все ожидающие',
-    '[ACTION:GATEWAY_WALLETS] 🏦 Балансы gateway',
+    '[ACTION:📋 Все ожидающие]',
+    '[ACTION:🏦 Балансы gateway]',
   ].join('\n');
 }
 
@@ -135,7 +146,7 @@ export function formatClientError(
   humanMessage: string,
   retryCode?: string,
 ): string {
-  const retryBtn = retryCode ? `\n\n[ACTION:RETRY:${retryCode}] 🔄 Повторить` : '';
+  const retryBtn = retryCode ? `\n\n[ACTION:🔄 Повторить ${retryCode}]` : '';
   return `⚠️ ${humanMessage}${retryBtn}`;
 }
 

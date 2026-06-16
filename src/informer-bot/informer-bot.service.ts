@@ -72,13 +72,9 @@ export class InformerBotService {
     conversationId: string,
     content: string,
   ): Promise<void> {
-    this.logger.log(
-      `handleUserMessage user=${userId} conv=${conversationId} content=${content.slice(0, 80)}`,
-    );
     try {
       await this.assertAccess(userId);
     } catch {
-      this.logger.warn(`access denied for ${userId}`);
       await this.publishBotMessage(
         userId,
         conversationId,
@@ -88,7 +84,6 @@ export class InformerBotService {
     }
 
     const action = this.parseActionCode(content);
-    this.logger.log(`parsed action=${action ?? 'null'}`);
     if (!action) {
       await this.publishBotMessage(userId, conversationId, formatButtonsOnlyHint());
       return;
@@ -104,7 +99,6 @@ export class InformerBotService {
 
     try {
       let md: string;
-      this.logger.log(`calling Informer for action=${action}`);
       switch (action) {
         case 'OPERATOR_WALLETS':
           md = formatOperatorWalletsList(
@@ -122,12 +116,10 @@ export class InformerBotService {
           );
           break;
       }
-      this.logger.log(`got ${md.length} chars, publishing`);
       await this.publishBotMessage(userId, conversationId, md);
-      this.logger.log(`published OK`);
     } catch (e) {
       this.logger.error(
-        `handleUserMessage caught: ${(e as Error)?.stack || e}`,
+        `informer action ${action} failed: ${(e as Error)?.message || e}`,
       );
       const md = this.errorToMessage(e, action);
       await this.publishBotMessage(userId, conversationId, md);
@@ -135,10 +127,25 @@ export class InformerBotService {
   }
 
   parseActionCode(content: string): ActionCode | null {
-    const m = content.match(/\[ACTION:(?:RETRY:)?([A-Z_]+)\]/);
-    if (!m) return null;
-    const code = m[1] as ActionCode;
-    return (ACTION_CODES as readonly string[]).includes(code) ? code : null;
+    // Two input shapes are supported because the mobile [ACTION:...] renderer
+    // sends the EXACT text inside the brackets as the message content. The
+    // legacy code-style payloads (OPERATOR_WALLETS) keep working for tests
+    // and any external integrations; the new human-label buttons land here
+    // as plain strings like "📋 Кошельки оператора" or "🔄 Повторить
+    // OPERATOR_WALLETS".
+    const lower = content.toLowerCase();
+    // Direct code matches (also handles "[ACTION:OPERATOR_WALLETS]" or
+    // "[ACTION:RETRY:OPERATOR_WALLETS]" patterns).
+    if (lower.includes('operator_wallets') || lower.includes('кошельки оператора') || lower.includes('все ожидающие')) {
+      return 'OPERATOR_WALLETS';
+    }
+    if (lower.includes('mini_acquiring') || lower.includes('mini-acquiring')) {
+      return 'MINI_ACQUIRING';
+    }
+    if (lower.includes('gateway_wallets') || lower.includes('gateway') || lower.includes('системные кошельки')) {
+      return 'GATEWAY_WALLETS';
+    }
+    return null;
   }
 
   errorToMessage(e: unknown, retryCode?: string): string {

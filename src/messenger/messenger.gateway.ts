@@ -145,25 +145,35 @@ export class MessengerGateway
     },
   ) {
     try {
+      this.logger.log(
+        `[handleMessage] socket=${client.id} user=${client.data.userId} conv=${payload.conversationId} tempId=${payload.clientTempId ?? 'none'} content=${(payload.content || '').slice(0, 40)}`,
+      );
       // Idempotency: skip duplicate messages sent during reconnects.
-      // On duplicate we still MUST tell the sender we have their message —
-      // otherwise the client's persistent pending queue retries forever.
+      // Atomic SETNX so two emits in the same millisecond don't both pass
+      // the check-then-act gap (the old GET+SETEX pattern raced and let
+      // duplicates through). On duplicate we still MUST tell the sender we
+      // have their message — otherwise the client's persistent pending
+      // queue retries forever.
+      let dedupKey: string | null = null;
       if (payload.clientTempId) {
-        const dedupKey = `msg:dedup:${client.data.userId}:${payload.clientTempId}`;
-        const alreadySent = await this.redis.get(dedupKey);
-        if (alreadySent) {
+        dedupKey = `msg:dedup:${client.data.userId}:${payload.clientTempId}`;
+        // setNxEx returns true if we acquired the slot, false if a sibling
+        // already did.
+        const acquired = await this.redis.setNxEx(dedupKey, 86400, '1');
+        if (!acquired) {
+          // Look up the real messageId stored by the winner (may still be
+          // '1' if the winner is mid-flight — that's fine, sender just
+          // gets ack later via broadcast).
+          const stored = await this.redis.get(dedupKey);
           this.logger.log(
-            `[handleMessage] Duplicate clientTempId=${payload.clientTempId}, ack-only`,
+            `[handleMessage] Duplicate clientTempId=${payload.clientTempId} (atomic), ack-only`,
           );
           client.emit('message_acked', {
             clientTempId: payload.clientTempId,
-            messageId: alreadySent !== '1' ? alreadySent : undefined,
+            messageId: stored && stored !== '1' ? stored : undefined,
           });
           return;
         }
-        // Store for 24h so reconnect storms across app restarts are caught.
-        // Value will be overwritten with real messageId after insert.
-        await this.redis.setEx(dedupKey, 86400, '1');
       }
       const fileData = payload.fileUrl
         ? {
