@@ -8,6 +8,7 @@ import { AuditLogInterceptor } from './common/interceptors/audit-log.interceptor
 import { PrismaService } from './prisma/prisma.service';
 import { OIDC_PROVIDER } from './oidc/oidc.service';
 import { GatingService } from './billing/services/gating.service';
+import { RedisIoAdapter } from './redis-io.adapter';
 import { WebSocket, WebSocketServer } from 'ws';
 import { verify, type JwtPayload } from 'jsonwebtoken';
 import * as fs from 'fs';
@@ -21,6 +22,13 @@ async function bootstrap() {
 
   // Increase body size limit for large meeting transcripts (default ~100KB is too small)
   app.use(json({ limit: '10mb' }));
+
+  // Socket.IO across multiple app nodes (DO load balancer): relay room joins
+  // and emits through Redis pub/sub so `new_message` reaches a recipient whose
+  // socket lives on a different node. Must be set before gateways init.
+  const redisIoAdapter = new RedisIoAdapter(app);
+  await redisIoAdapter.connectToRedis();
+  app.useWebSocketAdapter(redisIoAdapter);
 
   // Swagger/OpenAPI Configuration
   const config = new DocumentBuilder()
