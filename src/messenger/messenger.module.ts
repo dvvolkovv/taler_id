@@ -41,6 +41,6 @@ import { VideoTranscodeService } from '../common/video-transcode.service';
     // decoupled and testable via a small MeteringGateway interface.
     { provide: 'MESSENGER_GATEWAY', useExisting: MessengerGateway },
   ],
-  exports: [MessengerGateway, 'MESSENGER_GATEWAY'],
+  exports: [MessengerGateway, MessengerService, 'MESSENGER_GATEWAY'],
 })
 export class MessengerModule {}
