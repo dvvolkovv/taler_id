@@ -145,6 +145,9 @@ export class MessengerGateway
     },
   ) {
     try {
+      this.logger.log(
+        `[handleMessage] socket=${client.id} user=${client.data.userId} conv=${payload.conversationId} tempId=${payload.clientTempId ?? 'none'} content=${(payload.content || '').slice(0, 40)}`,
+      );
       // Idempotency: skip duplicate messages sent during reconnects.
       // On duplicate we still MUST tell the sender we have their message —
       // otherwise the client's persistent pending queue retries forever.
