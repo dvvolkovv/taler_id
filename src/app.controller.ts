@@ -78,7 +78,7 @@ export class AppController {
   appVersion(@Query('flavor') flavor?: string) {
     const isDev = flavor === 'dev';
     const latest = isDev
-      ? { version: '1.0.87', build: 180 }
+      ? { version: '1.0.88', build: 181 }
       : { version: '1.0.87', build: 180 };
     return {
       ios: { ...latest, required: false },
@@ -97,6 +97,25 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.0.88',
+    build: 181,
+    date: '2026-06-16',
+    flavor: 'dev',
+    notes_ru:
+      'Релиз 1.0.88 (DEV)\n\n' +
+      'Informer — новый бот в мессенджере. Виден только у 4 операторов GsmSoft с включённым доступом (флаг informerAccess на профиле). Показывает: кошельки, требующие действия оператора; балансы mini-acquiring (cold/hot/gas по сетям); системные кошельки crypto-gateway. ' +
+      'Кнопки прямо в чате — нажал, через несколько секунд приходит markdown-сводка. ' +
+      'Раз в 5 минут бэк сам проверяет API: если появился новый кошелёк, ждущий оператора — сразу алёрт в личный чат каждому из 4-х. Никакого общего канала: каждый видит у себя, читает в своём темпе. ' +
+      'Источник данных — Informer API GsmSoft (HMAC-SHA256 подпись, окно ±30с по NTP).',
+    notes_en:
+      'Release 1.0.88 (DEV)\n\n' +
+      'Informer bot — new messenger bot, visible only to 4 GsmSoft operators with the informerAccess flag on their profile. ' +
+      'Shows: operator-required wallets, mini-acquiring balances (cold/hot/gas per chain), gateway system wallets. ' +
+      'Buttons in chat — tap and get a markdown snapshot in seconds. ' +
+      'Backend polls the API every 5 minutes and pushes a new-wallet alert into each operator\'s personal chat. ' +
+      'Data source — GsmSoft Informer API (HMAC-SHA256 signed, ±30s NTP window).',
+  },
   {
     version: '1.0.87',
     build: 180,
