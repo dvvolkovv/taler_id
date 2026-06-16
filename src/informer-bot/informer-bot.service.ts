@@ -72,9 +72,13 @@ export class InformerBotService {
     conversationId: string,
     content: string,
   ): Promise<void> {
+    this.logger.log(
+      `handleUserMessage user=${userId} conv=${conversationId} content=${content.slice(0, 80)}`,
+    );
     try {
       await this.assertAccess(userId);
     } catch {
+      this.logger.warn(`access denied for ${userId}`);
       await this.publishBotMessage(
         userId,
         conversationId,
@@ -84,6 +88,7 @@ export class InformerBotService {
     }
 
     const action = this.parseActionCode(content);
+    this.logger.log(`parsed action=${action ?? 'null'}`);
     if (!action) {
       await this.publishBotMessage(userId, conversationId, formatButtonsOnlyHint());
       return;
@@ -99,6 +104,7 @@ export class InformerBotService {
 
     try {
       let md: string;
+      this.logger.log(`calling Informer for action=${action}`);
       switch (action) {
         case 'OPERATOR_WALLETS':
           md = formatOperatorWalletsList(
@@ -116,8 +122,13 @@ export class InformerBotService {
           );
           break;
       }
+      this.logger.log(`got ${md.length} chars, publishing`);
       await this.publishBotMessage(userId, conversationId, md);
+      this.logger.log(`published OK`);
     } catch (e) {
+      this.logger.error(
+        `handleUserMessage caught: ${(e as Error)?.stack || e}`,
+      );
       const md = this.errorToMessage(e, action);
       await this.publishBotMessage(userId, conversationId, md);
     }
