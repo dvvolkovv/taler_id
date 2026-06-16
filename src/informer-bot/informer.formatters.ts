@@ -52,7 +52,15 @@ export function formatMiniAcquiringBalances(
   for (const chain of data.chains) {
     const flag = chain.supported ? '' : ' _(не поддерживается)_';
     blocks.push(`### ${chain.chain}${flag}`);
-    for (const role of chain.roles) {
+    // Non-EVM chains (Bitcoin, Litecoin, Polkadot, Taler) may omit `roles`
+    // entirely. Skip them with a marker instead of crashing the whole reply.
+    const roles = Array.isArray(chain.roles) ? chain.roles : [];
+    if (roles.length === 0) {
+      blocks.push('_(нет ролей в ответе API)_');
+      blocks.push('');
+      continue;
+    }
+    for (const role of roles) {
       if (role.error) {
         blocks.push(`- **${role.role}**: ⚠️ ${role.error}`);
         continue;
