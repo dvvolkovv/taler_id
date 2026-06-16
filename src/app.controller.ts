@@ -106,12 +106,19 @@ const APP_RELEASES = [
       'Релиз 1.0.88\n\n' +
       'iOS — звонок больше не рвётся после отклонённого WhatsApp.\n' +
       'Сценарий: ты в звонке Taler ID, на iPhone приходит входящий по WhatsApp/Telegram, ты его отклоняешь — раньше после этого аудио в нашем звонке могло пропасть до самого конца, перезайти в звонок не помогало. Причина: при восстановлении аудио-сессии терялся флаг сосуществования с другими VoIP-приложениями, и iOS сразу заново «перетягивал» звук на CallKit того другого приложения. Теперь восстановление повторяет конфигурацию активного звонка один-в-один.\n\n' +
-      'Informer Bot — новый закреплённый бот в мессенджере для мониторинга кошельков и балансов. Появляется только у пользователей, которым он включён на сервере (ops-команда).',
+      'Informer Bot — новый бот в мессенджере. Виден только у 4 операторов GsmSoft с включённым доступом (флаг informerAccess на профиле). Показывает: кошельки, требующие действия оператора; балансы mini-acquiring (cold/hot/gas по сетям); системные кошельки crypto-gateway. ' +
+      'Кнопки прямо в чате — нажал, через несколько секунд приходит markdown-сводка. ' +
+      'Раз в 5 минут бэк сам проверяет API: если появился новый кошелёк, ждущий оператора — сразу алёрт в личный чат каждому из 4-х. Никакого общего канала: каждый видит у себя, читает в своём темпе. ' +
+      'Источник данных — Informer API GsmSoft (HMAC-SHA256 подпись, окно ±30с по NTP).',
     notes_en:
       'Release 1.0.88\n\n' +
       'iOS — voice call no longer dies after a declined WhatsApp/Telegram ring.\n' +
       'Scenario: you are in a Taler ID call, a WhatsApp/Telegram VoIP call comes in on iPhone, you decline it — previously the audio of our call could vanish for the rest of the session, even rejoining did not help. Root cause: the AVAudioSession restore path dropped the .mixWithOthers flag, so iOS treated our session as exclusive and immediately reassigned audio to the other app\'s CallKit. Restore path now mirrors the active-call configuration exactly.\n\n' +
-      'Informer Bot — new pinned bot in the messenger for wallet and balance monitoring. Visible only to users for whom it is server-enabled (ops team).',
+      'Informer bot — new messenger bot, visible only to 4 GsmSoft operators with the informerAccess flag on their profile. ' +
+      'Shows: operator-required wallets, mini-acquiring balances (cold/hot/gas per chain), gateway system wallets. ' +
+      'Buttons in chat — tap and get a markdown snapshot in seconds. ' +
+      'Backend polls the API every 5 minutes and pushes a new-wallet alert into each operator\'s personal chat. ' +
+      'Data source — GsmSoft Informer API (HMAC-SHA256 signed, ±30s NTP window).',
   },
   {
     version: '1.0.87',
