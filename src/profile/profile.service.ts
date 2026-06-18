@@ -57,7 +57,7 @@ export class ProfileService {
     };
   }
 
-  async updateProfile(userId: string, dto: UpdateProfileDto) {
+  async updateProfile(userId: string, dto: UpdateProfileDto, sessionId?: string) {
     if (dto.phone !== undefined) {
       await this.prisma.user.update({
         where: { id: userId },
@@ -77,6 +77,19 @@ export class ProfileService {
         where: { id: userId },
         data: { fcmToken: dto.fcmToken },
       });
+      // Multi-device: also store the token on THIS device's session so wake-pushes
+      // reach all of the user's logged-in devices (see MessengerService.getFcmTokens).
+      // try/catch: no-op if the Session.fcmToken column isn't present yet.
+      if (sessionId) {
+        try {
+          await this.prisma.session.update({
+            where: { id: sessionId },
+            data: { fcmToken: dto.fcmToken || null },
+          });
+        } catch {
+          /* column missing (un-migrated env) or session gone — ignore */
+        }
+      }
     }
 
     if (dto.voipToken !== undefined) {
@@ -91,6 +104,16 @@ export class ProfileService {
         where: { id: userId },
         data: { voipToken: dto.voipToken },
       });
+      if (sessionId) {
+        try {
+          await this.prisma.session.update({
+            where: { id: sessionId },
+            data: { voipToken: dto.voipToken || null },
+          });
+        } catch {
+          /* column missing (un-migrated env) or session gone — ignore */
+        }
+      }
     }
 
     return this.prisma.profile.upsert({

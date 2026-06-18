@@ -128,6 +128,8 @@ model Session {
   lastSeenAt DateTime @default(now())
   expiresAt  DateTime
   isRevoked  Boolean  @default(false)
+  fcmToken   String?
+  voipToken  String?
   user       User     @relation(fields: [userId], references: [id])
 }
 

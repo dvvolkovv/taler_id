@@ -820,6 +820,67 @@ export class MessengerService {
     return user?.voipToken ?? null;
   }
 
+  /**
+   * Multi-device push: all distinct FCM tokens for a user's currently-active
+   * sessions (one per logged-in device), so wake-pushes reach EVERY device, not
+   * just the last one to register. Falls back to the legacy single User.fcmToken
+   * when no session carries a token (transition + safety if the Session.fcmToken
+   * column is absent on an un-migrated environment — the try/catch makes this a
+   * no-op there instead of breaking the call path).
+   */
+  async getFcmTokens(userId: string): Promise<string[]> {
+    const tokens = new Set<string>();
+    try {
+      const sessions = await this.prisma.session.findMany({
+        where: {
+          userId,
+          isRevoked: false,
+          expiresAt: { gt: new Date() },
+          fcmToken: { not: null },
+        },
+        select: { fcmToken: true },
+      });
+      for (const s of sessions) if (s.fcmToken) tokens.add(s.fcmToken);
+    } catch {
+      /* Session.fcmToken column not present (pre-migration env) — fall back */
+    }
+    if (tokens.size === 0) {
+      const user = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { fcmToken: true },
+      });
+      if (user?.fcmToken) tokens.add(user.fcmToken);
+    }
+    return [...tokens];
+  }
+
+  /** Multi-device VoIP (iOS CallKit) tokens — same semantics as getFcmTokens. */
+  async getVoipTokens(userId: string): Promise<string[]> {
+    const tokens = new Set<string>();
+    try {
+      const sessions = await this.prisma.session.findMany({
+        where: {
+          userId,
+          isRevoked: false,
+          expiresAt: { gt: new Date() },
+          voipToken: { not: null },
+        },
+        select: { voipToken: true },
+      });
+      for (const s of sessions) if (s.voipToken) tokens.add(s.voipToken);
+    } catch {
+      /* Session.voipToken column not present (pre-migration env) — fall back */
+    }
+    if (tokens.size === 0) {
+      const user = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { voipToken: true },
+      });
+      if (user?.voipToken) tokens.add(user.voipToken);
+    }
+    return [...tokens];
+  }
+
   async getUserDisplayName(userId: string): Promise<string> {
     const info = await this.getUserCallInfo(userId);
     return info.name;

@@ -32,7 +32,7 @@ export class ProfileController {
 
   @Put()
   updateProfile(@Body() dto: UpdateProfileDto, @CurrentUser() user: any) {
-    return this.profileService.updateProfile(user.sub, dto);
+    return this.profileService.updateProfile(user.sub, dto, user.session_id);
   }
 
   @Put('phone')
