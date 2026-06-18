@@ -8,6 +8,7 @@ import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
 import { v4 as uuidv4 } from 'uuid';
 import * as crypto from 'crypto';
 import * as bcrypt from 'bcrypt';
+import { makeParticipantIdentity } from '../common/participant-identity';
 import { PrismaService } from '../prisma/prisma.service';
 
 import { FileStorageService } from '../common/file-storage.service';
@@ -44,6 +45,7 @@ export class VoiceService {
     withAi = false,
     userToken?: string,
     conversationId?: string,
+    sessionId?: string,
   ) {
     const roomName = 'call-' + uuidv4();
     await this.rooms.createRoom({
@@ -52,7 +54,7 @@ export class VoiceService {
       departureTimeout: 60,
       maxParticipants: 10,
     });
-    const token = await this.makeToken(roomName, initiatorId);
+    const token = await this.makeToken(roomName, initiatorId, sessionId);
     try {
       await this.prisma.callLog.create({
         data: {
@@ -74,7 +76,7 @@ export class VoiceService {
     return { roomName, token };
   }
 
-  async joinRoom(roomName: string, userId: string) {
+  async joinRoom(roomName: string, userId: string, sessionId?: string) {
     try {
       const log = await this.prisma.callLog.findUnique({ where: { roomName } });
       if (log && !log.participantIds.includes(userId)) {
@@ -84,7 +86,7 @@ export class VoiceService {
         });
       }
     } catch (_) {}
-    return { token: await this.makeToken(roomName, userId) };
+    return { token: await this.makeToken(roomName, userId, sessionId) };
   }
 
   /**
@@ -98,10 +100,11 @@ export class VoiceService {
   async generateGroupCallToken(
     groupCallId: string,
     userId: string,
+    sessionId?: string,
   ): Promise<{ token: string; livekitWsUrl: string }> {
     const roomName = `group-${groupCallId}`;
     const at = new AccessToken(LK_API_KEY, LK_API_SECRET, {
-      identity: userId,
+      identity: makeParticipantIdentity(userId, sessionId),
       ttl: 60 * 60 * 4, // 4 hours
     });
     at.addGrant({
@@ -564,7 +567,12 @@ export class VoiceService {
     };
   }
 
-  async joinPublicRoomAuth(code: string, userId: string, password?: string) {
+  async joinPublicRoomAuth(
+    code: string,
+    userId: string,
+    password?: string,
+    sessionId?: string,
+  ) {
     const room = await this.prisma.publicRoom.findUnique({ where: { code } });
     if (!room || !room.isActive) throw new NotFoundException('Room not found');
     if (
@@ -593,7 +601,7 @@ export class VoiceService {
       });
     } catch (_) {}
     return {
-      token: await this.makeToken(room.roomName, userId),
+      token: await this.makeToken(room.roomName, userId, sessionId),
       roomName: room.roomName,
     };
   }
@@ -608,17 +616,19 @@ export class VoiceService {
     return await at.toJwt();
   }
 
-  private async makeToken(room: string, identity: string) {
+  private async makeToken(room: string, userId: string, sessionId?: string) {
     const user = await this.prisma.user.findUnique({
-      where: { id: identity },
+      where: { id: userId },
       include: { profile: { select: { firstName: true, lastName: true } } },
     });
     const fullName = user
       ? `${user.profile?.firstName ?? ''} ${user.profile?.lastName ?? ''}`.trim()
       : '';
-    const displayName = fullName || user?.username || identity;
+    const displayName = fullName || user?.username || userId;
+    // Device-unique identity so the same account on multiple devices doesn't
+    // collide (DUPLICATE_IDENTITY). Display name still rides the token `name`.
     const at = new AccessToken(LK_API_KEY, LK_API_SECRET, {
-      identity,
+      identity: makeParticipantIdentity(userId, sessionId),
       name: displayName,
     });
     at.addGrant({ roomJoin: true, room, canPublish: true, canSubscribe: true });

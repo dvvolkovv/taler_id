@@ -13,6 +13,7 @@ import { GatingService } from '../billing/services/gating.service';
 import { MeteringService } from '../billing/services/metering.service';
 import { FEATURE_KEYS } from '../billing/constants/feature-keys';
 import { InsufficientFundsException } from '../billing/exceptions/insufficient-funds.exception';
+import { parseUserId } from '../common/participant-identity';
 import { FeatureDisabledException } from '../billing/exceptions/feature-disabled.exception';
 
 const LK_HOST = process.env.LIVEKIT_HOST || 'http://localhost:7880';
@@ -248,8 +249,12 @@ export class AiTwinService implements OnModuleInit, OnModuleDestroy {
     // Caller must still be in the room.
     try {
       const participants = await this.rooms.listParticipants(p.roomName);
-      const callerIn = participants.some((pt) => pt.identity === p.callerId);
-      const calleeIn = participants.some((pt) => pt.identity === p.calleeId);
+      const callerIn = participants.some(
+        (pt) => parseUserId(pt.identity) === p.callerId,
+      );
+      const calleeIn = participants.some(
+        (pt) => parseUserId(pt.identity) === p.calleeId,
+      );
       if (!callerIn) return false;
       if (calleeIn) return false;
     } catch (e) {

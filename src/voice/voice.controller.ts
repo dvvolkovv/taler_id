@@ -25,6 +25,7 @@ import { VoiceService } from './voice.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RecorderSecretGuard } from './guards/recorder-secret.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { parseUserId } from '../common/participant-identity';
 import { FileStorageService } from '../common/file-storage.service';
 import { BillingExceptionFilter } from '../billing/filters/billing-exception.filter';
 import { GatingService } from '../billing/services/gating.service';
@@ -96,7 +97,7 @@ export class VoiceController {
       event.participant?.identity
     ) {
       const callId = event.room.name.replace(/^group-/, '');
-      const userId = event.participant.identity;
+      const userId = parseUserId(event.participant.identity);
       try {
         await this.groupCallService.handleLivekitParticipantLeft(
           callId,
@@ -133,6 +134,7 @@ export class VoiceController {
       includeAi,
       userToken,
       conversationId,
+      user.session_id,
     );
   }
 
@@ -192,13 +194,18 @@ export class VoiceController {
     @Body('password') password: string | undefined,
     @CurrentUser() user: any,
   ) {
-    return this.service.joinPublicRoomAuth(code, user.sub, password);
+    return this.service.joinPublicRoomAuth(
+      code,
+      user.sub,
+      password,
+      user.session_id,
+    );
   }
 
   @Post('rooms/:name/join')
   @UseGuards(JwtAuthGuard)
   joinRoom(@Param('name') name: string, @CurrentUser() user: any) {
-    return this.service.joinRoom(name, user.sub);
+    return this.service.joinRoom(name, user.sub, user.session_id);
   }
 
   @Post('session')
