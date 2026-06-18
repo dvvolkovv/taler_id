@@ -959,6 +959,14 @@ export class MessengerGateway
           roomName: payload.roomName,
         });
       }
+      // Multi-device: tell the answerer's OWN other devices to stop ringing.
+      // `client.to(room)` broadcasts to every socket in the answerer's user room
+      // EXCEPT the answering socket (so the device that picked up isn't told to
+      // dismiss its own active call). The client's dashboard call_answered handler
+      // already dismisses CallKit + the invite for any room it isn't currently in.
+      client.to(`user:${client.data.userId}`).emit('call_answered', {
+        roomName: payload.roomName,
+      });
     } catch (e) {}
   }
 
