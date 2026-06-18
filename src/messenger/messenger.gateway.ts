@@ -424,8 +424,8 @@ export class MessengerGateway
           if (muted) {
             this.logger.log(`FCM skipped for ${p.userId}: conversation muted`);
           } else {
-            const fcmToken = await this.service.getFcmToken(p.userId);
-            if (fcmToken) {
+            const fcmTokens = await this.service.getFcmTokens(p.userId);
+            if (fcmTokens.length) {
               const pushText = (() => {
                 const c = payload.content ?? '';
                 if (c.startsWith('[CONTACT]')) return '📇 Контакт';
@@ -439,17 +439,20 @@ export class MessengerGateway
                 }
                 return c;
               })();
-              this.fcmService
-                .sendNewMessage(
-                  fcmToken,
-                  senderName,
-                  pushText,
-                  payload.conversationId,
-                )
-                .then(() => this.logger.log(`FCM sent to ${p.userId}`))
-                .catch((e) =>
-                  this.logger.error(`FCM failed for ${p.userId}:`, e),
-                );
+              // Fan out to every logged-in device of the recipient.
+              for (const fcmToken of fcmTokens) {
+                this.fcmService
+                  .sendNewMessage(
+                    fcmToken,
+                    senderName,
+                    pushText,
+                    payload.conversationId,
+                  )
+                  .then(() => this.logger.log(`FCM sent to ${p.userId}`))
+                  .catch((e) =>
+                    this.logger.error(`FCM failed for ${p.userId}:`, e),
+                  );
+              }
             }
           }
         }
@@ -681,11 +684,13 @@ export class MessengerGateway
       }
 
       if (!muted) {
-        const calleeToken = await this.service.getFcmToken(calleeId);
+        // Multi-device: fan the call wake-push out to EVERY logged-in device of
+        // the callee (tablet + PC + phone), not just the last to register a token.
+        const calleeTokens = await this.service.getFcmTokens(calleeId);
         this.logger.log(
-          `[call_invite] calleeId=${calleeId} fcmToken=${calleeToken ? 'YES(' + calleeToken.substring(0, 20) + '...)' : 'NULL'}`,
+          `[call_invite] calleeId=${calleeId} fcmTokens=${calleeTokens.length}`,
         );
-        if (calleeToken) {
+        for (const calleeToken of calleeTokens) {
           this.fcmService
             .sendCallInvite(
               calleeToken,
@@ -697,8 +702,8 @@ export class MessengerGateway
             )
             .catch(() => {});
         }
-        const voipToken = await this.service.getVoipToken(calleeId);
-        if (voipToken) {
+        const voipTokens = await this.service.getVoipTokens(calleeId);
+        for (const voipToken of voipTokens) {
           this.apnsService
             .sendVoIPCallInvite(voipToken, {
               nameCaller: isGroup ? `${fromUserName} (группа)` : fromUserName,
@@ -833,8 +838,9 @@ export class MessengerGateway
           );
           if (!areContacts) continue;
         }
-        const token = await this.service.getFcmToken(p.userId);
-        if (token) {
+        // Cancel the ringing on every device that got the invite push.
+        const tokens = await this.service.getFcmTokens(p.userId);
+        for (const token of tokens) {
           this.fcmService
             .sendCallCancelled(token, payload.roomName, callerName)
             .catch(() => {});

@@ -54,6 +54,16 @@ export class FcmService {
     } catch (cleanupErr) {
       this.logger.error(`FCM token cleanup failed: ${cleanupErr}`);
     }
+    // Multi-device: also clear the stale token from any session that holds it.
+    // try/catch: no-op if the Session.fcmToken column isn't present yet.
+    try {
+      await this.prisma.session.updateMany({
+        where: { fcmToken: token },
+        data: { fcmToken: null },
+      });
+    } catch {
+      /* column missing (un-migrated env) — ignore */
+    }
   }
 
   private init() {
