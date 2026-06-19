@@ -195,3 +195,97 @@ describe('formatRefillDigest', () => {
     expect(md).not.toMatch(/\[B:[a-z]+\][^[]*\[B:[a-z]+\]/);
   });
 });
+
+import {
+  formatRefillSnoozed,
+  formatRefillDisabled,
+  formatRefillEnabled,
+  formatRefillSettings,
+} from './informer.formatters';
+
+describe('formatRefillSnoozed', () => {
+  it('contains the duration argument and re-enable button', () => {
+    const md = formatRefillSnoozed('1 час');
+    expect(md).toContain('1 час');
+    expect(md).toContain('[ACTION:🔔 Включить обратно]');
+    expect(md).toContain('[ACTION:⚙️ Настройки алёртов]');
+  });
+
+  it('accepts custom prefix', () => {
+    const md = formatRefillSnoozed('30 минут', '[B:green]✅ Принято[/B]');
+    expect(md).toContain('✅ Принято');
+    expect(md).toContain('[B:green]');
+    expect(md).toContain('30 минут');
+  });
+});
+
+describe('formatRefillDisabled', () => {
+  it('shows red status and only the enable button', () => {
+    const md = formatRefillDisabled();
+    expect(md).toContain('[B:red]');
+    expect(md).toContain('🔇 Отключено');
+    expect(md).toContain('[ACTION:🔔 Включить обратно]');
+  });
+});
+
+describe('formatRefillEnabled', () => {
+  it('shows green status and settings button', () => {
+    const md = formatRefillEnabled();
+    expect(md).toContain('[B:green]');
+    expect(md).toContain('🔔 Включено');
+    expect(md).toContain('[ACTION:⚙️ Настройки алёртов]');
+  });
+});
+
+describe('formatRefillSettings', () => {
+  it('enabled, not snoozed: shows Активно + disable button', () => {
+    const md = formatRefillSettings({
+      userId: 'u1',
+      enabled: true,
+      snoozedUntil: null,
+      lastDigestStage: 0,
+      lastDigestAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as any);
+    expect(md).toContain('🔔 Активно');
+    expect(md).toContain('[B:green]');
+    expect(md).toContain('[ACTION:🔇 Совсем отключить]');
+  });
+
+  it('enabled, snoozed: shows snoozed status and enable button', () => {
+    const future = new Date(Date.now() + 3600_000);
+    const md = formatRefillSettings({
+      userId: 'u1',
+      enabled: true,
+      snoozedUntil: future,
+      lastDigestStage: 0,
+      lastDigestAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as any);
+    expect(md).toContain('🔕 Заглушено');
+    expect(md).toContain('[B:blue]');
+    expect(md).toContain('[ACTION:🔔 Включить обратно]');
+  });
+
+  it('disabled: shows Отключено + enable button', () => {
+    const md = formatRefillSettings({
+      userId: 'u1',
+      enabled: false,
+      snoozedUntil: null,
+      lastDigestStage: 0,
+      lastDigestAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as any);
+    expect(md).toContain('🔇 Отключено');
+    expect(md).toContain('[B:red]');
+    expect(md).toContain('[ACTION:🔔 Включить обратно]');
+  });
+
+  it('null cfg: defaults to Активно', () => {
+    const md = formatRefillSettings(null);
+    expect(md).toContain('🔔 Активно');
+  });
+});
