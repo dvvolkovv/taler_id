@@ -25,6 +25,13 @@ const ACTION_CODES = [
   'OPERATOR_WALLETS',
   'MINI_ACQUIRING',
   'GATEWAY_WALLETS',
+  // ── refill alerter (Sub-3) ──
+  'REFILL_ACK',
+  'REFILL_SNOOZE_1H',
+  'REFILL_SNOOZE_MORNING',
+  'REFILL_DISABLE',
+  'REFILL_ENABLE',
+  'REFILL_SETTINGS',
 ] as const;
 type ActionCode = (typeof ACTION_CODES)[number];
 
@@ -144,6 +151,29 @@ export class InformerBotService {
     }
     if (lower.includes('gateway_wallets') || lower.includes('gateway') || lower.includes('системные кошельки')) {
       return 'GATEWAY_WALLETS';
+    }
+    // Refill alerter — Sub-3
+    if (lower.includes('refill_ack') || lower.includes('понял, работаю')) {
+      return 'REFILL_ACK';
+    }
+    if (lower.includes('refill_snooze_1h') || lower.includes('заглушить 1 час')) {
+      return 'REFILL_SNOOZE_1H';
+    }
+    if (lower.includes('refill_snooze_morning') || lower.includes('до утра')) {
+      return 'REFILL_SNOOZE_MORNING';
+    }
+    if (lower.includes('refill_disable') || lower.includes('совсем отключить')) {
+      return 'REFILL_DISABLE';
+    }
+    if (lower.includes('refill_enable') || lower.includes('включить обратно')) {
+      return 'REFILL_ENABLE';
+    }
+    if (
+      lower.includes('refill_settings') ||
+      lower.includes('настройки алёртов') ||
+      lower.includes('настройки алертов')
+    ) {
+      return 'REFILL_SETTINGS';
     }
     return null;
   }

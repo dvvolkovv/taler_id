@@ -66,3 +66,25 @@ describe('InformerBotService.nextMorningInBerlin', () => {
     expect(out.toISOString()).toBe('2026-07-15T07:00:00.000Z'); // 09:00 CEST = 07:00 UTC
   });
 });
+
+describe('InformerBotService.parseActionCode (refill codes)', () => {
+  const svc = new TestableService();
+
+  const cases: [string, string][] = [
+    ['REFILL_ACK', '✅ Понял, работаю'],
+    ['REFILL_SNOOZE_1H', '🔕 Заглушить 1 час'],
+    ['REFILL_SNOOZE_MORNING', '🔕 До утра 9:00'],
+    ['REFILL_DISABLE', '🔇 Совсем отключить'],
+    ['REFILL_ENABLE', '🔔 Включить обратно'],
+    ['REFILL_SETTINGS', '⚙️ Настройки алёртов'],
+  ];
+
+  for (const [code, label] of cases) {
+    it(`recognises human label "${label}" → ${code}`, () => {
+      expect(svc.parseActionCode(label)).toBe(code);
+    });
+    it(`recognises raw code "${code}"`, () => {
+      expect(svc.parseActionCode(code)).toBe(code);
+    });
+  }
+});
