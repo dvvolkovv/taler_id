@@ -254,5 +254,7 @@ export function formatWelcome(): string {
     'Я бот мониторинга Informer. Что нужно проверить?',
     '',
     OPERATOR_BUTTONS,
+    '',
+    SETTINGS_BUTTON,
   ].join('\n');
 }

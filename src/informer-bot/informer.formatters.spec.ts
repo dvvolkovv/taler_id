@@ -289,3 +289,12 @@ describe('formatRefillSettings', () => {
     expect(md).toContain('🔔 Активно');
   });
 });
+
+import { formatWelcome } from './informer.formatters';
+
+describe('formatWelcome (extended)', () => {
+  it('now includes the alert settings button', () => {
+    const md = formatWelcome();
+    expect(md).toContain('[ACTION:⚙️ Настройки алёртов]');
+  });
+});
