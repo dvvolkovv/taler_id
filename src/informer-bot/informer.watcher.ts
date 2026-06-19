@@ -56,6 +56,13 @@ export class InformerWatcher {
       locked = r?.[0]?.locked === true;
       if (!locked) return;
       await this.tickForTest();
+      try {
+        await this.tickRefillForTest();
+      } catch (e) {
+        this.logger.warn(
+          `tickRefillForTest failed: ${(e as Error).message}`,
+        );
+      }
     } finally {
       if (locked) {
         await this.prisma
