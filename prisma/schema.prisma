@@ -41,6 +41,7 @@ model User {
   oauthClients         OAuthClient[]
   hostedGroupCalls     GroupCall[]           @relation("HostedGroupCalls")
   groupCallInvites     GroupCallInvite[]     @relation("GroupCallInvitesReceived")
+  informerAlertConfig  InformerAlertConfig?
 }
 
 model DeviceKey {
@@ -853,4 +854,21 @@ model InformerSeenWallet {
 
   @@unique([address, network, token])
   @@index([firstSeenAt])
+}
+
+model InformerAlertConfig {
+  userId          String    @id
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  enabled         Boolean   @default(true)
+  snoozedUntil    DateTime?
+
+  lastDigestStage Int       @default(0)
+  lastDigestAt    DateTime?
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([snoozedUntil])
+  @@index([enabled, snoozedUntil])
 }
