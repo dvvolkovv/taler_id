@@ -8,6 +8,7 @@ import { InformerBotService } from './informer-bot.service';
 import {
   formatNewOperatorWalletAlert,
   formatDowntimeAlert,
+  formatRefillDigest,
 } from './informer.formatters';
 import {
   InformerAuthError,
@@ -20,6 +21,13 @@ const BOOTSTRAP_KEY = 'informer:bootstrapped';
 const BOOTSTRAP_TTL_SEC = 60 * 60 * 24 * 30; // 30 days
 const DOWNTIME_THRESHOLD = 3;
 const SEEN_RETENTION_DAYS = 30;
+
+const STAGE_INTERVALS = [
+  { from: 0, after: 0, nextStage: 1 }, // initial → STAGE 1
+  { from: 1, after: 30 * 60, nextStage: 2 }, // +30 min → STAGE 2
+  { from: 2, after: 60 * 60, nextStage: 3 }, // +60 min → STAGE 3
+  // stage 3 → silence
+];
 
 @Injectable()
 export class InformerWatcher {
@@ -187,6 +195,63 @@ export class InformerWatcher {
     }
 
     return out;
+  }
+
+  async tickRefillForTest(): Promise<{ usersNotified: number }> {
+    const deficits = await this.computeRefillDeficits();
+    const userIds = await this.service.listWhitelistedUserIds();
+    let notified = 0;
+
+    for (const userId of userIds) {
+      const cfg = await this.prisma.informerAlertConfig.findUnique({
+        where: { userId },
+      });
+      const enabled = cfg?.enabled ?? true;
+      const snoozed = (cfg?.snoozedUntil ?? new Date(0)) > new Date();
+      const stage = cfg?.lastDigestStage ?? 0;
+      const lastAt = cfg?.lastDigestAt ?? null;
+
+      if (deficits.length === 0) {
+        if (stage !== 0 || lastAt !== null) {
+          await this.upsertConfig(userId, {
+            lastDigestStage: 0,
+            lastDigestAt: null,
+          });
+        }
+        continue;
+      }
+
+      if (!enabled || snoozed) continue;
+
+      const rule = STAGE_INTERVALS.find((r) => r.from === stage);
+      if (!rule) continue; // already at stage 3, silent
+      const elapsedSec = lastAt
+        ? (Date.now() - lastAt.getTime()) / 1000
+        : Number.POSITIVE_INFINITY;
+      if (elapsedSec < rule.after) continue;
+
+      const md = formatRefillDigest(deficits, rule.nextStage as 1 | 2 | 3);
+      const convId = await this.service.getOrCreateChat(userId);
+      await this.service.publishBotMessage(userId, convId, md);
+      await this.upsertConfig(userId, {
+        lastDigestStage: rule.nextStage,
+        lastDigestAt: new Date(),
+      });
+      notified++;
+    }
+
+    return { usersNotified: notified };
+  }
+
+  private async upsertConfig(
+    userId: string,
+    patch: { lastDigestStage?: number; lastDigestAt?: Date | null },
+  ): Promise<void> {
+    await this.prisma.informerAlertConfig.upsert({
+      where: { userId },
+      update: patch,
+      create: { userId, ...patch },
+    });
   }
 
   private async broadcastToAll(content: string): Promise<void> {

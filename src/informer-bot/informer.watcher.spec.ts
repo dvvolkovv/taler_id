@@ -290,6 +290,8 @@ describe('InformerWatcher.computeRefillDeficits', () => {
     expect(out).toHaveLength(0);
   });
 
+  // Anchor for adding next describe-block right after computeRefillDeficits.
+
   it('handles 3-network mixed case: deficit only where applicable', async () => {
     const m = makeMocks();
     m.client.getOperatorRequiredList.mockResolvedValue({
@@ -334,5 +336,257 @@ describe('InformerWatcher.computeRefillDeficits', () => {
     const out = await w.computeRefillDeficits();
     expect(out).toHaveLength(1);
     expect(out[0].chain).toBe('tron');
+  });
+});
+
+function makeRefillMocks(opts: { configs?: Record<string, any> } = {}) {
+  const m = makeMocks();
+  const configStore: Record<string, any> = opts.configs ?? {};
+  (m.prisma as any).informerAlertConfig = {
+    findUnique: jest.fn(
+      async ({ where }: any) => configStore[where.userId] ?? null,
+    ),
+    upsert: jest.fn(async ({ where, update, create }: any) => {
+      configStore[where.userId] = {
+        ...configStore[where.userId],
+        ...create,
+        ...update,
+      };
+      return configStore[where.userId];
+    }),
+  };
+  return { ...m, configStore };
+}
+
+function withDeficit(
+  m: ReturnType<typeof makeRefillMocks>,
+  hot: string,
+  pending: string,
+) {
+  m.client.getOperatorRequiredList.mockResolvedValue({
+    items: [
+      {
+        created_at: '2026-06-02T12:49:51Z',
+        withdraw_address: 'X',
+        withdraw_network: 'tron',
+        withdraw_token: 'usdt',
+        withdraw_amount: pending,
+      },
+    ],
+    total: 1,
+    page: 1,
+    per_page: 500,
+  });
+  (m.client as any).getMiniAcquiringBalances = jest.fn(async () =>
+    mockMiniBalances([{ network: 'tron', token: 'usdt', balance: hot }]),
+  );
+}
+
+describe('InformerWatcher.tickRefillForTest', () => {
+  it('first tick with deficit → STAGE 1, publishes, sets state', async () => {
+    const m = makeRefillMocks();
+    withDeficit(m, '1000', '950');
+    const w = new InformerWatcher(
+      m.prisma as any,
+      m.client as any,
+      m.service as any,
+      m.redis as any,
+    );
+    await w.tickRefillForTest();
+    expect(m.publishes).toHaveLength(2);
+    expect(m.publishes[0].content).toContain('STAGE 1');
+    expect(m.configStore['u1'].lastDigestStage).toBe(1);
+    expect(m.configStore['u1'].lastDigestAt).toBeInstanceOf(Date);
+  });
+
+  it('second tick before 30 min cooldown → no publish', async () => {
+    const recent = new Date(Date.now() - 5 * 60 * 1000);
+    const m = makeRefillMocks({
+      configs: {
+        u1: {
+          userId: 'u1',
+          enabled: true,
+          snoozedUntil: null,
+          lastDigestStage: 1,
+          lastDigestAt: recent,
+        },
+        u2: {
+          userId: 'u2',
+          enabled: true,
+          snoozedUntil: null,
+          lastDigestStage: 1,
+          lastDigestAt: recent,
+        },
+      },
+    });
+    withDeficit(m, '1000', '950');
+    const w = new InformerWatcher(
+      m.prisma as any,
+      m.client as any,
+      m.service as any,
+      m.redis as any,
+    );
+    await w.tickRefillForTest();
+    expect(m.publishes).toHaveLength(0);
+  });
+
+  it('tick after 30 min → STAGE 2 publish, state updated', async () => {
+    const past = new Date(Date.now() - 31 * 60 * 1000);
+    const m = makeRefillMocks({
+      configs: {
+        u1: {
+          userId: 'u1',
+          enabled: true,
+          snoozedUntil: null,
+          lastDigestStage: 1,
+          lastDigestAt: past,
+        },
+        u2: {
+          userId: 'u2',
+          enabled: true,
+          snoozedUntil: null,
+          lastDigestStage: 1,
+          lastDigestAt: past,
+        },
+      },
+    });
+    withDeficit(m, '1000', '950');
+    const w = new InformerWatcher(
+      m.prisma as any,
+      m.client as any,
+      m.service as any,
+      m.redis as any,
+    );
+    await w.tickRefillForTest();
+    expect(m.publishes).toHaveLength(2);
+    expect(m.publishes[0].content).toContain('STAGE 2');
+    expect(m.configStore['u1'].lastDigestStage).toBe(2);
+  });
+
+  it('tick after 60 min from STAGE 2 → STAGE 3', async () => {
+    const past = new Date(Date.now() - 61 * 60 * 1000);
+    const m = makeRefillMocks({
+      configs: {
+        u1: {
+          userId: 'u1',
+          enabled: true,
+          snoozedUntil: null,
+          lastDigestStage: 2,
+          lastDigestAt: past,
+        },
+      },
+    });
+    m.service.listWhitelistedUserIds = jest.fn(async () => ['u1']);
+    withDeficit(m, '1000', '950');
+    const w = new InformerWatcher(
+      m.prisma as any,
+      m.client as any,
+      m.service as any,
+      m.redis as any,
+    );
+    await w.tickRefillForTest();
+    expect(m.publishes).toHaveLength(1);
+    expect(m.publishes[0].content).toContain('STAGE 3');
+    expect(m.configStore['u1'].lastDigestStage).toBe(3);
+  });
+
+  it('STAGE 3 is silent on subsequent ticks', async () => {
+    const past = new Date(Date.now() - 90 * 60 * 1000);
+    const m = makeRefillMocks({
+      configs: {
+        u1: {
+          userId: 'u1',
+          enabled: true,
+          snoozedUntil: null,
+          lastDigestStage: 3,
+          lastDigestAt: past,
+        },
+      },
+    });
+    m.service.listWhitelistedUserIds = jest.fn(async () => ['u1']);
+    withDeficit(m, '1000', '950');
+    const w = new InformerWatcher(
+      m.prisma as any,
+      m.client as any,
+      m.service as any,
+      m.redis as any,
+    );
+    await w.tickRefillForTest();
+    expect(m.publishes).toHaveLength(0);
+  });
+
+  it('recovery (deficit gone) silently resets state', async () => {
+    const m = makeRefillMocks({
+      configs: {
+        u1: {
+          userId: 'u1',
+          enabled: true,
+          snoozedUntil: null,
+          lastDigestStage: 2,
+          lastDigestAt: new Date(),
+        },
+      },
+    });
+    m.service.listWhitelistedUserIds = jest.fn(async () => ['u1']);
+    // pending=400, hot=1000 → available=900, deficit=−500 → no deficits
+    withDeficit(m, '1000', '400');
+    const w = new InformerWatcher(
+      m.prisma as any,
+      m.client as any,
+      m.service as any,
+      m.redis as any,
+    );
+    await w.tickRefillForTest();
+    expect(m.publishes).toHaveLength(0);
+    expect(m.configStore['u1'].lastDigestStage).toBe(0);
+    expect(m.configStore['u1'].lastDigestAt).toBeNull();
+  });
+
+  it('snoozed user gets no publish', async () => {
+    const m = makeRefillMocks({
+      configs: {
+        u1: {
+          userId: 'u1',
+          enabled: true,
+          snoozedUntil: new Date(Date.now() + 3600 * 1000),
+          lastDigestStage: 0,
+          lastDigestAt: null,
+        },
+      },
+    });
+    m.service.listWhitelistedUserIds = jest.fn(async () => ['u1']);
+    withDeficit(m, '1000', '950');
+    const w = new InformerWatcher(
+      m.prisma as any,
+      m.client as any,
+      m.service as any,
+      m.redis as any,
+    );
+    await w.tickRefillForTest();
+    expect(m.publishes).toHaveLength(0);
+  });
+
+  it('disabled user gets no publish', async () => {
+    const m = makeRefillMocks({
+      configs: {
+        u1: {
+          userId: 'u1',
+          enabled: false,
+          snoozedUntil: null,
+          lastDigestStage: 0,
+          lastDigestAt: null,
+        },
+      },
+    });
+    m.service.listWhitelistedUserIds = jest.fn(async () => ['u1']);
+    withDeficit(m, '1000', '950');
+    const w = new InformerWatcher(
+      m.prisma as any,
+      m.client as any,
+      m.service as any,
+      m.redis as any,
+    );
+    await w.tickRefillForTest();
+    expect(m.publishes).toHaveLength(0);
   });
 });
