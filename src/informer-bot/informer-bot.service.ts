@@ -207,4 +207,59 @@ export class InformerBotService {
     });
     return profiles.map((p) => p.userId);
   }
+
+  /**
+   * Returns the next instant of 09:00 in Europe/Berlin time, expressed as a
+   * UTC Date. DST-aware via Intl.DateTimeFormat. If `now` is already past
+   * 09:00 in Berlin, returns 09:00 of the following day.
+   */
+  private nextMorningInBerlin(now: Date = new Date()): Date {
+    const tz = 'Europe/Berlin';
+    const targetHour = 9;
+
+    const fmt = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    });
+
+    // Step 1: read current Berlin wall-clock date components.
+    const parts = fmt.formatToParts(now);
+    const get = (t: string) =>
+      parseInt(parts.find((p) => p.type === t)!.value, 10);
+    const year = get('year');
+    const month = get('month');
+    const day = get('day');
+    const hour = get('hour');
+
+    // Step 2: pick today or tomorrow's calendar day in Berlin.
+    const targetDate = new Date(Date.UTC(year, month - 1, day));
+    if (hour >= targetHour) {
+      targetDate.setUTCDate(targetDate.getUTCDate() + 1);
+    }
+    const ty = targetDate.getUTCFullYear();
+    const tm = targetDate.getUTCMonth() + 1;
+    const td = targetDate.getUTCDate();
+
+    // Step 3: find the UTC instant that Berlin renders as ty-tm-td 09:00.
+    // Take a UTC guess of 09:00 on that day, compute Berlin's reading offset,
+    // adjust by that offset.
+    const guess = new Date(Date.UTC(ty, tm - 1, td, targetHour, 0, 0));
+    const berlinParts = fmt.formatToParts(guess);
+    const bh = parseInt(
+      berlinParts.find((p) => p.type === 'hour')!.value,
+      10,
+    );
+    const bm = parseInt(
+      berlinParts.find((p) => p.type === 'minute')!.value,
+      10,
+    );
+    const offsetHours = bh + bm / 60 - targetHour;
+    return new Date(guess.getTime() - offsetHours * 3600 * 1000);
+  }
 }
