@@ -3,6 +3,7 @@ import {
   OperatorRequiredItem,
   MiniAcquiringBalances,
   GatewaySystemWalletBalances,
+  RefillDeficit,
 } from './informer.types';
 
 // Human-readable labels in brackets so the mobile renderer (which uses the
@@ -12,6 +13,20 @@ export const OPERATOR_BUTTONS =
   '[ACTION:📋 Кошельки оператора]\n' +
   '[ACTION:💰 Балансы mini-acquiring]\n' +
   '[ACTION:🏦 Системные кошельки gateway]';
+
+export const ACK_BUTTONS =
+  '[ACTION:✅ Понял, работаю]\n' +
+  '[ACTION:🔕 Заглушить 1 час]\n' +
+  '[ACTION:🔕 До утра 9:00]\n' +
+  '[ACTION:🔇 Совсем отключить]';
+
+export const SETTINGS_BUTTON = '[ACTION:⚙️ Настройки алёртов]';
+
+const STAGE_BADGES: Record<1 | 2 | 3, string> = {
+  1: '[B:yellow]STAGE 1[/B]',
+  2: '[B:red]STAGE 2 — UNRESOLVED[/B]',
+  3: '[B:red]STAGE 3 — ESCALATED[/B]',
+};
 
 function formatRow(item: OperatorRequiredItem): string {
   const at = item.created_at.replace('T', ' ').replace('Z', ' UTC');
@@ -139,6 +154,25 @@ export function formatDowntimeAlert(): string {
     '',
     'Watcher временно остановлен. Алёрты о новых кошельках могут запаздывать.',
     'Когда API восстановится, watcher автоматически продолжит работу.',
+  ].join('\n');
+}
+
+export function formatRefillDigest(
+  items: RefillDeficit[],
+  stage: 1 | 2 | 3,
+): string {
+  const lines = items.map(
+    (d) =>
+      `- ${d.chain}-${d.token} [HOT_BADGE]HOT[/HOT_BADGE] \`${d.hotAddress}\`: ` +
+      `[HOT]${d.hotBalance}[/HOT] / pending ${d.pendingTotal} / [C:red]−${d.deficit}[/C] ` +
+      `(доступно ${d.availableForWithdrawal} при 10% буфере)`,
+  );
+  return [
+    `🔴 **Refill needed** ${STAGE_BADGES[stage]}`,
+    '',
+    ...lines,
+    '',
+    ACK_BUTTONS,
   ].join('\n');
 }
 

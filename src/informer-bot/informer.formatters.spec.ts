@@ -123,3 +123,75 @@ describe('formatNewOperatorWalletAlert', () => {
     expect(md).toContain('[ACTION:🏦 Балансы gateway]');
   });
 });
+
+import { formatRefillDigest } from './informer.formatters';
+import { RefillDeficit } from './informer.types';
+
+const sampleDeficit = (overrides: Partial<RefillDeficit> = {}): RefillDeficit => ({
+  chain: 'tron',
+  token: 'usdt',
+  hotAddress: 'TXxxxYYY',
+  hotBalance: '800.50',
+  pendingTotal: '1200.00',
+  availableForWithdrawal: '720.45',
+  deficit: '479.55',
+  ...overrides,
+});
+
+describe('formatRefillDigest', () => {
+  it('stage 1: yellow badge, all deficits rendered with colour tags', () => {
+    const md = formatRefillDigest([sampleDeficit()], 1);
+    expect(md).toContain('STAGE 1');
+    expect(md).toContain('[B:yellow]');
+    expect(md).toContain('[HOT_BADGE]HOT[/HOT_BADGE]');
+    expect(md).toContain('[HOT]800.50[/HOT]');
+    expect(md).toContain('[C:red]−479.55[/C]');
+    expect(md).toContain('`TXxxxYYY`');
+  });
+
+  it('stage 2: red unresolved badge', () => {
+    const md = formatRefillDigest([sampleDeficit()], 2);
+    expect(md).toContain('STAGE 2 — UNRESOLVED');
+    expect(md).toContain('[B:red]');
+  });
+
+  it('stage 3: red escalated badge', () => {
+    const md = formatRefillDigest([sampleDeficit()], 3);
+    expect(md).toContain('STAGE 3 — ESCALATED');
+  });
+
+  it('contains all four ack buttons', () => {
+    const md = formatRefillDigest([sampleDeficit()], 1);
+    expect(md).toContain('[ACTION:✅ Понял, работаю]');
+    expect(md).toContain('[ACTION:🔕 Заглушить 1 час]');
+    expect(md).toContain('[ACTION:🔕 До утра 9:00]');
+    expect(md).toContain('[ACTION:🔇 Совсем отключить]');
+  });
+
+  it('renders multiple deficits as a list', () => {
+    const md = formatRefillDigest(
+      [
+        sampleDeficit(),
+        sampleDeficit({
+          chain: 'bitcoin',
+          token: 'btc',
+          hotAddress: 'bc1qZZ',
+          hotBalance: '0.5',
+          deficit: '0.1',
+        }),
+      ],
+      1,
+    );
+    expect(md).toContain('tron-usdt');
+    expect(md).toContain('bitcoin-btc');
+    expect(md).toContain('`bc1qZZ`');
+  });
+
+  it('does not nest colour tags inside other colour tags', () => {
+    const md = formatRefillDigest([sampleDeficit()], 1);
+    // No same-family tag opener can appear before a non-bracket char inside a wrapping tag.
+    expect(md).not.toMatch(/\[HOT\][^[]*\[HOT_BADGE\]/);
+    expect(md).not.toMatch(/\[C:[a-z]+\][^[]*\[C:[a-z]+\]/);
+    expect(md).not.toMatch(/\[B:[a-z]+\][^[]*\[B:[a-z]+\]/);
+  });
+});
