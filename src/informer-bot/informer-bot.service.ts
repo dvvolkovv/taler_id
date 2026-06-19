@@ -10,6 +10,10 @@ import {
   formatWelcome,
   formatButtonsOnlyHint,
   formatClientError,
+  formatRefillSnoozed,
+  formatRefillDisabled,
+  formatRefillEnabled,
+  formatRefillSettings,
 } from './informer.formatters';
 import {
   InformerAuthError,
@@ -122,6 +126,45 @@ export class InformerBotService {
             await this.client.getGatewaySystemWalletBalances(),
           );
           break;
+        case 'REFILL_ACK': {
+          const until = new Date(Date.now() + 30 * 60 * 1000);
+          await this.upsertAlertConfig(userId, { snoozedUntil: until });
+          md = formatRefillSnoozed('30 минут', '[B:green]✅ Принято[/B]');
+          break;
+        }
+        case 'REFILL_SNOOZE_1H': {
+          const until = new Date(Date.now() + 60 * 60 * 1000);
+          await this.upsertAlertConfig(userId, { snoozedUntil: until });
+          md = formatRefillSnoozed('1 час');
+          break;
+        }
+        case 'REFILL_SNOOZE_MORNING': {
+          const until = this.nextMorningInBerlin();
+          await this.upsertAlertConfig(userId, { snoozedUntil: until });
+          md = formatRefillSnoozed(`до ${until.toISOString()}`);
+          break;
+        }
+        case 'REFILL_DISABLE':
+          await this.upsertAlertConfig(userId, {
+            enabled: false,
+            snoozedUntil: null,
+          });
+          md = formatRefillDisabled();
+          break;
+        case 'REFILL_ENABLE':
+          await this.upsertAlertConfig(userId, {
+            enabled: true,
+            snoozedUntil: null,
+          });
+          md = formatRefillEnabled();
+          break;
+        case 'REFILL_SETTINGS': {
+          const cfg = await this.prisma.informerAlertConfig.findUnique({
+            where: { userId },
+          });
+          md = formatRefillSettings(cfg);
+          break;
+        }
       }
       await this.publishBotMessage(userId, conversationId, md);
     } catch (e) {
@@ -236,6 +279,22 @@ export class InformerBotService {
       select: { userId: true },
     });
     return profiles.map((p) => p.userId);
+  }
+
+  private async upsertAlertConfig(
+    userId: string,
+    patch: Partial<{
+      enabled: boolean;
+      snoozedUntil: Date | null;
+      lastDigestStage: number;
+      lastDigestAt: Date | null;
+    }>,
+  ): Promise<void> {
+    await this.prisma.informerAlertConfig.upsert({
+      where: { userId },
+      update: patch,
+      create: { userId, ...patch },
+    });
   }
 
   /**
