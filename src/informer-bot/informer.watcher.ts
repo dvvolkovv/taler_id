@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import BigNumber from 'bignumber.js';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { InformerClient } from './informer.client';
@@ -11,6 +12,7 @@ import {
 import {
   InformerAuthError,
   InformerNotConfiguredError,
+  RefillDeficit,
 } from './informer.types';
 
 const ADVISORY_LOCK_ID = 87349126;
@@ -22,6 +24,7 @@ const SEEN_RETENTION_DAYS = 30;
 @Injectable()
 export class InformerWatcher {
   private readonly logger = new Logger(InformerWatcher.name);
+  private readonly SAFETY_MARGIN_PCT = new BigNumber('0.10');
   private consecutiveFailures = 0;
   private downtimeAnnounced = false;
   private fatalError = false;
@@ -129,6 +132,61 @@ export class InformerWatcher {
       await this.broadcastToAll(alert);
     }
     return { newCount, bootstrapped: false };
+  }
+
+  async computeRefillDeficits(): Promise<RefillDeficit[]> {
+    const operatorList = await this.client.getOperatorRequiredList(1, 500);
+
+    // Group pending withdrawals by (network, token)
+    const pending = new Map<
+      string,
+      { network: string; token: string; total: BigNumber }
+    >();
+    for (const item of operatorList.items) {
+      const key = `${item.withdraw_network}::${item.withdraw_token}`;
+      const cur = pending.get(key) ?? {
+        network: item.withdraw_network,
+        token: item.withdraw_token,
+        total: new BigNumber(0),
+      };
+      cur.total = cur.total.plus(new BigNumber(item.withdraw_amount));
+      pending.set(key, cur);
+    }
+
+    if (pending.size === 0) return [];
+
+    const balances = await this.client.getMiniAcquiringBalances();
+    const out: RefillDeficit[] = [];
+
+    for (const { network, token, total: pendingTotal } of pending.values()) {
+      const chain = balances.chains.find((c) => c.chain === network);
+      if (!chain || !Array.isArray(chain.roles)) continue;
+      const hot = chain.roles.find(
+        (r) => r.role === 'hot_wallet' && !r.error,
+      );
+      if (!hot || !Array.isArray(hot.balances)) continue;
+      const bal = hot.balances.find((b) => b.asset === token && !b.error);
+      if (!bal) continue;
+
+      const hotBalance = new BigNumber(bal.balance);
+      const available = hotBalance.times(
+        new BigNumber(1).minus(this.SAFETY_MARGIN_PCT),
+      );
+      const deficit = pendingTotal.minus(available);
+      if (deficit.lte(0)) continue;
+
+      out.push({
+        chain: network,
+        token,
+        hotAddress: hot.address,
+        hotBalance: hotBalance.toFixed(),
+        pendingTotal: pendingTotal.toFixed(),
+        availableForWithdrawal: available.toFixed(),
+        deficit: deficit.toFixed(),
+      });
+    }
+
+    return out;
   }
 
   private async broadcastToAll(content: string): Promise<void> {

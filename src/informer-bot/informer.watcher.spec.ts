@@ -2,6 +2,7 @@ import { InformerWatcher } from './informer.watcher';
 import {
   InformerAuthError,
   InformerUnavailableError,
+  MiniAcquiringBalances,
   OperatorRequiredList,
 } from './informer.types';
 
@@ -178,5 +179,160 @@ describe('InformerWatcher.tickForTest', () => {
     await w.tickForTest();
     expect(m.publishes).toHaveLength(2);
     expect(m.publishes[0].content).toContain('Informer API недоступен');
+  });
+});
+
+function mockMiniBalances(
+  hot: { network: string; token: string; balance: string; address?: string }[],
+): MiniAcquiringBalances {
+  const byChain = new Map<string, typeof hot>();
+  for (const h of hot) {
+    const arr = byChain.get(h.network) ?? [];
+    arr.push(h);
+    byChain.set(h.network, arr);
+  }
+  return {
+    chains: [...byChain.entries()].map(([chain, items]) => ({
+      chain,
+      base_asset: items[0].token,
+      supported: true,
+      roles: [
+        {
+          role: 'hot_wallet',
+          address: items[0].address ?? `addr-${chain}`,
+          balances: items.map((it) => ({
+            asset: it.token,
+            kind: 'native',
+            balance: it.balance,
+          })),
+        },
+      ],
+    })),
+  };
+}
+
+describe('InformerWatcher.computeRefillDeficits', () => {
+  function makeWatcher(m: ReturnType<typeof makeMocks>) {
+    return new InformerWatcher(
+      m.prisma as any,
+      m.client as any,
+      m.service as any,
+      m.redis as any,
+    );
+  }
+
+  it('no deficit when hot×0.9 >= pending', async () => {
+    const m = makeMocks();
+    m.client.getOperatorRequiredList.mockResolvedValue({
+      items: [
+        { ...makeItem('A'), withdraw_amount: '450' },
+        { ...makeItem('B'), withdraw_amount: '450' }, // total 900
+      ],
+      total: 2,
+      page: 1,
+      per_page: 500,
+    });
+    (m.client as any).getMiniAcquiringBalances = jest.fn(async () =>
+      mockMiniBalances([{ network: 'tron', token: 'usdt', balance: '1000' }]),
+    );
+
+    const w = makeWatcher(m);
+    const out = await w.computeRefillDeficits();
+    expect(out).toHaveLength(0);
+  });
+
+  it('detects deficit when pending exceeds 90% of hot', async () => {
+    const m = makeMocks();
+    m.client.getOperatorRequiredList.mockResolvedValue({
+      items: [
+        { ...makeItem('A'), withdraw_amount: '500' },
+        { ...makeItem('B'), withdraw_amount: '450' }, // total 950
+      ],
+      total: 2,
+      page: 1,
+      per_page: 500,
+    });
+    (m.client as any).getMiniAcquiringBalances = jest.fn(async () =>
+      mockMiniBalances([{ network: 'tron', token: 'usdt', balance: '1000' }]),
+    );
+
+    const w = makeWatcher(m);
+    const out = await w.computeRefillDeficits();
+    expect(out).toHaveLength(1);
+    expect(out[0].chain).toBe('tron');
+    expect(out[0].token).toBe('usdt');
+    expect(out[0].hotBalance).toBe('1000');
+    expect(out[0].pendingTotal).toBe('950');
+    expect(out[0].availableForWithdrawal).toBe('900');
+    expect(out[0].deficit).toBe('50');
+  });
+
+  it('skips chain/token pairs missing from mini-acquiring', async () => {
+    const m = makeMocks();
+    m.client.getOperatorRequiredList.mockResolvedValue({
+      items: [
+        {
+          ...makeItem('A'),
+          withdraw_network: 'unknown-chain',
+          withdraw_amount: '100',
+        },
+      ],
+      total: 1,
+      page: 1,
+      per_page: 500,
+    });
+    (m.client as any).getMiniAcquiringBalances = jest.fn(async () =>
+      mockMiniBalances([{ network: 'tron', token: 'usdt', balance: '1000' }]),
+    );
+
+    const w = makeWatcher(m);
+    const out = await w.computeRefillDeficits();
+    expect(out).toHaveLength(0);
+  });
+
+  it('handles 3-network mixed case: deficit only where applicable', async () => {
+    const m = makeMocks();
+    m.client.getOperatorRequiredList.mockResolvedValue({
+      items: [
+        {
+          ...makeItem('A'),
+          withdraw_network: 'tron',
+          withdraw_token: 'usdt',
+          withdraw_amount: '500',
+        },
+        {
+          ...makeItem('B'),
+          withdraw_network: 'tron',
+          withdraw_token: 'usdt',
+          withdraw_amount: '450',
+        }, // 950 on tron → deficit
+        {
+          ...makeItem('C'),
+          withdraw_network: 'bitcoin',
+          withdraw_token: 'btc',
+          withdraw_amount: '0.1',
+        }, // ok: 0.1 < 10 × 0.9
+        {
+          ...makeItem('D'),
+          withdraw_network: 'ethereum',
+          withdraw_token: 'usdc',
+          withdraw_amount: '100',
+        }, // no mini-acquiring entry → skip
+      ],
+      total: 4,
+      page: 1,
+      per_page: 500,
+    });
+    (m.client as any).getMiniAcquiringBalances = jest.fn(async () =>
+      mockMiniBalances([
+        { network: 'tron', token: 'usdt', balance: '1000' },
+        { network: 'bitcoin', token: 'btc', balance: '10' },
+      ]),
+    );
+
+    const w = makeWatcher(m);
+    const out = await w.computeRefillDeficits();
+    expect(out).toHaveLength(1);
+    expect(out[0].chain).toBe('tron');
   });
 });
