@@ -79,6 +79,17 @@ export interface GatewaySystemWalletBalances {
   items: GatewayItem[];
 }
 
+// ── Refill deficit (computed locally, not from admin-API) ───
+export interface RefillDeficit {
+  chain: string;                  // e.g. "tron"
+  token: string;                  // e.g. "usdt"
+  hotAddress: string;             // mini-acquiring role address
+  hotBalance: string;             // raw amount as string, e.g. "1000.00"
+  pendingTotal: string;           // raw aggregated pending withdrawal amount
+  availableForWithdrawal: string; // hotBalance × (1 − SAFETY_MARGIN_PCT)
+  deficit: string;                // pendingTotal − availableForWithdrawal, > 0 when alertable
+}
+
 // ── Errors ───────────────────────────────────────────────────
 export class InformerError extends Error {
   constructor(
