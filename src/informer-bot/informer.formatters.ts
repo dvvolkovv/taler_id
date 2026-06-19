@@ -1,8 +1,10 @@
+import type { InformerAlertConfig } from '@prisma/client';
 import {
   OperatorRequiredList,
   OperatorRequiredItem,
   MiniAcquiringBalances,
   GatewaySystemWalletBalances,
+  RefillDeficit,
 } from './informer.types';
 
 // Human-readable labels in brackets so the mobile renderer (which uses the
@@ -12,6 +14,20 @@ export const OPERATOR_BUTTONS =
   '[ACTION:📋 Кошельки оператора]\n' +
   '[ACTION:💰 Балансы mini-acquiring]\n' +
   '[ACTION:🏦 Системные кошельки gateway]';
+
+export const ACK_BUTTONS =
+  '[ACTION:✅ Понял, работаю]\n' +
+  '[ACTION:🔕 Заглушить 1 час]\n' +
+  '[ACTION:🔕 До утра 9:00]\n' +
+  '[ACTION:🔇 Совсем отключить]';
+
+export const SETTINGS_BUTTON = '[ACTION:⚙️ Настройки алёртов]';
+
+const STAGE_BADGES: Record<1 | 2 | 3, string> = {
+  1: '[B:yellow]STAGE 1[/B]',
+  2: '[B:red]STAGE 2 — UNRESOLVED[/B]',
+  3: '[B:red]STAGE 3 — ESCALATED[/B]',
+};
 
 function formatRow(item: OperatorRequiredItem): string {
   const at = item.created_at.replace('T', ' ').replace('Z', ' UTC');
@@ -142,6 +158,85 @@ export function formatDowntimeAlert(): string {
   ].join('\n');
 }
 
+export function formatRefillDigest(
+  items: RefillDeficit[],
+  stage: 1 | 2 | 3,
+): string {
+  const lines = items.map(
+    (d) =>
+      `- ${d.chain}-${d.token} [HOT_BADGE]HOT[/HOT_BADGE] \`${d.hotAddress}\`: ` +
+      `[HOT]${d.hotBalance}[/HOT] / pending ${d.pendingTotal} / [C:red]−${d.deficit}[/C] ` +
+      `(доступно ${d.availableForWithdrawal} при 10% буфере)`,
+  );
+  return [
+    `🔴 **Refill needed** ${STAGE_BADGES[stage]}`,
+    '',
+    ...lines,
+    '',
+    ACK_BUTTONS,
+  ].join('\n');
+}
+
+export function formatRefillSnoozed(
+  humanDuration: string,
+  prefix: string = '[B:blue]🔕 Заглушено[/B]',
+): string {
+  return [
+    `${prefix} на ${humanDuration}.`,
+    'Если что-то пойдёт совсем плохо — никто не разбудит, имей в виду.',
+    '',
+    '[ACTION:🔔 Включить обратно]',
+    SETTINGS_BUTTON,
+  ].join('\n');
+}
+
+export function formatRefillDisabled(): string {
+  return [
+    '[B:red]🔇 Отключено[/B]',
+    'Алёрты про дефициты hot-кошельков больше не приходят.',
+    '',
+    '[ACTION:🔔 Включить обратно]',
+  ].join('\n');
+}
+
+export function formatRefillEnabled(): string {
+  return [
+    '[B:green]🔔 Включено[/B]',
+    'Снова мониторю дефициты hot-кошельков. Если deficit есть прямо сейчас — увидишь его в следующие 5 минут.',
+    '',
+    SETTINGS_BUTTON,
+  ].join('\n');
+}
+
+export function formatRefillSettings(
+  cfg: InformerAlertConfig | null,
+): string {
+  const enabled = cfg?.enabled ?? true;
+  const snoozedUntil = cfg?.snoozedUntil ?? null;
+  const snoozed = snoozedUntil !== null && snoozedUntil > new Date();
+  let status: string;
+  let toggleButton: string;
+  if (!enabled) {
+    status = '[B:red]🔇 Отключено[/B]';
+    toggleButton = '[ACTION:🔔 Включить обратно]';
+  } else if (snoozed) {
+    status = `[B:blue]🔕 Заглушено до ${snoozedUntil!.toISOString()}[/B]`;
+    toggleButton = '[ACTION:🔔 Включить обратно]';
+  } else {
+    status = '[B:green]🔔 Активно[/B]';
+    toggleButton = '[ACTION:🔇 Совсем отключить]';
+  }
+  return [
+    '⚙️ **Настройки алёртов про refill**',
+    '',
+    `Текущее состояние: ${status}`,
+    '',
+    toggleButton,
+    '[ACTION:🔕 Заглушить 1 час]',
+    '[ACTION:🔕 До утра 9:00]',
+  ].join('\n');
+}
+
 export function formatClientError(
   humanMessage: string,
   retryCode?: string,
@@ -159,5 +254,7 @@ export function formatWelcome(): string {
     'Я бот мониторинга Informer. Что нужно проверить?',
     '',
     OPERATOR_BUTTONS,
+    '',
+    SETTINGS_BUTTON,
   ].join('\n');
 }

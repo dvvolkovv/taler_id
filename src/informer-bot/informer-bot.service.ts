@@ -10,6 +10,10 @@ import {
   formatWelcome,
   formatButtonsOnlyHint,
   formatClientError,
+  formatRefillSnoozed,
+  formatRefillDisabled,
+  formatRefillEnabled,
+  formatRefillSettings,
 } from './informer.formatters';
 import {
   InformerAuthError,
@@ -25,6 +29,13 @@ const ACTION_CODES = [
   'OPERATOR_WALLETS',
   'MINI_ACQUIRING',
   'GATEWAY_WALLETS',
+  // ── refill alerter (Sub-3) ──
+  'REFILL_ACK',
+  'REFILL_SNOOZE_1H',
+  'REFILL_SNOOZE_MORNING',
+  'REFILL_DISABLE',
+  'REFILL_ENABLE',
+  'REFILL_SETTINGS',
 ] as const;
 type ActionCode = (typeof ACTION_CODES)[number];
 
@@ -115,6 +126,45 @@ export class InformerBotService {
             await this.client.getGatewaySystemWalletBalances(),
           );
           break;
+        case 'REFILL_ACK': {
+          const until = new Date(Date.now() + 30 * 60 * 1000);
+          await this.upsertAlertConfig(userId, { snoozedUntil: until });
+          md = formatRefillSnoozed('30 минут', '[B:green]✅ Принято[/B]');
+          break;
+        }
+        case 'REFILL_SNOOZE_1H': {
+          const until = new Date(Date.now() + 60 * 60 * 1000);
+          await this.upsertAlertConfig(userId, { snoozedUntil: until });
+          md = formatRefillSnoozed('1 час');
+          break;
+        }
+        case 'REFILL_SNOOZE_MORNING': {
+          const until = this.nextMorningInBerlin();
+          await this.upsertAlertConfig(userId, { snoozedUntil: until });
+          md = formatRefillSnoozed(`до ${until.toISOString()}`);
+          break;
+        }
+        case 'REFILL_DISABLE':
+          await this.upsertAlertConfig(userId, {
+            enabled: false,
+            snoozedUntil: null,
+          });
+          md = formatRefillDisabled();
+          break;
+        case 'REFILL_ENABLE':
+          await this.upsertAlertConfig(userId, {
+            enabled: true,
+            snoozedUntil: null,
+          });
+          md = formatRefillEnabled();
+          break;
+        case 'REFILL_SETTINGS': {
+          const cfg = await this.prisma.informerAlertConfig.findUnique({
+            where: { userId },
+          });
+          md = formatRefillSettings(cfg);
+          break;
+        }
       }
       await this.publishBotMessage(userId, conversationId, md);
     } catch (e) {
@@ -144,6 +194,29 @@ export class InformerBotService {
     }
     if (lower.includes('gateway_wallets') || lower.includes('gateway') || lower.includes('системные кошельки')) {
       return 'GATEWAY_WALLETS';
+    }
+    // Refill alerter — Sub-3
+    if (lower.includes('refill_ack') || lower.includes('понял, работаю')) {
+      return 'REFILL_ACK';
+    }
+    if (lower.includes('refill_snooze_1h') || lower.includes('заглушить 1 час')) {
+      return 'REFILL_SNOOZE_1H';
+    }
+    if (lower.includes('refill_snooze_morning') || lower.includes('до утра')) {
+      return 'REFILL_SNOOZE_MORNING';
+    }
+    if (lower.includes('refill_disable') || lower.includes('совсем отключить')) {
+      return 'REFILL_DISABLE';
+    }
+    if (lower.includes('refill_enable') || lower.includes('включить обратно')) {
+      return 'REFILL_ENABLE';
+    }
+    if (
+      lower.includes('refill_settings') ||
+      lower.includes('настройки алёртов') ||
+      lower.includes('настройки алертов')
+    ) {
+      return 'REFILL_SETTINGS';
     }
     return null;
   }
@@ -206,5 +279,76 @@ export class InformerBotService {
       select: { userId: true },
     });
     return profiles.map((p) => p.userId);
+  }
+
+  private async upsertAlertConfig(
+    userId: string,
+    patch: Partial<{
+      enabled: boolean;
+      snoozedUntil: Date | null;
+      lastDigestStage: number;
+      lastDigestAt: Date | null;
+    }>,
+  ): Promise<void> {
+    await this.prisma.informerAlertConfig.upsert({
+      where: { userId },
+      update: patch,
+      create: { userId, ...patch },
+    });
+  }
+
+  /**
+   * Returns the next instant of 09:00 in Europe/Berlin time, expressed as a
+   * UTC Date. DST-aware via Intl.DateTimeFormat. If `now` is already past
+   * 09:00 in Berlin, returns 09:00 of the following day.
+   */
+  private nextMorningInBerlin(now: Date = new Date()): Date {
+    const tz = 'Europe/Berlin';
+    const targetHour = 9;
+
+    const fmt = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    });
+
+    // Step 1: read current Berlin wall-clock date components.
+    const parts = fmt.formatToParts(now);
+    const get = (t: string) =>
+      parseInt(parts.find((p) => p.type === t)!.value, 10);
+    const year = get('year');
+    const month = get('month');
+    const day = get('day');
+    const hour = get('hour');
+
+    // Step 2: pick today or tomorrow's calendar day in Berlin.
+    const targetDate = new Date(Date.UTC(year, month - 1, day));
+    if (hour >= targetHour) {
+      targetDate.setUTCDate(targetDate.getUTCDate() + 1);
+    }
+    const ty = targetDate.getUTCFullYear();
+    const tm = targetDate.getUTCMonth() + 1;
+    const td = targetDate.getUTCDate();
+
+    // Step 3: find the UTC instant that Berlin renders as ty-tm-td 09:00.
+    // Take a UTC guess of 09:00 on that day, compute Berlin's reading offset,
+    // adjust by that offset.
+    const guess = new Date(Date.UTC(ty, tm - 1, td, targetHour, 0, 0));
+    const berlinParts = fmt.formatToParts(guess);
+    const bh = parseInt(
+      berlinParts.find((p) => p.type === 'hour')!.value,
+      10,
+    );
+    const bm = parseInt(
+      berlinParts.find((p) => p.type === 'minute')!.value,
+      10,
+    );
+    const offsetHours = bh + bm / 60 - targetHour;
+    return new Date(guess.getTime() - offsetHours * 3600 * 1000);
   }
 }
