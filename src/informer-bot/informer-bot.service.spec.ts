@@ -1,9 +1,10 @@
+import BigNumber from 'bignumber.js';
 import { InformerBotService } from './informer-bot.service';
 
 // We exercise the helper via a tiny subclass that exposes it.
 class TestableService extends InformerBotService {
   constructor() {
-    super(null as any, null as any, null as any, null as any);
+    super(null as any, null as any, null as any, null as any, null as any);
   }
   public _nextMorningInBerlin(now?: Date): Date {
     return (this as any).nextMorningInBerlin(now);
@@ -79,6 +80,23 @@ describe('InformerBotService.parseActionCode (refill codes)', () => {
     ['REFILL_SETTINGS', '⚙️ Настройки алёртов'],
   ];
 
+  for (const [code, label] of cases) {
+    it(`recognises human label "${label}" → ${code}`, () => {
+      expect(svc.parseActionCode(label)).toBe(code);
+    });
+    it(`recognises raw code "${code}"`, () => {
+      expect(svc.parseActionCode(code)).toBe(code);
+    });
+  }
+});
+
+describe('InformerBotService.parseActionCode (Sub-2c codes)', () => {
+  const svc = new TestableService();
+
+  const cases: [string, string][] = [
+    ['FIAT_BALANCES', '💶 Балансы в евро'],
+    ['FIAT_BALANCES_REFRESH', '🔄 Обновить курсы'],
+  ];
   for (const [code, label] of cases) {
     it(`recognises human label "${label}" → ${code}`, () => {
       expect(svc.parseActionCode(label)).toBe(code);
@@ -200,5 +218,119 @@ describe('InformerBotService.handleUserMessage (refill actions)', () => {
     expect(m.calls.upsert).toHaveLength(0);
     expect(m.calls.findUnique).toBe(1);
     expect(m.calls.publishContent.join('\n')).toContain('Настройки алёртов');
+  });
+});
+
+describe('InformerBotService.handleUserMessage (fiat actions)', () => {
+  function makeMocks() {
+    const calls: any = {
+      ratesAssets: null as string[] | null,
+      ratesInvalidated: false,
+      published: [] as string[],
+    };
+    const prisma = {
+      profile: {
+        findUnique: jest.fn(async () => ({ informerAccess: true })),
+      },
+      informerAlertConfig: {
+        findUnique: jest.fn(async () => null),
+        upsert: jest.fn(async () => {}),
+      },
+    };
+    const client = {
+      getMiniAcquiringBalances: jest.fn(async () => ({
+        chains: [
+          {
+            chain: 'tron',
+            base_asset: 'usdt',
+            supported: true,
+            roles: [
+              {
+                role: 'hot_wallet',
+                address: 'TX',
+                balances: [
+                  { asset: 'usdt', kind: 'native', balance: '12450' },
+                ],
+              },
+            ],
+          },
+        ],
+      })),
+      getGatewaySystemWalletBalances: jest.fn(async () => ({
+        items: [
+          {
+            blockchain: 'tron',
+            asset_symbol: 'USDT',
+            wallet_type: 'deposit',
+            balance: '8350',
+            address: 'TX2',
+            updated_at: 1718900000,
+          },
+        ],
+      })),
+    };
+    const rates = {
+      getEurRates: jest.fn(async (assets: string[]) => {
+        calls.ratesAssets = assets;
+        const out: Record<string, BigNumber> = {};
+        for (const a of assets) out[a.toLowerCase()] = new BigNumber('1');
+        return out;
+      }),
+      invalidateCache: jest.fn(() => {
+        calls.ratesInvalidated = true;
+      }),
+      getCacheAgeMs: jest.fn(() => 120000),
+      getCoingeckoStatus: jest.fn(() => 'ok' as const),
+    };
+    const messenger = {
+      createMessage: jest.fn(async () => ({
+        id: 'm1',
+        content: '',
+        senderId: 'bot',
+        conversationId: 'c1',
+      })),
+    };
+    const gateway = { server: { to: () => ({ emit: jest.fn() }) } };
+    return { prisma, client, rates, messenger, gateway, calls };
+  }
+
+  function makeService(m: ReturnType<typeof makeMocks>) {
+    const svc = new InformerBotService(
+      m.prisma as any,
+      m.client as any,
+      m.messenger as any,
+      m.gateway as any,
+      m.rates as any,
+    );
+    (svc as any).publishBotMessage = jest.fn(
+      async (_uid: string, _cid: string, content: string) => {
+        m.calls.published.push(content);
+      },
+    );
+    return svc;
+  }
+
+  it('FIAT_BALANCES fetches admin-API + asks rates, publishes digest', async () => {
+    const m = makeMocks();
+    const svc = makeService(m);
+    await svc.handleUserMessage('u1', 'c1', '💶 Балансы в евро');
+    expect(m.client.getMiniAcquiringBalances).toHaveBeenCalledTimes(1);
+    expect(m.client.getGatewaySystemWalletBalances).toHaveBeenCalledTimes(1);
+    expect(m.rates.getEurRates).toHaveBeenCalledTimes(1);
+    expect(m.rates.invalidateCache).not.toHaveBeenCalled();
+    const assets = (m.rates.getEurRates.mock.calls[0][0] as string[]).map((s) =>
+      s.toLowerCase(),
+    );
+    expect(assets).toContain('usdt');
+    expect(m.calls.published[0]).toContain('Балансы в евро');
+  });
+
+  it('FIAT_BALANCES_REFRESH invalidates cache before fetch', async () => {
+    const m = makeMocks();
+    const svc = makeService(m);
+    await svc.handleUserMessage('u1', 'c1', '🔄 Обновить курсы');
+    expect(m.rates.invalidateCache).toHaveBeenCalledTimes(1);
+    expect(m.rates.getEurRates).toHaveBeenCalledTimes(1);
+    expect(m.calls.published[0]).toContain('Балансы в евро');
   });
 });

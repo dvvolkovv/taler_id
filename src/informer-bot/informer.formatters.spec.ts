@@ -298,3 +298,151 @@ describe('formatWelcome (extended)', () => {
     expect(md).toContain('[ACTION:⚙️ Настройки алёртов]');
   });
 });
+
+describe('formatWelcome (Sub-2c update)', () => {
+  it('now includes the fiat balances button', () => {
+    const md = formatWelcome();
+    expect(md).toContain('[ACTION:💶 Балансы в евро]');
+  });
+});
+
+import { formatFiatBalances } from './informer.formatters';
+import { FiatBalancesResult } from './informer.types';
+
+const sampleFiat = (
+  overrides: Partial<FiatBalancesResult> = {},
+): FiatBalancesResult => ({
+  pools: [
+    {
+      poolName: 'mini-acquiring',
+      eurTotal: '52400',
+      chains: [
+        {
+          chain: 'tron',
+          eurTotal: '30200',
+          roles: [
+            {
+              role: 'hot_wallet',
+              eurTotal: '18500',
+              tokens: [{ asset: 'usdt', native: '12450', eur: '18500' }],
+            },
+            {
+              role: 'cold_wallet',
+              eurTotal: '11700',
+              tokens: [{ asset: 'usdt', native: '7850', eur: '11700' }],
+            },
+          ],
+        },
+      ],
+      unpricedAssets: [],
+    },
+    {
+      poolName: 'gateway',
+      eurTotal: '18100',
+      chains: [
+        {
+          chain: 'tron',
+          eurTotal: '12400',
+          flatTokens: [
+            {
+              asset: 'usdt',
+              walletType: 'deposit',
+              native: '8350',
+              eur: '12400',
+            },
+          ],
+        },
+      ],
+      unpricedAssets: [],
+    },
+  ],
+  ratesCacheAgeMin: 2,
+  coingeckoStatus: 'ok',
+  ...overrides,
+});
+
+describe('formatFiatBalances', () => {
+  it('renders both pool blocks with totals + colour badges', () => {
+    const md = formatFiatBalances(sampleFiat());
+    expect(md).toContain('💰 Mini-acquiring');
+    expect(md).toContain('🏦 Gateway');
+    expect(md).toContain('[B:green]');
+    expect(md).toContain('€52 400');
+    expect(md).toContain('€18 100');
+  });
+
+  it('renders mini-acquiring rows with HOT_BADGE/COLD_BADGE + tinted text', () => {
+    const md = formatFiatBalances(sampleFiat());
+    expect(md).toContain('[HOT_BADGE]HOT[/HOT_BADGE]');
+    expect(md).toContain('[COLD_BADGE]COLD[/COLD_BADGE]');
+    expect(md).toContain('[HOT]€18 500[/HOT]');
+    expect(md).toContain('[COLD]€11 700[/COLD]');
+    expect(md).toContain('(12 450 USDT)');
+  });
+
+  it('renders cache age header when ratesCacheAgeMin > 0', () => {
+    const md = formatFiatBalances(sampleFiat({ ratesCacheAgeMin: 5 }));
+    expect(md).toContain('обновлены 5 мин назад');
+  });
+
+  it('renders "впервые получены" when ratesCacheAgeMin is null', () => {
+    const md = formatFiatBalances(sampleFiat({ ratesCacheAgeMin: null }));
+    expect(md).toContain('впервые получены сейчас');
+  });
+
+  it('renders "только что обновлены" when ratesCacheAgeMin === 0', () => {
+    const md = formatFiatBalances(sampleFiat({ ratesCacheAgeMin: 0 }));
+    expect(md).toContain('только что обновлены');
+  });
+
+  it('low-pool total uses [B:yellow] when total ≤ €10 000', () => {
+    const r = sampleFiat();
+    r.pools[0].eurTotal = '8000';
+    r.pools[0].chains[0].eurTotal = '8000';
+    const md = formatFiatBalances(r);
+    expect(md).toContain('[B:yellow]');
+  });
+
+  it('renders unpriced footer when present, omits otherwise', () => {
+    const withUnpriced = sampleFiat();
+    withUnpriced.pools[0].unpricedAssets.push({
+      asset: 'sometoken',
+      chain: 'ethereum',
+      native: '42',
+    });
+    const md = formatFiatBalances(withUnpriced);
+    expect(md).toContain('[C:yellow]42 SOMETOKEN на ethereum[/C]');
+
+    const noUnpriced = sampleFiat();
+    expect(formatFiatBalances(noUnpriced)).not.toContain(
+      "Asset'ы не пересчитанные",
+    );
+  });
+
+  it('coingeckoStatus=stale → yellow warning banner', () => {
+    const md = formatFiatBalances(sampleFiat({ coingeckoStatus: 'stale' }));
+    expect(md).toContain('[C:yellow]⚠️ Курсы из старого кэша');
+  });
+
+  it('coingeckoStatus=failed → red banner, no [HOT]/[COLD] EUR tags', () => {
+    const md = formatFiatBalances(sampleFiat({ coingeckoStatus: 'failed' }));
+    expect(md).toContain('[C:red]⚠️ Курсы недоступны');
+    expect(md).not.toContain('[HOT]€');
+    expect(md).not.toContain('[COLD]€');
+  });
+
+  it('does not nest colour tags inside other colour tags', () => {
+    const md = formatFiatBalances(sampleFiat());
+    expect(md).not.toMatch(/\[HOT\][^[]*\[HOT_BADGE\]/);
+    expect(md).not.toMatch(/\[C:[a-z]+\][^[]*\[C:[a-z]+\]/);
+    expect(md).not.toMatch(/\[B:[a-z]+\][^[]*\[B:[a-z]+\]/);
+  });
+
+  it('contains refresh + cross-link buttons', () => {
+    const md = formatFiatBalances(sampleFiat());
+    expect(md).toContain('[ACTION:🔄 Обновить курсы]');
+    expect(md).toContain('[ACTION:📋 Кошельки оператора]');
+    expect(md).toContain('[ACTION:💰 Балансы mini-acquiring]');
+    expect(md).toContain('[ACTION:🏦 Системные кошельки gateway]');
+  });
+});

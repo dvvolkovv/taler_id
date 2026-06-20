@@ -6,6 +6,7 @@ import { MessengerModule } from '../messenger/messenger.module';
 import { InformerBotController } from './informer-bot.controller';
 import { InformerBotService } from './informer-bot.service';
 import { InformerClient } from './informer.client';
+import { InformerRatesService } from './informer.rates';
 import { InformerWatcher } from './informer.watcher';
 
 @Global()
@@ -47,6 +48,7 @@ export class InformerBotModule {
         },
         InformerBotService,
         InformerWatcher,
+        InformerRatesService,
       ],
       exports: [InformerBotService],
     };

@@ -1,8 +1,10 @@
 import { Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
+import BigNumber from 'bignumber.js';
 import { PrismaService } from '../prisma/prisma.service';
 import { MessengerService } from '../messenger/messenger.service';
 import { MessengerGateway } from '../messenger/messenger.gateway';
 import { InformerClient } from './informer.client';
+import { InformerRatesService } from './informer.rates';
 import {
   formatOperatorWalletsList,
   formatMiniAcquiringBalances,
@@ -14,6 +16,7 @@ import {
   formatRefillDisabled,
   formatRefillEnabled,
   formatRefillSettings,
+  formatFiatBalances,
 } from './informer.formatters';
 import {
   InformerAuthError,
@@ -21,6 +24,10 @@ import {
   InformerNonceStoreError,
   InformerUnavailableError,
   InformerTimeoutError,
+  FiatBalancesResult,
+  FiatPoolDigest,
+  MiniAcquiringBalances,
+  GatewaySystemWalletBalances,
 } from './informer.types';
 
 const ANTI_FLOOD_MS = 3000;
@@ -36,6 +43,9 @@ const ACTION_CODES = [
   'REFILL_DISABLE',
   'REFILL_ENABLE',
   'REFILL_SETTINGS',
+  // ── fiat balances (Sub-2c) ──
+  'FIAT_BALANCES',
+  'FIAT_BALANCES_REFRESH',
 ] as const;
 type ActionCode = (typeof ACTION_CODES)[number];
 
@@ -50,6 +60,7 @@ export class InformerBotService {
     private readonly messenger: MessengerService,
     @Inject(forwardRef(() => MessengerGateway))
     private readonly gateway: MessengerGateway,
+    private readonly rates: InformerRatesService,
   ) {}
 
   private async assertAccess(userId: string): Promise<void> {
@@ -165,6 +176,15 @@ export class InformerBotService {
           md = formatRefillSettings(cfg);
           break;
         }
+        case 'FIAT_BALANCES_REFRESH':
+        case 'FIAT_BALANCES': {
+          if (action === 'FIAT_BALANCES_REFRESH') {
+            this.rates.invalidateCache();
+          }
+          const result = await this.computeFiatBalances();
+          md = formatFiatBalances(result);
+          break;
+        }
       }
       await this.publishBotMessage(userId, conversationId, md);
     } catch (e) {
@@ -184,6 +204,17 @@ export class InformerBotService {
     // as plain strings like "📋 Кошельки оператора" or "🔄 Повторить
     // OPERATOR_WALLETS".
     const lower = content.toLowerCase();
+    // Fiat balances — Sub-2c (placed early so REFRESH check fires before
+    // any future code adds an "обновить" matcher in unrelated context).
+    if (
+      lower.includes('fiat_balances_refresh') ||
+      lower.includes('обновить курсы')
+    ) {
+      return 'FIAT_BALANCES_REFRESH';
+    }
+    if (lower.includes('fiat_balances') || lower.includes('балансы в евро')) {
+      return 'FIAT_BALANCES';
+    }
     // Direct code matches (also handles "[ACTION:OPERATOR_WALLETS]" or
     // "[ACTION:RETRY:OPERATOR_WALLETS]" patterns).
     if (lower.includes('operator_wallets') || lower.includes('кошельки оператора') || lower.includes('все ожидающие')) {
@@ -350,5 +381,130 @@ export class InformerBotService {
     );
     const offsetHours = bh + bm / 60 - targetHour;
     return new Date(guess.getTime() - offsetHours * 3600 * 1000);
+  }
+
+  private async computeFiatBalances(): Promise<FiatBalancesResult> {
+    const [miniRaw, gatewayRaw] = await Promise.all([
+      this.client.getMiniAcquiringBalances(),
+      this.client.getGatewaySystemWalletBalances(),
+    ]);
+
+    const assets = new Set<string>();
+    for (const chain of miniRaw.chains) {
+      for (const role of chain.roles ?? []) {
+        if (role.error) continue;
+        for (const bal of role.balances ?? []) {
+          if (!bal.error) assets.add(bal.asset.toLowerCase());
+        }
+      }
+    }
+    for (const item of gatewayRaw.items) {
+      assets.add(item.asset_symbol.toLowerCase());
+    }
+
+    const rates = await this.rates.getEurRates([...assets]);
+
+    const miniDigest = this.buildMiniDigest(miniRaw, rates);
+    const gatewayDigest = this.buildGatewayDigest(gatewayRaw, rates);
+
+    const cacheAgeMs = this.rates.getCacheAgeMs();
+    return {
+      pools: [miniDigest, gatewayDigest],
+      ratesCacheAgeMin:
+        cacheAgeMs != null ? Math.floor(cacheAgeMs / 60000) : null,
+      coingeckoStatus: this.rates.getCoingeckoStatus(),
+    };
+  }
+
+  private buildMiniDigest(
+    raw: MiniAcquiringBalances,
+    rates: Record<string, BigNumber | null>,
+  ): FiatPoolDigest {
+    const chains: FiatPoolDigest['chains'] = [];
+    const unpriced: FiatPoolDigest['unpricedAssets'] = [];
+    let poolTotal = new BigNumber(0);
+
+    for (const chain of raw.chains) {
+      let chainTotal = new BigNumber(0);
+      const roles: NonNullable<FiatPoolDigest['chains'][0]['roles']> = [];
+      for (const role of chain.roles ?? []) {
+        if (role.error) continue;
+        let roleTotal = new BigNumber(0);
+        const tokens: { asset: string; native: string; eur: string | null }[] =
+          [];
+        for (const bal of role.balances ?? []) {
+          if (bal.error) continue;
+          const asset = bal.asset.toLowerCase();
+          const rate = rates[asset] ?? null;
+          if (rate === null) {
+            unpriced.push({ asset, chain: chain.chain, native: bal.balance });
+            continue;
+          }
+          const eur = new BigNumber(bal.balance).times(rate);
+          roleTotal = roleTotal.plus(eur);
+          tokens.push({ asset, native: bal.balance, eur: eur.toFixed(2) });
+        }
+        if (tokens.length === 0) continue;
+        roles.push({
+          role: role.role as 'hot_wallet' | 'cold_wallet' | 'gas_funding',
+          eurTotal: roleTotal.toFixed(2),
+          tokens,
+        });
+        chainTotal = chainTotal.plus(roleTotal);
+      }
+      if (roles.length === 0) continue;
+      chains.push({
+        chain: chain.chain,
+        eurTotal: chainTotal.toFixed(2),
+        roles,
+      });
+      poolTotal = poolTotal.plus(chainTotal);
+    }
+
+    return {
+      poolName: 'mini-acquiring',
+      eurTotal: poolTotal.toFixed(2),
+      chains,
+      unpricedAssets: unpriced,
+    };
+  }
+
+  private buildGatewayDigest(
+    raw: GatewaySystemWalletBalances,
+    rates: Record<string, BigNumber | null>,
+  ): FiatPoolDigest {
+    const byChain = new Map<string, FiatPoolDigest['chains'][0]>();
+    const unpriced: FiatPoolDigest['unpricedAssets'] = [];
+    let poolTotal = new BigNumber(0);
+
+    for (const item of raw.items) {
+      const asset = item.asset_symbol.toLowerCase();
+      const rate = rates[asset] ?? null;
+      if (rate === null) {
+        unpriced.push({ asset, chain: item.blockchain, native: item.balance });
+        continue;
+      }
+      const eur = new BigNumber(item.balance).times(rate);
+      let entry = byChain.get(item.blockchain);
+      if (!entry) {
+        entry = { chain: item.blockchain, eurTotal: '0', flatTokens: [] };
+        byChain.set(item.blockchain, entry);
+      }
+      entry.flatTokens!.push({
+        asset,
+        walletType: item.wallet_type,
+        native: item.balance,
+        eur: eur.toFixed(2),
+      });
+      entry.eurTotal = new BigNumber(entry.eurTotal).plus(eur).toFixed(2);
+      poolTotal = poolTotal.plus(eur);
+    }
+
+    return {
+      poolName: 'gateway',
+      eurTotal: poolTotal.toFixed(2),
+      chains: [...byChain.values()],
+      unpricedAssets: unpriced,
+    };
   }
 }
