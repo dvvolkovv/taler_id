@@ -1,10 +1,13 @@
 import type { InformerAlertConfig } from '@prisma/client';
+import BigNumber from 'bignumber.js';
 import {
   OperatorRequiredList,
   OperatorRequiredItem,
   MiniAcquiringBalances,
   GatewaySystemWalletBalances,
   RefillDeficit,
+  FiatBalancesResult,
+  FiatPoolDigest,
 } from './informer.types';
 
 // Human-readable labels in brackets so the mobile renderer (which uses the
@@ -28,6 +31,14 @@ const STAGE_BADGES: Record<1 | 2 | 3, string> = {
   2: '[B:red]STAGE 2 — UNRESOLVED[/B]',
   3: '[B:red]STAGE 3 — ESCALATED[/B]',
 };
+
+export const LOW_POOL_EUR_THRESHOLD = new BigNumber('10000');
+
+export const FIAT_FOOTER_BUTTONS =
+  '[ACTION:🔄 Обновить курсы]\n' +
+  '[ACTION:📋 Кошельки оператора]\n' +
+  '[ACTION:💰 Балансы mini-acquiring]\n' +
+  '[ACTION:🏦 Системные кошельки gateway]';
 
 function formatRow(item: OperatorRequiredItem): string {
   const at = item.created_at.replace('T', ' ').replace('Z', ' UTC');
@@ -235,6 +246,136 @@ export function formatRefillSettings(
     '[ACTION:🔕 Заглушить 1 час]',
     '[ACTION:🔕 До утра 9:00]',
   ].join('\n');
+}
+
+function formatEur(amount: string): string {
+  const n = new BigNumber(amount);
+  const integer = n.integerValue(BigNumber.ROUND_DOWN).toString();
+  const grouped = integer.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  const frac = n.minus(integer).toString();
+  return frac === '0' ? `€${grouped}` : `€${grouped}${frac.substring(1)}`;
+}
+
+function poolTotalBadge(eurTotal: string): string {
+  const tot = new BigNumber(eurTotal);
+  const fmt = formatEur(eurTotal);
+  if (tot.gt(LOW_POOL_EUR_THRESHOLD)) {
+    return `[B:green]≈ ${fmt}[/B]`;
+  }
+  return `[B:yellow]≈ ${fmt}[/B]`;
+}
+
+function nativeWithTokenSuffix(native: string, asset: string): string {
+  const n = new BigNumber(native);
+  const integer = n.integerValue(BigNumber.ROUND_DOWN).toString();
+  const grouped = integer.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  const frac = n.minus(integer).toString();
+  const formatted = frac === '0' ? grouped : `${grouped}${frac.substring(1)}`;
+  return `${formatted} ${asset.toUpperCase()}`;
+}
+
+function renderMiniAcquiringPool(
+  pool: FiatPoolDigest,
+  cgStatus: 'ok' | 'stale' | 'failed',
+): string[] {
+  const lines: string[] = ['## 💰 Mini-acquiring'];
+  if (pool.chains.length === 0) {
+    lines.push(`**Total: [B:yellow]≈ €0[/B]** _(пул пуст)_`);
+    return lines;
+  }
+  lines.push(`**Total: ${poolTotalBadge(pool.eurTotal)}**`);
+  lines.push('');
+  for (const chain of pool.chains) {
+    lines.push(`- **${chain.chain}** — ${formatEur(chain.eurTotal)}`);
+    for (const role of chain.roles ?? []) {
+      if (role.role === 'gas_funding') continue;
+      const badge =
+        role.role === 'hot_wallet'
+          ? '[HOT_BADGE]HOT[/HOT_BADGE]'
+          : '[COLD_BADGE]COLD[/COLD_BADGE]';
+      const tint =
+        role.role === 'hot_wallet'
+          ? `[HOT]${formatEur(role.eurTotal)}[/HOT]`
+          : `[COLD]${formatEur(role.eurTotal)}[/COLD]`;
+      const eurPart = cgStatus === 'failed' ? '' : `${tint} `;
+      const natives = role.tokens
+        .map((t) => nativeWithTokenSuffix(t.native, t.asset))
+        .join(' + ');
+      lines.push(`  - ${badge} ${eurPart}(${natives})`);
+    }
+  }
+  return lines;
+}
+
+function renderGatewayPool(
+  pool: FiatPoolDigest,
+  cgStatus: 'ok' | 'stale' | 'failed',
+): string[] {
+  const lines: string[] = ['## 🏦 Gateway'];
+  if (pool.chains.length === 0) {
+    lines.push(`**Total: [B:yellow]≈ €0[/B]** _(пул пуст)_`);
+    return lines;
+  }
+  lines.push(`**Total: ${poolTotalBadge(pool.eurTotal)}**`);
+  lines.push('');
+  for (const chain of pool.chains) {
+    const tokenSummary = (chain.flatTokens ?? [])
+      .map((t) => nativeWithTokenSuffix(t.native, t.asset))
+      .join(' + ');
+    if (cgStatus === 'failed') {
+      lines.push(`- **${chain.chain}**: ${tokenSummary}`);
+    } else {
+      lines.push(
+        `- **${chain.chain}**: ${formatEur(chain.eurTotal)} (${tokenSummary})`,
+      );
+    }
+  }
+  return lines;
+}
+
+export function formatFiatBalances(r: FiatBalancesResult): string {
+  const header = (() => {
+    if (r.ratesCacheAgeMin === null) {
+      return '💶 **Балансы в евро** _(курсы CoinGecko, впервые получены сейчас)_';
+    }
+    if (r.ratesCacheAgeMin === 0) {
+      return '💶 **Балансы в евро** _(курсы CoinGecko, только что обновлены)_';
+    }
+    return `💶 **Балансы в евро** _(курсы CoinGecko, обновлены ${r.ratesCacheAgeMin} мин назад)_`;
+  })();
+
+  const statusBanner =
+    r.coingeckoStatus === 'stale'
+      ? `[C:yellow]⚠️ Курсы из старого кэша (последнее успешное обновление ${r.ratesCacheAgeMin ?? '?'} минут назад)[/C]`
+      : r.coingeckoStatus === 'failed'
+        ? '[C:red]⚠️ Курсы недоступны, показываю только native[/C]'
+        : '';
+
+  const sections: string[] = [header, ''];
+  if (statusBanner) {
+    sections.push(statusBanner, '');
+  }
+
+  const mini = r.pools.find((p) => p.poolName === 'mini-acquiring');
+  const gateway = r.pools.find((p) => p.poolName === 'gateway');
+  if (mini) sections.push(...renderMiniAcquiringPool(mini, r.coingeckoStatus), '');
+  if (gateway) sections.push(...renderGatewayPool(gateway, r.coingeckoStatus), '');
+
+  const allUnpriced = r.pools.flatMap((p) => p.unpricedAssets);
+  if (allUnpriced.length > 0) {
+    sections.push(
+      "_Asset'ы не пересчитанные в EUR (нет mapping'а в CoinGecko):_",
+    );
+    for (const u of allUnpriced) {
+      sections.push(
+        `- [C:yellow]${u.native} ${u.asset.toUpperCase()} на ${u.chain}[/C]`,
+      );
+    }
+    sections.push('');
+  }
+
+  sections.push(FIAT_FOOTER_BUTTONS);
+  return sections.join('\n');
 }
 
 export function formatClientError(
