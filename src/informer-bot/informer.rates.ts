@@ -41,19 +41,84 @@ export class InformerRatesService {
     assets: string[],
     opts?: { forceRefresh?: boolean },
   ): Promise<Record<string, BigNumber | null>> {
+    const force = opts?.forceRefresh ?? false;
     const out: Record<string, BigNumber | null> = {};
+    const cgIdsToFetch: string[] = [];
+    const cgAssetByCoinId: Record<string, string> = {};
+
     for (const raw of assets) {
       const a = raw.toLowerCase();
       if (a in InformerRatesService.FIXED_EUR) {
         out[a] = InformerRatesService.FIXED_EUR[a];
-      } else if (!(a in InformerRatesService.CG_MAP)) {
+        continue;
+      }
+      const coinId = InformerRatesService.CG_MAP[a];
+      if (!coinId) {
         out[a] = null;
-      } else {
-        // TODO Task 3: CG cache + batch fetch
-        out[a] = null;
+        continue;
+      }
+      const cached = this.cache.get(a);
+      const fresh =
+        cached &&
+        Date.now() - cached.fetchedAt.getTime() < InformerRatesService.TTL_MS;
+      if (fresh && !force) {
+        out[a] = cached.eur;
+        continue;
+      }
+      out[a] = null; // placeholder, overwritten below
+      cgIdsToFetch.push(coinId);
+      cgAssetByCoinId[coinId] = a;
+    }
+
+    if (cgIdsToFetch.length === 0) return out;
+
+    const url = new URL(InformerRatesService.CG_BATCH_URL);
+    url.searchParams.set('ids', cgIdsToFetch.join(','));
+    url.searchParams.set('vs_currencies', 'eur');
+
+    let body: Record<string, { eur?: number | null }> | null = null;
+    let fetchOk = false;
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(),
+      InformerRatesService.HTTP_TIMEOUT_MS,
+    );
+    try {
+      const resp = await fetch(url.toString(), { signal: controller.signal });
+      if (resp.ok) {
+        body = (await resp.json()) as Record<string, { eur?: number | null }>;
+        fetchOk = true;
+      }
+    } catch (e) {
+      this.logger.warn(`CoinGecko fetch failed: ${(e as Error).message}`);
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (fetchOk && body) {
+      this.lastFetchSuccessAt = new Date();
+      this.lastFetchFailedAfterSuccess = false;
+      for (const coinId of cgIdsToFetch) {
+        const asset = cgAssetByCoinId[coinId];
+        const eur = body[coinId]?.eur;
+        if (eur != null) {
+          const eurBn = new BigNumber(eur);
+          this.cache.set(asset, { eur: eurBn, fetchedAt: new Date() });
+          out[asset] = eurBn;
+        } else {
+          out[asset] = null;
+        }
+      }
+    } else {
+      this.lastFetchFailedAfterSuccess = true;
+      // Fall back to stale cache where possible.
+      for (const coinId of cgIdsToFetch) {
+        const asset = cgAssetByCoinId[coinId];
+        const cached = this.cache.get(asset);
+        out[asset] = cached?.eur ?? null;
       }
     }
-    void opts;
+
     return out;
   }
 
