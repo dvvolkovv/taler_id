@@ -397,5 +397,7 @@ export function formatWelcome(): string {
     OPERATOR_BUTTONS,
     '',
     SETTINGS_BUTTON,
+    '',
+    '[ACTION:💶 Балансы в евро]',
   ].join('\n');
 }

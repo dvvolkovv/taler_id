@@ -299,6 +299,13 @@ describe('formatWelcome (extended)', () => {
   });
 });
 
+describe('formatWelcome (Sub-2c update)', () => {
+  it('now includes the fiat balances button', () => {
+    const md = formatWelcome();
+    expect(md).toContain('[ACTION:💶 Балансы в евро]');
+  });
+});
+
 import { formatFiatBalances } from './informer.formatters';
 import { FiatBalancesResult } from './informer.types';
 
