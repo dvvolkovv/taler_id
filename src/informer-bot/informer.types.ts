@@ -90,6 +90,38 @@ export interface RefillDeficit {
   deficit: string;                // pendingTotal − availableForWithdrawal, > 0 when alertable
 }
 
+// ── Fiat balances (Sub-2c, EUR dashboard) ───────────────────
+export interface FiatRoleBreakdown {
+  role: 'hot_wallet' | 'cold_wallet' | 'gas_funding';
+  eurTotal: string;       // BigNumber.toFixed()
+  tokens: Array<{ asset: string; native: string; eur: string | null }>;
+}
+
+export interface FiatChainBreakdown {
+  chain: string;
+  eurTotal: string;       // BigNumber.toFixed()
+  roles?: FiatRoleBreakdown[];                          // mini-acquiring only
+  flatTokens?: Array<{                                  // gateway only
+    asset: string;
+    walletType: string;
+    native: string;
+    eur: string | null;
+  }>;
+}
+
+export interface FiatPoolDigest {
+  poolName: 'mini-acquiring' | 'gateway';
+  eurTotal: string;
+  chains: FiatChainBreakdown[];
+  unpricedAssets: Array<{ asset: string; chain: string; native: string }>;
+}
+
+export interface FiatBalancesResult {
+  pools: FiatPoolDigest[];
+  ratesCacheAgeMin: number | null;  // null = no fetch yet
+  coingeckoStatus: 'ok' | 'stale' | 'failed';
+}
+
 // ── Errors ───────────────────────────────────────────────────
 export class InformerError extends Error {
   constructor(
