@@ -177,9 +177,10 @@ export class InformerBotService {
           break;
         }
         case 'FIAT_BALANCES_REFRESH':
-          this.rates.invalidateCache();
-        // fall through
         case 'FIAT_BALANCES': {
+          if (action === 'FIAT_BALANCES_REFRESH') {
+            this.rates.invalidateCache();
+          }
           const result = await this.computeFiatBalances();
           md = formatFiatBalances(result);
           break;
