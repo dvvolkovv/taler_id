@@ -36,6 +36,9 @@ const ACTION_CODES = [
   'REFILL_DISABLE',
   'REFILL_ENABLE',
   'REFILL_SETTINGS',
+  // ── fiat balances (Sub-2c) ──
+  'FIAT_BALANCES',
+  'FIAT_BALANCES_REFRESH',
 ] as const;
 type ActionCode = (typeof ACTION_CODES)[number];
 
@@ -184,6 +187,17 @@ export class InformerBotService {
     // as plain strings like "📋 Кошельки оператора" or "🔄 Повторить
     // OPERATOR_WALLETS".
     const lower = content.toLowerCase();
+    // Fiat balances — Sub-2c (placed early so REFRESH check fires before
+    // any future code adds an "обновить" matcher in unrelated context).
+    if (
+      lower.includes('fiat_balances_refresh') ||
+      lower.includes('обновить курсы')
+    ) {
+      return 'FIAT_BALANCES_REFRESH';
+    }
+    if (lower.includes('fiat_balances') || lower.includes('балансы в евро')) {
+      return 'FIAT_BALANCES';
+    }
     // Direct code matches (also handles "[ACTION:OPERATOR_WALLETS]" or
     // "[ACTION:RETRY:OPERATOR_WALLETS]" patterns).
     if (lower.includes('operator_wallets') || lower.includes('кошельки оператора') || lower.includes('все ожидающие')) {

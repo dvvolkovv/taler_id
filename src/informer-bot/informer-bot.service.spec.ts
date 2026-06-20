@@ -89,6 +89,23 @@ describe('InformerBotService.parseActionCode (refill codes)', () => {
   }
 });
 
+describe('InformerBotService.parseActionCode (Sub-2c codes)', () => {
+  const svc = new TestableService();
+
+  const cases: [string, string][] = [
+    ['FIAT_BALANCES', '💶 Балансы в евро'],
+    ['FIAT_BALANCES_REFRESH', '🔄 Обновить курсы'],
+  ];
+  for (const [code, label] of cases) {
+    it(`recognises human label "${label}" → ${code}`, () => {
+      expect(svc.parseActionCode(label)).toBe(code);
+    });
+    it(`recognises raw code "${code}"`, () => {
+      expect(svc.parseActionCode(code)).toBe(code);
+    });
+  }
+});
+
 describe('InformerBotService.handleUserMessage (refill actions)', () => {
   function makeMocks() {
     const calls: any = { upsert: [], publishContent: [], findUnique: 0 };
