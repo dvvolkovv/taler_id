@@ -446,3 +446,34 @@ describe('formatFiatBalances', () => {
     expect(md).toContain('[ACTION:🏦 Системные кошельки gateway]');
   });
 });
+
+describe('OPERATOR_BUTTONS main menu (5 actions)', () => {
+  it('contains all five main-menu buttons (regression after Sub-2c)', () => {
+    expect(OPERATOR_BUTTONS).toContain('[ACTION:📋 Кошельки оператора]');
+    expect(OPERATOR_BUTTONS).toContain('[ACTION:💰 Балансы mini-acquiring]');
+    expect(OPERATOR_BUTTONS).toContain('[ACTION:🏦 Системные кошельки gateway]');
+    expect(OPERATOR_BUTTONS).toContain('[ACTION:💶 Балансы в евро]');
+    expect(OPERATOR_BUTTONS).toContain('[ACTION:⚙️ Настройки алёртов]');
+  });
+
+  it('every primary list formatter ends with the full main menu', () => {
+    expect(
+      formatOperatorWalletsList({ items: [], total: 0, page: 1, per_page: 50 }),
+    ).toContain('[ACTION:💶 Балансы в евро]');
+    expect(formatMiniAcquiringBalances({ chains: [] })).toContain(
+      '[ACTION:⚙️ Настройки алёртов]',
+    );
+    expect(formatGatewayWallets({ items: [] })).toContain(
+      '[ACTION:💶 Балансы в евро]',
+    );
+  });
+
+  it('welcome includes all five buttons through OPERATOR_BUTTONS', () => {
+    const md = formatWelcome();
+    expect(md).toContain('[ACTION:📋 Кошельки оператора]');
+    expect(md).toContain('[ACTION:💰 Балансы mini-acquiring]');
+    expect(md).toContain('[ACTION:🏦 Системные кошельки gateway]');
+    expect(md).toContain('[ACTION:💶 Балансы в евро]');
+    expect(md).toContain('[ACTION:⚙️ Настройки алёртов]');
+  });
+});

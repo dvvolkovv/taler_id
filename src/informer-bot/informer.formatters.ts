@@ -13,10 +13,14 @@ import {
 // Human-readable labels in brackets so the mobile renderer (which uses the
 // captured text as the button label) shows friendly buttons. Parser does
 // substring matching to map back to action codes.
+// Main menu — appears as the footer of every response from the bot so the
+// operator can pivot between sections without scrolling up to the welcome.
 export const OPERATOR_BUTTONS =
   '[ACTION:📋 Кошельки оператора]\n' +
   '[ACTION:💰 Балансы mini-acquiring]\n' +
-  '[ACTION:🏦 Системные кошельки gateway]';
+  '[ACTION:🏦 Системные кошельки gateway]\n' +
+  '[ACTION:💶 Балансы в евро]\n' +
+  '[ACTION:⚙️ Настройки алёртов]';
 
 export const ACK_BUTTONS =
   '[ACTION:✅ Понял, работаю]\n' +
@@ -395,9 +399,5 @@ export function formatWelcome(): string {
     'Я бот мониторинга Informer. Что нужно проверить?',
     '',
     OPERATOR_BUTTONS,
-    '',
-    SETTINGS_BUTTON,
-    '',
-    '[ACTION:💶 Балансы в евро]',
   ].join('\n');
 }
