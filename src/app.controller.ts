@@ -78,8 +78,8 @@ export class AppController {
   appVersion(@Query('flavor') flavor?: string) {
     const isDev = flavor === 'dev';
     const latest = isDev
-      ? { version: '1.0.89', build: 186 }
-      : { version: '1.0.89', build: 186 };
+      ? { version: '1.0.97', build: 194 }
+      : { version: '1.0.97', build: 194 };
     return {
       ios: { ...latest, required: false },
       android: { ...latest, required: false },
@@ -97,6 +97,60 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.0.97',
+    build: 194,
+    date: '2026-06-21',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.0.97 — Informer V2.\n\n' +
+      'Этот релиз только для 4 операторов GsmSoft с включённым доступом informerAccess. Обычные пользователи никаких отличий не заметят.\n\n' +
+      'Цветные бейджи в Informer-чате. ' +
+      'Markdown-рендерер теперь понимает цветные теги: hot-кошельки помечаются красным бейджем, cold — синим, low-balance — жёлтым, OK — зелёным. Балансы в hot-роли подкрашены красным, в cold — синим. Раньше всё было чёрно-белым и приходилось вчитываться чтобы найти проблему. Цвета помогают глазом сразу увидеть «где плохо». Поддерживается и в сообщениях существующих ботов AI Аналитик / AI Обзвон — если они когда-то начнут эмитить цветные теги, отрендерится автоматически.\n\n' +
+      'Авто-алёрт «Hot нужно пополнить».\n' +
+      'Каждые 5 минут бэкенд считает: суммарный pending withdrawal по сети-токену против текущего баланса hot-кошелька. Если pending больше 90% от hot (т.е. не хватит даже с 10% буфером) — каждый из 4 операторов получает в Informer-чате алёрт:\n' +
+      '🔴 **Refill needed** [STAGE 1] — список затронутых пар, сколько надо пополнить.\n' +
+      'Если через 30 минут дефицит не закрыт — приходит follow-up [STAGE 2 — UNRESOLVED]. Ещё через час — [STAGE 3 — ESCALATED]. Дальше тишина (чтобы не спамить).\n' +
+      'Под алёртом четыре кнопки управления:\n' +
+      '• ✅ Понял, работаю — алёрты этой цепочки уходят на 30 минут\n' +
+      '• 🔕 Заглушить 1 час — на час\n' +
+      '• 🔕 До утра 9:00 — до следующего 9:00 по Берлину (DST-aware: зимой UTC+1, летом UTC+2)\n' +
+      '• 🔇 Совсем отключить — алёрты больше не приходят пока не нажмёшь Включить обратно\n' +
+      'Управление per-user: один оператор нажал «Понял» — у других эскалация продолжается.\n\n' +
+      'Кнопка ⚙️ Настройки алёртов в welcome-сообщении показывает текущее состояние (Активно / Заглушено до X / Отключено) и даёт переключатели.\n\n' +
+      'Дашборд балансов в евро.\n' +
+      'Новая кнопка [💶 Балансы в евро] в Informer-чате выдаёт сводку:\n' +
+      '• Mini-acquiring — total в евро + breakdown по сетям, HOT/COLD строки с цветом\n' +
+      '• Gateway — total + breakdown\n' +
+      '• Total per pool в зелёном бейдже если > €10 000, в жёлтом если меньше\n' +
+      'Курсы тянутся из CoinGecko (USDT/USDC/BTC/ETH/BNB/TRX), для TAL зашит фиксированный курс 1 TAL = €10 800. Кэш на 15 минут — повторное нажатие моментальное. Кнопка 🔄 Обновить курсы принудительно сбрасывает кэш.\n' +
+      'Если CoinGecko недоступен — показываем последний удачный кэш с пометкой «из старого кэша N минут назад», в худшем случае — только native (BTC, ETH и т.д.) без EUR.\n\n' +
+      'Также: накопились непубликованные изменения с 1.0.89 — звонки через TURN для CIS-сегмента (turn.talerid.io), мгновенный экран «Calling…» при тапе на звонок (без dead-tap паузы).',
+    notes_en:
+      'Release 1.0.97 — Informer V2.\n\n' +
+      'This release is only relevant for the 4 GsmSoft operators with the informerAccess flag enabled. Regular users will see no difference.\n\n' +
+      'Coloured badges in the Informer chat. ' +
+      'The markdown renderer now understands colour tags: hot wallets get a red badge, cold gets blue, low-balance yellow, OK green. Balances inside the hot role are tinted red, cold are blue. Previously the chat was monochrome and you had to read every row to spot a problem. Colours give an at-a-glance signal of where the trouble is. The renderer also activates for AI Analyst / AI Outbound bot messages — if they ever start emitting colour tags, they render automatically.\n\n' +
+      'Automatic "Hot needs refill" alerts.\n' +
+      'Every 5 minutes the backend computes total pending withdrawals per (network, token) against the current hot-wallet balance. If pending exceeds 90% of hot (i.e. cannot be served even with a 10% buffer), each of the 4 operators receives an Informer-chat alert:\n' +
+      '🔴 **Refill needed** [STAGE 1] — list of affected pairs and how much to top up.\n' +
+      'If the deficit is still there after 30 minutes, a follow-up [STAGE 2 — UNRESOLVED] follows. Another hour later — [STAGE 3 — ESCALATED]. Then silence (so we never spam).\n' +
+      'Each alert ships with four control buttons:\n' +
+      '• ✅ Acknowledged — snoozes this chain for 30 minutes\n' +
+      '• 🔕 Snooze 1 hour\n' +
+      '• 🔕 Until 9 AM — snoozes until the next 09:00 Berlin time (DST-aware: CET in winter, CEST in summer)\n' +
+      '• 🔇 Disable completely — no more alerts until you tap Enable again\n' +
+      'Per-user state: one operator pressing Acknowledged does not reset the escalation timer for the others.\n\n' +
+      'A ⚙️ Alert settings button in the welcome message shows current state (Active / Snoozed until X / Disabled) and toggle controls.\n\n' +
+      'EUR balances dashboard.\n' +
+      'New [💶 EUR balances] button in the Informer chat returns a digest:\n' +
+      '• Mini-acquiring — EUR total + per-chain breakdown, HOT/COLD rows colour-coded\n' +
+      '• Gateway — total + breakdown\n' +
+      '• Per-pool total in a green badge if above €10 000, yellow otherwise\n' +
+      'Rates pulled from CoinGecko (USDT/USDC/BTC/ETH/BNB/TRX); for TAL a hardcoded 1 TAL = €10 800 is used. Cache is 15 minutes — repeat taps are instant. 🔄 Refresh rates button forcibly invalidates the cache.\n' +
+      'If CoinGecko is unreachable, the digest shows the last successful cache with a "stale by N minutes" banner; worst case — native only (BTC, ETH, etc.) without EUR.\n\n' +
+      'Also: backlog since 1.0.89 — calls via TURN for CIS segments (turn.talerid.io), and an instant "Calling…" screen on tap (no dead-tap pause).',
+  },
   {
     version: '1.0.89',
     build: 186,
