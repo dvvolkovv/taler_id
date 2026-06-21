@@ -118,6 +118,8 @@ export class VoiceController {
   createRoom(
     @Body('withAi') withAi: boolean,
     @Body('conversationId') conversationId: string | undefined,
+    @Body('region') region: string | undefined,
+    @Headers('x-talerid-region') regionHeader: string | undefined,
     @CurrentUser() user: any,
     @Headers('authorization') authHeader: string,
   ) {
@@ -135,6 +137,7 @@ export class VoiceController {
       userToken,
       conversationId,
       user.session_id,
+      region || regionHeader,
     );
   }
 

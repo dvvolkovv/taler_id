@@ -22,6 +22,11 @@ const LK_HOST = process.env.LIVEKIT_HOST || 'http://localhost:7880';
 const LK_API_KEY = process.env.LIVEKIT_API_KEY || 'lkdevkey';
 const LK_API_SECRET = process.env.LIVEKIT_API_SECRET || 'lkSecret2024TalerID';
 const LK_WS_URL = process.env.LIVEKIT_WS_URL || 'ws://localhost:7880';
+// Region-routed second SFU: CIS calls run on the Selectel SFU (box1), EU calls
+// on the DO media SFU. Both share the LiveKit API key, so a token is valid on
+// either — only the connect (ws) URL differs. Defaults fall back to the EU SFU.
+const LK_HOST_RU = process.env.LIVEKIT_HOST_RU || LK_HOST;
+const LK_WS_URL_RU = process.env.LIVEKIT_WS_URL_RU || LK_WS_URL;
 const AI_AGENT_URL = process.env.AI_AGENT_URL || 'http://localhost:3100';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const BASE_URL = process.env.BASE_URL || 'https://id.taler.tirol';
@@ -30,6 +35,19 @@ const BASE_URL = process.env.BASE_URL || 'https://id.taler.tirol';
 export class VoiceService {
   private readonly log = new Logger(VoiceService.name);
   private rooms = new RoomServiceClient(LK_HOST, LK_API_KEY, LK_API_SECRET);
+  private ruRooms = new RoomServiceClient(
+    LK_HOST_RU,
+    LK_API_KEY,
+    LK_API_SECRET,
+  );
+
+  /** Pick the SFU for a room by its name prefix. CIS rooms are named
+   * `call-ru-…` and live on the Selectel SFU; everything else on the EU/DO SFU. */
+  private sfuFor(roomName: string) {
+    return roomName.startsWith('call-ru-')
+      ? { client: this.ruRooms, wsUrl: LK_WS_URL_RU }
+      : { client: this.rooms, wsUrl: LK_WS_URL };
+  }
 
   constructor(
     private readonly prisma: PrismaService,
@@ -46,9 +64,12 @@ export class VoiceService {
     userToken?: string,
     conversationId?: string,
     sessionId?: string,
+    region?: string,
   ) {
-    const roomName = 'call-' + uuidv4();
-    await this.rooms.createRoom({
+    const cis = region === 'cis';
+    const roomName = (cis ? 'call-ru-' : 'call-') + uuidv4();
+    const sfu = this.sfuFor(roomName);
+    await sfu.client.createRoom({
       name: roomName,
       emptyTimeout: 300,
       departureTimeout: 60,
@@ -71,9 +92,9 @@ export class VoiceService {
     // via its HTTP endpoint, but nothing in the clients currently asks for it
     // — and letting it auto-join collides with the new ai-twin-agent fallback.
     console.log(
-      `[createRoom] room=${roomName} initiator=${initiatorId} withAi=${withAi} — auto-join suppressed`,
+      `[createRoom] room=${roomName} region=${cis ? 'cis' : 'eu'} initiator=${initiatorId} withAi=${withAi} sfu=${sfu.wsUrl} — auto-join suppressed`,
     );
-    return { roomName, token };
+    return { roomName, token, livekitWsUrl: sfu.wsUrl };
   }
 
   async joinRoom(roomName: string, userId: string, sessionId?: string) {
@@ -86,7 +107,10 @@ export class VoiceService {
         });
       }
     } catch (_) {}
-    return { token: await this.makeToken(roomName, userId, sessionId) };
+    return {
+      token: await this.makeToken(roomName, userId, sessionId),
+      livekitWsUrl: this.sfuFor(roomName).wsUrl,
+    };
   }
 
   /**
@@ -129,7 +153,7 @@ export class VoiceService {
    * is already gone, so callers don't need to check existence first.
    */
   async deleteRoom(roomName: string): Promise<void> {
-    await this.rooms.deleteRoom(roomName);
+    await this.sfuFor(roomName).client.deleteRoom(roomName);
   }
 
   /**

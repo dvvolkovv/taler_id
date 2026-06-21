@@ -143,6 +143,14 @@ export class AiTwinService implements OnModuleInit, OnModuleDestroy {
    * the callee has `aiTwinEnabled = true`. Records the deadline in Redis.
    */
   async schedulePending(input: PendingPayload): Promise<void> {
+    // CIS calls run on the Selectel SFU (box1), which has no OpenAI/ElevenLabs
+    // egress — the AI twin can't run there, so don't arm the offer timer.
+    if (input.roomName.startsWith('call-ru-')) {
+      console.log(
+        `[schedulePending] room=${input.roomName} on CIS SFU — AI twin unavailable, skipping`,
+      );
+      return;
+    }
     const deadline = Date.now() + input.timeoutSeconds * 1000;
     const member = this.memberKey(
       input.roomName,
