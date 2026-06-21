@@ -77,18 +77,25 @@ export class AppController {
   @Get('app/version')
   appVersion(@Query('flavor') flavor?: string) {
     const isDev = flavor === 'dev';
-    const latest = isDev
-      ? { version: '1.0.97', build: 194 }
-      : { version: '1.0.97', build: 194 };
+    const env = process.env;
+    // Env-overridable so the DO/talerid build advertises its own track + APK URL;
+    // defaults preserve aeza (prod/dev) behaviour when these vars are unset.
+    const latest = {
+      version: env.APP_LATEST_VERSION || '1.0.97',
+      build: parseInt(env.APP_LATEST_BUILD || '194', 10),
+    };
+    const androidUrl =
+      env.APP_UPDATE_URL_ANDROID ||
+      (isDev
+        ? 'https://id.taler.tirol/download/taler-id-dev.apk'
+        : 'https://id.taler.tirol/download/taler-id.apk');
+    const iosUrl =
+      env.APP_UPDATE_URL_IOS ||
+      'https://apps.apple.com/app/taler-id/id6741208498';
     return {
       ios: { ...latest, required: false },
       android: { ...latest, required: false },
-      updateUrl: {
-        ios: 'https://apps.apple.com/app/taler-id/id6741208498',
-        android: isDev
-          ? 'https://id.taler.tirol/download/taler-id-dev.apk'
-          : 'https://id.taler.tirol/download/taler-id.apk',
-      },
+      updateUrl: { ios: iosUrl, android: androidUrl },
       releases: APP_RELEASES,
     };
   }
