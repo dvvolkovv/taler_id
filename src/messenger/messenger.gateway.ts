@@ -13,7 +13,6 @@ import { ConfigService } from '@nestjs/config';
 import { MessengerService } from './messenger.service';
 import { AiTwinService } from './ai-twin.service';
 import { AiAnalystService } from '../ai-analyst/ai-analyst.service';
-import { OutboundBotService } from '../outbound-bot/outbound-bot.service';
 import { InformerBotService } from '../informer-bot/informer-bot.service';
 import { FcmService } from '../common/fcm.service';
 import { ApnsService } from '../common/apns.service';
@@ -45,7 +44,6 @@ export class MessengerGateway
     private readonly redis: RedisService,
     private readonly aiTwin: AiTwinService,
     private readonly aiAnalyst: AiAnalystService,
-    private readonly outboundBot: OutboundBotService,
     @Optional() private readonly informerBot?: InformerBotService,
   ) {
     const publicKeyPath =
@@ -58,20 +56,6 @@ export class MessengerGateway
   onModuleInit() {
     // Wire AiTwinService so it can emit Socket.io events back to the right
     // users without holding a reference to the Server object itself.
-    // Wire OutboundBotService Socket.IO emitter
-    this.outboundBot.registerEmitter(async (target, event, data) => {
-      // target can be userId (for status events) or conversationId (for messages)
-      this.server.to(target).emit(event, data);
-      // Also emit to each participant's personal room for reliability
-      if (event === 'new_message' && data?.conversationId) {
-        try {
-          const parts = await this.service.getParticipants(data.conversationId);
-          for (const p of parts) {
-            this.server.to(`user:${p.userId}`).emit(event, data);
-          }
-        } catch {}
-      }
-    });
     this.aiTwin.registerEmitters(
       (callerId, payload) => {
         this.server.to(`user:${callerId}`).emit('call_ai_twin_offer', payload);
@@ -336,46 +320,9 @@ export class MessengerGateway
         return;
       }
 
-      // AI Outbound Bot: dispatch user message to start a call campaign.
-      this.logger.log(
-        `[AI_OUTBOUND] msgConvType=${msgConvType} convId=${payload.conversationId} content=${(payload.content || '').slice(0, 50)}`,
-      );
-      if (msgConvType === 'AI_OUTBOUND') {
-        const recentFiles: { url: string; name: string }[] = [];
-        try {
-          const recent = await this.prisma.message.findMany({
-            where: {
-              conversationId: payload.conversationId,
-              isSystem: false,
-              fileUrl: { not: null },
-            },
-            orderBy: { sentAt: 'desc' },
-            take: 10,
-            select: { fileUrl: true, fileName: true },
-          });
-          for (const m of recent) {
-            if (m.fileUrl)
-              recentFiles.push({ url: m.fileUrl, name: m.fileName || 'file' });
-          }
-        } catch (_) {}
-        if (
-          payload.fileUrl &&
-          !recentFiles.some((f) => f.url === payload.fileUrl)
-        ) {
-          recentFiles.unshift({
-            url: payload.fileUrl,
-            name: payload.fileName || 'file',
-          });
-        }
-        this.outboundBot.handleUserMessage({
-          userId: client.data.userId,
-          conversationId: payload.conversationId,
-          messageText: payload.content,
-          topicId: payload.topicId,
-          fileUrls: recentFiles.length > 0 ? recentFiles : undefined,
-        });
-        return;
-      }
+      // AI_OUTBOUND dispatch removed in 1.1.0 — feature was sunset; any
+      // legacy AI_OUTBOUND conversations fall through to the regular
+      // messaging path (which is harmless since the chats are now inert).
 
       if (msgConvType === 'AI_INFORMER') {
         if (this.informerBot) {
