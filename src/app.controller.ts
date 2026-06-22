@@ -81,8 +81,8 @@ export class AppController {
     // Env-overridable so the DO/talerid build advertises its own track + APK URL;
     // defaults preserve aeza (prod/dev) behaviour when these vars are unset.
     const latest = {
-      version: env.APP_LATEST_VERSION || '1.0.98',
-      build: parseInt(env.APP_LATEST_BUILD || '195', 10),
+      version: env.APP_LATEST_VERSION || '1.0.99',
+      build: parseInt(env.APP_LATEST_BUILD || '196', 10),
     };
     const androidUrl =
       env.APP_UPDATE_URL_ANDROID ||
@@ -104,6 +104,18 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.0.99',
+    build: 196,
+    date: '2026-06-22',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.0.99\n\n' +
+      'AI Обзвон — фича выпиливается из продукта. Закреплённый тайл «AI Обзвон» больше не появляется в списке чатов, новые кампании создать нельзя (бэкенд отвечает 410 Gone). Уже идущие кампании доиграют до конца. В следующих релизах сервис будет полностью удалён вместе с инфраструктурой (DigitalOcean dispatcher, Selectel Asterisk, Voximplant, SIPNET).',
+    notes_en:
+      'Release 1.0.99\n\n' +
+      'AI Outbound Caller — feature is being sunset. The pinned "AI Caller" tile is gone from the chat list and no new campaigns can be created (backend returns 410 Gone). Any in-flight campaigns will finish on their own. Following releases will remove the service entirely along with its infrastructure (DigitalOcean dispatcher, Selectel Asterisk, Voximplant, SIPNET).',
+  },
   {
     version: '1.0.98',
     build: 195,

@@ -26,21 +26,27 @@ export class OutboundBotController {
 
   @UseGuards(JwtAuthGuard)
   @Get('chat')
-  async getOrCreateChat(@Request() req: any) {
-    const conversationId = await this.service.getOrCreateChat(req.user.sub);
-    return { conversationId };
+  async getOrCreateChat(@Request() _req: any) {
+    // Phase 1 sunset (2026-06-22): the Outbound Bot is being removed from
+    // the product. Stop creating new AI_OUTBOUND conversations. Read-only
+    // endpoints (GET /campaigns, GET /campaigns/:id, listen, callback)
+    // remain available so any in-flight campaign can finish its callback
+    // cycle and the chat history stays accessible by direct conversationId.
+    throw new HttpException(
+      'AI Outbound Bot is no longer available.',
+      HttpStatus.GONE,
+    );
   }
 
   @UseGuards(JwtAuthGuard)
   @Post('tasks')
-  async createTask(@Request() req: any, @Body() body: { title: string }) {
-    if (!body.title?.trim())
-      throw new HttpException('Title is required', HttpStatus.BAD_REQUEST);
-    const result = await this.service.createTask(
-      req.user.sub,
-      body.title.trim(),
+  async createTask(@Request() _req: any, @Body() _body: { title: string }) {
+    // Phase 1 sunset (2026-06-22): block new campaign creation. See note on
+    // getOrCreateChat above.
+    throw new HttpException(
+      'AI Outbound Bot is no longer available.',
+      HttpStatus.GONE,
     );
-    return result;
   }
 
   @UseGuards(JwtAuthGuard)
