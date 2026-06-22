@@ -81,8 +81,8 @@ export class AppController {
     // Env-overridable so the DO/talerid build advertises its own track + APK URL;
     // defaults preserve aeza (prod/dev) behaviour when these vars are unset.
     const latest = {
-      version: env.APP_LATEST_VERSION || '1.0.99',
-      build: parseInt(env.APP_LATEST_BUILD || '196', 10),
+      version: env.APP_LATEST_VERSION || '1.1.0',
+      build: parseInt(env.APP_LATEST_BUILD || '197', 10),
     };
     const androidUrl =
       env.APP_UPDATE_URL_ANDROID ||
@@ -104,6 +104,22 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.1.0',
+    build: 197,
+    date: '2026-06-22',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.0\n\n' +
+      'AI Обзвон — фича полностью удалена из продукта (Фаза 2).\n' +
+      'В 1.0.99 убрали тайл и заблокировали создание новых кампаний; теперь удалены и обработчик сообщений в мессенджере, и весь модуль на бэкенде. Любые остатки AI_OUTBOUND-чатов рендерятся как обычные DIRECT-разговоры без бот-функциональности. Никаких пользовательских действий не требуется.\n\n' +
+      'Дальше планируется: вывод из эксплуатации связанной инфраструктуры (DigitalOcean dispatcher, Selectel Asterisk, SIPNET trunk, Voximplant) и удаление таблиц истории кампаний из БД — отдельным шагом после подтверждения, что in-flight кампании отстрелялись.',
+    notes_en:
+      'Release 1.1.0\n\n' +
+      'AI Outbound Caller — feature fully removed from the product (Phase 2).\n' +
+      '1.0.99 removed the tile and blocked new campaign creation; this release deletes the messenger handler and the entire backend module. Any leftover AI_OUTBOUND chats render as regular DIRECT conversations with no bot functionality. No user action required.\n\n' +
+      'Next steps: decommissioning of the supporting infrastructure (DigitalOcean dispatcher, Selectel Asterisk, SIPNET trunk, Voximplant) and dropping the campaign history tables — separate step pending confirmation that in-flight campaigns have finished.',
+  },
   {
     version: '1.0.99',
     build: 196,

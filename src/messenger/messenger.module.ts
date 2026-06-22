@@ -6,7 +6,6 @@ import { MessengerGateway } from './messenger.gateway';
 import { MessengerService } from './messenger.service';
 import { AiTwinService } from './ai-twin.service';
 import { AiAnalystService } from '../ai-analyst/ai-analyst.service';
-import { OutboundBotModule } from '../outbound-bot/outbound-bot.module';
 import { BillingModule } from '../billing/billing.module';
 import { FcmService } from '../common/fcm.service';
 import { ApnsService } from '../common/apns.service';
@@ -18,7 +17,6 @@ import { VideoTranscodeService } from '../common/video-transcode.service';
   imports: [
     ConfigModule,
     RedisModule,
-    OutboundBotModule,
     // AiTwinService gates dispatch through GatingService/MeteringService (Task 14).
     // forwardRef because BillingModule imports MessengerModule (for MESSENGER_GATEWAY
     // token) — the cycle is real and must be broken at both ends.

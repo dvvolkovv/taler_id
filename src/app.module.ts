@@ -24,7 +24,6 @@ import { ProfileSectionsModule } from './profile-sections/profile-sections.modul
 import { NotesModule } from './notes/notes.module';
 import { CalendarModule } from './calendar/calendar.module';
 import { AiAnalystModule } from './ai-analyst/ai-analyst.module';
-import { OutboundBotModule } from './outbound-bot/outbound-bot.module';
 import { InformerBotModule } from './informer-bot/informer-bot.module';
 import { DeviceKeysModule } from './device-keys/device-keys.module';
 import { BillingModule } from './billing/billing.module';
@@ -112,7 +111,6 @@ import configuration from './config/configuration';
     NotesModule,
     CalendarModule,
     AiAnalystModule,
-    OutboundBotModule,
     InformerBotModule.register(),
     DeviceKeysModule,
     BillingModule,

@@ -5,7 +5,6 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { AiTwinService } from './ai-twin.service';
 import { AiAnalystService } from '../ai-analyst/ai-analyst.service';
-import { OutboundBotService } from '../outbound-bot/outbound-bot.service';
 import { FcmService } from '../common/fcm.service';
 import { ApnsService } from '../common/apns.service';
 import { ConfigService } from '@nestjs/config';
@@ -70,7 +69,6 @@ describe('MessengerGateway._dispatchToAnalyst', () => {
         { provide: RedisService, useValue: {} },
         { provide: AiTwinService, useValue: {} },
         { provide: AiAnalystService, useValue: { submitTask: jest.fn() } },
-        { provide: OutboundBotService, useValue: {} },
         { provide: FcmService, useValue: {} },
         { provide: ApnsService, useValue: {} },
         { provide: ConfigService, useValue: { get: () => undefined } },
