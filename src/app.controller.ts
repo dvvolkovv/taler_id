@@ -81,8 +81,8 @@ export class AppController {
     // Env-overridable so the DO/talerid build advertises its own track + APK URL;
     // defaults preserve aeza (prod/dev) behaviour when these vars are unset.
     const latest = {
-      version: env.APP_LATEST_VERSION || '1.1.0',
-      build: parseInt(env.APP_LATEST_BUILD || '197', 10),
+      version: env.APP_LATEST_VERSION || '1.1.1',
+      build: parseInt(env.APP_LATEST_BUILD || '198', 10),
     };
     const androidUrl =
       env.APP_UPDATE_URL_ANDROID ||
@@ -104,6 +104,32 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.1.1',
+    build: 198,
+    date: '2026-06-22',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.1 — Три-трековая схема (DEV / TEST / Taler ID).\n\n' +
+      '⚠️ Иконка приложения переименовалась.\n' +
+      'Текущий aeza-прод (та сборка, которую ты сейчас обновляешь) теперь называется **«TEST Taler ID»**. Это не баг и не другое приложение — просто переименование, чтобы было видно где какая среда. Никаких миграций / повторного логина не нужно — все твои чаты, контакты, настройки на месте.\n\n' +
+      'Зачем: в продукт добавлен **новый «настоящий» прод на DigitalOcean** (Taler ID без префикса, домен api.talerid.io). Параллельно с aeza-сетью, более устойчивый, ближе к Европе. Cutover ещё не сделан — DO-прод пока «тихий», но инфраструктура готова и доступна как отдельное приложение (`io.talerid.app`, для iOS — App Store запись «Taler ID»).\n\n' +
+      'Чтобы было понятно где какая версия:\n' +
+      '• Иконка «DEV Taler ID» — internal-staging (aeza staging.id.taler.tirol)\n' +
+      '• Иконка «TEST Taler ID» — стабильная test-среда (aeza id.taler.tirol). **Это твоя сборка**.\n' +
+      '• Иконка «Taler ID» (без префикса) — будущий канонический PROD (DO api.talerid.io). Появится позже отдельным приложением.\n\n' +
+      'Внутри приложения, на экране Настройки → раздел с версией, теперь тоже виден префикс окружения (например «TEST 1.1.1+198») — чтобы не было путаницы при отчётах о багах.',
+    notes_en:
+      'Release 1.1.1 — Three-track naming (DEV / TEST / Taler ID).\n\n' +
+      '⚠️ Your app icon has been renamed.\n' +
+      'The current aeza prod build (the one you are upgrading now) is now called **"TEST Taler ID"**. This is not a different app — just a rename so each environment is visible at a glance. No migration / re-login needed — all your chats, contacts, settings stay.\n\n' +
+      'Why: a **new canonical prod on DigitalOcean** has been added to the product (Taler ID with no prefix, domain api.talerid.io). Parallel to the aeza stack, more resilient, closer to Europe. Cutover is not done yet — DO prod is still quiet, but infrastructure is ready and exposed as a separate app (`io.talerid.app`, iOS App Store entry "Taler ID").\n\n' +
+      'So you can tell builds apart:\n' +
+      '• "DEV Taler ID" icon — internal staging (aeza staging.id.taler.tirol)\n' +
+      '• "TEST Taler ID" icon — stable test track (aeza id.taler.tirol). **This is your build.**\n' +
+      '• "Taler ID" icon (no prefix) — future canonical PROD (DO api.talerid.io). Coming later as a separate app.\n\n' +
+      'Inside the app, the Settings screen now shows the environment prefix next to the version (e.g. "TEST 1.1.1+198") so bug reports are not ambiguous.',
+  },
   {
     version: '1.1.0',
     build: 197,
