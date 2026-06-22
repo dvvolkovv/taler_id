@@ -81,8 +81,8 @@ export class AppController {
     // Env-overridable so the DO/talerid build advertises its own track + APK URL;
     // defaults preserve aeza (prod/dev) behaviour when these vars are unset.
     const latest = {
-      version: env.APP_LATEST_VERSION || '1.0.97',
-      build: parseInt(env.APP_LATEST_BUILD || '194', 10),
+      version: env.APP_LATEST_VERSION || '1.0.98',
+      build: parseInt(env.APP_LATEST_BUILD || '195', 10),
     };
     const androidUrl =
       env.APP_UPDATE_URL_ANDROID ||
@@ -104,6 +104,24 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.0.98',
+    build: 195,
+    date: '2026-06-18',
+    flavor: 'both',
+    notes_ru:
+      'Hotfix 1.0.98\n\n' +
+      'Мессенджер — добили фантомные сообщения, которые иногда «выстреливали» из старой очереди черновиков.\n' +
+      'Симптом: внезапно из твоего аккаунта в разные чаты улетают сообщения, которые ты набирал когда-то давно и забыл (пример: «Не выдерживает твоего напора» прилетал то одному контакту, то другому через недели после написания).\n\n' +
+      'Что было: в 1.0.86 уже починили основной сценарий — очистку очереди при logout + фильтр по автору. Но записи, попавшие в локальный кэш ДО 1.0.86, оставались без полей «автор» и «время отправки». Старый код считал такие записи «непонятными → оставить на потом», и они продолжали ретраиться на каждом реконнекте сокета — месяцами.\n\n' +
+      'Что сделали: жёсткая политика — запись отправляется только если в ней одновременно есть твой userId как автор И валидное время отправки в пределах 7 дней. Любая запись без этих полей или с чужим автором или старше 7 дней — выкидывается, не отправляется. Старые легаси-записи дренируются за один проход после установки 1.0.98.',
+    notes_en:
+      'Hotfix 1.0.98\n\n' +
+      'Messenger — finished off the phantom messages that occasionally "fired" out of the stale draft queue.\n' +
+      'Symptom: suddenly your account would send into various chats messages you had typed long ago and forgotten (example: "Не выдерживает твоего напора" landing in random contacts\' chats weeks after authoring).\n\n' +
+      'Background: 1.0.86 already covered the main case — wipe queue on logout + filter by author. But entries written to the local cache BEFORE 1.0.86 had no "author" or "sentAt" fields. The old guards treated such entries as "unknown → keep for later", so they kept retrying on every socket reconnect — for months.\n\n' +
+      'Changes: strict policy — a draft is resent only if it has both your userId as author AND a valid sentAt within 7 days. Any entry missing those fields, or owned by a different account, or older than 7 days is evicted, not sent. All legacy pre-1.0.86 entries are flushed in a single pass after upgrading to 1.0.98.',
+  },
   {
     version: '1.0.97',
     build: 194,
