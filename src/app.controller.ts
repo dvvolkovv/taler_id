@@ -81,8 +81,8 @@ export class AppController {
     // Env-overridable so the DO/talerid build advertises its own track + APK URL;
     // defaults preserve aeza (prod/dev) behaviour when these vars are unset.
     const latest = {
-      version: env.APP_LATEST_VERSION || '1.1.1',
-      build: parseInt(env.APP_LATEST_BUILD || '198', 10),
+      version: env.APP_LATEST_VERSION || '1.1.2',
+      build: parseInt(env.APP_LATEST_BUILD || '200', 10),
     };
     const androidUrl =
       env.APP_UPDATE_URL_ANDROID ||
@@ -104,6 +104,20 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.1.2',
+    build: 200,
+    date: '2026-06-24',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.2 — Обновлённая иконка приложения.\n\n' +
+      'Новый дизайн иконки — хромированная скульптурная форма на чёрном фоне (взамен прежней «звезды»). Иконка теперь одна и та же на трёх треках (DEV / TEST / Taler ID), различие сохраняется только в названии под иконкой («DEV Taler ID», «TEST Taler ID», «Taler ID»). Внутри приложения логотипы на сплеше, экране входа, AI-ассистенте и в профиле тоже обновлены под новый дизайн.\n\n' +
+      'Никаких изменений в функциональности — только обновление визуального бренда.',
+    notes_en:
+      'Release 1.1.2 — Refreshed app icon.\n\n' +
+      'New icon design — chrome sculptural shape on black background (replacing the previous "star"). The icon is now the same across all three tracks (DEV / TEST / Taler ID); they remain distinguishable by the name under the icon ("DEV Taler ID", "TEST Taler ID", "Taler ID"). In-app branding on splash, login, AI assistant, and profile screens has been updated to match.\n\n' +
+      'No functional changes — purely a visual brand refresh.',
+  },
   {
     version: '1.1.1',
     build: 198,
