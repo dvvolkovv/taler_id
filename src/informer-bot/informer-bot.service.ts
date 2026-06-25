@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
 import BigNumber from 'bignumber.js';
 import { PrismaService } from '../prisma/prisma.service';
+import { RedisService } from '../redis/redis.service';
 import { MessengerService } from '../messenger/messenger.service';
 import { MessengerGateway } from '../messenger/messenger.gateway';
 import { InformerClient } from './informer.client';
@@ -17,11 +18,16 @@ import {
   formatRefillEnabled,
   formatRefillSettings,
   formatFiatBalances,
+  formatOperatorWalletRetryResult,
+  formatRetryAwaitingTotp,
+  formatRetryCancelled,
 } from './informer.formatters';
 import {
   InformerAuthError,
+  InformerBadRequestError,
   InformerNotConfiguredError,
   InformerNonceStoreError,
+  InformerTotpError,
   InformerUnavailableError,
   InformerTimeoutError,
   FiatBalancesResult,
@@ -46,8 +52,24 @@ const ACTION_CODES = [
   // ── fiat balances (Sub-2c) ──
   'FIAT_BALANCES',
   'FIAT_BALANCES_REFRESH',
+  // ── retry operator wallet (Sub-4) ──
+  'RETRY_OPERATOR_WALLET',
+  'CANCEL_TOTP',
+  'SUBMIT_TOTP',
 ] as const;
 type ActionCode = (typeof ACTION_CODES)[number];
+
+interface ParsedAction {
+  code: ActionCode;
+  walletId?: number;
+  totpCode?: string;
+}
+
+// TTL of the pending-TOTP window. TOTP codes from authenticator apps live
+// ~30s (+/-1 step). 60s gives the operator one safe attempt: button →
+// open app → read → type → send.
+const PENDING_TOTP_TTL_SEC = 60;
+const pendingTotpKey = (userId: string) => `informer:pending_totp:${userId}`;
 
 @Injectable()
 export class InformerBotService {
@@ -61,6 +83,7 @@ export class InformerBotService {
     @Inject(forwardRef(() => MessengerGateway))
     private readonly gateway: MessengerGateway,
     private readonly rates: InformerRatesService,
+    private readonly redis: RedisService,
   ) {}
 
   private async assertAccess(userId: string): Promise<void> {
@@ -105,13 +128,23 @@ export class InformerBotService {
       return;
     }
 
-    const action = this.parseActionCode(content);
-    if (!action) {
+    // Detect a bare 6-digit message as TOTP submission ONLY when there's an
+    // active pending state for this user — otherwise it falls through to the
+    // normal action parser (and likely gets the "buttons only" hint).
+    const parsed = await this.parseActionWithPendingState(userId, content);
+    if (!parsed) {
       await this.publishBotMessage(userId, conversationId, formatButtonsOnlyHint());
       return;
     }
+    const { code: action, walletId, totpCode } = parsed;
 
-    const flKey = `${userId}:${action}`;
+    // Anti-flood is per (user, code). For retry buttons we also key by
+    // walletId so that hitting retry for different wallets in quick
+    // succession is not blocked.
+    const flKey =
+      action === 'RETRY_OPERATOR_WALLET'
+        ? `${userId}:${action}:${walletId ?? '?'}`
+        : `${userId}:${action}`;
     const last = this.lastAction.get(flKey) ?? 0;
     if (Date.now() - last < ANTI_FLOOD_MS) {
       this.logger.warn(`anti-flood throttle for ${flKey}`);
@@ -127,6 +160,47 @@ export class InformerBotService {
             await this.client.getOperatorRequiredList(1, 50),
           );
           break;
+        case 'RETRY_OPERATOR_WALLET': {
+          if (walletId == null) {
+            md = formatClientError(
+              'Не понял какой кошелёк ретраить — wallet_id не пришёл с кнопкой.',
+            );
+            break;
+          }
+          // Stage 1: ask the operator for the 6-digit code. The pending
+          // state lives in Redis with TTL so an orphaned prompt expires on
+          // its own. A new retry button overwrites any earlier pending
+          // state — last button wins.
+          await this.redis.setEx(
+            pendingTotpKey(userId),
+            PENDING_TOTP_TTL_SEC,
+            JSON.stringify({ walletId, createdAt: Date.now() }),
+          );
+          md = formatRetryAwaitingTotp(walletId, PENDING_TOTP_TTL_SEC);
+          break;
+        }
+        case 'SUBMIT_TOTP': {
+          // Stage 2: code arrived — fire the retry, clear the state once
+          // (Redis del) so the same code can't be replayed.
+          if (walletId == null || !totpCode) {
+            // Unreachable in practice — parser only emits SUBMIT_TOTP when
+            // both fields are present.
+            md = formatClientError('Неполный TOTP-запрос.');
+            break;
+          }
+          await this.redis.del(pendingTotpKey(userId));
+          const result = await this.client.retryOperatorWallet(
+            walletId,
+            totpCode,
+          );
+          md = formatOperatorWalletRetryResult(result);
+          break;
+        }
+        case 'CANCEL_TOTP': {
+          await this.redis.del(pendingTotpKey(userId));
+          md = formatRetryCancelled();
+          break;
+        }
         case 'MINI_ACQUIRING':
           md = formatMiniAcquiringBalances(
             await this.client.getMiniAcquiringBalances(),
@@ -196,66 +270,129 @@ export class InformerBotService {
     }
   }
 
-  parseActionCode(content: string): ActionCode | null {
+  /**
+   * Parser variant aware of pending-TOTP state. A bare 6-digit message is
+   * promoted to SUBMIT_TOTP only when there's an active pending entry in
+   * Redis — otherwise a stray "123456" from chat doesn't get interpreted
+   * as a code.
+   */
+  async parseActionWithPendingState(
+    userId: string,
+    content: string,
+  ): Promise<ParsedAction | null> {
+    const trimmed = content.trim();
+    if (/^\d{6}$/.test(trimmed)) {
+      const raw = await this.redis.get(pendingTotpKey(userId));
+      if (raw) {
+        try {
+          const state = JSON.parse(raw) as { walletId: number };
+          return {
+            code: 'SUBMIT_TOTP',
+            walletId: state.walletId,
+            totpCode: trimmed,
+          };
+        } catch {
+          // Corrupt state — fall through to regular parser so the operator
+          // gets the buttons-only hint instead of a silent swallow.
+        }
+      }
+    }
+    return this.parseAction(content);
+  }
+
+  parseAction(content: string): ParsedAction | null {
     // Two input shapes are supported because the mobile [ACTION:...] renderer
     // sends the EXACT text inside the brackets as the message content. The
     // legacy code-style payloads (OPERATOR_WALLETS) keep working for tests
     // and any external integrations; the new human-label buttons land here
-    // as plain strings like "📋 Кошельки оператора" or "🔄 Повторить
-    // OPERATOR_WALLETS".
+    // as plain strings like "📋 Кошельки оператора" or "🔁 Повторить #613".
     const lower = content.toLowerCase();
+    // Cancel any pending TOTP prompt — keep before the retry matcher so
+    // the "повторить" substring inside "отмена повтора" doesn't get
+    // misinterpreted.
+    if (
+      lower.includes('cancel_totp') ||
+      lower.includes('отмена ретрая') ||
+      lower.includes('отмена ввода кода')
+    ) {
+      return { code: 'CANCEL_TOTP' };
+    }
+    // Retry per-wallet: format "🔁 Повторить #613" or legacy code form
+    // "RETRY_OPERATOR_WALLET:613". Match before other "повторить"-style
+    // matchers so the id can be extracted.
+    const retryMatch =
+      lower.match(/retry_operator_wallet[:\s]+(\d+)/) ||
+      lower.match(/повторить\s*#?(\d+)/);
+    if (retryMatch) {
+      return {
+        code: 'RETRY_OPERATOR_WALLET',
+        walletId: parseInt(retryMatch[1], 10),
+      };
+    }
     // Fiat balances — Sub-2c (placed early so REFRESH check fires before
     // any future code adds an "обновить" matcher in unrelated context).
     if (
       lower.includes('fiat_balances_refresh') ||
       lower.includes('обновить курсы')
     ) {
-      return 'FIAT_BALANCES_REFRESH';
+      return { code: 'FIAT_BALANCES_REFRESH' };
     }
     if (lower.includes('fiat_balances') || lower.includes('балансы в евро')) {
-      return 'FIAT_BALANCES';
+      return { code: 'FIAT_BALANCES' };
     }
     // Direct code matches (also handles "[ACTION:OPERATOR_WALLETS]" or
     // "[ACTION:RETRY:OPERATOR_WALLETS]" patterns).
     if (lower.includes('operator_wallets') || lower.includes('кошельки оператора') || lower.includes('все ожидающие')) {
-      return 'OPERATOR_WALLETS';
+      return { code: 'OPERATOR_WALLETS' };
     }
     if (lower.includes('mini_acquiring') || lower.includes('mini-acquiring')) {
-      return 'MINI_ACQUIRING';
+      return { code: 'MINI_ACQUIRING' };
     }
     if (lower.includes('gateway_wallets') || lower.includes('gateway') || lower.includes('системные кошельки')) {
-      return 'GATEWAY_WALLETS';
+      return { code: 'GATEWAY_WALLETS' };
     }
     // Refill alerter — Sub-3
     if (lower.includes('refill_ack') || lower.includes('понял, работаю')) {
-      return 'REFILL_ACK';
+      return { code: 'REFILL_ACK' };
     }
     if (lower.includes('refill_snooze_1h') || lower.includes('заглушить 1 час')) {
-      return 'REFILL_SNOOZE_1H';
+      return { code: 'REFILL_SNOOZE_1H' };
     }
     if (lower.includes('refill_snooze_morning') || lower.includes('до утра')) {
-      return 'REFILL_SNOOZE_MORNING';
+      return { code: 'REFILL_SNOOZE_MORNING' };
     }
     if (lower.includes('refill_disable') || lower.includes('совсем отключить')) {
-      return 'REFILL_DISABLE';
+      return { code: 'REFILL_DISABLE' };
     }
     if (lower.includes('refill_enable') || lower.includes('включить обратно')) {
-      return 'REFILL_ENABLE';
+      return { code: 'REFILL_ENABLE' };
     }
     if (
       lower.includes('refill_settings') ||
       lower.includes('настройки алёртов') ||
       lower.includes('настройки алертов')
     ) {
-      return 'REFILL_SETTINGS';
+      return { code: 'REFILL_SETTINGS' };
     }
     return null;
   }
 
   errorToMessage(e: unknown, retryCode?: string): string {
+    if (e instanceof InformerBadRequestError) {
+      return formatClientError(
+        `Informer отверг запрос (400). ${e.upstreamBody?.slice(0, 200) ?? ''}`.trim(),
+      );
+    }
     if (e instanceof InformerAuthError) {
       return formatClientError(
         'Informer: ошибка аутентификации. Сообщи администратору.',
+      );
+    }
+    if (e instanceof InformerTotpError) {
+      return formatClientError(
+        'Informer: TOTP-код не принят (часы или секрет разъехались). ' +
+          'Сверь время, попробуй ещё раз через 30 секунд.',
+        retryCode,
       );
     }
     if (e instanceof InformerNotConfiguredError) {
