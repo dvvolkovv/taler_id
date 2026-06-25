@@ -81,8 +81,8 @@ export class AppController {
     // Env-overridable so the DO/talerid build advertises its own track + APK URL;
     // defaults preserve aeza (prod/dev) behaviour when these vars are unset.
     const latest = {
-      version: env.APP_LATEST_VERSION || '1.1.4',
-      build: parseInt(env.APP_LATEST_BUILD || '202', 10),
+      version: env.APP_LATEST_VERSION || '1.1.5',
+      build: parseInt(env.APP_LATEST_BUILD || '203', 10),
     };
     const androidUrl =
       env.APP_UPDATE_URL_ANDROID ||
@@ -104,6 +104,20 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.1.5',
+    build: 203,
+    date: '2026-06-25',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.5\n\n' +
+      'Исправлен экран исходящего звонка.\n' +
+      'При нажатии кнопки звонка теперь сразу видно имя и аватар собеседника и слышны гудки — как было до версии 1.1.3.',
+    notes_en:
+      'Release 1.1.5\n\n' +
+      'Fixed outgoing call screen.\n' +
+      'Tapping the call button now immediately shows the callee\'s name and avatar with a ringback tone — restoring behaviour from before 1.1.3.',
+  },
   {
     version: '1.1.4',
     build: 202,
