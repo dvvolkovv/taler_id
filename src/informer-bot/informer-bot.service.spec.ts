@@ -1,5 +1,6 @@
 import BigNumber from 'bignumber.js';
 import { InformerBotService } from './informer-bot.service';
+import { InformerTotpError } from './informer.types';
 
 // In-memory Redis stub — only the methods the service actually calls
 // (get/setEx/del) are surfaced. Each test gets its own instance so state
@@ -393,10 +394,19 @@ describe('InformerBotService.handleUserMessage (retry wallet, flow B)', () => {
         findUnique: jest.fn(async () => ({ informerAccess: true })),
       },
     };
-    const client = {
+    const client: {
+      retryOperatorWallet: jest.Mock;
+      getOperatorRequiredList: jest.Mock;
+    } = {
       retryOperatorWallet: jest.fn(async (id: number, _code: string) => ({
         wallet_id: id,
         status: 'ok',
+      })),
+      getOperatorRequiredList: jest.fn(async () => ({
+        items: [],
+        total: 0,
+        page: 1,
+        per_page: 50,
       })),
     };
     const messenger = {
@@ -500,10 +510,81 @@ describe('InformerBotService.handleUserMessage (retry wallet, flow B)', () => {
     await svc.handleUserMessage('u1', 'c1', '🔁 Повторить #613');
 
     // Operator pastes something else — should not fire retry, should not
-    // clear the pending state (let TTL expire naturally).
-    await svc.handleUserMessage('u1', 'c1', '📋 Кошельки оператора');
+    // clear the pending state (let TTL expire naturally). Note: tapping
+    // "📋 Кошельки оператора" WOULD fire the OPERATOR_WALLETS action and
+    // also leave pending alone; here we use a non-matching string for
+    // clarity.
+    await svc.handleUserMessage('u1', 'c1', 'случайный текст');
 
     expect(m.client.retryOperatorWallet).not.toHaveBeenCalled();
     expect(m.redis.store.has('informer:pending_totp:u1')).toBe(true);
+  });
+
+  it('OPERATOR_WALLETS publishes one message per wallet (plus header/trailer) so each retry button sits under its wallet', async () => {
+    const m = makeMocks();
+    m.client.getOperatorRequiredList = jest.fn(async () => ({
+      items: [
+        {
+          wallet_id: 857,
+          created_at: '2026-06-24T17:06:47Z',
+          withdraw_address: '0xb45CfA4ADdd2d93e38413AD55F704Ea643eD7144',
+          withdraw_network: 'bsc',
+          withdraw_token: 'usdc',
+          withdraw_amount: '258.7',
+        },
+        {
+          wallet_id: 855,
+          created_at: '2026-06-24T14:38:46Z',
+          withdraw_address: '0x538c6ED66155dAAB441C008EbF9798cfd9fd330C',
+          withdraw_network: 'bsc',
+          withdraw_token: 'usdc',
+          withdraw_amount: '452.7',
+        },
+      ],
+      total: 2,
+      page: 1,
+      per_page: 50,
+    }));
+
+    const svc = makeService(m);
+    await svc.handleUserMessage('u1', 'c1', '📋 Кошельки оператора');
+
+    // header + 2 cards + trailer = 4 messages
+    expect(m.published).toHaveLength(4);
+    expect(m.published[1]).toContain('#857');
+    expect(m.published[1]).toContain('[ACTION:🔁 Повторить #857]');
+    expect(m.published[1]).not.toContain('#855');
+    expect(m.published[2]).toContain('#855');
+    expect(m.published[2]).toContain('[ACTION:🔁 Повторить #855]');
+    expect(m.published[2]).not.toContain('#857');
+  });
+
+  it('TOTP rejected by admin-API re-arms pending for the same wallet (no nav back)', async () => {
+    const m = makeMocks();
+    // Make admin-API simulate a TOTP rejection on the first call only.
+    m.client.retryOperatorWallet.mockImplementationOnce(async () => {
+      throw new InformerTotpError('invalid 2fa code');
+    });
+
+    const svc = makeService(m);
+    await svc.handleUserMessage('u1', 'c1', '🔁 Повторить #613');
+    m.published.length = 0;
+    m.redis.setEx.mockClear();
+
+    await svc.handleUserMessage('u1', 'c1', '000000');
+
+    expect(m.client.retryOperatorWallet).toHaveBeenCalledTimes(1);
+    // Pending re-armed for the SAME walletId so operator can retype without
+    // navigating back to the list.
+    expect(m.redis.setEx).toHaveBeenCalledTimes(1);
+    const [key, _ttl, value] = m.redis.setEx.mock.calls[0];
+    expect(key).toBe('informer:pending_totp:u1');
+    expect(JSON.parse(value)).toMatchObject({ walletId: 613 });
+    expect(m.redis.store.has('informer:pending_totp:u1')).toBe(true);
+    // User-facing message points at the same wallet and asks for a fresh
+    // code. It MUST NOT include the legacy bogus retry button.
+    expect(m.published[0]).toContain('#613');
+    expect(m.published[0]).toContain('Код не принят');
+    expect(m.published[0]).not.toContain('🔄 Повторить SUBMIT_TOTP');
   });
 });

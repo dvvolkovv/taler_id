@@ -21,6 +21,7 @@ import {
   formatOperatorWalletRetryResult,
   formatRetryAwaitingTotp,
   formatRetryCancelled,
+  formatRetryTotpRejected,
 } from './informer.formatters';
 import {
   InformerAuthError,
@@ -155,11 +156,15 @@ export class InformerBotService {
     try {
       let md: string;
       switch (action) {
-        case 'OPERATOR_WALLETS':
-          md = formatOperatorWalletsList(
+        case 'OPERATOR_WALLETS': {
+          const messages = formatOperatorWalletsList(
             await this.client.getOperatorRequiredList(1, 50),
           );
-          break;
+          for (const m of messages) {
+            await this.publishBotMessage(userId, conversationId, m);
+          }
+          return; // formatter emits N+1 messages; skip the single-publish below
+        }
         case 'RETRY_OPERATOR_WALLET': {
           if (walletId == null) {
             md = formatClientError(
@@ -189,11 +194,26 @@ export class InformerBotService {
             break;
           }
           await this.redis.del(pendingTotpKey(userId));
-          const result = await this.client.retryOperatorWallet(
-            walletId,
-            totpCode,
-          );
-          md = formatOperatorWalletRetryResult(result);
+          try {
+            const result = await this.client.retryOperatorWallet(
+              walletId,
+              totpCode,
+            );
+            md = formatOperatorWalletRetryResult(result);
+          } catch (e) {
+            if (e instanceof InformerTotpError) {
+              // Re-arm pending for the same wallet so the operator can
+              // submit a fresh code without going back to the wallet list.
+              await this.redis.setEx(
+                pendingTotpKey(userId),
+                PENDING_TOTP_TTL_SEC,
+                JSON.stringify({ walletId, createdAt: Date.now() }),
+              );
+              md = formatRetryTotpRejected(walletId, PENDING_TOTP_TTL_SEC);
+              break;
+            }
+            throw e; // generic admin-API errors bubble to outer catch
+          }
           break;
         }
         case 'CANCEL_TOTP': {
@@ -262,8 +282,13 @@ export class InformerBotService {
       }
       await this.publishBotMessage(userId, conversationId, md);
     } catch (e) {
+      const ue = e as { upstreamStatus?: number; upstreamBody?: string };
+      const upstream =
+        ue?.upstreamStatus != null
+          ? ` upstreamStatus=${ue.upstreamStatus} upstreamBody=${(ue.upstreamBody ?? '').slice(0, 300)}`
+          : '';
       this.logger.error(
-        `informer action ${action} failed: ${(e as Error)?.message || e}`,
+        `informer action ${action} failed: ${(e as Error)?.message || e}${upstream}`,
       );
       const md = this.errorToMessage(e, action);
       await this.publishBotMessage(userId, conversationId, md);
@@ -378,6 +403,17 @@ export class InformerBotService {
   }
 
   errorToMessage(e: unknown, retryCode?: string): string {
+    // TOTP-flow actions (RETRY_OPERATOR_WALLET / SUBMIT_TOTP / CANCEL_TOTP)
+    // need a wallet_id to be meaningful; we don't know it here in the outer
+    // catch (parsed is out of scope), so skip the retry button rather than
+    // render "🔄 Повторить SUBMIT_TOTP" which the parser can't act on.
+    if (
+      retryCode === 'RETRY_OPERATOR_WALLET' ||
+      retryCode === 'SUBMIT_TOTP' ||
+      retryCode === 'CANCEL_TOTP'
+    ) {
+      retryCode = undefined;
+    }
     if (e instanceof InformerBadRequestError) {
       return formatClientError(
         `Informer отверг запрос (400). ${e.upstreamBody?.slice(0, 200) ?? ''}`.trim(),
