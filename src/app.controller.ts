@@ -81,8 +81,8 @@ export class AppController {
     // Env-overridable so the DO/talerid build advertises its own track + APK URL;
     // defaults preserve aeza (prod/dev) behaviour when these vars are unset.
     const latest = {
-      version: env.APP_LATEST_VERSION || '1.1.2',
-      build: parseInt(env.APP_LATEST_BUILD || '200', 10),
+      version: env.APP_LATEST_VERSION || '1.1.3',
+      build: parseInt(env.APP_LATEST_BUILD || '201', 10),
     };
     const androidUrl =
       env.APP_UPDATE_URL_ANDROID ||
@@ -104,6 +104,26 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.1.3',
+    build: 201,
+    date: '2026-06-25',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.3 — Иконка вместо видео на сплеше и в Ассистенте + новый launch screen.\n\n' +
+      'Пульсирующее видео-лого, которое крутилось в центре splash-экрана и в AI-Ассистенте (на idle, в активной сессии и при загрузке), заменено на статическую хром-иконку. На светлой теме — chrome с прозрачным фоном поверх белой подложки; на тёмной — chrome на чёрной подложке.\n\n' +
+      'Также обновлены native launch-screens, которые показываются ДО загрузки Flutter:\n' +
+      '• Android — хром-иконка из mipmap/ic_launcher поверх чёрного фона.\n' +
+      '• iOS — настоящая хром-иконка 200/400/600 px вместо прежней 1×1 заглушки, фон сменился с синего на чёрный.\n\n' +
+      'Никаких функциональных изменений — продолжение визуального refresh, начатого в 1.1.2.',
+    notes_en:
+      'Release 1.1.3 — Static icon instead of looping video on splash and Assistant + new native launch screen.\n\n' +
+      'The pulsing video logo that played in the centre of the splash screen and the AI Assistant (idle, active, and loading states) is replaced with the static chrome icon. On light theme — chrome with transparent background over a white pad; on dark theme — chrome over a black pad.\n\n' +
+      'Native launch screens (shown BEFORE Flutter loads) are also updated:\n' +
+      '• Android — chrome icon from mipmap/ic_launcher over a black background.\n' +
+      '• iOS — real chrome icon at 200/400/600 px instead of the previous 1×1 placeholder, background switched from blue to black.\n\n' +
+      'No functional changes — continuation of the visual refresh started in 1.1.2.',
+  },
   {
     version: '1.1.2',
     build: 200,
