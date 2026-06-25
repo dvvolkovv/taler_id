@@ -55,34 +55,58 @@ function formatRow(item: OperatorRequiredItem): string {
   ].join(' · ');
 }
 
-export function formatOperatorWalletsList(data: OperatorRequiredList): string {
+/**
+ * Returns a list of messages: a summary header + one card per wallet (with
+ * its own retry button) + a trailer with navigation buttons. The reason it's
+ * split into multiple messages instead of one is the mobile renderer
+ * collects ALL `[ACTION:...]` markers from a single message into one button
+ * stack at the bottom — visually disconnecting each button from its row.
+ * One-message-per-wallet keeps the retry button tied to the wallet
+ * description it belongs to.
+ */
+export function formatOperatorWalletsList(
+  data: OperatorRequiredList,
+): string[] {
   if (data.items.length === 0) {
     return [
-      '📋 **Кошельки, требующие оператора**',
-      '',
-      'Всего: **0**. Очередь пуста — ничего делать не надо.',
-      '',
-      OPERATOR_BUTTONS,
-    ].join('\n');
+      [
+        '📋 **Кошельки, требующие оператора**',
+        '',
+        'Всего: **0**. Очередь пуста — ничего делать не надо.',
+        '',
+        OPERATOR_BUTTONS,
+      ].join('\n'),
+    ];
   }
-  // Render one line per item plus a retry button on the next line. The retry
-  // button is only emitted when admin-API actually returned wallet_id; the
-  // current public docs don't list this field but the retry endpoint needs
-  // it (tracked in gsmsoft1/exchange/admin-api).
-  const lines = data.items.flatMap((i) => {
-    const row = `- ${formatRow(i)}`;
-    if (i.wallet_id == null) return [row];
-    return [row, `  [ACTION:🔁 Повторить #${i.wallet_id}]`];
-  });
-  return [
+  const header = [
     '📋 **Кошельки, требующие оператора**',
     '',
     `Всего: **${data.total}** (стр. ${data.page}, по ${data.per_page})`,
-    '',
-    ...lines,
-    '',
-    OPERATOR_BUTTONS,
   ].join('\n');
+
+  const cards = data.items.map((i) => {
+    const at = i.created_at.replace('T', ' ').replace('Z', ' UTC');
+    const idLine =
+      i.wallet_id != null
+        ? `🪪 **#${i.wallet_id}** · ${i.withdraw_network} / ${i.withdraw_token}`
+        : `🪪 ${i.withdraw_network} / ${i.withdraw_token}`;
+    const lines = [
+      idLine,
+      `Адрес: \`${i.withdraw_address}\``,
+      `Сумма: \`${i.withdraw_amount}\``,
+      `Создан: ${at}`,
+    ];
+    if (i.wallet_id != null) {
+      lines.push('', `[ACTION:🔁 Повторить #${i.wallet_id}]`);
+    }
+    return lines.join('\n');
+  });
+
+  // Trailer carries the navigation buttons so they don't pile up on every
+  // wallet card.
+  const trailer = OPERATOR_BUTTONS;
+
+  return [header, ...cards, trailer];
 }
 
 export function formatOperatorWalletRetryResult(
@@ -117,6 +141,25 @@ export function formatRetryCancelled(): string {
     'Pending-код сброшен. Нажми «🔁 Повторить» в листе кошельков ещё раз, когда нужно.',
     '',
     OPERATOR_BUTTONS,
+  ].join('\n');
+}
+
+/**
+ * Renders the «code rejected, try again» card. Pending state is re-armed
+ * on the same wallet so the operator can submit a fresh code without
+ * navigating back to the wallet list.
+ */
+export function formatRetryTotpRejected(
+  walletId: number,
+  ttlSeconds: number,
+): string {
+  return [
+    `⚠️ **Код не принят** для кошелька **#${walletId}**.`,
+    '',
+    'Часы расходятся или код истёк. Возьми свежий 6-значный код из ' +
+      `аутентификатора и пришли в течение ${ttlSeconds} секунд.`,
+    '',
+    '[ACTION:❌ Отмена ретрая]',
   ].join('\n');
 }
 

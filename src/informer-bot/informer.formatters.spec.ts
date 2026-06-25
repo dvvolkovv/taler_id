@@ -7,45 +7,81 @@ import {
 } from './informer.formatters';
 
 describe('formatOperatorWalletsList', () => {
-  it('renders empty state with total 0', () => {
-    const md = formatOperatorWalletsList({
+  it('renders empty state as a single message with total 0', () => {
+    const messages = formatOperatorWalletsList({
       items: [],
       total: 0,
       page: 1,
       per_page: 50,
     });
-    expect(md).toContain('Кошельки, требующие оператора');
-    expect(md).toContain('0');
-    expect(md).toContain(OPERATOR_BUTTONS);
+    expect(messages).toHaveLength(1);
+    const joined = messages.join('\n');
+    expect(joined).toContain('Кошельки, требующие оператора');
+    expect(joined).toContain('0');
+    expect(joined).toContain(OPERATOR_BUTTONS);
   });
 
-  it('renders 2 items with addresses and amounts', () => {
-    const md = formatOperatorWalletsList({
+  it('emits header + one card per wallet + nav trailer; retry button is co-located with its wallet', () => {
+    const messages = formatOperatorWalletsList({
       items: [
         {
-          created_at: '2026-06-02T12:49:51Z',
-          withdraw_address: 'TGkEaodwbZWd8Sg7wGoRQU5tHYwhTWM9ZG',
-          withdraw_network: 'tron',
-          withdraw_token: 'usdt',
-          withdraw_amount: '1.258494593554098000',
+          wallet_id: 857,
+          created_at: '2026-06-24T17:06:47Z',
+          withdraw_address: '0xb45CfA4ADdd2d93e38413AD55F704Ea643eD7144',
+          withdraw_network: 'bsc',
+          withdraw_token: 'usdc',
+          withdraw_amount: '258.7',
         },
         {
-          created_at: '2026-05-29T15:17:25Z',
-          withdraw_address: '0x89Ffc69aA86bA8b1592AbEF189B6ec5d7E33301a',
-          withdraw_network: 'ethereum',
-          withdraw_token: 'eth',
-          withdraw_amount: '0.006338050505100000',
+          wallet_id: 855,
+          created_at: '2026-06-24T14:38:46Z',
+          withdraw_address: '0x538c6ED66155dAAB441C008EbF9798cfd9fd330C',
+          withdraw_network: 'bsc',
+          withdraw_token: 'usdc',
+          withdraw_amount: '452.7',
         },
       ],
       total: 13,
       page: 1,
       per_page: 20,
     });
-    expect(md).toContain('13');
-    expect(md).toContain('TGkEaodwbZWd8Sg7wGoRQU5tHYwhTWM9ZG');
-    expect(md).toContain('0x89Ffc69aA86bA8b1592AbEF189B6ec5d7E33301a');
-    expect(md).toContain('tron');
-    expect(md).toContain('ethereum');
+    expect(messages).toHaveLength(4); // header + 2 cards + trailer
+    expect(messages[0]).toContain('Кошельки, требующие оператора');
+    expect(messages[0]).toContain('13');
+    // First card pairs row #857 with the #857 retry button — and ONLY that
+    // button (so mobile renders one button immediately under one wallet).
+    expect(messages[1]).toContain('#857');
+    expect(messages[1]).toContain('0xb45CfA4ADdd2d93e38413AD55F704Ea643eD7144');
+    expect(messages[1]).toContain('[ACTION:🔁 Повторить #857]');
+    expect(messages[1]).not.toContain('#855');
+    // Second card pairs row #855 with its own button.
+    expect(messages[2]).toContain('#855');
+    expect(messages[2]).toContain('0x538c6ED66155dAAB441C008EbF9798cfd9fd330C');
+    expect(messages[2]).toContain('[ACTION:🔁 Повторить #855]');
+    expect(messages[2]).not.toContain('#857');
+    // Trailer = nav buttons, separate from wallet cards.
+    expect(messages[3]).toBe(OPERATOR_BUTTONS);
+  });
+
+  it('omits retry button on items missing wallet_id (tolerant for older admin-API)', () => {
+    const messages = formatOperatorWalletsList({
+      items: [
+        {
+          // no wallet_id — admin-API stand without the field
+          created_at: '2026-06-02T12:49:51Z',
+          withdraw_address: 'TGkEaodwbZWd8Sg7wGoRQU5tHYwhTWM9ZG',
+          withdraw_network: 'tron',
+          withdraw_token: 'usdt',
+          withdraw_amount: '1.0',
+        },
+      ],
+      total: 1,
+      page: 1,
+      per_page: 20,
+    });
+    expect(messages).toHaveLength(3); // header + 1 card + trailer
+    expect(messages[1]).toContain('TGkEaodwbZWd8Sg7wGoRQU5tHYwhTWM9ZG');
+    expect(messages[1]).not.toContain('[ACTION:🔁');
   });
 });
 
@@ -457,8 +493,16 @@ describe('OPERATOR_BUTTONS main menu (5 actions)', () => {
   });
 
   it('every primary list formatter ends with the full main menu', () => {
+    // formatOperatorWalletsList now emits a string[] — the menu lives in
+    // the last message (trailer in non-empty case, or the only message in
+    // empty case).
     expect(
-      formatOperatorWalletsList({ items: [], total: 0, page: 1, per_page: 50 }),
+      formatOperatorWalletsList({
+        items: [],
+        total: 0,
+        page: 1,
+        per_page: 50,
+      }).join('\n'),
     ).toContain('[ACTION:💶 Балансы в евро]');
     expect(formatMiniAcquiringBalances({ chains: [] })).toContain(
       '[ACTION:⚙️ Настройки алёртов]',
