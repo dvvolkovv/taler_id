@@ -1,10 +1,37 @@
 import BigNumber from 'bignumber.js';
 import { InformerBotService } from './informer-bot.service';
 
+// In-memory Redis stub — only the methods the service actually calls
+// (get/setEx/del) are surfaced. Each test gets its own instance so state
+// doesn't leak across cases.
+function makeRedisStub() {
+  const store = new Map<string, string>();
+  return {
+    store,
+    get: jest.fn(async (k: string) => store.get(k) ?? null),
+    set: jest.fn(async (k: string, v: string) => {
+      store.set(k, v);
+    }),
+    setEx: jest.fn(async (k: string, _ttl: number, v: string) => {
+      store.set(k, v);
+    }),
+    del: jest.fn(async (k: string) => {
+      store.delete(k);
+    }),
+  };
+}
+
 // We exercise the helper via a tiny subclass that exposes it.
 class TestableService extends InformerBotService {
   constructor() {
-    super(null as any, null as any, null as any, null as any, null as any);
+    super(
+      null as any,
+      null as any,
+      null as any,
+      null as any,
+      null as any,
+      makeRedisStub() as any,
+    );
   }
   public _nextMorningInBerlin(now?: Date): Date {
     return (this as any).nextMorningInBerlin(now);
@@ -68,7 +95,7 @@ describe('InformerBotService.nextMorningInBerlin', () => {
   });
 });
 
-describe('InformerBotService.parseActionCode (refill codes)', () => {
+describe('InformerBotService.parseAction (refill codes)', () => {
   const svc = new TestableService();
 
   const cases: [string, string][] = [
@@ -82,15 +109,15 @@ describe('InformerBotService.parseActionCode (refill codes)', () => {
 
   for (const [code, label] of cases) {
     it(`recognises human label "${label}" → ${code}`, () => {
-      expect(svc.parseActionCode(label)).toBe(code);
+      expect(svc.parseAction(label)?.code).toBe(code);
     });
     it(`recognises raw code "${code}"`, () => {
-      expect(svc.parseActionCode(code)).toBe(code);
+      expect(svc.parseAction(code)?.code).toBe(code);
     });
   }
 });
 
-describe('InformerBotService.parseActionCode (Sub-2c codes)', () => {
+describe('InformerBotService.parseAction (Sub-2c codes)', () => {
   const svc = new TestableService();
 
   const cases: [string, string][] = [
@@ -99,12 +126,32 @@ describe('InformerBotService.parseActionCode (Sub-2c codes)', () => {
   ];
   for (const [code, label] of cases) {
     it(`recognises human label "${label}" → ${code}`, () => {
-      expect(svc.parseActionCode(label)).toBe(code);
+      expect(svc.parseAction(label)?.code).toBe(code);
     });
     it(`recognises raw code "${code}"`, () => {
-      expect(svc.parseActionCode(code)).toBe(code);
+      expect(svc.parseAction(code)?.code).toBe(code);
     });
   }
+});
+
+describe('InformerBotService.parseAction (retry wallet)', () => {
+  const svc = new TestableService();
+
+  it('recognises human label "🔁 Повторить #613"', () => {
+    const out = svc.parseAction('🔁 Повторить #613');
+    expect(out?.code).toBe('RETRY_OPERATOR_WALLET');
+    expect(out?.walletId).toBe(613);
+  });
+
+  it('recognises legacy code form RETRY_OPERATOR_WALLET:42', () => {
+    const out = svc.parseAction('RETRY_OPERATOR_WALLET:42');
+    expect(out?.code).toBe('RETRY_OPERATOR_WALLET');
+    expect(out?.walletId).toBe(42);
+  });
+
+  it('returns null without an id', () => {
+    expect(svc.parseAction('🔁 Повторить')).toBeNull();
+  });
 });
 
 describe('InformerBotService.handleUserMessage (refill actions)', () => {
@@ -145,6 +192,8 @@ describe('InformerBotService.handleUserMessage (refill actions)', () => {
       null as any,
       m.messenger as any,
       m.gateway as any,
+      null as any,
+      makeRedisStub() as any,
     );
     // capture published content for assertions
     (svc as any).publishBotMessage = jest.fn(
@@ -301,6 +350,7 @@ describe('InformerBotService.handleUserMessage (fiat actions)', () => {
       m.messenger as any,
       m.gateway as any,
       m.rates as any,
+      makeRedisStub() as any,
     );
     (svc as any).publishBotMessage = jest.fn(
       async (_uid: string, _cid: string, content: string) => {
@@ -332,5 +382,128 @@ describe('InformerBotService.handleUserMessage (fiat actions)', () => {
     expect(m.rates.invalidateCache).toHaveBeenCalledTimes(1);
     expect(m.rates.getEurRates).toHaveBeenCalledTimes(1);
     expect(m.calls.published[0]).toContain('Балансы в евро');
+  });
+});
+
+describe('InformerBotService.handleUserMessage (retry wallet, flow B)', () => {
+  function makeMocks() {
+    const published: string[] = [];
+    const prisma = {
+      profile: {
+        findUnique: jest.fn(async () => ({ informerAccess: true })),
+      },
+    };
+    const client = {
+      retryOperatorWallet: jest.fn(async (id: number, _code: string) => ({
+        wallet_id: id,
+        status: 'ok',
+      })),
+    };
+    const messenger = {
+      createMessage: jest.fn(async () => ({
+        id: 'm1',
+        content: '',
+        senderId: 'bot',
+        conversationId: 'c1',
+      })),
+    };
+    const gateway = { server: { to: () => ({ emit: jest.fn() }) } };
+    const redis = makeRedisStub();
+    return { prisma, client, messenger, gateway, redis, published };
+  }
+
+  function makeService(m: ReturnType<typeof makeMocks>) {
+    const svc = new InformerBotService(
+      m.prisma as any,
+      m.client as any,
+      m.messenger as any,
+      m.gateway as any,
+      null as any,
+      m.redis as any,
+    );
+    (svc as any).publishBotMessage = jest.fn(
+      async (_u: string, _c: string, content: string) => {
+        m.published.push(content);
+      },
+    );
+    return svc;
+  }
+
+  it('stage 1: retry button stores pending state and prompts for code', async () => {
+    const m = makeMocks();
+    const svc = makeService(m);
+    await svc.handleUserMessage('u1', 'c1', '🔁 Повторить #613');
+
+    // Client NOT called yet — stage 1 just sets up the prompt.
+    expect(m.client.retryOperatorWallet).not.toHaveBeenCalled();
+
+    // Pending state stored with TTL.
+    expect(m.redis.setEx).toHaveBeenCalledTimes(1);
+    const [key, ttl, value] = m.redis.setEx.mock.calls[0];
+    expect(key).toBe('informer:pending_totp:u1');
+    expect(ttl).toBe(60);
+    expect(JSON.parse(value)).toMatchObject({ walletId: 613 });
+
+    expect(m.published[0]).toContain('#613');
+    expect(m.published[0]).toContain('Google Authenticator');
+    expect(m.published[0]).toContain('❌ Отмена ретрая');
+  });
+
+  it('stage 2: 6-digit message with pending state fires retry and clears state', async () => {
+    const m = makeMocks();
+    const svc = makeService(m);
+    await svc.handleUserMessage('u1', 'c1', '🔁 Повторить #613');
+    m.published.length = 0; // reset for clarity
+
+    await svc.handleUserMessage('u1', 'c1', '123456');
+
+    expect(m.client.retryOperatorWallet).toHaveBeenCalledTimes(1);
+    const [walletId, totpCode] = m.client.retryOperatorWallet.mock.calls[0];
+    expect(walletId).toBe(613);
+    expect(totpCode).toBe('123456');
+
+    // State cleared so the same code can't be replayed.
+    expect(m.redis.del).toHaveBeenCalledWith('informer:pending_totp:u1');
+    expect(m.redis.store.has('informer:pending_totp:u1')).toBe(false);
+
+    expect(m.published[0]).toContain('Повтор запущен');
+    expect(m.published[0]).toContain('#613');
+  });
+
+  it('bare 6-digit message WITHOUT pending state is not interpreted as TOTP', async () => {
+    const m = makeMocks();
+    const svc = makeService(m);
+    await svc.handleUserMessage('u1', 'c1', '123456');
+
+    expect(m.client.retryOperatorWallet).not.toHaveBeenCalled();
+    // Falls through to the buttons-only hint.
+    expect(m.published[0]).toMatch(/нажми|кнопк/i);
+  });
+
+  it('cancel button clears pending state and acknowledges', async () => {
+    const m = makeMocks();
+    const svc = makeService(m);
+    await svc.handleUserMessage('u1', 'c1', '🔁 Повторить #613');
+    m.published.length = 0;
+
+    await svc.handleUserMessage('u1', 'c1', '❌ Отмена ретрая');
+
+    expect(m.client.retryOperatorWallet).not.toHaveBeenCalled();
+    expect(m.redis.del).toHaveBeenCalledWith('informer:pending_totp:u1');
+    expect(m.redis.store.has('informer:pending_totp:u1')).toBe(false);
+    expect(m.published[0]).toContain('отменён');
+  });
+
+  it('non-digit message after retry button leaves pending state intact', async () => {
+    const m = makeMocks();
+    const svc = makeService(m);
+    await svc.handleUserMessage('u1', 'c1', '🔁 Повторить #613');
+
+    // Operator pastes something else — should not fire retry, should not
+    // clear the pending state (let TTL expire naturally).
+    await svc.handleUserMessage('u1', 'c1', '📋 Кошельки оператора');
+
+    expect(m.client.retryOperatorWallet).not.toHaveBeenCalled();
+    expect(m.redis.store.has('informer:pending_totp:u1')).toBe(true);
   });
 });

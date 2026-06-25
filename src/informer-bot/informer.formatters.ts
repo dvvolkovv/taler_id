@@ -3,6 +3,7 @@ import BigNumber from 'bignumber.js';
 import {
   OperatorRequiredList,
   OperatorRequiredItem,
+  OperatorWalletRetryResult,
   MiniAcquiringBalances,
   GatewaySystemWalletBalances,
   RefillDeficit,
@@ -64,13 +65,56 @@ export function formatOperatorWalletsList(data: OperatorRequiredList): string {
       OPERATOR_BUTTONS,
     ].join('\n');
   }
-  const lines = data.items.map((i) => `- ${formatRow(i)}`);
+  // Render one line per item plus a retry button on the next line. The retry
+  // button is only emitted when admin-API actually returned wallet_id; the
+  // current public docs don't list this field but the retry endpoint needs
+  // it (tracked in gsmsoft1/exchange/admin-api).
+  const lines = data.items.flatMap((i) => {
+    const row = `- ${formatRow(i)}`;
+    if (i.wallet_id == null) return [row];
+    return [row, `  [ACTION:🔁 Повторить #${i.wallet_id}]`];
+  });
   return [
     '📋 **Кошельки, требующие оператора**',
     '',
     `Всего: **${data.total}** (стр. ${data.page}, по ${data.per_page})`,
     '',
     ...lines,
+    '',
+    OPERATOR_BUTTONS,
+  ].join('\n');
+}
+
+export function formatOperatorWalletRetryResult(
+  result: OperatorWalletRetryResult,
+): string {
+  return [
+    `[B:green]✅ Повтор запущен[/B] для кошелька **#${result.wallet_id}**`,
+    '',
+    `Статус: \`${result.status}\``,
+    '',
+    OPERATOR_BUTTONS,
+  ].join('\n');
+}
+
+export function formatRetryAwaitingTotp(
+  walletId: number,
+  ttlSeconds: number,
+): string {
+  return [
+    `🔐 **Подтверди ретрай кошелька #${walletId}**`,
+    '',
+    `Введи 6-значный код из Google Authenticator в течение ${ttlSeconds} секунд.`,
+    'Код одноразовый и не должен светиться в чате после — стирать не надо, я не храню.',
+    '',
+    '[ACTION:❌ Отмена ретрая]',
+  ].join('\n');
+}
+
+export function formatRetryCancelled(): string {
+  return [
+    '[B:blue]❌ Ретрай отменён.[/B]',
+    'Pending-код сброшен. Нажми «🔁 Повторить» в листе кошельков ещё раз, когда нужно.',
     '',
     OPERATOR_BUTTONS,
   ].join('\n');

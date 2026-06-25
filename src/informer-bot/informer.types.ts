@@ -25,11 +25,22 @@ export interface OperatorRequiredCount {
 
 // ── /operator-required-wallets ───────────────────────────────
 export interface OperatorRequiredItem {
+  // Optional because the public list response per current admin-API docs does
+  // not include it, but the retry endpoint requires it. Tracked in
+  // gsmsoft1/exchange/admin-api: when present, the chat renders a per-item
+  // retry button; when absent, the button is omitted.
+  wallet_id?: number;
   created_at: string;
   withdraw_address: string;
   withdraw_network: string;
   withdraw_token: string;
   withdraw_amount: string;
+}
+
+// ── /operator-required-wallets/{id}/retry ────────────────────
+export interface OperatorWalletRetryResult {
+  wallet_id: number;
+  status: string;
 }
 
 export interface OperatorRequiredList {
@@ -166,5 +177,19 @@ export class InformerTimeoutError extends InformerError {
   constructor() {
     super('informer-timeout');
     this.name = 'InformerTimeoutError';
+  }
+}
+
+export class InformerBadRequestError extends InformerError {
+  constructor(body?: string) {
+    super('informer-bad-request', 400, body);
+    this.name = 'InformerBadRequestError';
+  }
+}
+
+export class InformerTotpError extends InformerError {
+  constructor(body?: string) {
+    super('informer-totp-rejected', 403, body);
+    this.name = 'InformerTotpError';
   }
 }

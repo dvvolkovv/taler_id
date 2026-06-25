@@ -4,11 +4,14 @@ import {
   assertEnvelope,
   OperatorRequiredCount,
   OperatorRequiredList,
+  OperatorWalletRetryResult,
   MiniAcquiringBalances,
   GatewaySystemWalletBalances,
   InformerAuthError,
+  InformerBadRequestError,
   InformerNotConfiguredError,
   InformerNonceStoreError,
+  InformerTotpError,
   InformerUnavailableError,
   InformerTimeoutError,
   InformerError,
@@ -47,7 +50,9 @@ export class InformerClient {
   }
 
   mapStatusToError(status: number, body: string): InformerError {
+    if (status === 400) return new InformerBadRequestError(body);
     if (status === 401) return new InformerAuthError(body);
+    if (status === 403) return new InformerTotpError(body);
     if (status === 404) return new InformerNotConfiguredError(404, body);
     if (status === 503) {
       if (body.includes('nonce store unavailable'))
@@ -59,12 +64,31 @@ export class InformerClient {
     return new InformerUnavailableError(status, body);
   }
 
-  private async signedGet<T>(path: string): Promise<T> {
-    const url = new URL(path, this.cfg.baseUrl);
-    const requestUri = url.pathname + url.search;
+  private buildAuthHeaders(
+    method: string,
+    requestUri: string,
+    body: string,
+  ): Record<string, string> {
     const ts = Math.floor(Date.now() / 1000).toString();
     const nonce = randomUUID().replace(/-/g, '');
-    const signature = this.buildSignature('GET', requestUri, ts, '');
+    const signature = this.buildSignature(method, requestUri, ts, body);
+    return {
+      'X-Informer-Key': this.cfg.key,
+      'X-Informer-Timestamp': ts,
+      'X-Informer-Nonce': nonce,
+      'X-Informer-Signature': signature,
+    };
+  }
+
+  private async signedRequest<T>(
+    method: 'GET' | 'POST',
+    path: string,
+    body: string,
+  ): Promise<T> {
+    const url = new URL(path, this.cfg.baseUrl);
+    const requestUri = url.pathname + url.search;
+    const headers = this.buildAuthHeaders(method, requestUri, body);
+    if (method === 'POST') headers['Content-Type'] = 'application/json';
 
     const controller = new AbortController();
     const timer = setTimeout(
@@ -75,13 +99,9 @@ export class InformerClient {
     let resp: Response;
     try {
       resp = await fetch(url.toString(), {
-        method: 'GET',
-        headers: {
-          'X-Informer-Key': this.cfg.key,
-          'X-Informer-Timestamp': ts,
-          'X-Informer-Nonce': nonce,
-          'X-Informer-Signature': signature,
-        },
+        method,
+        headers,
+        body: method === 'POST' ? body : undefined,
         signal: controller.signal,
       });
     } catch (e: any) {
@@ -106,6 +126,18 @@ export class InformerClient {
       return envelope.data;
     }
     throw this.mapStatusToError(resp.status, text);
+  }
+
+  private signedGet<T>(path: string): Promise<T> {
+    return this.signedRequest<T>('GET', path, '');
+  }
+
+  private signedPost<T>(path: string, payload: unknown): Promise<T> {
+    // Serialize once and pass the exact bytes to both sha256 (in signing
+    // string) and fetch body. Any whitespace / key-order drift between the
+    // two would yield 401 (signature mismatch).
+    const body = JSON.stringify(payload);
+    return this.signedRequest<T>('POST', path, body);
   }
 
   getOperatorRequiredCount(): Promise<OperatorRequiredCount> {
@@ -136,6 +168,16 @@ export class InformerClient {
   getGatewaySystemWalletBalances(): Promise<GatewaySystemWalletBalances> {
     return this.signedGet<GatewaySystemWalletBalances>(
       '/informer/v1/gateway/system-wallet-balances',
+    );
+  }
+
+  retryOperatorWallet(
+    walletId: number,
+    totpCode: string,
+  ): Promise<OperatorWalletRetryResult> {
+    return this.signedPost<OperatorWalletRetryResult>(
+      `/informer/v1/operator-required-wallets/${walletId}/retry`,
+      { totp_code: totpCode },
     );
   }
 }
