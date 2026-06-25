@@ -81,8 +81,8 @@ export class AppController {
     // Env-overridable so the DO/talerid build advertises its own track + APK URL;
     // defaults preserve aeza (prod/dev) behaviour when these vars are unset.
     const latest = {
-      version: env.APP_LATEST_VERSION || '1.1.3',
-      build: parseInt(env.APP_LATEST_BUILD || '201', 10),
+      version: env.APP_LATEST_VERSION || '1.1.4',
+      build: parseInt(env.APP_LATEST_BUILD || '202', 10),
     };
     const androidUrl =
       env.APP_UPDATE_URL_ANDROID ||
@@ -104,6 +104,22 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.1.4',
+    build: 202,
+    date: '2026-06-25',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.4 — Новая хром-иконка + чёткие иконки на маленьких размерах.\n\n' +
+      'Обновлён дизайн иконки приложения — теплее свечение по контуру (вместо холодного chrome в 1.1.2/1.1.3). Иконка одна на трёх треках (DEV / TEST / Taler ID), различие — только в названии под иконкой.\n\n' +
+      'Чинит замыленные иконки на маленьких размерах (60×60 / 120×120 на home screen, лаунчер, нотификации): теперь все размеры генерятся через ImageMagick с Lanczos + unsharp вместо встроенного билинейного даунсемплинга — детали и тонкие линии (точки контура, светлые блики) видны на любом размере.\n\n' +
+      'Без функциональных изменений — продолжение визуального refresh.',
+    notes_en:
+      'Release 1.1.4 — New chrome icon + crisp small-size rendering.\n\n' +
+      'Refreshed app icon design — warmer outline glow (vs the colder chrome in 1.1.2/1.1.3). Same icon across all three tracks (DEV / TEST / Taler ID); only the name under the icon differs.\n\n' +
+      'Fixes the blurry small-size icons (60×60 / 120×120 on home screen, launcher, notifications): every size is now generated via ImageMagick Lanczos + unsharp instead of the default bilinear downsample — fine details (contour dots, highlights) stay visible at every size.\n\n' +
+      'No functional changes — continuation of the visual refresh.',
+  },
   {
     version: '1.1.3',
     build: 201,
