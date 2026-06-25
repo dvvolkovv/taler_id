@@ -81,8 +81,8 @@ export class AppController {
     // Env-overridable so the DO/talerid build advertises its own track + APK URL;
     // defaults preserve aeza (prod/dev) behaviour when these vars are unset.
     const latest = {
-      version: env.APP_LATEST_VERSION || '1.1.5',
-      build: parseInt(env.APP_LATEST_BUILD || '203', 10),
+      version: env.APP_LATEST_VERSION || '1.1.6',
+      build: parseInt(env.APP_LATEST_BUILD || '204', 10),
     };
     const androidUrl =
       env.APP_UPDATE_URL_ANDROID ||
@@ -104,6 +104,20 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.1.6',
+    build: 204,
+    date: '2026-06-25',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.6\n\n' +
+      'Убраны цветные тени вокруг логотипа на заставке и в экране ассистента — хром-иконка теперь выглядит чище.\n' +
+      'Улучшена маска иконки для светлой темы: устранён оранжевый ореол на белом фоне.',
+    notes_en:
+      'Release 1.1.6\n\n' +
+      'Removed coloured glow shadows around the logo on the splash screen and in the assistant screen — the chrome icon now looks cleaner.\n' +
+      'Tightened the light-theme icon mask to eliminate the orange halo on white backgrounds.',
+  },
   {
     version: '1.1.5',
     build: 203,
