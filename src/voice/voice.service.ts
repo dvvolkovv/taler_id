@@ -231,21 +231,32 @@ export class VoiceService {
             });
           otherIds = convParticipants.map((cp) => cp.userId);
         }
-        const profiles = await this.prisma.profile.findMany({
-          where: { userId: { in: otherIds } },
+        // Query User (not Profile) so we can fall back to username when the
+        // profile has no firstName/lastName — matches makeToken() below, which
+        // already does fullName || username || userId. Without this fallback,
+        // users like VKOVAL (username set, profile names empty) showed up as
+        // raw UUIDs in call history while LiveKit identified them by username.
+        const users = await this.prisma.user.findMany({
+          where: { id: { in: otherIds } },
           select: {
-            userId: true,
-            firstName: true,
-            lastName: true,
-            avatarUrl: true,
+            id: true,
+            username: true,
+            profile: {
+              select: { firstName: true, lastName: true, avatarUrl: true },
+            },
           },
         });
-        const participants = profiles.map((p) => ({
-          userId: p.userId,
-          displayName:
-            `${p.firstName ?? ''} ${p.lastName ?? ''}`.trim() || p.userId,
-          avatarUrl: p.avatarUrl ?? undefined,
-        }));
+        const usersById = new Map(users.map((u) => [u.id, u]));
+        const participants = otherIds.map((id) => {
+          const u = usersById.get(id);
+          const fullName =
+            `${u?.profile?.firstName ?? ''} ${u?.profile?.lastName ?? ''}`.trim();
+          return {
+            userId: id,
+            displayName: fullName || u?.username || id,
+            avatarUrl: u?.profile?.avatarUrl ?? undefined,
+          };
+        });
         return {
           id: log.id,
           roomName: log.roomName,
@@ -311,21 +322,29 @@ export class VoiceService {
     });
     if (!log) throw new Error('Call not found');
     if (!log.participantIds.includes(userId)) throw new Error('Access denied');
-    const profiles = await this.prisma.profile.findMany({
-      where: { userId: { in: log.participantIds } },
+    // Same User+Profile lookup as getCallHistory — fall back to username when
+    // firstName/lastName are empty (matches makeToken behaviour).
+    const users = await this.prisma.user.findMany({
+      where: { id: { in: log.participantIds } },
       select: {
-        userId: true,
-        firstName: true,
-        lastName: true,
-        avatarUrl: true,
+        id: true,
+        username: true,
+        profile: {
+          select: { firstName: true, lastName: true, avatarUrl: true },
+        },
       },
     });
-    const participants = profiles.map((p) => ({
-      userId: p.userId,
-      displayName:
-        `${p.firstName ?? ''} ${p.lastName ?? ''}`.trim() || p.userId,
-      avatarUrl: p.avatarUrl,
-    }));
+    const usersById = new Map(users.map((u) => [u.id, u]));
+    const participants = log.participantIds.map((id) => {
+      const u = usersById.get(id);
+      const fullName =
+        `${u?.profile?.firstName ?? ''} ${u?.profile?.lastName ?? ''}`.trim();
+      return {
+        userId: id,
+        displayName: fullName || u?.username || id,
+        avatarUrl: u?.profile?.avatarUrl ?? undefined,
+      };
+    });
     return {
       id: log.id,
       roomName: log.roomName,

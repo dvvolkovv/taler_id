@@ -81,8 +81,8 @@ export class AppController {
     // Env-overridable so the DO/talerid build advertises its own track + APK URL;
     // defaults preserve aeza (prod/dev) behaviour when these vars are unset.
     const latest = {
-      version: env.APP_LATEST_VERSION || '1.1.6',
-      build: parseInt(env.APP_LATEST_BUILD || '204', 10),
+      version: env.APP_LATEST_VERSION || '1.1.7',
+      build: parseInt(env.APP_LATEST_BUILD || '205', 10),
     };
     const androidUrl =
       env.APP_UPDATE_URL_ANDROID ||
@@ -104,6 +104,24 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.1.7',
+    build: 205,
+    date: '2026-06-27',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.7 — пакет фиксов для звонков.\n\n' +
+      '🔊 Громкая связь больше не сбрасывается при сворачивании окна звонка. Если ты включил динамик и свернул приложение — звук останется на динамике, когда ты вернёшься в звонок (раньше тихо переключался на разговорный).\n\n' +
+      '📞 Имя собеседника в истории звонков теперь отображается корректно даже у контактов, у которых заполнен только username (без имени/фамилии). Раньше такие звонки помечались UUID-ом — было непонятно кто звонил.\n\n' +
+      '🔀 Если вы и собеседник одновременно набираете друг друга — больше не будет второго звонка поверх первого. Вместо этого появится выбор: «Принять его» (роняет твой исходящий, поднимаешь его звонок) или «Остаться на своём» (отбиваешь его, твой звонок продолжается).\n\n' +
+      '🎧 Если у собеседника видно индикатор речи (кружок мигает), но звука не слышно — приложение теперь автоматически восстанавливает аудио-трек (раньше единственный workaround был перезвонить).',
+    notes_en:
+      'Release 1.1.7 — voice call fix bundle.\n\n' +
+      '🔊 Speakerphone no longer reverts to earpiece when minimising the call screen. If you enabled the speaker and backgrounded the app, audio stays on the speaker when you come back (previously it silently switched back to the earpiece).\n\n' +
+      '📞 The contact name in call history is now shown correctly even for contacts who only have a username (no first/last name). Previously such calls were tagged with a UUID and you could not tell who called.\n\n' +
+      '🔀 When you and your contact dial each other at the same moment — no more second ringing call layered on top of the first. Instead you get a choice: "Pick up theirs" (drops your outgoing, picks up their call) or "Stay on mine" (declines theirs, your call keeps ringing).\n\n' +
+      '🎧 If the speaking indicator for the remote peer is ticking but you hear nothing, the app now automatically recovers the audio track (previously the only workaround was to hang up and call again).',
+  },
   {
     version: '1.1.6',
     build: 204,
