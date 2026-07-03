@@ -10,6 +10,14 @@ import * as path from 'path';
 const CLAUDE_WORKER_URL =
   process.env.CLAUDE_WORKER_URL || 'http://5.101.115.184:3033';
 
+// Bearer token for the Worker (it rejects unauthenticated requests since
+// 2026-07-03 — defense-in-depth on top of its ufw allowlist).
+const CLAUDE_WORKER_TOKEN = process.env.CLAUDE_WORKER_TOKEN || '';
+const workerAuthHeaders = (): Record<string, string> =>
+  CLAUDE_WORKER_TOKEN
+    ? { Authorization: `Bearer ${CLAUDE_WORKER_TOKEN}` }
+    : {};
+
 // Where Worker-produced output files are mirrored so mobile clients can fetch
 // them. The Worker's own static `/files/...` is locked behind an iptables
 // allowlist (PROD/DEV only) — phones cannot reach it. We copy files into an
@@ -99,12 +107,13 @@ export class AiAnalystService {
         }
         return fetch(`${CLAUDE_WORKER_URL}/chat`, {
           method: 'POST',
+          headers: workerAuthHeaders(),
           body: formData,
         });
       }
       return fetch(`${CLAUDE_WORKER_URL}/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...workerAuthHeaders() },
         body: JSON.stringify({
           message: input.messageText,
           sessionId,
@@ -238,7 +247,7 @@ export class AiAnalystService {
 
       try {
         await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
-        const resp = await fetch(sourceUrl);
+        const resp = await fetch(sourceUrl, { headers: workerAuthHeaders() });
         if (!resp.ok) {
           this.logger.warn(
             `mirrorOutputFiles: GET ${sourceUrl} -> ${resp.status}, skipping`,
