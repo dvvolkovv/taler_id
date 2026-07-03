@@ -81,8 +81,8 @@ export class AppController {
     // Env-overridable so the DO/talerid build advertises its own track + APK URL;
     // defaults preserve aeza (prod/dev) behaviour when these vars are unset.
     const latest = {
-      version: env.APP_LATEST_VERSION || '1.1.7',
-      build: parseInt(env.APP_LATEST_BUILD || '205', 10),
+      version: env.APP_LATEST_VERSION || '1.1.8',
+      build: parseInt(env.APP_LATEST_BUILD || '206', 10),
     };
     const androidUrl =
       env.APP_UPDATE_URL_ANDROID ||
@@ -104,6 +104,22 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.1.8',
+    build: 206,
+    date: '2026-07-03',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.8 — голос хозяина для AI-ассистента.\n\n' +
+      '🎙️ Ассистент теперь может узнавать твой голос. При первом открытии ассистента появится предложение записать короткий образец голоса (~15 секунд). После записи ассистент будет реагировать только на голос владельца аккаунта — и игнорировать телевизор, коллег рядом или чужую речь в комнате.\n\n' +
+      '🔒 Образец голоса хранится как математический отпечаток (embedding), само аудио не сохраняется. Запись можно удалить в любой момент — ассистент вернётся к обычному режиму.\n\n' +
+      'Функция экспериментальная: если распознавание сработает неверно, ассистент продолжит работать как раньше, без блокировки.',
+    notes_en:
+      'Release 1.1.8 — owner voice for the AI assistant.\n\n' +
+      '🎙️ The assistant can now recognise your voice. On first open you will be offered to record a short voice sample (~15 seconds). Once enrolled, the assistant reacts only to the account owner’s voice — ignoring the TV, nearby colleagues, or other people speaking in the room.\n\n' +
+      '🔒 The voice sample is stored as a mathematical fingerprint (embedding); the audio itself is not kept. You can delete the enrollment at any time and the assistant returns to normal mode.\n\n' +
+      'This feature is experimental: if recognition misfires, the assistant keeps working as before without locking you out.',
+  },
   {
     version: '1.1.7',
     build: 205,
