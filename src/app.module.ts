@@ -20,6 +20,7 @@ import { DemoModule } from './demo/demo.module';
 import { AssistantModule } from './assistant/assistant.module';
 import { MessengerModule } from './messenger/messenger.module';
 import { VoiceModule } from './voice/voice.module';
+import { VoiceGateModule } from './voice-gate/voice-gate.module';
 import { ProfileSectionsModule } from './profile-sections/profile-sections.module';
 import { NotesModule } from './notes/notes.module';
 import { CalendarModule } from './calendar/calendar.module';
@@ -106,6 +107,7 @@ import configuration from './config/configuration';
     AssistantModule,
     MessengerModule,
     VoiceModule,
+    VoiceGateModule,
     ProfileSectionsModule,
     ScheduleModule.forRoot(),
     NotesModule,

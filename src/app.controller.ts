@@ -151,6 +151,56 @@ const APP_RELEASES = [
       'Tapping the call button now immediately shows the callee\'s name and avatar with a ringback tone — restoring behaviour from before 1.1.3.',
   },
   {
+    version: '1.1.4',
+    build: 202,
+    date: '2026-06-25',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.4 — Новая хром-иконка + чёткие иконки на маленьких размерах.\n\n' +
+      'Обновлён дизайн иконки приложения — теплее свечение по контуру (вместо холодного chrome в 1.1.2/1.1.3). Иконка одна на трёх треках (DEV / TEST / Taler ID), различие — только в названии под иконкой.\n\n' +
+      'Чинит замыленные иконки на маленьких размерах (60×60 / 120×120 на home screen, лаунчер, нотификации): теперь все размеры генерятся через ImageMagick с Lanczos + unsharp вместо встроенного билинейного даунсемплинга — детали и тонкие линии (точки контура, светлые блики) видны на любом размере.\n\n' +
+      'Без функциональных изменений — продолжение визуального refresh.',
+    notes_en:
+      'Release 1.1.4 — New chrome icon + crisp small-size rendering.\n\n' +
+      'Refreshed app icon design — warmer outline glow (vs the colder chrome in 1.1.2/1.1.3). Same icon across all three tracks (DEV / TEST / Taler ID); only the name under the icon differs.\n\n' +
+      'Fixes the blurry small-size icons (60×60 / 120×120 on home screen, launcher, notifications): every size is now generated via ImageMagick Lanczos + unsharp instead of the default bilinear downsample — fine details (contour dots, highlights) stay visible at every size.\n\n' +
+      'No functional changes — continuation of the visual refresh.',
+  },
+  {
+    version: '1.1.3',
+    build: 201,
+    date: '2026-06-25',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.3 — Иконка вместо видео на сплеше и в Ассистенте + новый launch screen.\n\n' +
+      'Пульсирующее видео-лого, которое крутилось в центре splash-экрана и в AI-Ассистенте (на idle, в активной сессии и при загрузке), заменено на статическую хром-иконку. На светлой теме — chrome с прозрачным фоном поверх белой подложки; на тёмной — chrome на чёрной подложке.\n\n' +
+      'Также обновлены native launch-screens, которые показываются ДО загрузки Flutter:\n' +
+      '• Android — хром-иконка из mipmap/ic_launcher поверх чёрного фона.\n' +
+      '• iOS — настоящая хром-иконка 200/400/600 px вместо прежней 1×1 заглушки, фон сменился с синего на чёрный.\n\n' +
+      'Никаких функциональных изменений — продолжение визуального refresh, начатого в 1.1.2.',
+    notes_en:
+      'Release 1.1.3 — Static icon instead of looping video on splash and Assistant + new native launch screen.\n\n' +
+      'The pulsing video logo that played in the centre of the splash screen and the AI Assistant (idle, active, and loading states) is replaced with the static chrome icon. On light theme — chrome with transparent background over a white pad; on dark theme — chrome over a black pad.\n\n' +
+      'Native launch screens (shown BEFORE Flutter loads) are also updated:\n' +
+      '• Android — chrome icon from mipmap/ic_launcher over a black background.\n' +
+      '• iOS — real chrome icon at 200/400/600 px instead of the previous 1×1 placeholder, background switched from blue to black.\n\n' +
+      'No functional changes — continuation of the visual refresh started in 1.1.2.',
+  },
+  {
+    version: '1.1.2',
+    build: 200,
+    date: '2026-06-24',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.2 — Обновлённая иконка приложения.\n\n' +
+      'Новый дизайн иконки — хромированная скульптурная форма на чёрном фоне (взамен прежней «звезды»). Иконка теперь одна и та же на трёх треках (DEV / TEST / Taler ID), различие сохраняется только в названии под иконкой («DEV Taler ID», «TEST Taler ID», «Taler ID»). Внутри приложения логотипы на сплеше, экране входа, AI-ассистенте и в профиле тоже обновлены под новый дизайн.\n\n' +
+      'Никаких изменений в функциональности — только обновление визуального бренда.',
+    notes_en:
+      'Release 1.1.2 — Refreshed app icon.\n\n' +
+      'New icon design — chrome sculptural shape on black background (replacing the previous "star"). The icon is now the same across all three tracks (DEV / TEST / Taler ID); they remain distinguishable by the name under the icon ("DEV Taler ID", "TEST Taler ID", "Taler ID"). In-app branding on splash, login, AI assistant, and profile screens has been updated to match.\n\n' +
+      'No functional changes — purely a visual brand refresh.',
+  },
+  {
     version: '1.1.1',
     build: 198,
     date: '2026-06-22',
