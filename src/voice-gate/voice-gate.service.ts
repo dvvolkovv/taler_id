@@ -46,7 +46,11 @@ export class VoiceGateService {
     if (!this.enabled) {
       return { ok: false, error: 'feature_disabled' };
     }
-    const emb = await this.embedAudio(audio, this.enrollTimeoutMs);
+    // windowSec=3 matches OWNER_VOICE_WINDOW_MS at runtime: enrollment is
+    // stored as the average of 3-sec window embeddings so verify compares
+    // like with like (single whole-clip embeddings sit in a different part
+    // of ECAPA space than short-window embeddings and drag cosine down).
+    const emb = await this.embedAudio(audio, this.enrollTimeoutMs, 3);
     if (emb.error === 'embed_unavailable') {
       return { ok: false, error: 'manax_unavailable' };
     }
@@ -79,9 +83,16 @@ export class VoiceGateService {
     };
   }
 
-  async embedAudio(audio: Buffer, timeoutMs = this.verifyTimeoutMs): Promise<EmbedResult> {
+  async embedAudio(
+    audio: Buffer,
+    timeoutMs = this.verifyTimeoutMs,
+    windowSec?: number,
+  ): Promise<EmbedResult> {
     const form = new FormData();
     form.append('audio', audio, { filename: 'audio.wav', contentType: 'audio/wav' });
+    if (windowSec) {
+      form.append('window_sec', String(windowSec));
+    }
     const start = Date.now();
     try {
       const resp = await axios.post<{ vector: number[]; dim: number; audioSec: number }>(
