@@ -59,3 +59,19 @@ export function wrapWavMono(pcm: Buffer, sampleRate = 16_000): Buffer {
 
   return Buffer.concat([header, pcm]);
 }
+
+/**
+ * RMS energy of int16 LE PCM. Used as a cheap VAD: windows quieter than
+ * ~400 RMS are silence/room-noise — their ECAPA embeddings are garbage
+ * (cosine ~0 vs anyone) and must not vote in owner gating.
+ */
+export function pcmRms16(pcm: Buffer): number {
+  const samples = Math.floor(pcm.length / 2);
+  if (samples === 0) return 0;
+  let sumSq = 0;
+  for (let i = 0; i < samples; i++) {
+    const v = pcm.readInt16LE(i * 2);
+    sumSq += v * v;
+  }
+  return Math.sqrt(sumSq / samples);
+}

@@ -49,3 +49,25 @@ describe('wrapWavMono', () => {
     expect(wav.readUInt32LE(28)).toBe(48_000);
   });
 });
+
+describe('pcmRms16', () => {
+  it('returns 0 for empty buffer', () => {
+    const { pcmRms16 } = require('./pcm-window');
+    expect(pcmRms16(Buffer.alloc(0))).toBe(0);
+  });
+
+  it('returns 0 for silence and full-scale for a square wave', () => {
+    const { pcmRms16 } = require('./pcm-window');
+    expect(pcmRms16(Buffer.alloc(3200))).toBe(0);
+    const loud = Buffer.alloc(3200);
+    for (let i = 0; i < 1600; i++) loud.writeInt16LE(i % 2 === 0 ? 16000 : -16000, i * 2);
+    expect(pcmRms16(loud)).toBeCloseTo(16000, 0);
+  });
+
+  it('quiet room noise stays below the 400 gate', () => {
+    const { pcmRms16 } = require('./pcm-window');
+    const noise = Buffer.alloc(3200);
+    for (let i = 0; i < 1600; i++) noise.writeInt16LE((i % 7) - 3, i * 2);
+    expect(pcmRms16(noise)).toBeLessThan(400);
+  });
+});
