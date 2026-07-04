@@ -30,12 +30,13 @@ export class PcmWindow {
 }
 
 /**
- * Wrap 16kHz mono int16 PCM in a RIFF/WAV header. voice-embed-service
- * uses torchaudio.load which expects a real audio container, not a raw
- * PCM byte stream.
+ * Wrap mono int16 PCM in a RIFF/WAV header. voice-embed-service uses
+ * torchaudio.load which expects a real audio container, not a raw PCM
+ * byte stream. The sample rate MUST match the actual PCM rate — the
+ * OpenAI Realtime stream is 24kHz; mislabeling it as 16kHz slows the
+ * audio 1.5x and destroys ECAPA embeddings (cosine ~0 vs enrollment).
  */
-export function wrapWav16kMono(pcm: Buffer): Buffer {
-  const sampleRate = 16_000;
+export function wrapWavMono(pcm: Buffer, sampleRate = 16_000): Buffer {
   const numChannels = 1;
   const bitsPerSample = 16;
   const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
