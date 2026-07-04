@@ -14,7 +14,7 @@ import { verify, type JwtPayload } from 'jsonwebtoken';
 import * as fs from 'fs';
 import { json } from 'express';
 import { VoiceGateService } from './voice-gate/voice-gate.service';
-import { PcmWindow, wrapWavMono } from './voice-gate/pcm-window';
+import { PcmWindow, wrapWavMono, pcmRms16 } from './voice-gate/pcm-window';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
@@ -640,6 +640,13 @@ async function bootstrap() {
       let ownerEmbedding: number[] = [];
       let responseInFlight = false;
       const pcmWindow = new PcmWindow(ownerVoiceWindowBytes);
+      // Anti-flap gating state: silence windows never vote; a single
+      // borderline non-owner window must not wipe the input buffer
+      // mid-sentence — require 2 consecutive speech-energy non-owner
+      // verdicts before retracting.
+      let nonOwnerStreak = 0;
+      const VOICE_GATE_MIN_RMS = 400;
+      const VOICE_GATE_STREAK = 2;
       let verifyInFlight = false;
 
       // Known race: fire-and-forget Prisma.findUnique here means audio frames
@@ -799,7 +806,7 @@ async function bootstrap() {
               typeof parsedClient.audio === 'string'
             ) {
               const window = pcmWindow.appendBase64(parsedClient.audio);
-              if (window) {
+              if (window && pcmRms16(window) >= VOICE_GATE_MIN_RMS) {
                 verifyInFlight = true;
                 const wav = wrapWavMono(window, 24_000);
                 voiceGate
@@ -822,17 +829,23 @@ async function bootstrap() {
                       }),
                       'voice-gate.verify',
                     );
-                    if (
-                      verdict.isOwner === false &&
-                      openaiWs.readyState === WebSocket.OPEN
-                    ) {
-                      openaiWs.send(
-                        JSON.stringify({ type: 'input_audio_buffer.clear' }),
-                      );
-                      if (responseInFlight) {
+                    if (verdict.isOwner === true) {
+                      nonOwnerStreak = 0;
+                    } else if (verdict.isOwner === false) {
+                      nonOwnerStreak += 1;
+                      if (
+                        nonOwnerStreak >= VOICE_GATE_STREAK &&
+                        openaiWs.readyState === WebSocket.OPEN
+                      ) {
+                        nonOwnerStreak = 0;
                         openaiWs.send(
-                          JSON.stringify({ type: 'response.cancel' }),
+                          JSON.stringify({ type: 'input_audio_buffer.clear' }),
                         );
+                        if (responseInFlight) {
+                          openaiWs.send(
+                            JSON.stringify({ type: 'response.cancel' }),
+                          );
+                        }
                       }
                     }
                   })

@@ -34,7 +34,7 @@ export class VoiceGateService {
 
   constructor(private readonly config: ConfigService) {
     this.baseUrl = config.get<string>('VOICE_EMBED_URL', 'http://127.0.0.1:18082');
-    this.threshold = parseFloat(config.get<string>('OWNER_VOICE_THRESHOLD', '0.5'));
+    this.threshold = parseFloat(config.get<string>('OWNER_VOICE_THRESHOLD', '0.3'));
     this.enabled = config.get<string>('OWNER_VOICE_ENABLED', 'true') !== 'false';
   }
 
