@@ -1,4 +1,4 @@
-import { PcmWindow, wrapWav16kMono } from './pcm-window';
+import { PcmWindow, wrapWavMono } from './pcm-window';
 
 describe('PcmWindow', () => {
   it('does not emit before window is full', () => {
@@ -26,10 +26,10 @@ describe('PcmWindow', () => {
   });
 });
 
-describe('wrapWav16kMono', () => {
+describe('wrapWavMono', () => {
   it('produces a 44-byte RIFF header + the original PCM payload', () => {
     const pcm = Buffer.alloc(32_000); // 1 sec of audio
-    const wav = wrapWav16kMono(pcm);
+    const wav = wrapWavMono(pcm);
     expect(wav.length).toBe(44 + 32_000);
     expect(wav.slice(0, 4).toString()).toBe('RIFF');
     expect(wav.slice(8, 12).toString()).toBe('WAVE');
@@ -39,5 +39,13 @@ describe('wrapWav16kMono', () => {
     expect(wav.readUInt16LE(34)).toBe(16);
     // num channels at bytes 22..24 → 1
     expect(wav.readUInt16LE(22)).toBe(1);
+  });
+
+  it('writes the requested sample rate into the header (24kHz realtime PCM)', () => {
+    const pcm = Buffer.alloc(48_000); // 1 sec of 24kHz mono int16
+    const wav = wrapWavMono(pcm, 24_000);
+    expect(wav.readUInt32LE(24)).toBe(24_000);
+    // byteRate = sampleRate * channels * 2
+    expect(wav.readUInt32LE(28)).toBe(48_000);
   });
 });

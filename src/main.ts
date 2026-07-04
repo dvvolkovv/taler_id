@@ -14,7 +14,7 @@ import { verify, type JwtPayload } from 'jsonwebtoken';
 import * as fs from 'fs';
 import { json } from 'express';
 import { VoiceGateService } from './voice-gate/voice-gate.service';
-import { PcmWindow, wrapWav16kMono } from './voice-gate/pcm-window';
+import { PcmWindow, wrapWavMono } from './voice-gate/pcm-window';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
@@ -574,7 +574,8 @@ async function bootstrap() {
     process.env.OWNER_VOICE_WINDOW_MS ?? '1000',
   );
   // 16 samples/ms × 2 bytes per int16 = 32 bytes/ms PCM; round to whole sample
-  const ownerVoiceWindowBytes = Math.round(ownerVoiceWindowMs * 32);
+  // OpenAI Realtime audio is 24kHz mono int16 PCM: 48 bytes per ms.
+  const ownerVoiceWindowBytes = Math.round(ownerVoiceWindowMs * 48);
   const wss = new WebSocketServer({ noServer: true });
   const httpServer = app.getHttpServer();
   const gatingService = app.get(GatingService);
@@ -800,7 +801,7 @@ async function bootstrap() {
               const window = pcmWindow.appendBase64(parsedClient.audio);
               if (window) {
                 verifyInFlight = true;
-                const wav = wrapWav16kMono(window);
+                const wav = wrapWavMono(window, 24_000);
                 voiceGate
                   .verify(wav, ownerEmbedding)
                   .then((verdict) => {
