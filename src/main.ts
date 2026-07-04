@@ -640,13 +640,18 @@ async function bootstrap() {
       let ownerEmbedding: number[] = [];
       let responseInFlight = false;
       const pcmWindow = new PcmWindow(ownerVoiceWindowBytes);
-      // Anti-flap gating state: silence windows never vote; a single
-      // borderline non-owner window must not wipe the input buffer
-      // mid-sentence — require 2 consecutive speech-energy non-owner
-      // verdicts before retracting.
+      // Anti-flap gating state: silence windows never vote (RMS gate).
+      // With 3-sec windows a single speech-energy verdict is reliable
+      // (owner ~0.31-0.55, others <0.2 with windowed enrollment), so one
+      // non-owner window retracts immediately — with 2 the reaction lagged
+      // behind OpenAI's VAD commit and foreign turns slipped through.
       let nonOwnerStreak = 0;
       const VOICE_GATE_MIN_RMS = 400;
-      const VOICE_GATE_STREAK = 2;
+      const VOICE_GATE_STREAK = 1;
+      // Ring of recently committed user input item ids: on a non-owner
+      // verdict the buffer may already be committed, so buffer.clear alone
+      // is not enough — delete the committed conversation items too.
+      const recentUserItemIds: string[] = [];
       let verifyInFlight = false;
 
       // Known race: fire-and-forget Prisma.findUnique here means audio frames
@@ -846,6 +851,25 @@ async function bootstrap() {
                             JSON.stringify({ type: 'response.cancel' }),
                           );
                         }
+                        // Retract turns OpenAI already committed from this
+                        // foreign speech — buffer.clear only covers the
+                        // uncommitted tail.
+                        while (recentUserItemIds.length > 0) {
+                          const itemId = recentUserItemIds.pop();
+                          openaiWs.send(
+                            JSON.stringify({
+                              type: 'conversation.item.delete',
+                              item_id: itemId,
+                            }),
+                          );
+                        }
+                        Logger.log(
+                          JSON.stringify({
+                            ns: 'voice-gate.retract',
+                            userId: userIdFromToken,
+                          }),
+                          'voice-gate.retract',
+                        );
                       }
                     }
                   })
@@ -884,6 +908,14 @@ async function bootstrap() {
               Logger.log('session.updated received from OpenAI', 'RealtimeProxy');
             }
             if (ev.type === 'response.created') responseInFlight = true;
+            if (
+              ev.type === 'conversation.item.created' &&
+              ev.item?.role === 'user' &&
+              typeof ev.item?.id === 'string'
+            ) {
+              recentUserItemIds.push(ev.item.id);
+              if (recentUserItemIds.length > 4) recentUserItemIds.shift();
+            }
             if (
               ev.type === 'response.done' ||
               ev.type === 'response.cancelled'
