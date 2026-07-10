@@ -958,8 +958,27 @@
     }
 
     async function connectToRoom(token) {
-      const { Room, RoomEvent, Track } = LivekitClient;
-      room = new Room({ adaptiveStream: true, dynacast: true });
+      const { Room, RoomEvent, Track, VideoPresets } = LivekitClient;
+      // Cap publish bitrates — without maxBitrate WebRTC pushes ~2+ Mbps for
+      // 720p camera and captures screen share at native display resolution
+      // (4K monitors → several Mbps). On asymmetric uplinks this saturates
+      // the channel and stalls ALL other traffic on the user's machine
+      // (reported: "весь интернет висит во время звонка").
+      room = new Room({
+        adaptiveStream: true,
+        dynacast: true,
+        videoCaptureDefaults: {
+          resolution: VideoPresets.h720.resolution,
+        },
+        screenShareCaptureDefaults: {
+          resolution: VideoPresets.h1080.resolution,
+        },
+        publishDefaults: {
+          simulcast: true,
+          videoEncoding: { maxBitrate: 1_200_000, maxFramerate: 24 },
+          screenShareEncoding: { maxBitrate: 1_500_000, maxFramerate: 10 },
+        },
+      });
 
       const updateCount = () => {
         if (!room) return;
