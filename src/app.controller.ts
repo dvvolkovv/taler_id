@@ -81,8 +81,8 @@ export class AppController {
     // Env-overridable so the DO/talerid build advertises its own track + APK URL;
     // defaults preserve aeza (prod/dev) behaviour when these vars are unset.
     const latest = {
-      version: env.APP_LATEST_VERSION || '1.1.8',
-      build: parseInt(env.APP_LATEST_BUILD || '206', 10),
+      version: env.APP_LATEST_VERSION || '1.1.9',
+      build: parseInt(env.APP_LATEST_BUILD || '207', 10),
     };
     const androidUrl =
       env.APP_UPDATE_URL_ANDROID ||
@@ -104,6 +104,24 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.1.9',
+    build: 207,
+    date: '2026-07-10',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.9 — доработки голосового ассистента и звонков.\n\n' +
+      '🎙️ Управление голосом владельца: в Настройках → «Голосовой помощник» появился пункт «Голос владельца» — можно посмотреть статус, записать образец заново или удалить его (ассистент вернётся к обычному режиму).\n\n' +
+      '🎧 Звонки: при переключении в другое приложение (например, WhatsApp) и возврате звук больше не слетает с наушников на громкую связь — приложение теперь уважает фактически подключённое устройство.\n\n' +
+      '🌐 Переводчик: если назвать языки («переводи с русского на китайский»), пара языков выставляется сразу и правильно — раньше флаги могли залипнуть на 🇷🇺+🇬🇧.\n\n' +
+      '💬 Ваши реплики в чате с ассистентом теперь появляются в правильном порядке — до ответа, а не после. Реплики посторонних (телевизор, чужая речь), отклонённые фильтром голоса владельца, больше не остаются в переписке.',
+    notes_en:
+      'Release 1.1.9 — voice assistant and call refinements.\n\n' +
+      '🎙️ Owner voice management: Settings → Voice Assistant now has an "Owner voice" entry — check status, re-record the sample, or delete it (the assistant returns to normal mode).\n\n' +
+      '🎧 Calls: switching to another app (e.g. WhatsApp) and back no longer knocks audio off your headphones onto the loudspeaker — the app now respects the actually connected device.\n\n' +
+      '🌐 Translator: naming the languages ("translate between Russian and Chinese") locks the correct pair immediately — flags used to get stuck on 🇷🇺+🇬🇧.\n\n' +
+      '💬 Your messages in the assistant chat now appear in the correct order — before the answer, not after. Bystander speech (TV, other people) rejected by the owner-voice filter no longer lingers in the transcript.',
+  },
   {
     version: '1.1.8',
     build: 206,
