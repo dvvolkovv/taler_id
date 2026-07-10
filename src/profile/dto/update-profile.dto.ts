@@ -75,6 +75,12 @@ export class UpdateProfileDto {
   @IsOptional()
   aiTwinPrompt?: string;
 
+  // Preferred form of address for the AI assistant ("Дима", "Dmitry", …).
+  @IsString()
+  @MaxLength(80)
+  @IsOptional()
+  assistantName?: string;
+
   @IsString()
   @MaxLength(100)
   @IsOptional()
