@@ -408,6 +408,13 @@ export class MessengerGateway
         }
       }
     } catch (e) {
+      // Observability: message-send failures were silently swallowed (only emitted to
+      // the client) — a stale-client / missing-column break shipped dead pushes for a
+      // day before anyone noticed (incident 2026-07-10). Log server-side too.
+      this.logger.error(
+        `handleMessage failed (user=${client.data?.userId} conv=${payload?.conversationId}): ${(e as Error).message}`,
+        (e as Error).stack,
+      );
       client.emit('error', { message: (e as Error).message });
     }
   }
