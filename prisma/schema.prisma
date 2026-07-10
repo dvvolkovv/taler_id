@@ -287,6 +287,7 @@ model Message {
   poll               Poll?
   editedAt           DateTime?
   fileRecordId       String?
+  clientTempId       String?
   threadParentId     String?
   topicId            String?
   metadata           Json?
@@ -295,6 +296,7 @@ model Message {
   sender             User              @relation(fields: [senderId], references: [id])
 
   @@index([conversationId, sentAt])
+  @@unique([senderId, clientTempId])
 }
 
 model FileRecord {

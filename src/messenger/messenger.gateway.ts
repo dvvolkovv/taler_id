@@ -222,6 +222,9 @@ export class MessengerGateway
         payload.content,
         fileData,
         payload.topicId,
+        undefined,
+        undefined,
+        payload.clientTempId,
       );
       const senderName = await this.service.getUserDisplayName(
         client.data.userId,

@@ -729,7 +729,56 @@ export class MessengerService {
     topicId?: string,
     isSystem?: boolean,
     metadata?: Record<string, any>,
+    clientTempId?: string,
   ) {
+    // Durable idempotency: the Redis dedup key lives 24h, but broken client
+    // outboxes retry stuck sends for weeks (phantom-message incident,
+    // 2026-07-10). The unique index on (senderId, clientTempId) makes the
+    // retry collide; return the original row instead of inserting a copy.
+    if (clientTempId) {
+      try {
+        return await this.prisma.message.create({
+          data: {
+            conversationId,
+            senderId,
+            content,
+            clientTempId,
+            ...fileData,
+            ...(topicId ? { topicId } : {}),
+            ...(isSystem ? { isSystem } : {}),
+            ...(metadata ? { metadata } : {}),
+          },
+        });
+      } catch (e: any) {
+        if (e?.code === 'P2002') {
+          const existing = await this.prisma.message.findFirst({
+            where: { senderId, clientTempId },
+          });
+          if (existing) return existing;
+        }
+        throw e;
+      }
+    }
+    // No clientTempId (legacy clients): content-based fallback. An identical
+    // non-trivial message from the same sender in the same conversation
+    // within 14 days is a stuck-outbox retry, not a new send.
+    if (!isSystem && !fileData && content.length >= 20) {
+      const dup = await this.prisma.message.findFirst({
+        where: {
+          conversationId,
+          senderId,
+          content,
+          sentAt: { gte: new Date(Date.now() - 14 * 24 * 3600 * 1000) },
+        },
+        orderBy: { sentAt: 'desc' },
+      });
+      if (dup) {
+        this.logger?.warn?.(
+          `[createMessage] content-dedup hit: sender=${senderId} conv=${conversationId} len=${content.length}`,
+        );
+        return dup;
+      }
+    }
     return this.prisma.message.create({
       data: {
         conversationId,
