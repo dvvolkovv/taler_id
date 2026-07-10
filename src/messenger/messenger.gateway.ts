@@ -222,6 +222,9 @@ export class MessengerGateway
         payload.content,
         fileData,
         payload.topicId,
+        undefined,
+        undefined,
+        payload.clientTempId,
       );
       const senderName = await this.service.getUserDisplayName(
         client.data.userId,
@@ -914,6 +917,18 @@ export class MessengerGateway
       client.to(`user:${client.data.userId}`).emit('call_answered', {
         roomName: payload.roomName,
       });
+      // Sleeping devices have no live socket — their CallKit rings from the
+      // VoIP/FCM push alone. Send a cancel push to every device of the
+      // answerer; the client guards against ending an already-accepted call,
+      // so the answering device is unaffected.
+      try {
+        const tokens = await this.service.getFcmTokens(client.data.userId);
+        for (const token of tokens) {
+          this.fcmService
+            .sendCallCancelled(token, payload.roomName, 'answered_elsewhere')
+            .catch(() => {});
+        }
+      } catch (_) {}
     } catch (e) {}
   }
 
