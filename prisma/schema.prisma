@@ -90,6 +90,7 @@ model Profile {
   lastSeenPrivacy      LastSeenPrivacy @default(EVERYONE)
   ownerSpeakerId       String?
   ownerEmbedding       Float[]         @default([])
+  assistantName        String?
   documents            Document[]
   user                 User            @relation(fields: [userId], references: [id])
 }

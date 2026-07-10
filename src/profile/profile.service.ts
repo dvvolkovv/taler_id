@@ -132,6 +132,7 @@ export class ProfileService {
         aiTwinTimeoutSeconds: dto.aiTwinTimeoutSeconds,
         aiTwinPrompt: dto.aiTwinPrompt,
         aiTwinVoiceId: dto.aiTwinVoiceId,
+        assistantName: dto.assistantName,
         lastSeenPrivacy: dto.lastSeenPrivacy,
       },
       create: {
@@ -149,6 +150,7 @@ export class ProfileService {
         aiTwinTimeoutSeconds: dto.aiTwinTimeoutSeconds,
         aiTwinPrompt: dto.aiTwinPrompt,
         aiTwinVoiceId: dto.aiTwinVoiceId,
+        assistantName: dto.assistantName,
         lastSeenPrivacy: dto.lastSeenPrivacy,
       },
     });
