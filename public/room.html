@@ -996,12 +996,20 @@
           }
         })
         .on(RoomEvent.TrackUnsubscribed, (track, pub, participant) => {
+          // Detach ALL element types — video (incl. screen share) elements
+          // otherwise stay in the DOM showing a black frame.
+          track.detach().forEach(el => el.remove());
           renderParticipant(participant);
           updateCount();
-          if (track.kind === Track.Kind.Audio) {
-            track.detach().forEach(el => el.remove());
-          }
           if (isRecording) removeTrackFromRecording(track);
+        })
+        .on(RoomEvent.TrackUnpublished, (pub, participant) => {
+          // TrackUnsubscribed fires while the publication is still in the
+          // participant's map (with a dead track), so renderParticipant can
+          // re-attach it as a black tile. TrackUnpublished fires after the
+          // publication is removed — re-render to drop the stale tile.
+          renderParticipant(participant);
+          updateCount();
         })
         .on(RoomEvent.TrackMuted, (pub, participant) => renderParticipant(participant))
         .on(RoomEvent.TrackUnmuted, (pub, participant) => renderParticipant(participant))
@@ -1081,7 +1089,15 @@
         .on(RoomEvent.ParticipantNameChanged, (name, participant) => renderParticipant(participant))
         .on(RoomEvent.ParticipantMetadataChanged, (meta, participant) => renderParticipant(participant))
         .on(RoomEvent.LocalTrackPublished, () => renderParticipant(room.localParticipant))
-        .on(RoomEvent.LocalTrackUnpublished, () => renderParticipant(room.localParticipant))
+        .on(RoomEvent.LocalTrackUnpublished, (pub) => {
+          // Screen share can end outside the app button (browser "Stop
+          // sharing" bar) — sync the toggle state so the button doesn't stick.
+          if (pub && pub.source === Track.Source.ScreenShare && screenEnabled) {
+            screenEnabled = false;
+            updateControlButtons();
+          }
+          renderParticipant(room.localParticipant);
+        })
         .on(RoomEvent.DataReceived, (payload, participant) => {
           try {
             const msg = JSON.parse(decoder.decode(payload));
@@ -1489,9 +1505,15 @@
         tile.appendChild(srvBadge);
       }
 
-      // Screen share tile
+      // Screen share tile. Guard against a dead track still sitting in the
+      // publication (mediaStreamTrack ended but unpublish not processed yet) —
+      // attaching it renders a stuck black tile.
       const screenPub = participant.getTrackPublication(Track.Source.ScreenShare);
-      const screenTrack = screenPub && !screenPub.isMuted ? screenPub.track : null;
+      let screenTrack = screenPub && !screenPub.isMuted ? screenPub.track : null;
+      if (screenTrack && screenTrack.mediaStreamTrack &&
+          screenTrack.mediaStreamTrack.readyState === 'ended') {
+        screenTrack = null;
+      }
       const screenId = 'tile-screen-' + id;
       let screenTile = document.getElementById(screenId);
 
