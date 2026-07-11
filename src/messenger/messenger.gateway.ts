@@ -990,25 +990,40 @@ export class MessengerGateway
   }
 
   @SubscribeMessage('mark_read')
-  async handleMarkRead(client: Socket, payload: { conversationId: string }) {
+  async handleMarkRead(
+    client: Socket,
+    payload: { conversationId: string; upToSentAt?: string; upToMessageId?: string },
+  ) {
     try {
-      const updatedIds = await this.service.markConversationRead(
+      const userId = client.data.userId;
+      const advanced = await this.service.advanceReadHorizon(
         payload.conversationId,
-        client.data.userId,
+        userId,
+        payload.upToSentAt ? new Date(payload.upToSentAt) : null,
+        payload.upToMessageId ?? null,
       );
-      if (updatedIds.length > 0) {
-        const participants = await this.service.getParticipants(
-          payload.conversationId,
-        );
-        for (const p of participants) {
-          if (p.userId === client.data.userId) continue;
-          this.server.to(`user:${p.userId}`).emit('messages_read', {
-            conversationId: payload.conversationId,
-            messageIds: updatedIds,
-          });
-        }
+      if (!advanced) return; // no-op (monotonic)
+      const evt = {
+        conversationId: payload.conversationId,
+        userId,
+        lastReadAt: advanced.lastReadAt.toISOString(),
+        lastReadMessageId: advanced.lastReadMessageId,
+      };
+      // Receipts to the other participants (senders) + this user's OTHER devices.
+      const participants = await this.service.getParticipants(payload.conversationId);
+      for (const p of participants) {
+        this.server.to(`user:${p.userId}`).emit('conversation_read', evt);
       }
-    } catch (e) {}
+      // Legacy event kept during client transition (harmless double-signal).
+      this.server.to(`user:${userId}`).emit('messages_read', {
+        conversationId: payload.conversationId,
+        messageIds: [],
+      });
+      // Clear-on-read fan-out to backgrounded devices — Task 5.
+      await this.clearOnRead(userId, payload.conversationId, advanced.lastReadAt);
+    } catch (e) {
+      this.logger.error(`mark_read failed (conv=${payload?.conversationId}): ${(e as Error).message}`);
+    }
   }
 
   // ─── Group events broadcast ───
@@ -1316,5 +1331,13 @@ export class MessengerGateway
         clearTyping();
       }
     }
+  }
+
+  private async clearOnRead(
+    _userId: string,
+    _conversationId: string,
+    _lastReadAt: Date,
+  ): Promise<void> {
+    /* Task 5 */
   }
 }
