@@ -1088,7 +1088,8 @@ export class MessengerService {
     return { lastReadAt: upToSentAt, lastReadMessageId: upToMessageId };
   }
 
-  async getReadState(conversationId: string) {
+  async getReadState(conversationId: string, userId: string) {
+    await this.assertParticipant(conversationId, userId);
     return this.prisma.conversationParticipant.findMany({
       where: { conversationId },
       select: { userId: true, lastReadAt: true, lastReadMessageId: true },

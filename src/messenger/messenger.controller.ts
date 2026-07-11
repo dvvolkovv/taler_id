@@ -134,8 +134,11 @@ export class MessengerController {
   }
 
   @Get('conversations/:id/read-state')
-  async conversationReadState(@Param('id') id: string) {
-    const participants = await this.service.getReadState(id);
+  async conversationReadState(
+    @Param('id') id: string,
+    @CurrentUser() user: any,
+  ) {
+    const participants = await this.service.getReadState(id, user.sub);
     return {
       participants: participants.map((p) => ({
         userId: p.userId,
