@@ -903,6 +903,11 @@ export class MessengerService {
     return [...tokens];
   }
 
+  /** Thin wrapper over getFcmTokens for clear-on-read fan-out (Task 5). */
+  async getFcmTokensForUser(userId: string): Promise<string[]> {
+    return this.getFcmTokens(userId); // all logged-in devices' tokens
+  }
+
   /** Multi-device VoIP (iOS CallKit) tokens — same semantics as getFcmTokens. */
   async getVoipTokens(userId: string): Promise<string[]> {
     const tokens = new Set<string>();

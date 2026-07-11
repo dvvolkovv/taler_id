@@ -1334,10 +1334,19 @@ export class MessengerGateway
   }
 
   private async clearOnRead(
-    _userId: string,
-    _conversationId: string,
-    _lastReadAt: Date,
+    userId: string,
+    conversationId: string,
+    lastReadAt: Date,
   ): Promise<void> {
-    /* Task 5 */
+    // Online other-devices already got `conversation_read` over the socket (Task 3).
+    // Push a silent read_sync so BACKGROUNDED devices cancel this chat's notifications.
+    const tokens = await this.service.getFcmTokensForUser(userId);
+    await Promise.all(
+      tokens.map((t) =>
+        this.fcmService.sendReadSync(t, conversationId, lastReadAt.toISOString()).catch((e) =>
+          this.logger.error(`read_sync push failed for ${userId}: ${(e as Error).message}`),
+        ),
+      ),
+    );
   }
 }
