@@ -257,6 +257,8 @@ model ConversationParticipant {
   joinedAt       DateTime     @default(now())
   isMuted        Boolean      @default(false)
   mutedUntil     DateTime?
+  lastReadAt        DateTime?
+  lastReadMessageId String?
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@unique([conversationId, userId])
