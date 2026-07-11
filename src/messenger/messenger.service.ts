@@ -1109,6 +1109,22 @@ export class MessengerService {
     });
   }
 
+  async readStateForUser(userId: string) {
+    const parts = await this.prisma.conversationParticipant.findMany({
+      where: { userId },
+      select: { conversationId: true, lastReadAt: true },
+    });
+    const out = [];
+    for (const p of parts) {
+      out.push({
+        conversationId: p.conversationId,
+        myLastReadAt: p.lastReadAt ? p.lastReadAt.toISOString() : null,
+        unread: await this.unreadCountFor(p.conversationId, userId),
+      });
+    }
+    return { conversations: out };
+  }
+
   // ─── Helpers ───
 
   private async _getConversationOrThrow(conversationId: string) {

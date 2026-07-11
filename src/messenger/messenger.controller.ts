@@ -128,6 +128,23 @@ export class MessengerController {
     return this.service.sync(user.sub, cursor || undefined, parsedLimit);
   }
 
+  @Get('read-state')
+  readState(@CurrentUser() user: any) {
+    return this.service.readStateForUser(user.sub);
+  }
+
+  @Get('conversations/:id/read-state')
+  async conversationReadState(@Param('id') id: string) {
+    const participants = await this.service.getReadState(id);
+    return {
+      participants: participants.map((p) => ({
+        userId: p.userId,
+        lastReadAt: p.lastReadAt ? p.lastReadAt.toISOString() : null,
+        lastReadMessageId: p.lastReadMessageId,
+      })),
+    };
+  }
+
   @Get('conversations/:id/messages')
   messages(
     @Param('id') id: string,
