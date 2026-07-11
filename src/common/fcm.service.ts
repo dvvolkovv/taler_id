@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import * as admin from 'firebase-admin';
 import * as fs from 'fs';
+import { createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -157,6 +158,10 @@ export class FcmService {
     }
   }
 
+  notificationIdFor(conversationId: string): string {
+    return 'conv-' + createHash('sha1').update(conversationId).digest('hex').slice(0, 16);
+  }
+
   async sendNewMessage(
     fcmToken: string,
     fromName: string,
@@ -178,9 +183,11 @@ export class FcmService {
         },
         android: {
           priority: 'high',
+          collapseKey: conversationId,
           notification: {
             channelId: 'messages',
             defaultSound: true,
+            tag: this.notificationIdFor(conversationId),
           },
         },
         apns: {
@@ -196,11 +203,34 @@ export class FcmService {
           headers: {
             'apns-priority': '10',
             'apns-push-type': 'alert',
+            'apns-collapse-id': this.notificationIdFor(conversationId),
           },
         },
       });
     } catch (e) {
       this.logger.error('FCM sendNewMessage error:', e);
+      this.handleSendError(fcmToken, e).catch(() => {});
+    }
+  }
+
+  async sendReadSync(
+    fcmToken: string,
+    conversationId: string,
+    lastReadAt: string,
+  ): Promise<void> {
+    if (!this.initialized || !fcmToken) return;
+    try {
+      await admin.messaging().send({
+        token: fcmToken,
+        data: { type: 'read_sync', conversationId, lastReadAt },
+        android: { priority: 'high' },
+        apns: {
+          payload: { aps: { 'content-available': 1 } },
+          headers: { 'apns-push-type': 'background', 'apns-priority': '5' },
+        },
+      });
+    } catch (e) {
+      this.logger.error('FCM sendReadSync error:', e);
       this.handleSendError(fcmToken, e).catch(() => {});
     }
   }
