@@ -1053,6 +1053,57 @@ export class MessengerService {
     return ids;
   }
 
+  async advanceReadHorizon(
+    conversationId: string,
+    userId: string,
+    upToSentAt: Date | null,
+    upToMessageId: string | null,
+  ): Promise<{ lastReadAt: Date; lastReadMessageId: string | null } | null> {
+    // Resolve "read to latest" for old clients (no horizon in payload).
+    if (!upToSentAt) {
+      const latest = await this.prisma.message.findFirst({
+        where: { conversationId },
+        orderBy: [{ sentAt: 'desc' }, { id: 'desc' }],
+        select: { id: true, sentAt: true },
+      });
+      if (!latest) return null;
+      upToSentAt = latest.sentAt;
+      upToMessageId = latest.id;
+    }
+    const p = await this.prisma.conversationParticipant.findUnique({
+      where: { conversationId_userId: { conversationId, userId } },
+      select: { lastReadAt: true },
+    });
+    // Monotonic: only advance.
+    if (p?.lastReadAt && p.lastReadAt.getTime() >= upToSentAt.getTime()) return null;
+    await this.prisma.conversationParticipant.update({
+      where: { conversationId_userId: { conversationId, userId } },
+      data: { lastReadAt: upToSentAt, lastReadMessageId: upToMessageId },
+    });
+    return { lastReadAt: upToSentAt, lastReadMessageId: upToMessageId };
+  }
+
+  async getReadState(conversationId: string) {
+    return this.prisma.conversationParticipant.findMany({
+      where: { conversationId },
+      select: { userId: true, lastReadAt: true, lastReadMessageId: true },
+    });
+  }
+
+  async unreadCountFor(conversationId: string, userId: string): Promise<number> {
+    const p = await this.prisma.conversationParticipant.findUnique({
+      where: { conversationId_userId: { conversationId, userId } },
+      select: { lastReadAt: true },
+    });
+    return this.prisma.message.count({
+      where: {
+        conversationId,
+        senderId: { not: userId },
+        ...(p?.lastReadAt ? { sentAt: { gt: p.lastReadAt } } : {}),
+      },
+    });
+  }
+
   // ─── Helpers ───
 
   private async _getConversationOrThrow(conversationId: string) {
