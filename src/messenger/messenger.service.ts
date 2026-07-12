@@ -384,7 +384,10 @@ export class MessengerService {
           where: {
             conversationId: conv.id,
             senderId: { not: userId },
-            ...(mine?.lastReadAt ? { sentAt: { gt: mine.lastReadAt } } : {}),
+            // Horizon once a read cursor exists; else fall back to the legacy
+            // isRead flag so conversations read under the old model (no cursor
+            // yet) don't count their entire history as unread.
+            ...(mine?.lastReadAt ? { sentAt: { gt: mine.lastReadAt } } : { isRead: false }),
           },
         });
       }),
@@ -1111,7 +1114,9 @@ export class MessengerService {
       where: {
         conversationId,
         senderId: { not: userId },
-        ...(p?.lastReadAt ? { sentAt: { gt: p.lastReadAt } } : {}),
+        // Horizon once a read cursor exists; else legacy isRead fallback
+        // (matches getConversations so the list badge and read-state agree).
+        ...(p?.lastReadAt ? { sentAt: { gt: p.lastReadAt } } : { isRead: false }),
       },
     });
   }
