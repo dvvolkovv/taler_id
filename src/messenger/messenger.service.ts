@@ -370,19 +370,25 @@ export class MessengerService {
     const userMap = Object.fromEntries(users.map((u) => [u.id, u]));
 
     const convIds = conversations.map((c) => c.id);
-    const unreadCounts = await this.prisma.message.groupBy({
-      by: ['conversationId'],
-      where: {
-        conversationId: { in: convIds },
-        senderId: { not: userId },
-        isRead: false,
-      },
-      _count: { id: true },
-    });
+    // Unread is derived from the per-participant read HORIZON
+    // (ConversationParticipant.lastReadAt) — the SAME source as
+    // GET /messenger/read-state and unreadCountFor(). mark_read only advances
+    // the horizon and no longer touches the legacy Message.isRead flag, so
+    // counting isRead=false left the conversation-list badge stuck after a chat
+    // was read (it flickered 0 then back). Reuse the already-loaded participants.
     const unreadMap: Record<string, number> = {};
-    for (const r of unreadCounts) {
-      unreadMap[r.conversationId] = r._count.id;
-    }
+    await Promise.all(
+      conversations.map(async (conv) => {
+        const mine = conv.participants.find((p) => p.userId === userId);
+        unreadMap[conv.id] = await this.prisma.message.count({
+          where: {
+            conversationId: conv.id,
+            senderId: { not: userId },
+            ...(mine?.lastReadAt ? { sentAt: { gt: mine.lastReadAt } } : {}),
+          },
+        });
+      }),
+    );
 
     // Fetch active calls for all conversations
     const activeCalls = await this.prisma.callLog.findMany({
