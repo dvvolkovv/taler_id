@@ -81,8 +81,8 @@ export class AppController {
     // Env-overridable so the DO/talerid build advertises its own track + APK URL;
     // defaults preserve aeza (prod/dev) behaviour when these vars are unset.
     const latest = {
-      version: env.APP_LATEST_VERSION || '1.1.9',
-      build: parseInt(env.APP_LATEST_BUILD || '207', 10),
+      version: env.APP_LATEST_VERSION || '1.1.10',
+      build: parseInt(env.APP_LATEST_BUILD || '208', 10),
     };
     const androidUrl =
       env.APP_UPDATE_URL_ANDROID ||
@@ -104,6 +104,24 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.1.10',
+    build: 208,
+    date: '2026-07-12',
+    flavor: 'dev',
+    notes_ru:
+      'Релиз 1.1.10 — статусы прочтения в мессенджере (как в Telegram).\n\n' +
+      '✅ Галочки: ✓ отправлено, ✓✓ прочитано. В группах — «прочитали N», нажмите чтобы увидеть кто именно.\n\n' +
+      'ℹ️ Долгое нажатие на своё сообщение открывает панель «кто прочитал + реакции».\n\n' +
+      '🔕 Уведомление о сообщении теперь исчезает, когда вы прочитали чат — в том числе на других ваших устройствах (прочитали на компьютере — баннер на телефоне пропадает).\n\n' +
+      '🔢 Точные счётчики непрочитанного и бейдж на иконке, синхронизированные между устройствами.',
+    notes_en:
+      'Release 1.1.10 — Telegram-style read receipts in the messenger.\n\n' +
+      '✅ Ticks: ✓ sent, ✓✓ read. In groups — "Seen by N", tap to see exactly who.\n\n' +
+      'ℹ️ Long-press your own message for a "read by + reactions" panel.\n\n' +
+      '🔕 A message notification now clears when you read the chat — including on your other devices (read on desktop → the phone banner disappears).\n\n' +
+      '🔢 Accurate per-chat unread counts and app-icon badge, synced across devices.',
+  },
   {
     version: '1.1.9',
     build: 207,
