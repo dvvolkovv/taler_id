@@ -81,8 +81,8 @@ export class AppController {
     // Env-overridable so the DO/talerid build advertises its own track + APK URL;
     // defaults preserve aeza (prod/dev) behaviour when these vars are unset.
     const latest = {
-      version: env.APP_LATEST_VERSION || '1.1.10',
-      build: parseInt(env.APP_LATEST_BUILD || '208', 10),
+      version: env.APP_LATEST_VERSION || '1.1.11',
+      build: parseInt(env.APP_LATEST_BUILD || '209', 10),
     };
     const androidUrl =
       env.APP_UPDATE_URL_ANDROID ||
@@ -104,6 +104,20 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.1.11',
+    build: 209,
+    date: '2026-07-12',
+    flavor: 'both',
+    notes_ru:
+      'Мелкие улучшения статусов прочтения в мессенджере.\n\n' +
+      '✅ В группах у вашего сообщения теперь всегда есть отметка статуса: галочка «отправлено», затем «прочитали N» по мере того как участники читают.\n\n' +
+      'ℹ️ Подписи статусов прочтения и панель «кто прочитал + реакции» переведены на русский.',
+    notes_en:
+      'Read-receipt polish in the messenger.\n\n' +
+      '✅ In groups your own message now always shows a status: a "sent" tick, then "Seen by N" as members read it.\n\n' +
+      'ℹ️ Read-status labels and the "who read it + reactions" panel are now localized.',
+  },
   {
     version: '1.1.10',
     build: 208,
