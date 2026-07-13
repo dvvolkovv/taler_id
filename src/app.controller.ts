@@ -81,8 +81,8 @@ export class AppController {
     // Env-overridable so the DO/talerid build advertises its own track + APK URL;
     // defaults preserve aeza (prod/dev) behaviour when these vars are unset.
     const latest = {
-      version: env.APP_LATEST_VERSION || '1.1.11',
-      build: parseInt(env.APP_LATEST_BUILD || '209', 10),
+      version: env.APP_LATEST_VERSION || '1.1.12',
+      build: parseInt(env.APP_LATEST_BUILD || '210', 10),
     };
     const androidUrl =
       env.APP_UPDATE_URL_ANDROID ||
@@ -104,6 +104,20 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.1.12',
+    build: 210,
+    date: '2026-07-13',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.12 — надёжность звонков.\n\n' +
+      '🔇 Односторонняя тишина побеждена: если раньше в звонке собеседник вас слышал, а вы его нет (и помогал только перезвон) — теперь приложение само замечает «мёртвый» входящий аудиопоток по счётчикам трафика и восстанавливает его за 10-20 секунд без переподключения.\n\n' +
+      '🌐 Звонки по ссылке из браузера (включая Telegram на iPhone): экран больше не гаснет во время звонка, а если телефон всё же заблокировали — звук автоматически возвращается после разблокировки.',
+    notes_en:
+      'Release 1.1.12 — call reliability.\n\n' +
+      '🔇 One-way silence defeated: when the peer could hear you but you heard nothing (and only re-calling helped) — the app now detects a dead incoming audio stream via traffic counters and recovers it within 10-20 seconds, no reconnect needed.\n\n' +
+      '🌐 Browser link calls (including Telegram on iPhone): the screen no longer sleeps during a call, and if the phone does get locked, audio recovers automatically after unlock.',
+  },
   {
     version: '1.1.11',
     build: 209,
