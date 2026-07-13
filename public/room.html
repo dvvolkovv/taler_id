@@ -1238,6 +1238,11 @@
         // Safari + Chrome: when the tab becomes hidden the browser can suspend the AudioContext
         // and/or mute local mic/camera tracks. When we come back we must re-assert them.
         setupVisibilityRecovery();
+        // Keep the screen awake during the call: on iPhone (Safari and the
+        // Telegram in-app browser) the screen sleeping suspends WebRTC audio
+        // entirely — the peer goes silent until the user wakes the phone.
+        acquireWakeLock();
+        startAudioWatchdog();
         const micOpts = currentMicId ? { deviceId: currentMicId } : undefined;
         // Enable only microphone on join; camera will be offered via prompt
         camEnabled = false;
@@ -1260,12 +1265,75 @@
 
     function getLivekitUrl() { return `wss://${location.hostname}/livekit/`; }
 
+    // ── Screen Wake Lock ─────────────────────────────────────────────
+    // iOS releases the lock every time the page is hidden; we must
+    // re-request it on every return to visibility. Unsupported browsers
+    // (older Telegram web-views) just no-op — the watchdog below still
+    // recovers audio after the phone wakes.
+    let wakeLockSentinel = null;
+    async function acquireWakeLock() {
+      if (!('wakeLock' in navigator)) return;
+      try {
+        wakeLockSentinel = await navigator.wakeLock.request('screen');
+        wakeLockSentinel.addEventListener('release', () => { wakeLockSentinel = null; });
+      } catch (e) {
+        console.warn('[WakeLock] request failed:', e && e.message);
+      }
+    }
+    function releaseWakeLock() {
+      try { wakeLockSentinel && wakeLockSentinel.release(); } catch (_) {}
+      wakeLockSentinel = null;
+    }
+
+    // ── Audio watchdog ──────────────────────────────────────────────
+    // The Telegram in-app browser does not always fire visibilitychange
+    // when the phone comes back from sleep — poll playback state and
+    // re-assert it. canPlaybackAudio flips false when Safari suspends
+    // the audio pipeline.
+    let audioWatchdogTimer = null;
+    function startAudioWatchdog() {
+      if (audioWatchdogTimer) return;
+      audioWatchdogTimer = setInterval(async () => {
+        if (!room || document.hidden) return;
+        try {
+          if (room.canPlaybackAudio === false) {
+            console.warn('[Watchdog] audio playback suspended — restarting');
+            await room.startAudio();
+          }
+        } catch (_) {}
+        try {
+          if (micEnabled) {
+            const pub = room.localParticipant.getTrackPublication(
+              LivekitClient.Track.Source.Microphone);
+            const t = pub && pub.track && pub.track.mediaStreamTrack;
+            if (t && (t.readyState === 'ended' || t.muted)) {
+              console.warn('[Watchdog] mic track ' + t.readyState + '/muted=' + t.muted + ' — re-enabling');
+              const micOpts = currentMicId ? { deviceId: currentMicId } : undefined;
+              await room.localParticipant.setMicrophoneEnabled(true, micOpts);
+            }
+          }
+        } catch (_) {}
+        if (!wakeLockSentinel) acquireWakeLock();
+      }, 4000);
+    }
+    function stopAudioWatchdog() {
+      if (audioWatchdogTimer) { clearInterval(audioWatchdogTimer); audioWatchdogTimer = null; }
+    }
+
     let _visibilityHandlerInstalled = false;
     function setupVisibilityRecovery() {
       if (_visibilityHandlerInstalled) return;
       _visibilityHandlerInstalled = true;
+      // pageshow fires on bfcache restores where visibilitychange may not
+      // (observed in the Telegram in-app browser on iOS).
+      window.addEventListener('pageshow', () => {
+        if (!room) return;
+        try { room.startAudio(); } catch (_) {}
+        acquireWakeLock();
+      });
       document.addEventListener('visibilitychange', async () => {
         if (document.hidden || !room) return;
+        acquireWakeLock();
         // Tab came back into focus. Safari aggressively suspends audio playback and
         // mutes local MediaStreamTracks while hidden. Re-assert every user-facing
         // state so the user doesn't have to toggle mic/cam manually.
@@ -1730,6 +1798,8 @@
       removeConsentDialog();
       removeConsentStatusUI();
       if (room) { room.disconnect(); room = null; }
+      stopAudioWatchdog();
+      releaseWakeLock();
       recordingParticipants.clear();
       updateRecordingBanner();
       showDisconnected();
