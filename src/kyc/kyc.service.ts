@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { BlockchainService } from '../blockchain/blockchain.service';
 import { ConfigService } from '@nestjs/config';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import * as crypto from 'crypto';
 import { EmailService } from '../email/email.service';
@@ -117,56 +118,11 @@ export class KycService {
 
     if (type === 'applicantReviewed') {
       if (reviewResult?.reviewAnswer === 'GREEN') {
-        const updated = await this.prisma.kycRecord.update({
-          where: { id: kyc.id },
-          data: {
-            status: 'VERIFIED',
-            verifiedAt: new Date(),
-            rejectionReason: null,
-          },
-          include: { user: { select: { id: true } } },
-        });
-
-        this.prisma.user
-          .findUnique({ where: { id: updated.userId } })
-          .then((u) => {
-            if (u?.email)
-              this.email
-                .sendKycStatusUpdate(u.email, 'VERIFIED')
-                .catch(() => {});
-          })
-          .catch(() => {});
-
-        this.blockchain
-          .attestVerification(updated.userId, 2)
-          .then((result) => {
-            if (result) {
-              this.logger.log(
-                `On-chain KYC attestation: userId=${updated.userId} tx=${result.txHash}`,
-              );
-            }
-          })
-          .catch((err) => {
-            this.logger.error(
-              `On-chain attestation failed for ${updated.userId}: ${err.message}`,
-            );
-          });
+        await this.markVerified(kyc.id, kyc.userId);
       } else if (reviewResult?.reviewAnswer === 'RED') {
         const reason =
           reviewResult?.rejectLabels?.join(', ') || 'Verification failed';
-        await this.prisma.kycRecord.update({
-          where: { id: kyc.id },
-          data: { status: 'REJECTED', rejectionReason: reason },
-        });
-        this.prisma.user
-          .findUnique({ where: { id: kyc.userId } })
-          .then((u) => {
-            if (u?.email)
-              this.email
-                .sendKycStatusUpdate(u.email, 'REJECTED', reason)
-                .catch(() => {});
-          })
-          .catch(() => {});
+        await this.markRejected(kyc.id, kyc.userId, reason);
       }
     } else if (type === 'applicantPending') {
       await this.prisma.kycRecord.update({
@@ -176,6 +132,102 @@ export class KycService {
     }
 
     return { received: true };
+  }
+
+  /**
+   * Fallback while the KYC provider (welid) has no webhook callback to us:
+   * poll pending applicants once a minute and apply review results.
+   * Guarded transitions (status: PENDING in where) make it safe to run on
+   * multiple app nodes and alongside webhooks — only one caller fires the
+   * email/attestation side effects.
+   */
+  @Cron(CronExpression.EVERY_MINUTE)
+  async pollPendingApplicants() {
+    const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const pending = await this.prisma.kycRecord.findMany({
+      where: {
+        status: 'PENDING',
+        sumsubApplicantId: { not: null },
+        updatedAt: { gte: dayAgo },
+      },
+      take: 100,
+    });
+
+    for (const kyc of pending) {
+      try {
+        const data = await this.apiGet(
+          `/resources/applicants/${kyc.sumsubApplicantId}/one`,
+        );
+        const answer = data.review?.reviewResult?.reviewAnswer;
+        if (answer === 'GREEN') {
+          await this.markVerified(kyc.id, kyc.userId);
+          this.logger.log(`KYC poll: userId=${kyc.userId} → VERIFIED`);
+        } else if (answer === 'RED') {
+          const reason =
+            data.review?.reviewResult?.rejectLabels?.join(', ') ||
+            'Verification failed';
+          await this.markRejected(kyc.id, kyc.userId, reason);
+          this.logger.log(`KYC poll: userId=${kyc.userId} → REJECTED`);
+        }
+      } catch (e) {
+        this.logger.warn(
+          `KYC poll failed for applicant ${kyc.sumsubApplicantId}: ${e}`,
+        );
+      }
+    }
+  }
+
+  private async markVerified(kycId: string, userId: string) {
+    const res = await this.prisma.kycRecord.updateMany({
+      where: { id: kycId, status: { not: 'VERIFIED' } },
+      data: {
+        status: 'VERIFIED',
+        verifiedAt: new Date(),
+        rejectionReason: null,
+      },
+    });
+    if (res.count === 0) return; // another node/webhook already handled it
+
+    this.prisma.user
+      .findUnique({ where: { id: userId } })
+      .then((u) => {
+        if (u?.email)
+          this.email.sendKycStatusUpdate(u.email, 'VERIFIED').catch(() => {});
+      })
+      .catch(() => {});
+
+    this.blockchain
+      .attestVerification(userId, 2)
+      .then((result) => {
+        if (result) {
+          this.logger.log(
+            `On-chain KYC attestation: userId=${userId} tx=${result.txHash}`,
+          );
+        }
+      })
+      .catch((err) => {
+        this.logger.error(
+          `On-chain attestation failed for ${userId}: ${err.message}`,
+        );
+      });
+  }
+
+  private async markRejected(kycId: string, userId: string, reason: string) {
+    const res = await this.prisma.kycRecord.updateMany({
+      where: { id: kycId, status: { notIn: ['REJECTED', 'VERIFIED'] } },
+      data: { status: 'REJECTED', rejectionReason: reason },
+    });
+    if (res.count === 0) return;
+
+    this.prisma.user
+      .findUnique({ where: { id: userId } })
+      .then((u) => {
+        if (u?.email)
+          this.email
+            .sendKycStatusUpdate(u.email, 'REJECTED', reason)
+            .catch(() => {});
+      })
+      .catch(() => {});
   }
 
   async getApplicantData(userId: string) {

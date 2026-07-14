@@ -11,7 +11,9 @@ const mockPrisma = {
   kycRecord: {
     findUnique: jest.fn(),
     findFirst: jest.fn(),
+    findMany: jest.fn(),
     update: jest.fn(),
+    updateMany: jest.fn(),
     upsert: jest.fn(),
   },
   user: { findUnique: jest.fn() },
@@ -141,11 +143,7 @@ describe('KycService', () => {
         userId: 'user-verified',
         sumsubApplicantId: 'sumsub-1',
       });
-      mockPrisma.kycRecord.update.mockResolvedValue({
-        id: 'k1',
-        userId: 'user-verified',
-        status: 'VERIFIED',
-      });
+      mockPrisma.kycRecord.updateMany.mockResolvedValue({ count: 1 });
       mockPrisma.user.findUnique.mockResolvedValue({
         id: 'user-verified',
         email: 'verified@example.com',
@@ -153,7 +151,7 @@ describe('KycService', () => {
 
       const result = await service.handleWebhook(body, sig);
       expect(result).toHaveProperty('received', true);
-      expect(mockPrisma.kycRecord.update).toHaveBeenCalledWith(
+      expect(mockPrisma.kycRecord.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({ status: 'VERIFIED' }),
         }),
@@ -178,11 +176,7 @@ describe('KycService', () => {
         userId: 'user-rejected',
         sumsubApplicantId: 'sumsub-2',
       });
-      mockPrisma.kycRecord.update.mockResolvedValue({
-        id: 'k2',
-        userId: 'user-rejected',
-        status: 'REJECTED',
-      });
+      mockPrisma.kycRecord.updateMany.mockResolvedValue({ count: 1 });
       mockPrisma.user.findUnique.mockResolvedValue({
         id: 'user-rejected',
         email: 'rejected@example.com',
@@ -190,7 +184,7 @@ describe('KycService', () => {
 
       const result = await service.handleWebhook(body, sig);
       expect(result).toHaveProperty('received', true);
-      expect(mockPrisma.kycRecord.update).toHaveBeenCalledWith(
+      expect(mockPrisma.kycRecord.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({ status: 'REJECTED' }),
         }),
@@ -213,7 +207,56 @@ describe('KycService', () => {
       mockPrisma.kycRecord.findFirst.mockResolvedValue(null);
       const result = await service.handleWebhook(body, sig);
       expect(result).toHaveProperty('received', true);
-      expect(mockPrisma.kycRecord.update).not.toHaveBeenCalled();
+      expect(mockPrisma.kycRecord.updateMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('pollPendingApplicants', () => {
+    afterEach(() => {
+      (global.fetch as jest.Mock | undefined)?.mockRestore?.();
+    });
+
+    it('marks record VERIFIED when provider review is GREEN', async () => {
+      mockPrisma.kycRecord.findMany.mockResolvedValue([
+        { id: 'k1', userId: 'user-1', sumsubApplicantId: 'app-1' },
+      ]);
+      mockPrisma.kycRecord.updateMany.mockResolvedValue({ count: 1 });
+      mockPrisma.user.findUnique.mockResolvedValue({
+        id: 'user-1',
+        email: 'u1@example.com',
+      });
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          id: 'app-1',
+          review: { reviewResult: { reviewAnswer: 'GREEN' } },
+        }),
+      }) as any;
+
+      await service.pollPendingApplicants();
+
+      expect(mockPrisma.kycRecord.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ status: 'VERIFIED' }),
+        }),
+      );
+    });
+
+    it('does nothing while review is still pending', async () => {
+      mockPrisma.kycRecord.findMany.mockResolvedValue([
+        { id: 'k1', userId: 'user-1', sumsubApplicantId: 'app-1' },
+      ]);
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          id: 'app-1',
+          review: { reviewStatus: 'init', reviewResult: null },
+        }),
+      }) as any;
+
+      await service.pollPendingApplicants();
+
+      expect(mockPrisma.kycRecord.updateMany).not.toHaveBeenCalled();
     });
   });
 
