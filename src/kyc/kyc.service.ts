@@ -82,6 +82,30 @@ export class KycService {
   async getKycStatus(userId: string) {
     const kyc = await this.prisma.kycRecord.findUnique({ where: { userId } });
     if (!kyc) return { status: 'UNVERIFIED' };
+
+    // PENDING is set at /kyc/start, before the user actually walks the wizard.
+    // If the provider says the applicant was never submitted for review
+    // (init/prechecked), report UNVERIFIED + inProgress so clients re-show the
+    // start/continue button instead of a dead-end "under review" screen.
+    if (kyc.status === 'PENDING' && kyc.sumsubApplicantId) {
+      try {
+        const data = await this.apiGet(
+          `/resources/applicants/${kyc.sumsubApplicantId}/one`,
+        );
+        const reviewStatus = data.review?.reviewStatus;
+        if (reviewStatus === 'init' || reviewStatus === 'prechecked') {
+          return {
+            status: 'UNVERIFIED',
+            inProgress: true,
+            verifiedAt: null,
+            rejectionReason: null,
+          };
+        }
+      } catch {
+        // provider unreachable — fall back to the DB status
+      }
+    }
+
     return {
       status: kyc.status,
       verifiedAt: kyc.verifiedAt,
@@ -360,7 +384,10 @@ export class KycService {
   }
 
   private async apiGet(urlPath: string): Promise<any> {
-    const response = await fetch(this.baseUrl + urlPath, { method: 'GET' });
+    const response = await fetch(this.baseUrl + urlPath, {
+      method: 'GET',
+      signal: AbortSignal.timeout(8000),
+    });
     const data = await response.json();
     if (!response.ok) {
       throw new BadRequestException(

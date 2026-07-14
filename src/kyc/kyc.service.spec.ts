@@ -91,13 +91,48 @@ describe('KycService', () => {
       expect(result.status).toBe('VERIFIED');
     });
 
-    it('returns PENDING status', async () => {
+    it('returns PENDING when applicant is actually under review', async () => {
       mockPrisma.kycRecord.findUnique.mockResolvedValue({
         id: 'k2',
         status: 'PENDING',
+        sumsubApplicantId: 'app-2',
         verifiedAt: null,
         rejectionReason: null,
       });
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ review: { reviewStatus: 'onHold' } }),
+      }) as any;
+      const result = await service.getKycStatus('user-2');
+      expect(result.status).toBe('PENDING');
+    });
+
+    it('returns UNVERIFIED+inProgress for abandoned wizard (init/prechecked)', async () => {
+      mockPrisma.kycRecord.findUnique.mockResolvedValue({
+        id: 'k2',
+        status: 'PENDING',
+        sumsubApplicantId: 'app-2',
+        verifiedAt: null,
+        rejectionReason: null,
+      });
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ review: { reviewStatus: 'prechecked' } }),
+      }) as any;
+      const result = await service.getKycStatus('user-2');
+      expect(result.status).toBe('UNVERIFIED');
+      expect((result as any).inProgress).toBe(true);
+    });
+
+    it('falls back to DB PENDING when provider is unreachable', async () => {
+      mockPrisma.kycRecord.findUnique.mockResolvedValue({
+        id: 'k2',
+        status: 'PENDING',
+        sumsubApplicantId: 'app-2',
+        verifiedAt: null,
+        rejectionReason: null,
+      });
+      global.fetch = jest.fn().mockRejectedValue(new Error('timeout')) as any;
       const result = await service.getKycStatus('user-2');
       expect(result.status).toBe('PENDING');
     });
