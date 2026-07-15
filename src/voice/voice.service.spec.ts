@@ -108,4 +108,50 @@ describe("VoiceService", () => {
       expect(payload.video.canSubscribe).toBe(true);
     });
   });
+
+  describe("transcribeExistingRecording — ownership check", () => {
+    // Sentinel thrown by fileStorage.getObject: reaching it proves the
+    // ownership check passed (download happens right after the check).
+    const SENTINEL = "SENTINEL_DOWNLOAD_REACHED";
+    const OWNER_ID = "c79530ed-5ba8-44e3-b7d4-4a591c7c1db6";
+
+    const meeting = (over: Record<string, unknown> = {}) => ({
+      id: "m-1",
+      roomName: "personal-c79530ed-36fc367a",
+      recordingUrl: "https://x/messenger/files/download?key=recordings%2Fa.ogg",
+      participantIds: ["guest-1a941683", "guest-50507c35"],
+      durationSec: 60,
+      ...over,
+    });
+
+    beforeEach(() => {
+      mockPrisma.meetingSummary.update.mockResolvedValue({});
+      mockFileStorage.getObject.mockRejectedValue(new Error(SENTINEL));
+    });
+
+    it("allows the personal-room owner even when participantIds contains only guests", async () => {
+      mockPrisma.meetingSummary.findUnique.mockResolvedValue(meeting());
+      await expect(
+        service.transcribeExistingRecording(OWNER_ID, "m-1"),
+      ).rejects.toThrow(SENTINEL);
+    });
+
+    it("allows a listed participant", async () => {
+      mockPrisma.meetingSummary.findUnique.mockResolvedValue(
+        meeting({ participantIds: ["user-abc"], roomName: "tmp-room" }),
+      );
+      await expect(
+        service.transcribeExistingRecording("user-abc", "m-1"),
+      ).rejects.toThrow(SENTINEL);
+    });
+
+    it("rejects a stranger (not participant, not room owner) with 403", async () => {
+      mockPrisma.meetingSummary.findUnique.mockResolvedValue(
+        meeting({ roomName: "personal-51ed7d1a-38e454fb" }),
+      );
+      await expect(
+        service.transcribeExistingRecording(OWNER_ID, "m-1"),
+      ).rejects.toThrow("Not a participant of this meeting");
+    });
+  });
 });

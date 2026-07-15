@@ -1098,12 +1098,19 @@ export class VoiceService {
     if (!meeting) throw new NotFoundException('Meeting not found');
     if (!meeting.recordingUrl) throw new Error('No recording URL');
 
-    // Ownership: only a participant in the call can kick off transcription (and be billed).
+    // Ownership: a participant OR the personal-room owner can kick off transcription
+    // (and be billed). The owner clause mirrors getMeetingRecordings(): when everyone
+    // joined a personal room via web guest links, participantIds contains only
+    // guest-* identities, yet the owner sees the recording in their list.
     // If participantIds wasn't populated on legacy rows, skip the check rather than hard-fail —
     // the JWT guard already ensures an authenticated user.
+    const isPersonalRoomOwner = meeting.roomName.startsWith(
+      `personal-${userId.substring(0, 8)}`,
+    );
     if (
       meeting.participantIds.length > 0 &&
-      !meeting.participantIds.includes(userId)
+      !meeting.participantIds.includes(userId) &&
+      !isPersonalRoomOwner
     ) {
       throw new ForbiddenException('Not a participant of this meeting');
     }
