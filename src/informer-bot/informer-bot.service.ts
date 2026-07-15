@@ -31,6 +31,8 @@ import {
   InformerTotpError,
   InformerUnavailableError,
   InformerTimeoutError,
+  InformerOperatorInterventionError,
+  upstreamMessageFrom,
   FiatBalancesResult,
   FiatPoolDigest,
   MiniAcquiringBalances,
@@ -443,9 +445,27 @@ export class InformerBotService {
     if (e instanceof InformerTimeoutError) {
       return formatClientError('Informer не ответил вовремя.', retryCode);
     }
-    if (e instanceof InformerUnavailableError) {
+    if (e instanceof InformerOperatorInterventionError) {
+      // 422 = the operation needs a human. The upstream message says exactly
+      // what to do (e.g. "insufficient USDT balance on gas wallet ... have X,
+      // need Y") — show it verbatim so the operator can act without going to
+      // the server logs. No retry button: retrying without fixing the cause
+      // will 422 again.
+      const detail = upstreamMessageFrom(e.upstreamBody);
       return formatClientError(
-        'Informer недоступен, попробуй через минуту.',
+        '⚠️ Требуется вмешательство оператора — Informer не смог выполнить операцию:\n\n' +
+          `\`${detail || 'причина не указана'}\`\n\n` +
+          'Устрани причину и повтори вручную.',
+      );
+    }
+    if (e instanceof InformerUnavailableError) {
+      // Include upstream status+message so operators can distinguish "their
+      // backend service is down" (e.g. 502 mini-crypto-acquiring unavailable)
+      // from generic network noise without reading pm2 logs.
+      const detail = upstreamMessageFrom(e.upstreamBody, 200);
+      return formatClientError(
+        'Informer недоступен, попробуй через минуту.' +
+          (detail ? `\n(${e.upstreamStatus ?? '?'}: ${detail})` : ''),
         retryCode,
       );
     }

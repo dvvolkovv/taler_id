@@ -14,6 +14,7 @@ import {
   InformerTotpError,
   InformerUnavailableError,
   InformerTimeoutError,
+  InformerOperatorInterventionError,
   InformerError,
 } from './informer.types';
 
@@ -54,6 +55,7 @@ export class InformerClient {
     if (status === 401) return new InformerAuthError(body);
     if (status === 403) return new InformerTotpError(body);
     if (status === 404) return new InformerNotConfiguredError(404, body);
+    if (status === 422) return new InformerOperatorInterventionError(body);
     if (status === 503) {
       if (body.includes('nonce store unavailable'))
         return new InformerNonceStoreError(body);
