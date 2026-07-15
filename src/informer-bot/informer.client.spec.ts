@@ -7,6 +7,8 @@ import {
   InformerNonceStoreError,
   InformerTotpError,
   InformerUnavailableError,
+  InformerOperatorInterventionError,
+  upstreamMessageFrom,
 } from './informer.types';
 
 describe('InformerClient.buildSignature', () => {
@@ -224,5 +226,41 @@ describe('InformerClient.mapStatusToError', () => {
     expect(client.mapStatusToError(500, 'oops')).toBeInstanceOf(
       InformerUnavailableError,
     );
+  });
+
+  // Regression: 2026-07-14 — the admin-API started returning 422
+  // "operator intervention required: ... insufficient USDT balance on gas
+  // wallet ..." on retry. Before this mapping the catch-all turned it into
+  // InformerUnavailableError → the operator saw a useless "попробуй через
+  // минуту" instead of the actionable message.
+  it('422 → InformerOperatorInterventionError, body preserved', () => {
+    const body =
+      '{"code":"error","data":null,"message":"mini-crypto retry status 422: operator intervention required: failed to process withdraw: insufficient USDT balance on gas wallet for changelly payin: have 428.67, need 570.11"}';
+    const err = client.mapStatusToError(422, body);
+    expect(err).toBeInstanceOf(InformerOperatorInterventionError);
+    expect(err.upstreamStatus).toBe(422);
+    expect(err.upstreamBody).toBe(body);
+  });
+});
+
+describe('upstreamMessageFrom', () => {
+  it('extracts message from the standard error envelope', () => {
+    expect(
+      upstreamMessageFrom('{"code":"error","data":null,"message":"gas low"}'),
+    ).toBe('gas low');
+  });
+
+  it('falls back to raw body when not JSON', () => {
+    expect(upstreamMessageFrom('<html>bad gateway</html>')).toBe(
+      '<html>bad gateway</html>',
+    );
+  });
+
+  it('caps length', () => {
+    expect(upstreamMessageFrom('x'.repeat(1000), 100)).toHaveLength(100);
+  });
+
+  it('empty body → empty string', () => {
+    expect(upstreamMessageFrom(undefined)).toBe('');
   });
 });

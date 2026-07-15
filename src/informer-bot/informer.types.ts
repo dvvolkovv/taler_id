@@ -193,3 +193,34 @@ export class InformerTotpError extends InformerError {
     this.name = 'InformerTotpError';
   }
 }
+
+/**
+ * 422 from the admin-API: the request was understood and processed, but the
+ * operation needs a human — e.g. "operator intervention required: insufficient
+ * USDT balance on gas wallet". The upstream message is operator-actionable, so
+ * it must reach the bot chat verbatim, not be masked as "unavailable".
+ */
+export class InformerOperatorInterventionError extends InformerError {
+  constructor(body?: string) {
+    super('informer-operator-intervention', 422, body);
+    this.name = 'InformerOperatorInterventionError';
+  }
+}
+
+/**
+ * Extracts a human-readable message from an upstream error body. Their
+ * envelope is {"code":"error","data":null,"message":"..."} — prefer the
+ * message field; fall back to the raw body (trimmed) if it's not JSON.
+ */
+export function upstreamMessageFrom(body?: string, maxLen = 500): string {
+  if (!body) return '';
+  try {
+    const parsed = JSON.parse(body);
+    if (typeof parsed?.message === 'string' && parsed.message.trim()) {
+      return parsed.message.slice(0, maxLen);
+    }
+  } catch {
+    // not JSON — fall through to raw
+  }
+  return body.slice(0, maxLen);
+}
