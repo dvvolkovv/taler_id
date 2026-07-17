@@ -130,4 +130,8 @@ export class AssistantChatService {
     }
     return msg;
   }
+
+  async textTurn(userId: string, dto: any): Promise<any> {
+    throw new Error('not implemented'); // Task 4
+  }
 }
