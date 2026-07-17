@@ -73,7 +73,7 @@ describe('MessengerGateway._dispatchToAnalyst', () => {
         { provide: AiAnalystService, useValue: { submitTask: jest.fn() } },
         {
           provide: AssistantChatService,
-          useValue: { appendAnalystReply: jest.fn() },
+          useValue: { appendAnalystReply: jest.fn().mockResolvedValue({}) },
         },
         { provide: FcmService, useValue: {} },
         { provide: ApnsService, useValue: {} },
