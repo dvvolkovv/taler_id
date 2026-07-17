@@ -14,6 +14,23 @@ const LK_URL = process.env.LIVEKIT_WS_URL || 'ws://localhost:7880';
 const LK_API_KEY = process.env.LIVEKIT_API_KEY || 'lkdevkey';
 const LK_API_SECRET = process.env.LIVEKIT_API_SECRET || 'lkSecret2024TalerID';
 const OPENAI_KEY = process.env.OPENAI_API_KEY;
+// Linear gain applied to translator PCM before publishing. OpenAI Realtime
+// TTS output is noticeably quieter than live speech; combined with client-side
+// peer ducking (0.15) this makes the translation clearly dominant.
+const TRANSLATOR_GAIN = Math.max(
+  0.1,
+  Math.min(4, parseFloat(process.env.TRANSLATOR_GAIN || '1.4')),
+);
+
+// In-place linear gain with int16 clamping (soft-limit at full scale).
+function applyGain(int16, gain) {
+  if (gain === 1) return int16;
+  for (let i = 0; i < int16.length; i++) {
+    const v = int16[i] * gain;
+    int16[i] = v > 32767 ? 32767 : v < -32768 ? -32768 : v | 0;
+  }
+  return int16;
+}
 
 // All languages supported by Whisper + GPT Realtime for translation
 const LANG_NAMES = {
@@ -382,10 +399,13 @@ async function ensureSpeakerSessions(session, speakerIdentity) {
         if (session.stopping) return;
         try {
           const { AudioFrame } = livekitRtc;
-          const int16 = new Int16Array(
-            pcmBuffer.buffer,
-            pcmBuffer.byteOffset,
-            Math.floor(pcmBuffer.byteLength / 2)
+          const int16 = applyGain(
+            new Int16Array(
+              pcmBuffer.buffer,
+              pcmBuffer.byteOffset,
+              Math.floor(pcmBuffer.byteLength / 2)
+            ),
+            TRANSLATOR_GAIN
           );
           const frame = new AudioFrame(int16, 24000, 1, int16.length);
           frameQueue.push(frame);
