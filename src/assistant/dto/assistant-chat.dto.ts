@@ -1,9 +1,11 @@
 import {
+  ArrayMaxSize,
   IsArray,
   IsIn,
   IsObject,
   IsOptional,
   IsString,
+  MaxLength,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -38,6 +40,7 @@ export class AssistantEntryDto {
   source: 'voice' | 'text';
 
   @IsString()
+  @MaxLength(8000)
   text: string;
 
   @IsOptional()
@@ -48,6 +51,7 @@ export class AssistantEntryDto {
 
 export class LogEntriesDto {
   @IsArray()
+  @ArrayMaxSize(100)
   @ValidateNested({ each: true })
   @Type(() => AssistantEntryDto)
   entries: AssistantEntryDto[];
@@ -64,9 +68,11 @@ export class ToolResultDto {
 export class TurnDto {
   @IsOptional()
   @IsString()
+  @MaxLength(8000)
   text?: string;
 
   @IsString()
+  @MaxLength(32000)
   instructions: string;
 
   @IsArray()
