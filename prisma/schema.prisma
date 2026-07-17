@@ -364,6 +364,7 @@ enum ConvType {
   AI_ANALYST
   AI_OUTBOUND
   AI_INFORMER
+  AI_ASSISTANT
 }
 
 model CallLog {
