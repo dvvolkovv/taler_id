@@ -131,7 +131,121 @@ export class AssistantChatService {
     return msg;
   }
 
-  async textTurn(userId: string, dto: any): Promise<any> {
-    throw new Error('not implemented'); // Task 4
+  private static readonly HISTORY_LIMIT = 30;
+
+  /** One text turn. Stateless: tool round-trips echo state from the client. */
+  async textTurn(
+    userId: string,
+    dto: {
+      text?: string;
+      instructions: string;
+      tools: any[];
+      pendingAssistantMessage?: any;
+      toolResults?: { tool_call_id: string; output: string }[];
+    },
+  ) {
+    const conversationId = await this.getOrCreateThread(userId);
+
+    if (dto.text) {
+      const userMsg = await this.prisma.message.create({
+        data: {
+          conversationId,
+          senderId: userId,
+          content: dto.text,
+          isSystem: false,
+          metadata: { assistantRole: 'user', source: 'text' },
+        },
+      });
+      this.gateway.server.to(`user:${userId}`).emit('new_message', userMsg);
+    }
+
+    // Context: last N thread messages, chronological.
+    const historyRows = await this.prisma.message.findMany({
+      where: { conversationId, deletedAt: null },
+      orderBy: { sentAt: 'desc' },
+      take: AssistantChatService.HISTORY_LIMIT,
+    });
+    const history = historyRows
+      .reverse()
+      .filter((m) => (m.content ?? '').length > 0)
+      .map((m) => ({
+        role:
+          (m.metadata as any)?.assistantRole === 'assistant' || m.isSystem
+            ? ('assistant' as const)
+            : ('user' as const),
+        content: m.content,
+      }));
+
+    const messages: any[] = [{ role: 'system', content: dto.instructions }, ...history];
+    if (dto.text) {
+      // the just-persisted user message is in `history` only if findMany saw
+      // it; guard against lag by ensuring the last entry is the current text
+      if (messages[messages.length - 1]?.content !== dto.text) {
+        messages.push({ role: 'user', content: dto.text });
+      }
+    }
+    if (dto.pendingAssistantMessage && dto.toolResults) {
+      messages.push(dto.pendingAssistantMessage);
+      for (const r of dto.toolResults) {
+        messages.push({ role: 'tool', tool_call_id: r.tool_call_id, content: r.output });
+      }
+    }
+
+    const reply = await this.callOpenAI({
+      messages,
+      tools: dto.tools?.length ? dto.tools : undefined,
+    });
+
+    if (reply.tool_calls && reply.tool_calls.length > 0) {
+      return {
+        status: 'tool_calls' as const,
+        assistantMessage: { role: 'assistant', content: reply.content ?? null, tool_calls: reply.tool_calls },
+        toolCalls: reply.tool_calls,
+      };
+    }
+
+    const finalText = reply.content ?? '';
+    const assistantMsg = await this.prisma.message.create({
+      data: {
+        conversationId,
+        senderId: userId,
+        content: finalText,
+        isSystem: true,
+        metadata: { assistantRole: 'assistant', source: 'text' },
+      },
+    });
+    this.gateway.server.to(`user:${userId}`).emit('new_message', {
+      ...assistantMsg,
+      senderName: 'AI Ассистент',
+    });
+    return { status: 'final' as const, text: finalText, messageId: assistantMsg.id };
+  }
+
+  /** Thin OpenAI chat-completions wrapper (mocked in unit tests). */
+  private async callOpenAI(payload: {
+    messages: any[];
+    tools?: any[];
+  }): Promise<{ content: string | null; tool_calls?: any[] }> {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) throw new Error('OPENAI_API_KEY not configured');
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o',
+        messages: payload.messages,
+        ...(payload.tools ? { tools: payload.tools } : {}),
+      }),
+    });
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      throw new Error(`OpenAI ${res.status}: ${errText.slice(0, 300)}`);
+    }
+    const data = await res.json();
+    const msg = data.choices?.[0]?.message ?? {};
+    return { content: msg.content ?? null, tool_calls: msg.tool_calls };
   }
 }

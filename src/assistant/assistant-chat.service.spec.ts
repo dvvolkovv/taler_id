@@ -140,4 +140,109 @@ describe('AssistantChatService', () => {
       );
     });
   });
+
+  describe('textTurn', () => {
+    beforeEach(() => {
+      prisma.conversation.findFirst.mockResolvedValue({ id: 'conv-1' });
+      prisma.message.findMany.mockResolvedValue([]);
+    });
+
+    it('persists user text, returns final answer and persists it', async () => {
+      prisma.message.create
+        .mockResolvedValueOnce({ id: 'u1', conversationId: 'conv-1' }) // user msg
+        .mockResolvedValueOnce({ id: 'a1', conversationId: 'conv-1' }); // assistant msg
+      jest.spyOn(service as any, 'callOpenAI').mockResolvedValue({
+        content: 'Привет! Чем помочь?',
+        tool_calls: undefined,
+      });
+
+      const res = await service.textTurn('user-1', {
+        text: 'Привет',
+        instructions: 'Ты — ассистент Taler ID',
+        tools: [],
+      });
+
+      expect(res).toEqual({ status: 'final', text: 'Привет! Чем помочь?', messageId: 'a1' });
+      expect(prisma.message.create.mock.calls[0][0].data.metadata).toEqual({
+        assistantRole: 'user',
+        source: 'text',
+      });
+      expect(prisma.message.create.mock.calls[1][0].data.isSystem).toBe(true);
+      expect(emitToUser).toHaveBeenCalledWith('new_message', expect.objectContaining({ id: 'a1' }));
+    });
+
+    it('returns tool_calls without persisting an assistant message', async () => {
+      prisma.message.create.mockResolvedValueOnce({ id: 'u1', conversationId: 'conv-1' });
+      const toolCalls = [
+        { id: 'call_1', type: 'function', function: { name: 'send_message', arguments: '{}' } },
+      ];
+      jest.spyOn(service as any, 'callOpenAI').mockResolvedValue({
+        content: null,
+        tool_calls: toolCalls,
+      });
+
+      const res = await service.textTurn('user-1', {
+        text: 'Отправь сообщение Ивану',
+        instructions: 'sys',
+        tools: [{ type: 'function', function: { name: 'send_message' } }],
+      });
+
+      expect(res.status).toBe('tool_calls');
+      expect(res.toolCalls).toEqual(toolCalls);
+      expect(prisma.message.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('feeds toolResults back and persists the final message', async () => {
+      prisma.message.create.mockResolvedValueOnce({ id: 'a2', conversationId: 'conv-1' });
+      const spy = jest.spyOn(service as any, 'callOpenAI').mockResolvedValue({
+        content: 'Сообщение отправлено',
+        tool_calls: undefined,
+      });
+      const pending = {
+        role: 'assistant',
+        tool_calls: [
+          { id: 'call_1', type: 'function', function: { name: 'send_message', arguments: '{}' } },
+        ],
+      };
+
+      const res = await service.textTurn('user-1', {
+        instructions: 'sys',
+        tools: [],
+        pendingAssistantMessage: pending,
+        toolResults: [{ tool_call_id: 'call_1', output: '{"ok":true}' }],
+      });
+
+      expect(res.status).toBe('final');
+      const sentMessages = spy.mock.calls[0][0].messages;
+      expect(sentMessages).toEqual(
+        expect.arrayContaining([
+          pending,
+          { role: 'tool', tool_call_id: 'call_1', content: '{"ok":true}' },
+        ]),
+      );
+    });
+
+    it('maps thread history into the OpenAI context', async () => {
+      prisma.message.findMany.mockResolvedValue([
+        // findMany returns desc; service must reverse to chronological
+        { content: 'Ответ', metadata: { assistantRole: 'assistant' }, isSystem: true },
+        { content: 'Вопрос', metadata: { assistantRole: 'user' }, isSystem: false },
+      ]);
+      prisma.message.create
+        .mockResolvedValueOnce({ id: 'u1', conversationId: 'conv-1' })
+        .mockResolvedValueOnce({ id: 'a1', conversationId: 'conv-1' });
+      const spy = jest.spyOn(service as any, 'callOpenAI').mockResolvedValue({
+        content: 'ok',
+        tool_calls: undefined,
+      });
+
+      await service.textTurn('user-1', { text: 'Ещё', instructions: 'sys', tools: [] });
+
+      const msgs = spy.mock.calls[0][0].messages;
+      expect(msgs[0]).toEqual({ role: 'system', content: 'sys' });
+      expect(msgs[1]).toEqual({ role: 'user', content: 'Вопрос' });
+      expect(msgs[2]).toEqual({ role: 'assistant', content: 'Ответ' });
+      expect(msgs[msgs.length - 1]).toEqual({ role: 'user', content: 'Ещё' });
+    });
+  });
 });
