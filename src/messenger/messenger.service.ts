@@ -739,11 +739,45 @@ export class MessengerService {
     isSystem?: boolean,
     metadata?: Record<string, any>,
     clientTempId?: string,
+    phantomSuspect?: boolean,
   ) {
+    // Phantom-resend content dedup (incidents 2026-07-10 and 2026-07-17):
+    // stale pre-1.0.98 client outboxes re-fire old messages on every socket
+    // reconnect. Ancient clients send no clientTempId at all; 1.0.8x-era
+    // clients attach a FRESH tempId to a resend of a message originally
+    // saved without one — both bypass the (senderId, clientTempId) unique
+    // index. The observed ghost was 42 days old, hence the 90-day window.
+    // For tempId-carrying sends the check only applies inside the
+    // reconnect-drain window (phantomSuspect: message arrived seconds after
+    // socket connect — outbox drains fire immediately, humans don't), so a
+    // deliberate identical repeat typed later is never swallowed.
+    // Callers must NOT broadcast rows returned with `deduped: true`.
+    if (
+      !isSystem &&
+      !fileData &&
+      content.length >= 20 &&
+      (!clientTempId || phantomSuspect)
+    ) {
+      const dup = await this.prisma.message.findFirst({
+        where: {
+          conversationId,
+          senderId,
+          content,
+          sentAt: { gte: new Date(Date.now() - 90 * 24 * 3600 * 1000) },
+        },
+        orderBy: { sentAt: 'desc' },
+      });
+      if (dup) {
+        this.logger?.warn?.(
+          `[createMessage] content-dedup hit: sender=${senderId} conv=${conversationId} len=${content.length} tempId=${clientTempId ?? 'none'}`,
+        );
+        return { ...dup, deduped: true };
+      }
+    }
     // Durable idempotency: the Redis dedup key lives 24h, but broken client
-    // outboxes retry stuck sends for weeks (phantom-message incident,
-    // 2026-07-10). The unique index on (senderId, clientTempId) makes the
-    // retry collide; return the original row instead of inserting a copy.
+    // outboxes retry stuck sends for weeks. The unique index on
+    // (senderId, clientTempId) makes the retry collide; return the original
+    // row instead of inserting a copy.
     if (clientTempId) {
       try {
         return await this.prisma.message.create({
@@ -763,29 +797,9 @@ export class MessengerService {
           const existing = await this.prisma.message.findFirst({
             where: { senderId, clientTempId },
           });
-          if (existing) return existing;
+          if (existing) return { ...existing, deduped: true };
         }
         throw e;
-      }
-    }
-    // No clientTempId (legacy clients): content-based fallback. An identical
-    // non-trivial message from the same sender in the same conversation
-    // within 14 days is a stuck-outbox retry, not a new send.
-    if (!isSystem && !fileData && content.length >= 20) {
-      const dup = await this.prisma.message.findFirst({
-        where: {
-          conversationId,
-          senderId,
-          content,
-          sentAt: { gte: new Date(Date.now() - 14 * 24 * 3600 * 1000) },
-        },
-        orderBy: { sentAt: 'desc' },
-      });
-      if (dup) {
-        this.logger?.warn?.(
-          `[createMessage] content-dedup hit: sender=${senderId} conv=${conversationId} len=${content.length}`,
-        );
-        return dup;
       }
     }
     return this.prisma.message.create({
