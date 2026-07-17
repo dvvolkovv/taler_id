@@ -62,6 +62,7 @@ export class ToolResultDto {
   tool_call_id: string;
 
   @IsString()
+  @MaxLength(16000)
   output: string;
 }
 
@@ -76,6 +77,7 @@ export class TurnDto {
   instructions: string;
 
   @IsArray()
+  @ArrayMaxSize(64)
   tools: any[];
 
   // Follow-up call of the same turn: echo of the assistant tool_calls
@@ -86,6 +88,7 @@ export class TurnDto {
 
   @IsOptional()
   @IsArray()
+  @ArrayMaxSize(32)
   @ValidateNested({ each: true })
   @Type(() => ToolResultDto)
   toolResults?: ToolResultDto[];

@@ -239,6 +239,7 @@ export class AssistantChatService {
         messages: payload.messages,
         ...(payload.tools ? { tools: payload.tools } : {}),
       }),
+      signal: AbortSignal.timeout(60_000),
     });
     if (!res.ok) {
       const errText = await res.text().catch(() => '');
