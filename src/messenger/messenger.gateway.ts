@@ -79,6 +79,7 @@ export class MessengerGateway
         algorithms: ['RS256'],
       }) as any;
       client.data.userId = payload.sub;
+      client.data.connectedAt = Date.now();
       client.join(`user:${payload.sub}`);
     } catch {
       client.disconnect();
@@ -216,6 +217,13 @@ export class MessengerGateway
           client.data.userId,
         );
       }
+      // Reconnect-drain window: stale client outboxes re-fire pending
+      // entries immediately after the socket connects. A message arriving
+      // within seconds of connect that duplicates old content is a phantom
+      // resend, not a human typing (2026-07-17 ghost incident).
+      const phantomSuspect =
+        typeof client.data.connectedAt === 'number' &&
+        Date.now() - client.data.connectedAt < 15_000;
       const msg = await this.service.createMessage(
         payload.conversationId,
         client.data.userId,
@@ -225,7 +233,24 @@ export class MessengerGateway
         undefined,
         undefined,
         payload.clientTempId,
+        phantomSuspect,
       );
+      if ((msg as any).deduped) {
+        // Phantom resend of an already-stored message: ack the sender so its
+        // pending queue clears, but never re-broadcast or push the old row.
+        if (payload.clientTempId) {
+          const dedupKey = `msg:dedup:${client.data.userId}:${payload.clientTempId}`;
+          await this.redis.setEx(dedupKey, 86400, msg.id);
+          client.emit('message_acked', {
+            clientTempId: payload.clientTempId,
+            messageId: msg.id,
+          });
+        }
+        this.logger.warn(
+          `[handleMessage] Phantom resend blocked: user=${client.data.userId} conv=${payload.conversationId} msg=${msg.id}`,
+        );
+        return;
+      }
       const senderName = await this.service.getUserDisplayName(
         client.data.userId,
       );
