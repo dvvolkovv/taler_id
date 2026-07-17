@@ -8,7 +8,10 @@ import { MessengerModule } from '../messenger/messenger.module';
 import { FcmService } from '../common/fcm.service';
 
 @Module({
-  imports: [BillingModule, forwardRef(() => MessengerModule)],
+  // forwardRef on BillingModule too: MessengerModule now imports AssistantModule
+  // (analyst→assistant mirror), so the require chain Billing→Messenger→Assistant
+  // evaluates this file before BillingModule's class binding exists.
+  imports: [forwardRef(() => BillingModule), forwardRef(() => MessengerModule)],
   controllers: [AssistantController, AssistantChatController],
   providers: [AssistantService, AssistantChatService, FcmService],
   exports: [AssistantChatService],
