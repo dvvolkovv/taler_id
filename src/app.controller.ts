@@ -81,8 +81,8 @@ export class AppController {
     // Env-overridable so the DO/talerid build advertises its own track + APK URL;
     // defaults preserve aeza (prod/dev) behaviour when these vars are unset.
     const latest = {
-      version: env.APP_LATEST_VERSION || '1.1.12',
-      build: parseInt(env.APP_LATEST_BUILD || '210', 10),
+      version: env.APP_LATEST_VERSION || '1.1.13',
+      build: parseInt(env.APP_LATEST_BUILD || '211', 10),
     };
     const androidUrl =
       env.APP_UPDATE_URL_ANDROID ||
@@ -104,6 +104,28 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.1.13',
+    build: 211,
+    date: '2026-07-17',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.13 — мессенджер, заметки и звонки.\n\n' +
+      '✅ Статусы прочтения в группах — теперь галочками, как в личных чатах: одна — доставлено, две — прочитано. Кто именно прочитал — по долгому нажатию на сообщение.\n\n' +
+      '👻 Починили «сообщения-призраки»: старые сообщения больше не приходят повторно.\n\n' +
+      '📝 Заметки удаляются с первого раза и больше не возвращаются после обновления списка.\n\n' +
+      '💾 На компьютере (macOS/Windows/Linux) вложения из чата теперь сохраняются через системный диалог «Сохранить как».\n\n' +
+      '🌍 Синхронный перевод стало лучше слышно: голос собеседника приглушается сильнее, голос переводчика — громче.\n\n' +
+      '📞 iPhone: параллельный входящий звонок WhatsApp больше не ломает разговор — звук автоматически восстанавливается.',
+    notes_en:
+      'Release 1.1.13 — messenger, notes and calls.\n\n' +
+      '✅ Group read receipts are now ticks, like in direct chats: one tick — delivered, two — read. Long-press a message to see who read it.\n\n' +
+      '👻 Fixed "ghost messages": old messages no longer arrive again.\n\n' +
+      '📝 Notes now delete on the first try and stay deleted after refreshing.\n\n' +
+      '💾 On desktop (macOS/Windows/Linux) chat attachments now save via the system "Save as" dialog.\n\n' +
+      '🌍 Live translation is easier to hear: the peer\'s voice is ducked further and the translator voice is louder.\n\n' +
+      '📞 iPhone: a parallel incoming WhatsApp call no longer breaks the conversation — audio recovers automatically.',
+  },
   {
     version: '1.1.12',
     build: 210,
