@@ -7,6 +7,7 @@ import { MessengerService } from './messenger.service';
 import { AiTwinService } from './ai-twin.service';
 import { AiAnalystService } from '../ai-analyst/ai-analyst.service';
 import { BillingModule } from '../billing/billing.module';
+import { AssistantModule } from '../assistant/assistant.module';
 import { FcmService } from '../common/fcm.service';
 import { ApnsService } from '../common/apns.service';
 import { FileStorageService } from '../common/file-storage.service';
@@ -21,6 +22,10 @@ import { VideoTranscodeService } from '../common/video-transcode.service';
     // forwardRef because BillingModule imports MessengerModule (for MESSENGER_GATEWAY
     // token) — the cycle is real and must be broken at both ends.
     forwardRef(() => BillingModule),
+    // AssistantChatService mirrors analyst replies into the AI_ASSISTANT
+    // thread when the task originated from the voice assistant. AssistantModule
+    // imports MessengerModule back — break the cycle with forwardRef.
+    forwardRef(() => AssistantModule),
   ],
   controllers: [MessengerController],
   providers: [

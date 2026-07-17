@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { AiTwinService } from './ai-twin.service';
 import { AiAnalystService } from '../ai-analyst/ai-analyst.service';
+import { AssistantChatService } from '../assistant/assistant-chat.service';
 import { FcmService } from '../common/fcm.service';
 import { ApnsService } from '../common/apns.service';
 import { ConfigService } from '@nestjs/config';
@@ -18,6 +19,7 @@ describe('MessengerGateway._dispatchToAnalyst', () => {
   let gateway: MessengerGateway;
   let mockAnalyst: AiAnalystService;
   let mockMessenger: MessengerService;
+  let mockAssistantChat: AssistantChatService;
   let emitted: Array<{ room: string; event: string; data: any }> = [];
 
   beforeEach(async () => {
@@ -69,6 +71,10 @@ describe('MessengerGateway._dispatchToAnalyst', () => {
         { provide: RedisService, useValue: {} },
         { provide: AiTwinService, useValue: {} },
         { provide: AiAnalystService, useValue: { submitTask: jest.fn() } },
+        {
+          provide: AssistantChatService,
+          useValue: { appendAnalystReply: jest.fn().mockResolvedValue({}) },
+        },
         { provide: FcmService, useValue: {} },
         { provide: ApnsService, useValue: {} },
         { provide: ConfigService, useValue: { get: () => undefined } },
@@ -78,6 +84,7 @@ describe('MessengerGateway._dispatchToAnalyst', () => {
     (gateway as any).server = mockServer;
     mockAnalyst = mod.get(AiAnalystService);
     mockMessenger = mod.get(MessengerService);
+    mockAssistantChat = mod.get(AssistantChatService);
   });
 
   function replayWorker(
@@ -271,5 +278,36 @@ describe('MessengerGateway._dispatchToAnalyst', () => {
     expect(successCall[2]).toBe('done');
     expect(successCall[5]).toBe(true);
     jest.useRealTimers();
+  });
+
+  it('duplicates analyst reply into assistant thread when origin=assistant', async () => {
+    (mockAnalyst.submitTask as jest.Mock).mockImplementation(async () => {
+      return { text: 'Анализ готов: всё хорошо', outputFiles: [] };
+    });
+    await (gateway as any)._dispatchToAnalyst(
+      'user-1',
+      'analyst-conv-1',
+      'Проанализируй файл',
+      [],
+      'assistant', // origin
+    );
+    expect(mockAssistantChat.appendAnalystReply).toHaveBeenCalledWith(
+      'user-1',
+      'Анализ готов: всё хорошо',
+      'analyst-conv-1',
+    );
+  });
+
+  it('does NOT duplicate reply without origin', async () => {
+    (mockAnalyst.submitTask as jest.Mock).mockImplementation(async () => {
+      return { text: 'ответ', outputFiles: [] };
+    });
+    await (gateway as any)._dispatchToAnalyst(
+      'user-1',
+      'analyst-conv-1',
+      'вопрос',
+      [],
+    );
+    expect(mockAssistantChat.appendAnalystReply).not.toHaveBeenCalled();
   });
 });

@@ -339,7 +339,10 @@ export class MessengerService {
 
   async getConversations(userId: string) {
     const conversations = await this.prisma.conversation.findMany({
-      where: { participants: { some: { userId } } },
+      where: {
+        participants: { some: { userId } },
+        NOT: { type: 'AI_ASSISTANT' },
+      },
       include: {
         participants: true,
         _count: { select: { participants: true } },
