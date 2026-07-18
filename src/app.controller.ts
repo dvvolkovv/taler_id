@@ -81,8 +81,8 @@ export class AppController {
     // Env-overridable so the DO/talerid build advertises its own track + APK URL;
     // defaults preserve aeza (prod/dev) behaviour when these vars are unset.
     const latest = {
-      version: env.APP_LATEST_VERSION || '1.1.16',
-      build: parseInt(env.APP_LATEST_BUILD || '214', 10),
+      version: env.APP_LATEST_VERSION || '1.1.17',
+      build: parseInt(env.APP_LATEST_BUILD || '215', 10),
     };
     const androidUrl =
       env.APP_UPDATE_URL_ANDROID ||
@@ -104,6 +104,20 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.1.17',
+    build: 215,
+    date: '2026-07-18',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.17 — ассистент стал обновляемым на лету.\n\n' +
+      '⚡ Инструкции ассистента теперь загружаются с сервера: улучшения его поведения будут приходить мгновенно, без обновления приложения.\n\n' +
+      '📴 Без интернета ассистент работает как раньше — встроенные инструкции остаются запасным вариантом.',
+    notes_en:
+      'Release 1.1.17 — the assistant now updates on the fly.\n\n' +
+      '⚡ Assistant instructions are now loaded from the server: behavior improvements arrive instantly, without an app update.\n\n' +
+      '📴 Offline the assistant works as before — built-in instructions remain as a fallback.',
+  },
   {
     version: '1.1.16',
     build: 214,
