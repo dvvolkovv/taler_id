@@ -1,4 +1,4 @@
-import { DynamicModule, Global, Logger, Module, forwardRef } from '@nestjs/common';
+import { DynamicModule, Global, Logger, Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { PrismaModule } from '../prisma/prisma.module';
 import { RedisModule } from '../redis/redis.module';
@@ -29,7 +29,17 @@ export class InformerBotModule {
         ConfigModule,
         PrismaModule,
         RedisModule,
-        forwardRef(() => MessengerModule),
+        // NO forwardRef here. A forwardRef inside a DYNAMIC module's imports
+        // makes Nest register a SECOND instance of the target module (different
+        // container token) -> a second MessengerGateway bound to the same
+        // socket.io namespace -> every inbound event handled twice, every
+        // call_invite VoIP push sent twice (incident 2026-07-18: a second ring
+        // from the same peer interrupted an active call; all the msg/call_ended
+        // dedup patches since 2026-06-16 were treating this symptom). There is
+        // no module-level cycle: InformerBotModule is @Global and
+        // MessengerModule never imports it - provider-level forwardRefs in the
+        // services are enough.
+        MessengerModule,
       ],
       controllers: [InformerBotController],
       providers: [

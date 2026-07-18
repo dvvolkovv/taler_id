@@ -32,6 +32,23 @@ async function bootstrap() {
   await redisIoAdapter.connectToRedis();
   app.useWebSocketAdapter(redisIoAdapter);
 
+  // Container sanity: a STATIC module appearing twice means Nest built two
+  // instances of it (e.g. forwardRef inside a dynamic module's imports) and
+  // every gateway/cron in it runs twice. Bit us 2026-06-16..07-18: a second
+  // MessengerGateway double-handled every socket event and double-sent every
+  // call VoIP push. Dynamic modules (Config/Bull/ServeStatic...) legitimately
+  // repeat, so only flag names we know are static.
+  {
+    const { ModulesContainer } = await import('@nestjs/core');
+    const names = [...app.get(ModulesContainer).values()]
+      .map((m) => m.metatype?.name)
+      .filter((n): n is string => !!n && !/^(ConfigModule|ConfigHostModule|BullModule|ScheduleModule|ServeStaticModule|JwtModule|PassportModule|ThrottlerModule|HttpModule)$/.test(n));
+    const dup = [...new Set(names.filter((n, i) => names.indexOf(n) !== i))];
+    if (dup.length) {
+      console.error(`[BOOT-GUARD] duplicated static modules in container: ${dup.join(', ')} — a gateway in them will double-handle every event!`);
+    }
+  }
+
   // Swagger/OpenAPI Configuration
   const config = new DocumentBuilder()
     .setTitle('Taler ID API')
