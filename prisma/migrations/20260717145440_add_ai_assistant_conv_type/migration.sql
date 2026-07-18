@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "ConvType" ADD VALUE 'AI_ASSISTANT';

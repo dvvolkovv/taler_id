@@ -7,13 +7,20 @@ import {
   ConnectedSocket,
   MessageBody,
 } from '@nestjs/websockets';
-import { Logger, OnModuleInit, Optional } from '@nestjs/common';
+import {
+  forwardRef,
+  Inject,
+  Logger,
+  OnModuleInit,
+  Optional,
+} from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { ConfigService } from '@nestjs/config';
 import { MessengerService } from './messenger.service';
 import { AiTwinService } from './ai-twin.service';
 import { AiAnalystService } from '../ai-analyst/ai-analyst.service';
 import { InformerBotService } from '../informer-bot/informer-bot.service';
+import { AssistantChatService } from '../assistant/assistant-chat.service';
 import { FcmService } from '../common/fcm.service';
 import { ApnsService } from '../common/apns.service';
 import * as jwt from 'jsonwebtoken';
@@ -44,6 +51,8 @@ export class MessengerGateway
     private readonly redis: RedisService,
     private readonly aiTwin: AiTwinService,
     private readonly aiAnalyst: AiAnalystService,
+    @Inject(forwardRef(() => AssistantChatService))
+    private readonly assistantChat: AssistantChatService,
     @Optional() private readonly informerBot?: InformerBotService,
   ) {
     const publicKeyPath =
@@ -127,6 +136,7 @@ export class MessengerGateway
       silent?: boolean;
       topicId?: string;
       clientTempId?: string;
+      origin?: string;
     },
   ) {
     try {
@@ -342,6 +352,7 @@ export class MessengerGateway
           payload.conversationId,
           payload.content,
           recentFiles,
+          payload.origin === 'assistant' ? 'assistant' : undefined,
         );
         // No push notifications or delivery tracking for AI_ANALYST — the
         // user is the only participant. Skip the rest of the handler.
@@ -1187,6 +1198,7 @@ export class MessengerGateway
     conversationId: string,
     messageText: string,
     fileUrls: { url: string; name: string }[],
+    origin?: 'assistant',
   ): Promise<void> {
     const started = Date.now();
     // Idle timeout resets on every chunk/tool event from the Worker. Hard cap
@@ -1328,6 +1340,16 @@ export class MessengerGateway
         steps,
         durationMs,
       });
+      if (origin === 'assistant') {
+        // Mirror the reply into the AI_ASSISTANT thread (spec: analyst intercept).
+        this.assistantChat
+          .appendAnalystReply(userId, text, conversationId)
+          .catch((e) =>
+            this.logger.error(
+              `[AI Analyst] assistant-thread mirror failed: ${(e as Error).message}`,
+            ),
+          );
+      }
     } catch (e) {
       clearTimers();
       const err = e as Error;
