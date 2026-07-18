@@ -81,8 +81,8 @@ export class AppController {
     // Env-overridable so the DO/talerid build advertises its own track + APK URL;
     // defaults preserve aeza (prod/dev) behaviour when these vars are unset.
     const latest = {
-      version: env.APP_LATEST_VERSION || '1.1.13',
-      build: parseInt(env.APP_LATEST_BUILD || '211', 10),
+      version: env.APP_LATEST_VERSION || '1.1.14',
+      build: parseInt(env.APP_LATEST_BUILD || '212', 10),
     };
     const androidUrl =
       env.APP_UPDATE_URL_ANDROID ||
@@ -104,6 +104,30 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.1.14',
+    build: 212,
+    date: '2026-07-18',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.14 — большой апдейт AI-ассистента.\n\n' +
+      '💬 У ассистента появился полноценный чат: вся история общения (голосом и текстом) сохраняется и доступна с любого вашего устройства.\n\n' +
+      '⌨️ Ассистенту теперь можно писать текстом — все команды работают как голосом: отправить сообщение, создать встречу, позвонить и т.д.\n\n' +
+      '🔗 Действия ассистента — кликабельные: создал встречу — нажмите и откроется календарь; отправил сообщение — перейдёте прямо к нему.\n\n' +
+      '📎 Ассистенту можно отправлять файлы (фото, PDF) — при необходимости он сам передаст их AI-аналитику и покажет ответ в чате.\n\n' +
+      '📝 Недописанное сообщение ассистенту сохраняется как черновик — даже после перезапуска приложения.\n\n' +
+      '🔊 Голос ассистента стал заметно громче.\n\n' +
+      '🧭 Быстрые переходы в разделы — теперь прямо над чатом ассистента.',
+    notes_en:
+      'Release 1.1.14 — a major AI assistant update.\n\n' +
+      '💬 The assistant now has a full chat: your entire conversation history (voice and text) is saved and available on all your devices.\n\n' +
+      '⌨️ You can now type to the assistant — every command works the same as by voice: send a message, create an event, make a call, and more.\n\n' +
+      '🔗 Assistant actions are tappable: created an event — tap to open the calendar; sent a message — jump right to it.\n\n' +
+      '📎 Send files (photos, PDF) to the assistant — it will pass them to the AI analyst when needed and show the reply in the chat.\n\n' +
+      '📝 An unsent message to the assistant is kept as a draft — even after restarting the app.\n\n' +
+      '🔊 The assistant\'s voice is noticeably louder.\n\n' +
+      '🧭 Quick section shortcuts now live right above the assistant chat.',
+  },
   {
     version: '1.1.13',
     build: 211,
