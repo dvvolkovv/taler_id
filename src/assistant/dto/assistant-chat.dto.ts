@@ -18,6 +18,7 @@ export class AssistantActionDto {
     'call_made',
     'contact_added',
     'channel_post',
+    'web_link',
   ])
   type: string;
 

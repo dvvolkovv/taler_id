@@ -10,7 +10,8 @@ export type AssistantActionType =
   | 'analyst_reply'
   | 'call_made'
   | 'contact_added'
-  | 'channel_post';
+  | 'channel_post'
+  | 'web_link';
 
 export interface AssistantAction {
   type: AssistantActionType;
