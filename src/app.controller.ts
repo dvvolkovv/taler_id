@@ -81,8 +81,8 @@ export class AppController {
     // Env-overridable so the DO/talerid build advertises its own track + APK URL;
     // defaults preserve aeza (prod/dev) behaviour when these vars are unset.
     const latest = {
-      version: env.APP_LATEST_VERSION || '1.1.14',
-      build: parseInt(env.APP_LATEST_BUILD || '212', 10),
+      version: env.APP_LATEST_VERSION || '1.1.15',
+      build: parseInt(env.APP_LATEST_BUILD || '213', 10),
     };
     const androidUrl =
       env.APP_UPDATE_URL_ANDROID ||
@@ -104,6 +104,24 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.1.15',
+    build: 213,
+    date: '2026-07-18',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.15 — ассистент в привычном виде, чат внутри.\n\n' +
+      '🪐 Вернули главный экран с «планетами»-разделами вокруг значка TalerID — как раньше.\n\n' +
+      '💬 Чат с историей теперь внутри голосового окна ассистента: нажмите на центр — и вся история общения, живые реплики, текстовый ввод и файлы в одном месте.\n\n' +
+      '🔗 Ссылки из веб-поиска ассистента кликабельны: попросили найти билеты — переходите на сайт прямо из чата.\n\n' +
+      '🧭 Все пузыри-действия (встречи, сообщения, звонки, ответы аналитика) — в этой же ленте.',
+    notes_en:
+      'Release 1.1.15 — the assistant back to its classic look, chat inside.\n\n' +
+      '🪐 The home screen with section "planets" orbiting the TalerID logo is back — just like before.\n\n' +
+      '💬 The chat with history now lives inside the assistant voice window: tap the center — full conversation history, live replies, text input and files in one place.\n\n' +
+      '🔗 Links from the assistant\'s web search are tappable: asked to find tickets — open the site right from the chat.\n\n' +
+      '🧭 All action bubbles (events, messages, calls, analyst replies) live in the same feed.',
+  },
   {
     version: '1.1.14',
     build: 212,
