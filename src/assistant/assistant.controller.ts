@@ -1,14 +1,26 @@
-import { Controller, Post, Body, UseGuards, UseFilters } from '@nestjs/common';
+import { Controller, Get, Post, Body, Query, UseGuards, UseFilters } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AssistantService } from './assistant.service';
+import { AssistantInstructionsService } from './assistant-instructions.service';
 import { SaveTranscriptDto } from './dto/save-transcript.dto';
 import { BillingExceptionFilter } from '../billing/filters/billing-exception.filter';
 
 @Controller('assistant')
 @UseGuards(JwtAuthGuard)
 export class AssistantController {
-  constructor(private readonly assistantService: AssistantService) {}
+  constructor(
+    private readonly assistantService: AssistantService,
+    private readonly instructionsService: AssistantInstructionsService,
+  ) {}
+
+  /** Server-side assistant system prompt. `ru` → ru.md, anything else → en.md.
+   *  The client substitutes {{NOW}} / {{LANG_NAME}} and prepends the name
+   *  preamble before feeding the text to the OpenAI Realtime session. */
+  @Get('instructions')
+  getInstructions(@Query('locale') locale?: string) {
+    return this.instructionsService.getInstructions(locale);
+  }
 
   @Post('transcripts')
   saveTranscript(@CurrentUser() user: any, @Body() dto: SaveTranscriptDto) {

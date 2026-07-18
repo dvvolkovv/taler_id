@@ -3,6 +3,7 @@ import { AssistantController } from './assistant.controller';
 import { AssistantService } from './assistant.service';
 import { AssistantChatService } from './assistant-chat.service';
 import { AssistantChatController } from './assistant-chat.controller';
+import { AssistantInstructionsService } from './assistant-instructions.service';
 import { BillingModule } from '../billing/billing.module';
 import { MessengerModule } from '../messenger/messenger.module';
 import { FcmService } from '../common/fcm.service';
@@ -13,7 +14,7 @@ import { FcmService } from '../common/fcm.service';
   // evaluates this file before BillingModule's class binding exists.
   imports: [forwardRef(() => BillingModule), forwardRef(() => MessengerModule)],
   controllers: [AssistantController, AssistantChatController],
-  providers: [AssistantService, AssistantChatService, FcmService],
+  providers: [AssistantService, AssistantChatService, AssistantInstructionsService, FcmService],
   exports: [AssistantChatService],
 })
 export class AssistantModule {}
