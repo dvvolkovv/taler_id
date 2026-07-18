@@ -81,8 +81,8 @@ export class AppController {
     // Env-overridable so the DO/talerid build advertises its own track + APK URL;
     // defaults preserve aeza (prod/dev) behaviour when these vars are unset.
     const latest = {
-      version: env.APP_LATEST_VERSION || '1.1.15',
-      build: parseInt(env.APP_LATEST_BUILD || '213', 10),
+      version: env.APP_LATEST_VERSION || '1.1.16',
+      build: parseInt(env.APP_LATEST_BUILD || '214', 10),
     };
     const androidUrl =
       env.APP_UPDATE_URL_ANDROID ||
@@ -104,6 +104,20 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.1.16',
+    build: 214,
+    date: '2026-07-18',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.16 — точечные исправления ассистента.\n\n' +
+      '🔇 Ассистент больше не «комментирует со стороны» ваши же реплики — убрано эхо собственной истории в голосовой сессии.\n\n' +
+      '🎯 Поручения «найди билеты/отель/вариант» надёжно уходят AI-аналитику, в том числе повторно после уточнений — ассистент не скажет «передал», не передав на самом деле.',
+    notes_en:
+      'Release 1.1.16 — targeted assistant fixes.\n\n' +
+      '🔇 The assistant no longer "narrates" your own words — own-history echo is filtered out of the voice session.\n\n' +
+      '🎯 Errands like "find tickets/a hotel" reliably reach the AI Analyst, including re-submission after clarifications — the assistant won\'t claim "sent" without actually sending.',
+  },
   {
     version: '1.1.15',
     build: 213,
