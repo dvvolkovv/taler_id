@@ -81,8 +81,8 @@ export class AppController {
     // Env-overridable so the DO/talerid build advertises its own track + APK URL;
     // defaults preserve aeza (prod/dev) behaviour when these vars are unset.
     const latest = {
-      version: env.APP_LATEST_VERSION || '1.1.17',
-      build: parseInt(env.APP_LATEST_BUILD || '215', 10),
+      version: env.APP_LATEST_VERSION || '1.1.18',
+      build: parseInt(env.APP_LATEST_BUILD || '216', 10),
     };
     const androidUrl =
       env.APP_UPDATE_URL_ANDROID ||
@@ -104,6 +104,20 @@ export class AppController {
 // Append entries on top whenever a new version ships.
 // Keep notes user-facing (no internal jargon, no commit hashes).
 const APP_RELEASES = [
+  {
+    version: '1.1.18',
+    build: 216,
+    date: '2026-07-19',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.18 — стабильность звонков.\n\n' +
+      '📞 Исправлена редкая гонка при звонке на несколько устройств одновременно: звук больше не пропадает, когда отвечают с другого устройства.\n\n' +
+      '🔍 Добавлена диагностика аудио-подключений для более быстрого разбора проблем со звуком.',
+    notes_en:
+      'Release 1.1.18 — call stability.\n\n' +
+      '📞 Fixed a rare race when calling multiple devices at once: audio no longer drops when the call is answered on another device.\n\n' +
+      '🔍 Added audio-connection diagnostics for faster troubleshooting of sound issues.',
+  },
   {
     version: '1.1.17',
     build: 215,
