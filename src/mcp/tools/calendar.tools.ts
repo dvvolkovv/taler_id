@@ -135,7 +135,7 @@ export function registerCalendarTools(
         .int()
         .positive()
         .optional()
-        .describe('За сколько минут до начала напомнить (вычисляется от startAt)'),
+        .describe('За сколько минут до начала напомнить (вычисляется от startAt; если startAt не передан в этом же вызове — игнорируется)'),
     },
     async ({
       id,
