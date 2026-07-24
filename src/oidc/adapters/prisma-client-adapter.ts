@@ -10,8 +10,13 @@ export class PrismaClientAdapter {
     const c = await this.prisma.oAuthClient.findUnique({ where: { clientId: id } });
     if (!c) return undefined;
 
-    // Dynamic clients registered via DCR: return stored metadata as-is.
-    if (c.isDynamic) return c.dcrMetadata as Record<string, any>;
+    // Dynamic clients registered via DCR: return stored metadata with canonical
+    // client_id injected so oidc-provider always sees a consistent client_id field
+    // regardless of what was persisted in dcrMetadata.
+    if (c.isDynamic) {
+      const meta = c.dcrMetadata as Record<string, any>;
+      return { ...meta, client_id: c.clientId };
+    }
 
     // Hardcoded post-logout redirect URIs for system clients until the
     // OAuthClient model gains a postLogoutRedirectUris column.
@@ -56,25 +61,46 @@ export class PrismaClientAdapter {
   // a newly-registered client. We strip offline_access from scope — that grant
   // is reserved for manually-verified B2B partners (verifiedPartner=true) and
   // must not be auto-granted via open registration.
+  //
+  // Security: we explicitly check whether the target row is a static client
+  // before updating, so a DCR PUT /reg/:clientId request cannot overwrite
+  // redirect_uris of system clients like 'walletx' or 'taler-id-developers'.
   async upsert(id: string, payload: any, _expiresIn: number): Promise<void> {
     const scope = String(payload.scope ?? '')
       .split(' ')
       .filter((s) => s && s !== 'offline_access')
       .join(' ');
     const metadata = { ...payload, scope };
-    await this.prisma.oAuthClient.upsert({
+
+    const existing = await this.prisma.oAuthClient.findUnique({
       where: { clientId: id },
-      create: {
-        clientId: id,
-        clientSecret: payload.client_secret ?? '',
-        name: payload.client_name ?? id,
-        redirectUris: payload.redirect_uris ?? [],
-        allowedScopes: scope.split(' ').filter(Boolean),
-        isDynamic: true,
-        dcrMetadata: metadata,
-      },
-      update: { dcrMetadata: metadata, redirectUris: payload.redirect_uris ?? [] },
+      select: { isDynamic: true },
     });
+
+    if (existing && !existing.isDynamic) {
+      throw new Error(`Refusing DCR upsert over static client ${id}`);
+    }
+
+    if (existing) {
+      // Dynamic client update — only touch DCR-owned fields.
+      await this.prisma.oAuthClient.update({
+        where: { clientId: id },
+        data: { dcrMetadata: metadata, redirectUris: payload.redirect_uris ?? [] },
+      });
+    } else {
+      // New dynamic client registration.
+      await this.prisma.oAuthClient.create({
+        data: {
+          clientId: id,
+          clientSecret: payload.client_secret ?? '',
+          name: payload.client_name ?? id,
+          redirectUris: payload.redirect_uris ?? [],
+          allowedScopes: scope.split(' ').filter(Boolean),
+          isDynamic: true,
+          dcrMetadata: metadata,
+        },
+      });
+    }
   }
 
   async findByUserCode(_userCode: string): Promise<undefined> { return undefined; }
