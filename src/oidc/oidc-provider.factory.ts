@@ -63,17 +63,26 @@ export async function createOidcProvider(config: OidcProviderConfig) {
       'kyc',
       'wallet',
       'offline_access',
+      'mcp:calendar',
+      'mcp:notes',
+      'mcp:messages.read',
+      'mcp:messages.send',
     ],
 
     features: {
       devInteractions: { enabled: false },
       revocation: { enabled: true },
       userinfo: { enabled: true },
+      registration: {
+        enabled: process.env.OIDC_DCR_ENABLED === 'true',
+      },
     },
 
     pkce: {
       required: () => true,
     },
+
+    clientAuthMethods: ['client_secret_basic', 'client_secret_post', 'none'],
 
     responseTypes: ['code'],
 
