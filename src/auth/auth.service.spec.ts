@@ -11,6 +11,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
+import { SystemChannelService } from '../system-channel/system-channel.service';
 
 // Mock all ESM/native modules that can't be loaded in Jest
 jest.mock('fs', () => ({
@@ -92,6 +93,7 @@ describe('AuthService', () => {
         { provide: RedisService, useValue: mockRedis },
         { provide: JwtService, useValue: mockJwt },
         { provide: ConfigService, useValue: mockConfig },
+        { provide: SystemChannelService, useValue: { subscribeUser: jest.fn().mockResolvedValue(undefined) } },
       ],
     }).compile();
     service = module.get<AuthService>(AuthService);

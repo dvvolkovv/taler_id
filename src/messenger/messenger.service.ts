@@ -502,6 +502,8 @@ export class MessengerService {
           ? (conv._count?.participants ?? conv.participants.length)
           : undefined,
       isSubscribed: conv.type === 'CHANNEL' ? !!myParticipant : undefined,
+      // системный канал (Taler ID — Новости): клиенты не могут отписаться
+      isSystem: conv.isSystem ? true : undefined,
     };
   }
 
@@ -1322,6 +1324,9 @@ export class MessengerService {
   async unsubscribeFromChannel(channelId: string, userId: string) {
     const conv = await this._getConversationOrThrow(channelId);
     if (conv.type !== 'CHANNEL') throw new BadRequestException('Not a channel');
+    if ((conv as any).isSystem) {
+      throw new ForbiddenException('Нельзя отписаться от системного канала');
+    }
     const existing = await this.prisma.conversationParticipant.findUnique({
       where: { conversationId_userId: { conversationId: channelId, userId } },
     });
@@ -1924,6 +1929,28 @@ export class MessengerService {
       },
     });
     return !!contact;
+  }
+
+  async listContacts(userId: string) {
+    const requests = await this.prisma.contactRequest.findMany({
+      where: {
+        status: 'ACCEPTED',
+        OR: [{ senderId: userId }, { receiverId: userId }],
+      },
+      select: { senderId: true, receiverId: true },
+    });
+    const ids = requests.map((r) =>
+      r.senderId === userId ? r.receiverId : r.senderId,
+    );
+    if (ids.length === 0) return [];
+    return this.prisma.user.findMany({
+      where: { id: { in: ids } },
+      select: {
+        id: true,
+        username: true,
+        profile: { select: { firstName: true, lastName: true } },
+      },
+    });
   }
 
   async getContactStatus(

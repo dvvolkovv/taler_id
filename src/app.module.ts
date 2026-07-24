@@ -30,6 +30,9 @@ import { DeviceKeysModule } from './device-keys/device-keys.module';
 import { BillingModule } from './billing/billing.module';
 import { OAuthMobileModule } from './oauth-mobile/oauth-mobile.module';
 import { PresenceModule } from './presence/presence.module';
+import { MailModule } from './mail/mail.module';
+import { McpModule } from './mcp/mcp.module';
+import { SystemChannelModule } from './system-channel/system-channel.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import configuration from './config/configuration';
 
@@ -118,6 +121,9 @@ import configuration from './config/configuration';
     BillingModule,
     OAuthMobileModule,
     PresenceModule,
+    MailModule,
+    McpModule,
+    SystemChannelModule,
   ],
   controllers: [AppController],
   providers: [

@@ -42,6 +42,7 @@ model User {
   hostedGroupCalls     GroupCall[]           @relation("HostedGroupCalls")
   groupCallInvites     GroupCallInvite[]     @relation("GroupCallInvitesReceived")
   informerAlertConfig  InformerAlertConfig?
+  mailAccount          MailAccount?
 }
 
 model DeviceKey {
@@ -65,8 +66,8 @@ model DeviceKey {
 }
 
 model Profile {
-  id                   String     @id @default(uuid())
-  userId               String     @unique
+  id                   String          @id @default(uuid())
+  userId               String          @unique
   firstName            String?
   lastName             String?
   middleName           String?
@@ -76,11 +77,11 @@ model Profile {
   walletAddress        String?
   avatarUrl            String?
   preferredCurrency    String?
-  language             String     @default("en")
+  language             String          @default("en")
   status               String?
-  createdAt            DateTime   @default(now())
-  updatedAt            DateTime   @updatedAt
-  personalRoomCode     String?    @unique
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+  personalRoomCode     String?         @unique
   aiTwinEnabled        Boolean         @default(false)
   aiTwinTimeoutSeconds Int             @default(30)
   aiTwinPrompt         String?         @db.Text
@@ -164,6 +165,9 @@ model OAuthClient {
   isDesktopClient Boolean  @default(false)
   allowedScopes   String[]
   logoUri         String?
+  verifiedPartner Boolean  @default(false)
+  isDynamic       Boolean  @default(false)
+  dcrMetadata     Json?
   userId          String?
   user            User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   createdAt       DateTime @default(now())
@@ -176,7 +180,7 @@ model OAuthGrant {
   id        String   @id @default(uuid())
   userId    String
   clientId  String
-  scope     String   // space-separated scopes
+  scope     String // space-separated scopes
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -244,22 +248,23 @@ model Conversation {
   invitePolicy   String                    @default("all")
   autoDeleteDays Int?
   topicsEnabled  Boolean                   @default(false)
+  isSystem       Boolean                   @default(false)
   participants   ConversationParticipant[]
   messages       Message[]
   topics         Topic[]
 }
 
 model ConversationParticipant {
-  id             String       @id @default(uuid())
-  conversationId String
-  userId         String
-  role           GroupRole    @default(MEMBER)
-  joinedAt       DateTime     @default(now())
-  isMuted        Boolean      @default(false)
-  mutedUntil     DateTime?
+  id                String       @id @default(uuid())
+  conversationId    String
+  userId            String
+  role              GroupRole    @default(MEMBER)
+  joinedAt          DateTime     @default(now())
+  isMuted           Boolean      @default(false)
+  mutedUntil        DateTime?
   lastReadAt        DateTime?
   lastReadMessageId String?
-  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  conversation      Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@unique([conversationId, userId])
   @@index([userId])
@@ -297,8 +302,8 @@ model Message {
   conversation       Conversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sender             User              @relation(fields: [senderId], references: [id])
 
-  @@index([conversationId, sentAt])
   @@unique([senderId, clientTempId])
+  @@index([conversationId, sentAt])
 }
 
 model FileRecord {
@@ -863,18 +868,53 @@ model InformerSeenWallet {
 }
 
 model InformerAlertConfig {
-  userId          String    @id
-  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String @id
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  enabled         Boolean   @default(true)
-  snoozedUntil    DateTime?
+  enabled      Boolean   @default(true)
+  snoozedUntil DateTime?
 
   lastDigestStage Int       @default(0)
   lastDigestAt    DateTime?
 
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([snoozedUntil])
   @@index([enabled, snoozedUntil])
+}
+
+enum MailAccountStatus {
+  PROVISIONING
+  ACTIVE
+  SUSPENDED
+}
+
+model MailAccount {
+  id           String            @id @default(uuid())
+  userId       String            @unique
+  user         User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  localpart    String            @unique
+  domain       String
+  status       MailAccountStatus @default(PROVISIONING)
+  quotaBytes   BigInt            @default(1073741824)
+  masterSecret String // AES-256-GCM(random master password), key = MAIL_MASTER_KEY
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  appPasswords MailAppPassword[]
+
+  @@index([status])
+}
+
+model MailAppPassword {
+  id            String      @id @default(uuid())
+  mailAccountId String
+  mailAccount   MailAccount @relation(fields: [mailAccountId], references: [id], onDelete: Cascade)
+  mailcowId     Int
+  label         String
+  createdAt     DateTime    @default(now())
+  revokedAt     DateTime?
+
+  @@index([mailAccountId])
 }

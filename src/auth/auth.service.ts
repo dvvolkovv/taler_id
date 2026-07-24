@@ -4,6 +4,7 @@ import {
   ConflictException,
   BadRequestException,
   ForbiddenException,
+  Logger,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
@@ -17,11 +18,14 @@ import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import * as fs from 'fs';
 import { EmailService } from '../email/email.service';
+import { SYSTEM_USER_EMAIL } from '../system-channel/system-channel.constants';
+import { SystemChannelService } from '../system-channel/system-channel.service';
 
 @Injectable()
 export class AuthService {
   private readonly privateKey: string;
   private readonly publicKey: string;
+  private readonly logger = new Logger(AuthService.name);
 
   constructor(
     private prisma: PrismaService,
@@ -29,6 +33,7 @@ export class AuthService {
     private configService: ConfigService,
     private redis: RedisService,
     private emailService: EmailService,
+    private readonly systemChannel: SystemChannelService,
   ) {
     const privatePath =
       this.configService.get<string>('jwt.privateKeyPath') ?? '';
@@ -75,6 +80,15 @@ export class AuthService {
         kycRecord: { create: {} },
       },
     });
+
+    try {
+      await this.systemChannel.subscribeUser(user.id);
+    } catch (e) {
+      // подписка не должна ронять регистрацию
+      this.logger.warn(
+        `system-channel subscribe failed for ${user.id}: ${(e as Error).message}`,
+      );
+    }
 
     await this.auditLog(
       user.id,
@@ -460,6 +474,10 @@ export class AuthService {
   async forgotPassword(email: string) {
     const normalized = email?.trim().toLowerCase();
     if (!normalized) return { sent: true };
+
+    // Silent no-op for system account: mirrors the user-not-found path to
+    // prevent enumeration while blocking the reset flow for this account.
+    if (normalized === SYSTEM_USER_EMAIL) return { sent: true };
 
     const user = await this.prisma.user.findUnique({
       where: { email: normalized },

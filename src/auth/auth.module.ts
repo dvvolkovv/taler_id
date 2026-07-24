@@ -6,6 +6,7 @@ import { AuthService } from './auth.service';
 import { JwtStrategy } from './jwt.strategy';
 import { PrismaModule } from '../prisma/prisma.module';
 import { RedisModule } from '../redis/redis.module';
+import { SystemChannelModule } from '../system-channel/system-channel.module';
 
 @Module({
   imports: [
@@ -13,6 +14,7 @@ import { RedisModule } from '../redis/redis.module';
     JwtModule.register({}),
     PrismaModule,
     RedisModule,
+    SystemChannelModule,
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy],

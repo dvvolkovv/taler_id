@@ -7,6 +7,7 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { AuditLogInterceptor } from './common/interceptors/audit-log.interceptor';
 import { PrismaService } from './prisma/prisma.service';
 import { OIDC_PROVIDER } from './oidc/oidc.service';
+import { RedisService } from './redis/redis.service';
 import { GatingService } from './billing/services/gating.service';
 import { RedisIoAdapter } from './redis-io.adapter';
 import { WebSocket, WebSocketServer } from 'ws';
@@ -554,6 +555,31 @@ async function bootstrap() {
   });
   oidcProvider.on('grant.error', (_ctx: any, err: any) => {
     Logger.error(`OIDC grant.error: ${err.message}`, err.stack, 'OidcProvider');
+  });
+
+  // DCR registration rate-limit: 10/min per IP (защита от мусорной регистрации клиентов)
+  const redisService = app.get(RedisService);
+  expressApp.use('/oauth/reg', async (req: any, res: any, next: any) => {
+    if (req.method !== 'POST') return next();
+    // Use LAST XFF entry — spoof-resistant: appended by our trusted nginx
+    // (first entries are client-supplied and can be forged).
+    const xff = String(req.headers['x-forwarded-for'] ?? '');
+    const ip = xff.split(',').pop()?.trim() || req.ip || 'unknown';
+    const key = `dcr_rl:${ip}`;
+    try {
+      // Atomic pipeline: INCR + EXPIRE in one round-trip — avoids a permanent
+      // key (no TTL) if the process dies between the two calls. TTL resets on
+      // each request (sliding window) — acceptable for a 10-req/min gate.
+      const results = await redisService.getClient().multi().incr(key).expire(key, 60).exec();
+      const count = Number(results?.[0]?.[1] ?? 0);
+      if (count > 10) {
+        return res.status(429).json({ error: 'too_many_requests' });
+      }
+    } catch (_err) {
+      // Redis unavailable — fail-open so DCR registration stays available
+      Logger.warn('DCR rate-limit: Redis error, failing open', 'OidcProvider');
+    }
+    return next();
   });
 
   const oidcCallback = oidcProvider.callback();
