@@ -138,6 +138,7 @@ export class FcmService {
             channelId: 'calls',
             priority: 'max',
             defaultSound: true,
+            imageUrl: this.notificationImageUrl,
           },
         },
         apns: {
@@ -160,6 +161,13 @@ export class FcmService {
 
   notificationIdFor(conversationId: string): string {
     return 'conv-' + createHash('sha1').update(conversationId).digest('hex').slice(0, 16);
+  }
+
+  // App logo for SDK-rendered (backgrounded app) Android pushes — the client
+  // can only brand notifications it draws itself; background ones need the
+  // image delivered in the payload. iOS shows the app icon natively.
+  private get notificationImageUrl(): string {
+    return `${process.env.BASE_URL || 'http://localhost:3000'}/brand/app-icon-dark.png`;
   }
 
   async sendNewMessage(
@@ -188,6 +196,7 @@ export class FcmService {
             channelId: 'messages',
             defaultSound: true,
             tag: this.notificationIdFor(conversationId),
+            imageUrl: this.notificationImageUrl,
           },
         },
         apns: {
@@ -247,7 +256,10 @@ export class FcmService {
         token: fcmToken,
         data: { type: 'calendar_invite', eventId },
         notification: { title, body },
-        android: { priority: 'high' as const },
+        android: {
+          priority: 'high' as const,
+          notification: { imageUrl: this.notificationImageUrl },
+        },
         apns: { payload: { aps: { sound: 'default' } } },
       });
     } catch (e: any) {
@@ -268,7 +280,10 @@ export class FcmService {
         token: fcmToken,
         data: { type: 'calendar_reminder', eventId },
         notification: { title, body },
-        android: { priority: 'high' as const },
+        android: {
+          priority: 'high' as const,
+          notification: { imageUrl: this.notificationImageUrl },
+        },
         apns: { payload: { aps: { sound: 'default' } } },
       });
     } catch (e: any) {
@@ -311,6 +326,7 @@ export class FcmService {
           notification: {
             channelId: 'messages',
             defaultSound: true,
+            imageUrl: this.notificationImageUrl,
           },
         },
         apns: {
