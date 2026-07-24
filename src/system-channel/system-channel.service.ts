@@ -168,13 +168,19 @@ export class SystemChannelService implements OnApplicationBootstrap {
     );
     const full = await this.messenger.getMessageById(msg.id);
     if (full) {
-      await this.gateway.deliverNewMessage(
-        // reactions: [] — свежее сообщение, реакций ещё нет
-        { ...full, senderName: 'Taler ID', reactions: [] },
-        senderId,
-        channelId,
-        { senderName: 'Taler ID', systemPost: true },
-      );
+      try {
+        await this.gateway.deliverNewMessage(
+          // reactions: [] — свежее сообщение, реакций ещё нет
+          { ...full, senderName: 'Taler ID', reactions: [] },
+          senderId,
+          channelId,
+          { senderName: 'Taler ID', systemPost: true },
+        );
+      } catch (e) {
+        // Пост сохранён; доставка best-effort — сбой рассылки не должен
+        // помечать seed как failed (PROD 2026-07-24, fetchSockets timeout)
+        this.logger.warn(`system post delivery failed: ${(e as Error).message}`);
+      }
     }
     return { messageId: msg.id };
   }
