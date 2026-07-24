@@ -164,6 +164,9 @@ model OAuthClient {
   isDesktopClient Boolean  @default(false)
   allowedScopes   String[]
   logoUri         String?
+  verifiedPartner Boolean  @default(false)
+  isDynamic       Boolean  @default(false)
+  dcrMetadata     Json?
   userId          String?
   user            User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   createdAt       DateTime @default(now())
