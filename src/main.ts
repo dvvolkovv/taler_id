@@ -7,6 +7,7 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { AuditLogInterceptor } from './common/interceptors/audit-log.interceptor';
 import { PrismaService } from './prisma/prisma.service';
 import { OIDC_PROVIDER } from './oidc/oidc.service';
+import { RedisService } from './redis/redis.service';
 import { GatingService } from './billing/services/gating.service';
 import { RedisIoAdapter } from './redis-io.adapter';
 import { WebSocket, WebSocketServer } from 'ws';
@@ -554,6 +555,28 @@ async function bootstrap() {
   });
   oidcProvider.on('grant.error', (_ctx: any, err: any) => {
     Logger.error(`OIDC grant.error: ${err.message}`, err.stack, 'OidcProvider');
+  });
+
+  // DCR registration rate-limit: 10/min per IP (защита от мусорной регистрации клиентов)
+  const redisService = app.get(RedisService);
+  expressApp.use('/oauth/reg', async (req: any, res: any, next: any) => {
+    if (req.method !== 'POST') return next();
+    const ip =
+      (req.headers['x-forwarded-for'] as string | undefined)
+        ?.split(',')[0]
+        ?.trim() ?? req.ip;
+    const key = `dcr_rl:${ip}`;
+    try {
+      const count = await redisService.incr(key);
+      if (count === 1) await redisService.expire(key, 60);
+      if (count > 10) {
+        return res.status(429).json({ error: 'too_many_requests' });
+      }
+    } catch (_err) {
+      // Redis unavailable — fail-open so DCR registration stays available
+      Logger.warn('DCR rate-limit: Redis error, failing open', 'OidcProvider');
+    }
+    return next();
   });
 
   const oidcCallback = oidcProvider.callback();
