@@ -20,16 +20,26 @@ function makePrisma() {
   } as any;
 }
 
+/** Returns a RedisService mock where SETNX resolves to 'OK' (lock acquired) by default. */
+function makeRedis(setnxResult: string | null = 'OK') {
+  return {
+    getClient: jest.fn().mockReturnValue({
+      set: jest.fn().mockResolvedValue(setnxResult),
+    }),
+  } as any;
+}
+
 const noopGateway = { deliverNewMessage: jest.fn() } as any;
 const noopMessenger = {
   createMessage: jest.fn(),
   getMessageById: jest.fn(),
 } as any;
+const noopRedis = makeRedis();
 
 describe('SystemChannelService.ensureSeeded', () => {
   it('creates system user and channel when missing, backfills subscriptions', async () => {
     const prisma = makePrisma();
-    const svc = new SystemChannelService(prisma, noopGateway, noopMessenger);
+    const svc = new SystemChannelService(prisma, noopGateway, noopMessenger, noopRedis);
     const res = await svc.ensureSeeded();
     expect(prisma.user.create).toHaveBeenCalled();
     expect(prisma.conversation.create).toHaveBeenCalledWith(
@@ -50,7 +60,7 @@ describe('SystemChannelService.ensureSeeded', () => {
     const prisma = makePrisma();
     prisma.user.findUnique.mockResolvedValue({ id: 'sys-user' });
     prisma.conversation.findFirst.mockResolvedValue({ id: 'sys-chan' });
-    const svc = new SystemChannelService(prisma, noopGateway, noopMessenger);
+    const svc = new SystemChannelService(prisma, noopGateway, noopMessenger, noopRedis);
     await svc.ensureSeeded();
     expect(prisma.user.create).not.toHaveBeenCalled();
     expect(prisma.conversation.create).not.toHaveBeenCalled();
@@ -60,13 +70,13 @@ describe('SystemChannelService.ensureSeeded', () => {
   it('onApplicationBootstrap swallows seed errors', async () => {
     const prisma = makePrisma();
     prisma.user.findUnique.mockRejectedValue(new Error('db down'));
-    const svc = new SystemChannelService(prisma, noopGateway, noopMessenger);
+    const svc = new SystemChannelService(prisma, noopGateway, noopMessenger, noopRedis);
     await expect(svc.onApplicationBootstrap()).resolves.toBeUndefined();
   });
 
   it('backfill uses SUBSCRIBER role for regular users', async () => {
     const prisma = makePrisma();
-    const svc = new SystemChannelService(prisma, noopGateway, noopMessenger);
+    const svc = new SystemChannelService(prisma, noopGateway, noopMessenger, noopRedis);
     await svc.ensureSeeded();
     const createManyCall = prisma.conversationParticipant.createMany.mock.calls[0][0];
     expect(createManyCall.data).toEqual(
@@ -78,7 +88,7 @@ describe('SystemChannelService.ensureSeeded', () => {
 
   it('system channel owner participant has OWNER role', async () => {
     const prisma = makePrisma();
-    const svc = new SystemChannelService(prisma, noopGateway, noopMessenger);
+    const svc = new SystemChannelService(prisma, noopGateway, noopMessenger, noopRedis);
     await svc.ensureSeeded();
     const createCall = prisma.conversation.create.mock.calls[0][0];
     expect(createCall.data.participants.create).toEqual(
@@ -97,7 +107,7 @@ describe('SystemChannelService.subscribeUser', () => {
         createMany: jest.fn().mockResolvedValue({ count: 2 }),
       },
     };
-    const svc = new SystemChannelService(prisma, noopGateway, noopMessenger);
+    const svc = new SystemChannelService(prisma, noopGateway, noopMessenger, noopRedis);
     await svc.subscribeUser('new-user-id');
 
     expect(prisma.conversationParticipant.createMany).toHaveBeenCalledWith({
@@ -118,7 +128,7 @@ describe('SystemChannelService.subscribeUser', () => {
         createMany: jest.fn(),
       },
     };
-    const svc = new SystemChannelService(prisma, noopGateway, noopMessenger);
+    const svc = new SystemChannelService(prisma, noopGateway, noopMessenger, noopRedis);
     await svc.subscribeUser('new-user-id');
 
     expect(prisma.conversationParticipant.createMany).not.toHaveBeenCalled();
@@ -126,7 +136,7 @@ describe('SystemChannelService.subscribeUser', () => {
 });
 
 describe('SystemChannelService.autopostLatestRelease', () => {
-  it('posts when latest release not yet posted', async () => {
+  it('posts when latest release not yet posted (lock acquired)', async () => {
     const prisma = makePrisma();
     prisma.user.findUnique.mockResolvedValue({ id: 'sys-user' });
     prisma.conversation.findFirst.mockResolvedValue({ id: 'sys-chan' });
@@ -136,7 +146,8 @@ describe('SystemChannelService.autopostLatestRelease', () => {
       getMessageById: jest.fn().mockResolvedValue({ id: 'm1', content: 'x' }),
     } as any;
     const gateway = { deliverNewMessage: jest.fn() } as any;
-    const svc = new SystemChannelService(prisma, gateway, messenger);
+    const redis = makeRedis('OK'); // lock acquired
+    const svc = new SystemChannelService(prisma, gateway, messenger, redis);
     await svc.autopostLatestRelease();
     expect(messenger.createMessage).toHaveBeenCalledWith(
       'sys-chan', 'sys-user', expect.stringContaining('🚀 Taler ID'),
@@ -145,11 +156,12 @@ describe('SystemChannelService.autopostLatestRelease', () => {
     );
     expect(gateway.deliverNewMessage).toHaveBeenCalledWith(
       expect.objectContaining({ senderName: 'Taler ID' }),
-      'sys-user', 'sys-chan', expect.objectContaining({ senderName: 'Taler ID' }),
+      'sys-user', 'sys-chan',
+      expect.objectContaining({ senderName: 'Taler ID', systemPost: true }),
     );
   });
 
-  it('skips when latest already posted', async () => {
+  it('skips when latest already posted (version-idempotency guard)', async () => {
     const { APP_RELEASES } = require('../app-releases');
     const prisma = makePrisma();
     prisma.user.findUnique.mockResolvedValue({ id: 'sys-user' });
@@ -158,8 +170,41 @@ describe('SystemChannelService.autopostLatestRelease', () => {
       findFirst: jest.fn().mockResolvedValue({ metadata: { version: APP_RELEASES[0].version } }),
     };
     const messenger = { createMessage: jest.fn(), getMessageById: jest.fn() } as any;
-    const svc = new SystemChannelService(prisma, { deliverNewMessage: jest.fn() } as any, messenger);
+    const redis = makeRedis('OK');
+    const svc = new SystemChannelService(prisma, { deliverNewMessage: jest.fn() } as any, messenger, redis);
     await svc.autopostLatestRelease();
     expect(messenger.createMessage).not.toHaveBeenCalled();
+  });
+
+  it('skips when Redis SETNX lock is NOT acquired (another node holds it)', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue({ id: 'sys-user' });
+    prisma.conversation.findFirst.mockResolvedValue({ id: 'sys-chan' });
+    (prisma as any).message = { findFirst: jest.fn().mockResolvedValue(null) };
+    const messenger = {
+      createMessage: jest.fn().mockResolvedValue({ id: 'm1' }),
+      getMessageById: jest.fn().mockResolvedValue({ id: 'm1', content: 'x' }),
+    } as any;
+    const gateway = { deliverNewMessage: jest.fn() } as any;
+    const redis = makeRedis(null); // SETNX returns null → lock already held
+    const svc = new SystemChannelService(prisma, gateway, messenger, redis);
+    await svc.autopostLatestRelease();
+    expect(messenger.createMessage).not.toHaveBeenCalled();
+  });
+
+  it('proceeds when Redis SETNX returns OK (lock acquired)', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue({ id: 'sys-user' });
+    prisma.conversation.findFirst.mockResolvedValue({ id: 'sys-chan' });
+    (prisma as any).message = { findFirst: jest.fn().mockResolvedValue(null) };
+    const messenger = {
+      createMessage: jest.fn().mockResolvedValue({ id: 'm1' }),
+      getMessageById: jest.fn().mockResolvedValue({ id: 'm1', content: 'x' }),
+    } as any;
+    const gateway = { deliverNewMessage: jest.fn() } as any;
+    const redis = makeRedis('OK'); // lock acquired
+    const svc = new SystemChannelService(prisma, gateway, messenger, redis);
+    await svc.autopostLatestRelease();
+    expect(messenger.createMessage).toHaveBeenCalled();
   });
 });

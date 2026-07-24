@@ -443,7 +443,7 @@ export class MessengerGateway
     enrichedMsg: any,
     senderId: string,
     conversationId: string,
-    opts: { silent?: boolean; senderName?: string } = {},
+    opts: { silent?: boolean; senderName?: string; systemPost?: boolean } = {},
   ): Promise<void> {
     const senderName =
       opts.senderName ?? (enrichedMsg?.senderName as string | undefined) ?? '';
@@ -474,9 +474,9 @@ export class MessengerGateway
         `FCM: recipientId=${p.userId} online=${isOnline} inConv=${recipientInConv} → push=${!recipientInConv}`,
       );
       if (!recipientInConv && !opts.silent) {
-        const isCriticalNews = enrichedMsg?.metadata?.newsType === 'critical';
+        const isCriticalNews = opts.systemPost === true && enrichedMsg?.metadata?.newsType === 'critical';
         const muted = isCriticalNews
-          ? false // critical system-channel news bypasses mute
+          ? false // critical system-channel news bypasses mute (server-controlled path only)
           : await this.service.isParticipantMuted(conversationId, p.userId);
         if (muted) {
           this.logger.log(`FCM skipped for ${p.userId}: conversation muted`);
@@ -540,7 +540,7 @@ export class MessengerGateway
     enrichedMsg: any,
     senderId: string,
     conversationId: string,
-    opts: { silent?: boolean; senderName?: string } = {},
+    opts: { silent?: boolean; senderName?: string; systemPost?: boolean } = {},
   ): Promise<void> {
     this.broadcastNewMessage(enrichedMsg, conversationId);
     await this.fanOutToParticipants(enrichedMsg, senderId, conversationId, opts);

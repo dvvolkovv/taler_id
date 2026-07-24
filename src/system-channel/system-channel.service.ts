@@ -3,6 +3,7 @@ import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { MessengerGateway } from '../messenger/messenger.gateway';
 import { MessengerService } from '../messenger/messenger.service';
+import { RedisService } from '../redis/redis.service';
 import {
   SYSTEM_USER_EMAIL,
   SYSTEM_USERNAME,
@@ -20,6 +21,7 @@ export class SystemChannelService implements OnApplicationBootstrap {
     private readonly prisma: PrismaService,
     private readonly gateway: MessengerGateway,
     private readonly messenger: MessengerService,
+    private readonly redis: RedisService,
   ) {}
 
   async onApplicationBootstrap() {
@@ -105,6 +107,17 @@ export class SystemChannelService implements OnApplicationBootstrap {
       where: { email: SYSTEM_USER_EMAIL },
     });
     if (!channel || !sysUser) return;
+
+    // Advisory lock: prevents both PROD app-nodes from posting the same
+    // release simultaneously on bootstrap. TTL of 5 min is the window;
+    // version-idempotency check below still protects after TTL expiry.
+    const lockKey = `system-channel:autopost:${latest.version}`;
+    const acquired = await this.redis.getClient().set(lockKey, '1', 'EX', 300, 'NX');
+    if (acquired !== 'OK') {
+      this.logger.log(`Autopost ${latest.version}: lock held by another node, skipping`);
+      return;
+    }
+
     const lastPost = await this.prisma.message.findFirst({
       where: {
         conversationId: channel.id,
@@ -139,10 +152,11 @@ export class SystemChannelService implements OnApplicationBootstrap {
     const full = await this.messenger.getMessageById(msg.id);
     if (full) {
       await this.gateway.deliverNewMessage(
+        // reactions: [] — свежее сообщение, реакций ещё нет
         { ...full, senderName: 'Taler ID', reactions: [] },
         senderId,
         channelId,
-        { senderName: 'Taler ID' },
+        { senderName: 'Taler ID', systemPost: true },
       );
     }
     return { messageId: msg.id };

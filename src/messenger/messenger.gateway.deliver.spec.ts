@@ -238,24 +238,39 @@ describe('MessengerGateway.deliverNewMessage', () => {
     expect(fanOutSpy).toHaveBeenCalledWith(baseMsg, 'sender', 'conv-1', {});
   });
 
-  // ── Critical-news bypass mute ─────────────────────────────────────────────
-  it('critical newsType bypasses mute: FCM sent even when conversation is muted', async () => {
+  // ── Critical-news bypass mute (server-scoped via opts.systemPost) ───────────
+  it('critical newsType WITH systemPost:true bypasses mute: FCM sent even when muted', async () => {
     (mockMessenger.isParticipantMuted as jest.Mock).mockResolvedValue(true);
     const criticalMsg = {
       ...baseMsg,
       metadata: { newsType: 'critical' },
     };
-    await gateway.deliverNewMessage(criticalMsg, 'sender', 'conv-1');
+    await gateway.deliverNewMessage(criticalMsg, 'sender', 'conv-1', {
+      systemPost: true,
+    });
     expect(mockFcm.sendNewMessage).toHaveBeenCalled();
   });
 
-  it('non-critical newsType respects mute: FCM NOT sent when conversation is muted', async () => {
+  it('critical newsType WITHOUT systemPost (opts omitted) respects mute: FCM NOT sent', async () => {
+    (mockMessenger.isParticipantMuted as jest.Mock).mockResolvedValue(true);
+    const criticalMsg = {
+      ...baseMsg,
+      metadata: { newsType: 'critical' },
+    };
+    // No opts — client-supplied metadata alone must not trigger bypass
+    await gateway.deliverNewMessage(criticalMsg, 'sender', 'conv-1');
+    expect(mockFcm.sendNewMessage).not.toHaveBeenCalled();
+  });
+
+  it('non-critical newsType respects mute regardless of systemPost', async () => {
     (mockMessenger.isParticipantMuted as jest.Mock).mockResolvedValue(true);
     const newsMsg = {
       ...baseMsg,
       metadata: { newsType: 'news' },
     };
-    await gateway.deliverNewMessage(newsMsg, 'sender', 'conv-1');
+    await gateway.deliverNewMessage(newsMsg, 'sender', 'conv-1', {
+      systemPost: true,
+    });
     expect(mockFcm.sendNewMessage).not.toHaveBeenCalled();
   });
 });
