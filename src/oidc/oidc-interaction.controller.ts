@@ -20,6 +20,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { OidcService } from './oidc.service';
+import { MCP_SCOPE_DESCRIPTIONS } from '../mcp/mcp.constants';
 import * as bcrypt from 'bcrypt';
 
 @ApiTags('oauth-interaction')
@@ -94,6 +95,7 @@ export class OidcInteractionController {
       const client = await this.oidcService.findClient(
         params.client_id as string,
       );
+      const consentScopes = (params.scope as string).split(' ').filter(Boolean);
       return res.json({
         interaction: 'consent',
         uid,
@@ -101,7 +103,12 @@ export class OidcInteractionController {
           name: client?.name,
           logoUri: client?.logoUri,
         },
-        scopes: (params.scope as string).split(' '),
+        scopes: consentScopes,
+        scopeDescriptions: Object.fromEntries(
+          consentScopes
+            .filter((s) => MCP_SCOPE_DESCRIPTIONS[s])
+            .map((s) => [s, MCP_SCOPE_DESCRIPTIONS[s]]),
+        ),
       });
     }
 

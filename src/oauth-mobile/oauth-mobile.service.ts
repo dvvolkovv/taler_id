@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { OidcService } from '../oidc/oidc.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { describeScopes, ScopeDescriptor } from './scope-descriptors';
+import { MCP_SCOPE_DESCRIPTIONS } from '../mcp/mcp.constants';
 import type { OAuthAuthorizeQueryDto } from './dto/oauth-authorize-query.dto';
 import type { OAuthApproveDto } from './dto/oauth-approve.dto';
 
@@ -9,6 +10,7 @@ export interface GrantInfo {
   client_name: string;
   client_logo?: string;
   scopes: ScopeDescriptor[];
+  scopeDescriptions: Record<string, { ru: string; en: string }>;
   remembered: boolean;
 }
 
@@ -87,6 +89,11 @@ export class OAuthMobileService {
       client_name: client.clientName,
       client_logo: client.logoUri ?? undefined,
       scopes: describeScopes(requestedScopes),
+      scopeDescriptions: Object.fromEntries(
+        requestedScopes
+          .filter((s) => MCP_SCOPE_DESCRIPTIONS[s])
+          .map((s) => [s, MCP_SCOPE_DESCRIPTIONS[s]]),
+      ),
       remembered,
     };
   }
