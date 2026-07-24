@@ -216,4 +216,25 @@ describe('MessengerGateway.deliverNewMessage', () => {
       'conv-1',
     );
   });
+
+  // ── Regression: AI-branch ordering (commit 79c8644) ──────────────────────
+  // broadcastNewMessage must NOT call getParticipants or markDelivered.
+  // Before the split, deliverNewMessage (which includes fan-out) was called
+  // BEFORE the AI_ANALYST / AI_INFORMER early-returns, causing extra DB
+  // round-trips per AI message. The socket handler now calls broadcastNewMessage
+  // eagerly and fanOutToParticipants only after those early-returns; this test
+  // asserts the structural invariant on broadcastNewMessage itself.
+  it('broadcastNewMessage does NOT call getParticipants or markDelivered (AI-branch safety)', async () => {
+    gateway.broadcastNewMessage(baseMsg, 'conv-1');
+    expect(mockMessenger.getParticipants).not.toHaveBeenCalled();
+    expect(mockMessenger.markDelivered).not.toHaveBeenCalled();
+  });
+
+  it('deliverNewMessage is a composition: broadcastNewMessage + fanOutToParticipants', async () => {
+    const broadcastSpy = jest.spyOn(gateway, 'broadcastNewMessage');
+    const fanOutSpy = jest.spyOn(gateway, 'fanOutToParticipants');
+    await gateway.deliverNewMessage(baseMsg, 'sender', 'conv-1');
+    expect(broadcastSpy).toHaveBeenCalledWith(baseMsg, 'conv-1');
+    expect(fanOutSpy).toHaveBeenCalledWith(baseMsg, 'sender', 'conv-1', {});
+  });
 });

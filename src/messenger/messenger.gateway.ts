@@ -281,15 +281,14 @@ export class MessengerGateway
           messageId: msg.id,
         });
       }
-      // Room broadcast + per-participant delivery (FCM push, blocks,
-      // markDelivered) is now shared with the MCP send_message tool via
-      // deliverNewMessage() — see method below.
-      await this.deliverNewMessage(
-        enrichedMsg,
-        client.data.userId,
-        payload.conversationId,
-        { silent: payload.silent, senderName },
-      );
+      // Room broadcast is done eagerly — all sockets joined to the conversation
+      // room see the message immediately, including the sender's own echo.
+      // AI-веткам не нужен fan-out — они единственные участники, см. ниже.
+      // Ordering invariant: broadcastNewMessage BEFORE AI early-returns so the
+      // sender always sees their own message echoed; fanOutToParticipants AFTER
+      // because AI_ANALYST / AI_INFORMER skip that block entirely (the user is
+      // the sole participant — no blocks, markDelivered, or FCM to run).
+      this.broadcastNewMessage(enrichedMsg, payload.conversationId);
 
       // AI Analyst: dispatch user message to Claude Worker asynchronously.
       // The response will appear as a new system message in the same chat.
@@ -382,6 +381,18 @@ export class MessengerGateway
         return;
       }
 
+      // Per-participant fan-out (block skip, per-user emit, markDelivered,
+      // FCM push) runs only for non-AI conversations. AI_ANALYST and
+      // AI_INFORMER already returned above — this is intentional: those
+      // conversations have exactly one human participant so getParticipants,
+      // markDelivered, and FCM are unnecessary DB/network round-trips.
+      await this.fanOutToParticipants(
+        enrichedMsg,
+        client.data.userId,
+        payload.conversationId,
+        { silent: payload.silent, senderName },
+      );
+
     } catch (e) {
       // Observability: message-send failures were silently swallowed (only emitted to
       // the client) — a stale-client / missing-column break shipped dead pushes for a
@@ -395,34 +406,45 @@ export class MessengerGateway
   }
 
   /**
-   * Post-persist delivery for a new message. Broadcasts to the conversation
-   * room, then per-participant: skips blocked recipients, emits per-user
-   * new_message, marks delivered when the recipient has any live socket,
-   * and fires FCM push when the recipient is NOT currently viewing the
-   * conversation (respecting per-participant mute + opts.silent).
+   * Emit `new_message` to every socket currently joined to the conversation
+   * room. This is a cheap, synchronous-like fan-out that does NOT touch the
+   * database (no getParticipants, no markDelivered, no FCM).
    *
-   * Shared with the MCP send_message tool (see mcp/tools/messenger.tools.ts)
-   * so MCP-originated messages get identical delivery semantics — before the
-   * extraction, MCP-sent messages were silent for offline recipients, ignored
-   * blocks, and never bumped delivered status.
+   * Called eagerly in the socket `message` handler BEFORE any AI-branch
+   * early-returns so the sender always sees their own message echoed in real
+   * time regardless of conversation type.
    *
-   * @param enrichedMsg  Persisted message row + { senderName, reactions: [] }.
-   * @param senderId     Sending user id.
-   * @param conversationId  Target conversation id.
-   * @param opts.silent  If true, skip FCM push (matches socket payload.silent).
-   * @param opts.senderName  Optional pre-resolved sender display name for FCM
-   *                         push title; defaults to enrichedMsg.senderName.
+   * Structural guarantee: this method MUST NOT call getParticipants or
+   * markDelivered — tests assert this (see deliver.spec.ts regression test).
    */
-  async deliverNewMessage(
+  broadcastNewMessage(enrichedMsg: any, conversationId: string): void {
+    this.server.to(conversationId).emit('new_message', enrichedMsg);
+  }
+
+  /**
+   * Per-participant delivery loop: skips blocked recipients, emits per-user
+   * `new_message`, marks delivered when the recipient has a live socket, and
+   * fires FCM push when the recipient is NOT currently viewing the conversation
+   * (respecting per-participant mute + opts.silent).
+   *
+   * Called ONLY for non-AI conversation types (after AI_ANALYST / AI_INFORMER
+   * early-returns in the socket handler). AI conversations skip this entirely
+   * because the user is the sole participant — getParticipants, markDelivered,
+   * and FCM are unnecessary round-trips for those paths.
+   *
+   * @param enrichedMsg    Persisted message row + { senderName, reactions: [] }.
+   * @param senderId       Sending user id.
+   * @param conversationId Target conversation id.
+   * @param opts.silent    If true, skip FCM push (matches socket payload.silent).
+   * @param opts.senderName Optional pre-resolved sender display name for FCM
+   *                        push title; defaults to enrichedMsg.senderName.
+   */
+  async fanOutToParticipants(
     enrichedMsg: any,
     senderId: string,
     conversationId: string,
     opts: { silent?: boolean; senderName?: string } = {},
   ): Promise<void> {
-    // 1) Room broadcast — every socket joined to the conv room hears it.
-    this.server.to(conversationId).emit('new_message', enrichedMsg);
-
-    // 2) Per-participant delivery: per-user emit, blocks, delivered, FCM.
     const senderName =
       opts.senderName ?? (enrichedMsg?.senderName as string | undefined) ?? '';
     const participants = await this.service.getParticipants(conversationId);
@@ -492,6 +514,36 @@ export class MessengerGateway
         }
       }
     }
+  }
+
+  /**
+   * Post-persist delivery for a new message. Broadcasts to the conversation
+   * room, then per-participant: skips blocked recipients, emits per-user
+   * new_message, marks delivered when the recipient has any live socket,
+   * and fires FCM push when the recipient is NOT currently viewing the
+   * conversation (respecting per-participant mute + opts.silent).
+   *
+   * Thin composition of broadcastNewMessage + fanOutToParticipants.
+   * Shared with the MCP send_message tool (see mcp/tools/messenger.tools.ts)
+   * so MCP-originated messages get identical delivery semantics — before the
+   * extraction, MCP-sent messages were silent for offline recipients, ignored
+   * blocks, and never bumped delivered status.
+   *
+   * @param enrichedMsg  Persisted message row + { senderName, reactions: [] }.
+   * @param senderId     Sending user id.
+   * @param conversationId  Target conversation id.
+   * @param opts.silent  If true, skip FCM push (matches socket payload.silent).
+   * @param opts.senderName  Optional pre-resolved sender display name for FCM
+   *                         push title; defaults to enrichedMsg.senderName.
+   */
+  async deliverNewMessage(
+    enrichedMsg: any,
+    senderId: string,
+    conversationId: string,
+    opts: { silent?: boolean; senderName?: string } = {},
+  ): Promise<void> {
+    this.broadcastNewMessage(enrichedMsg, conversationId);
+    await this.fanOutToParticipants(enrichedMsg, senderId, conversationId, opts);
   }
 
   @SubscribeMessage('edit_message')
