@@ -11,6 +11,28 @@ export interface AppRelease {
 // Keep notes user-facing (no internal jargon, no commit hashes).
 export const APP_RELEASES: AppRelease[] = [
   {
+    version: '1.1.20',
+    build: 219,
+    date: '2026-07-24',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.20 — папки в почте.\n\n' +
+      '📁 Папки: Входящие, Отправленные, Черновики, Спам и Корзина — плюс свои папки.\n\n' +
+      '📤 Отправленные письма теперь сохраняются в «Отправленные».\n\n' +
+      '📝 Черновики: недописанное письмо можно сохранить и вернуться к нему позже.\n\n' +
+      '🗑️ Удалённые письма попадают в Корзину, а не исчезают безвозвратно.\n\n' +
+      '🔔 На планете «Почта» появился счётчик непрочитанных писем.\n\n' +
+      '📰 Канал новостей теперь корректно подписан «Taler ID».',
+    notes_en:
+      'Release 1.1.20 — mail folders.\n\n' +
+      '📁 Folders: Inbox, Sent, Drafts, Spam and Trash — plus your own folders.\n\n' +
+      '📤 Sent messages are now saved to Sent.\n\n' +
+      '📝 Drafts: save an unfinished email and come back to it later.\n\n' +
+      '🗑️ Deleted messages go to Trash instead of disappearing forever.\n\n' +
+      '🔔 The Mail planet now shows an unread counter.\n\n' +
+      '📰 The news channel is now correctly signed «Taler ID».',
+  },
+  {
     version: '1.1.19',
     build: 218,
     date: '2026-07-24',
