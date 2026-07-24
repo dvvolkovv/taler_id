@@ -11,6 +11,26 @@ export interface AppRelease {
 // Keep notes user-facing (no internal jargon, no commit hashes).
 export const APP_RELEASES: AppRelease[] = [
   {
+    version: '1.1.19',
+    build: 218,
+    date: '2026-07-24',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.19 — собственная почта.\n\n' +
+      '📧 У каждого пользователя теперь может быть свой почтовый адрес: выберите имя ящика — и получайте и отправляйте письма прямо из приложения.\n\n' +
+      '📬 Раздел «Почта»: входящие, чтение писем, ответы, вложения.\n\n' +
+      '🔑 Пароли приложений: подключите ящик в привычном почтовом клиенте (Apple Mail, Outlook и др.).\n\n' +
+      '🗣️ Ассистент умеет проверять почту, читать письма вслух и отправлять их голосовой командой.\n\n' +
+      '📰 Новый системный канал «Taler ID — Новости» с новостями о релизах.',
+    notes_en:
+      'Release 1.1.19 — your own mailbox.\n\n' +
+      '📧 Every user can now have a personal email address: pick a mailbox name and send/receive mail right in the app.\n\n' +
+      '📬 Mail section: inbox, reading, replies, attachments.\n\n' +
+      '🔑 App passwords: connect your mailbox in a regular mail client (Apple Mail, Outlook, etc.).\n\n' +
+      '🗣️ The assistant can check mail, read messages aloud and send email by voice.\n\n' +
+      '📰 New “Taler ID — News” system channel with release news.',
+  },
+  {
     version: '1.1.18',
     build: 217,
     date: '2026-07-24',
