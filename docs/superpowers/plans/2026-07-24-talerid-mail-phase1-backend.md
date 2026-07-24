@@ -152,7 +152,7 @@ Expected: в SAN есть `mail.talerid.io`; IMAP-порт отвечает ва
 **Files:**
 - Modify: `~/Downloads/taler_id/prisma/schema.prisma` (в конец)
 
-- [ ] **Step 1: Добавить модели и enum в конец `schema.prisma`**
+- [x] **Step 1: Добавить модели и enum в конец `schema.prisma`**
 
 ```prisma
 enum MailAccountStatus {
@@ -193,7 +193,7 @@ model MailAppPassword {
 
 В модель `User` добавить обратную связь: `mailAccount MailAccount?`
 
-- [ ] **Step 2: Сгенерировать миграцию и клиент (локально против dev-БД либо `db:push` на DEV при деплое)**
+- [x] **Step 2: Сгенерировать миграцию и клиент (локально против dev-БД либо `db:push` на DEV при деплое)**
 
 ```bash
 cd ~/Downloads/taler_id && npx prisma format && npx prisma validate
@@ -201,7 +201,7 @@ npx prisma migrate dev --name mail_accounts --create-only && npx prisma generate
 ```
 Expected: `prisma validate` без ошибок; миграция в `prisma/migrations/*_mail_accounts/`. (Если локальной БД нет — только `format`+`validate`+`generate`, миграция применится на DEV через `prisma migrate deploy` при деплое.)
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add prisma/ && git commit -m "feat(mail): MailAccount + MailAppPassword prisma models"
@@ -215,7 +215,7 @@ git add prisma/ && git commit -m "feat(mail): MailAccount + MailAppPassword pris
 - Modify: `~/Downloads/taler_id/src/config/configuration.ts`
 - Modify: `~/Downloads/taler_id/.env.example`
 
-- [ ] **Step 1: Добавить секцию `mail` в `configuration.ts`** (после секции `email`):
+- [x] **Step 1: Добавить секцию `mail` в `configuration.ts`** (после секции `email`):
 
 ```typescript
 mail: {
@@ -228,7 +228,7 @@ mail: {
 },
 ```
 
-- [ ] **Step 2: Добавить в `.env.example`:**
+- [x] **Step 2: Добавить в `.env.example`:**
 
 ```
 # Mail hosting (@talerid.io mailboxes via Mailcow)
@@ -242,7 +242,7 @@ MAIL_SEND_DAILY_LIMIT=50
 
 На PROD (DO) будет `MAIL_DOMAIN=talerid.io`. `MAIL_MASTER_KEY` генерится per-env: `openssl rand -hex 32`.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/config/configuration.ts .env.example && git commit -m "feat(mail): mailcow + mail env configuration"
@@ -256,7 +256,7 @@ git add src/config/configuration.ts .env.example && git commit -m "feat(mail): m
 - Create: `~/Downloads/taler_id/src/mail/mail-crypto.ts`
 - Test: `~/Downloads/taler_id/src/mail/mail-crypto.spec.ts`
 
-- [ ] **Step 1: Написать падающий тест `mail-crypto.spec.ts`**
+- [x] **Step 1: Написать падающий тест `mail-crypto.spec.ts`**
 
 ```typescript
 import { encryptSecret, decryptSecret } from './mail-crypto';
@@ -288,14 +288,14 @@ describe('mail-crypto', () => {
 });
 ```
 
-- [ ] **Step 2: Убедиться, что тест падает**
+- [x] **Step 2: Убедиться, что тест падает**
 
 ```bash
 cd ~/Downloads/taler_id && npx jest src/mail/mail-crypto.spec.ts
 ```
 Expected: FAIL — `Cannot find module './mail-crypto'`.
 
-- [ ] **Step 3: Реализация `mail-crypto.ts`**
+- [x] **Step 3: Реализация `mail-crypto.ts`**
 
 ```typescript
 import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
@@ -322,14 +322,14 @@ export function decryptSecret(payload: string, keyHex: string): string {
 }
 ```
 
-- [ ] **Step 4: Тест зелёный**
+- [x] **Step 4: Тест зелёный**
 
 ```bash
 npx jest src/mail/mail-crypto.spec.ts
 ```
 Expected: 4 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/mail/mail-crypto.ts src/mail/mail-crypto.spec.ts && git commit -m "feat(mail): AES-256-GCM secret helper"
@@ -343,7 +343,7 @@ git add src/mail/mail-crypto.ts src/mail/mail-crypto.spec.ts && git commit -m "f
 - Create: `~/Downloads/taler_id/src/mail/localpart.ts`
 - Test: `~/Downloads/taler_id/src/mail/localpart.spec.ts`
 
-- [ ] **Step 1: Падающий тест `localpart.spec.ts`**
+- [x] **Step 1: Падающий тест `localpart.spec.ts`**
 
 ```typescript
 import { normalizeLocalpart, validateLocalpart } from './localpart';
@@ -379,9 +379,9 @@ describe('localpart', () => {
 });
 ```
 
-- [ ] **Step 2: Убедиться, что падает** — `npx jest src/mail/localpart.spec.ts` → FAIL (module not found).
+- [x] **Step 2: Убедиться, что падает** — `npx jest src/mail/localpart.spec.ts` → FAIL (module not found).
 
-- [ ] **Step 3: Реализация `localpart.ts`**
+- [x] **Step 3: Реализация `localpart.ts`**
 
 ```typescript
 const LOCALPART_RE = /^[a-z0-9][a-z0-9._-]{1,62}[a-z0-9]$/;
@@ -405,9 +405,9 @@ export function validateLocalpart(localpart: string): 'INVALID' | 'RESERVED' | n
 }
 ```
 
-- [ ] **Step 4: Тест зелёный** — `npx jest src/mail/localpart.spec.ts` → all passed.
+- [x] **Step 4: Тест зелёный** — `npx jest src/mail/localpart.spec.ts` → all passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/mail/localpart.ts src/mail/localpart.spec.ts && git commit -m "feat(mail): localpart validation + reserved blocklist"
