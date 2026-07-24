@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { HttpException } from '@nestjs/common';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CalendarService } from '../../calendar/calendar.service';
 
@@ -12,6 +13,34 @@ function err(message: string) {
     isError: true as const,
   };
 }
+
+/**
+ * Zod schema for a datetime string with timezone offset (ISO 8601 with Z or ±HH:MM).
+ * Example: "2026-07-25T10:00:00.000Z"
+ */
+const isoDatetime = z
+  .string()
+  .datetime({ offset: true })
+  .describe('Дата и время в формате ISO 8601 с указанием таймзоны, например 2026-07-25T10:00:00.000Z');
+
+/**
+ * Zod schema for a date-or-datetime range boundary.
+ * Accepts ISO date ("2026-07-01") or full datetime ("2026-07-01T00:00:00Z").
+ */
+const isoDateOrDatetime = (description: string) =>
+  z
+    .string()
+    .refine((s) => !Number.isNaN(Date.parse(s)), 'Invalid date — ожидается ISO 8601 дата или datetime')
+    .describe(description);
+
+/**
+ * Known CalendarEventType values from Prisma enum CalendarEventType.
+ * Defined in prisma/schema.prisma: CALL | EVENT | REMINDER
+ */
+const CALENDAR_EVENT_TYPES = ['CALL', 'EVENT', 'REMINDER'] as const;
+const calendarEventType = z
+  .enum(CALENDAR_EVENT_TYPES)
+  .describe('Тип события: CALL (звонок), EVENT (встреча/событие), REMINDER (напоминание)');
 
 export function registerCalendarTools(
   server: McpServer,
@@ -28,14 +57,8 @@ export function registerCalendarTools(
       'Если from и to не указаны — возвращает все события. ' +
       'Используй для показа расписания, поиска свободного времени.',
     {
-      from: z
-        .string()
-        .optional()
-        .describe('Начало диапазона (ISO 8601 дата или datetime)'),
-      to: z
-        .string()
-        .optional()
-        .describe('Конец диапазона (ISO 8601 дата или datetime)'),
+      from: isoDateOrDatetime('Начало диапазона (ISO 8601 дата или datetime), например 2026-07-01 или 2026-07-01T00:00:00Z').optional(),
+      to: isoDateOrDatetime('Конец диапазона (ISO 8601 дата или datetime), например 2026-07-31 или 2026-07-31T23:59:59Z').optional(),
     },
     async ({ from, to }) => {
       const events = await calendar.findByRange(userId, from, to);
@@ -55,8 +78,11 @@ export function registerCalendarTools(
       try {
         const event = await calendar.findOne(userId, id);
         return json(event);
-      } catch {
-        return err(`Событие ${id} не найдено или нет прав`);
+      } catch (e) {
+        if (e instanceof HttpException) {
+          return err(`Событие ${id} не найдено или нет прав`);
+        }
+        throw e;
       }
     },
   );
@@ -65,20 +91,17 @@ export function registerCalendarTools(
   server.tool(
     'create_calendar_event',
     'Создаёт новое событие в календаре пользователя. ' +
-      'Обязательные поля: title (название), type (тип: MEETING/CALL/REMINDER/TASK/OTHER), startAt (начало). ' +
+      'Обязательные поля: title (название), type (тип: CALL/EVENT/REMINDER), startAt (начало). ' +
       'Необязательные: endAt (конец), description (описание), reminder_minutes_before (за сколько минут до начала напомнить).',
     {
       title: z.string().describe('Название события'),
-      type: z
-        .string()
-        .describe('Тип события: MEETING, CALL, REMINDER, TASK, OTHER'),
-      startAt: z
-        .string()
-        .describe('Дата и время начала (ISO 8601), например 2026-07-25T10:00:00.000Z'),
-      endAt: z
-        .string()
-        .optional()
-        .describe('Дата и время окончания (ISO 8601)'),
+      type: calendarEventType,
+      startAt: isoDatetime.describe(
+        'Дата и время начала (ISO 8601 с таймзоной), например 2026-07-25T10:00:00.000Z',
+      ),
+      endAt: isoDatetime
+        .describe('Дата и время окончания (ISO 8601 с таймзоной)')
+        .optional(),
       description: z.string().optional().describe('Описание события'),
       reminder_minutes_before: z
         .number()
@@ -116,15 +139,13 @@ export function registerCalendarTools(
     {
       id: z.string().describe('UUID события для обновления'),
       title: z.string().optional().describe('Новое название'),
-      type: z
-        .string()
-        .optional()
-        .describe('Новый тип: MEETING, CALL, REMINDER, TASK, OTHER'),
-      startAt: z
-        .string()
-        .optional()
-        .describe('Новая дата начала (ISO 8601)'),
-      endAt: z.string().optional().describe('Новая дата окончания (ISO 8601)'),
+      type: calendarEventType.optional(),
+      startAt: isoDatetime
+        .describe('Новая дата начала (ISO 8601 с таймзоной)')
+        .optional(),
+      endAt: isoDatetime
+        .describe('Новая дата окончания (ISO 8601 с таймзоной)')
+        .optional(),
       description: z.string().optional().describe('Новое описание'),
       allDay: z
         .boolean()
@@ -168,8 +189,11 @@ export function registerCalendarTools(
         }
         const event = await calendar.update(userId, id, updateData);
         return json(event);
-      } catch {
-        return err(`Событие ${id} не найдено или нет прав`);
+      } catch (e) {
+        if (e instanceof HttpException) {
+          return err(`Событие ${id} не найдено или нет прав`);
+        }
+        throw e;
       }
     },
   );
@@ -186,8 +210,11 @@ export function registerCalendarTools(
       try {
         const result = await calendar.remove(userId, id);
         return json(result);
-      } catch {
-        return err(`Событие ${id} не найдено или нет прав`);
+      } catch (e) {
+        if (e instanceof HttpException) {
+          return err(`Событие ${id} не найдено или нет прав`);
+        }
+        throw e;
       }
     },
   );

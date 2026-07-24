@@ -1,3 +1,4 @@
+import { NotFoundException } from '@nestjs/common';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { registerCalendarTools } from './calendar.tools';
 
@@ -47,7 +48,7 @@ describe('calendar tools', () => {
     const result = await tool.handler(
       {
         title: 'Team meeting',
-        type: 'MEETING',
+        type: 'EVENT',
         startAt,
         endAt: '2026-07-25T11:00:00.000Z',
         description: 'Weekly sync',
@@ -62,7 +63,7 @@ describe('calendar tools', () => {
 
     expect(calendar.create).toHaveBeenCalledWith('user-1', {
       title: 'Team meeting',
-      type: 'MEETING',
+      type: 'EVENT',
       startAt,
       endAt: '2026-07-25T11:00:00.000Z',
       description: 'Weekly sync',
@@ -83,10 +84,10 @@ describe('calendar tools', () => {
     expect(callArg.reminderAt).toBeUndefined();
   });
 
-  it('get_calendar_event returns isError message when findOne throws', async () => {
+  it('get_calendar_event returns isError message when findOne throws HttpException', async () => {
     const server = build();
     const tool = (server as any)._registeredTools['get_calendar_event'];
-    calendar.findOne.mockRejectedValueOnce(new Error('Not found'));
+    calendar.findOne.mockRejectedValueOnce(new NotFoundException('Not found'));
     const result = await tool.handler({ id: 'missing-id' }, {} as any);
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/missing-id/);
@@ -118,10 +119,10 @@ describe('calendar tools', () => {
     });
   });
 
-  it('update_calendar_event returns isError when update throws', async () => {
+  it('update_calendar_event returns isError when update throws HttpException', async () => {
     const server = build();
     const tool = (server as any)._registeredTools['update_calendar_event'];
-    calendar.update.mockRejectedValueOnce(new Error('Forbidden'));
+    calendar.update.mockRejectedValueOnce(new NotFoundException('Not found'));
     const result = await tool.handler({ id: 'bad-id' }, {} as any);
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/bad-id/);
@@ -135,12 +136,91 @@ describe('calendar tools', () => {
     expect(JSON.parse(result.content[0].text)).toEqual({ ok: true });
   });
 
-  it('delete_calendar_event returns isError when remove throws', async () => {
+  it('delete_calendar_event returns isError when remove throws HttpException', async () => {
     const server = build();
     const tool = (server as any)._registeredTools['delete_calendar_event'];
-    calendar.remove.mockRejectedValueOnce(new Error('Not found'));
+    calendar.remove.mockRejectedValueOnce(new NotFoundException('Not found'));
     const result = await tool.handler({ id: 'gone' }, {} as any);
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/gone/);
+  });
+
+  // ─── Finding 1: datetime validation ───
+
+  it('create rejects invalid startAt via zod schema (not-a-date fails datetime validation)', () => {
+    // tool.inputSchema is the zod schema object exposed by the MCP SDK — call safeParse directly
+    const server = build();
+    const schema = (server as any)._registeredTools['create_calendar_event'].inputSchema;
+    const result = schema.safeParse({
+      title: 'Bad event',
+      type: 'CALL',
+      startAt: 'not-a-date',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('create rejects invalid endAt via zod schema', () => {
+    const server = build();
+    const schema = (server as any)._registeredTools['create_calendar_event'].inputSchema;
+    const result = schema.safeParse({
+      title: 'Bad event',
+      type: 'REMINDER',
+      startAt: '2026-07-25T10:00:00.000Z',
+      endAt: 'garbage',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('list rejects invalid from date via zod schema', () => {
+    const server = build();
+    const schema = (server as any)._registeredTools['list_calendar_events'].inputSchema;
+    const result = schema.safeParse({ from: 'not-a-date' });
+    expect(result.success).toBe(false);
+  });
+
+  // ─── Finding 2: narrow error handling ───
+
+  it('get_calendar_event re-throws non-HttpException errors (e.g. DB down)', async () => {
+    const server = build();
+    const tool = (server as any)._registeredTools['get_calendar_event'];
+    const dbError = new Error('db down');
+    calendar.findOne.mockRejectedValueOnce(dbError);
+    await expect(tool.handler({ id: 'e1' }, {} as any)).rejects.toThrow('db down');
+  });
+
+  it('get_calendar_event returns friendly err() for NotFoundException', async () => {
+    const server = build();
+    const tool = (server as any)._registeredTools['get_calendar_event'];
+    calendar.findOne.mockRejectedValueOnce(new NotFoundException('Event not found'));
+    const result = await tool.handler({ id: 'e1' }, {} as any);
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/e1/);
+  });
+
+  // ─── Finding 3: type enum ───
+
+  it('create rejects invalid type value via zod schema', () => {
+    const server = build();
+    const schema = (server as any)._registeredTools['create_calendar_event'].inputSchema;
+    // MEETING, TASK, OTHER are NOT in the Prisma CalendarEventType enum (CALL|EVENT|REMINDER)
+    const result = schema.safeParse({
+      title: 'Bad type',
+      type: 'MEETING',
+      startAt: '2026-07-25T10:00:00.000Z',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('create accepts valid CalendarEventType values', () => {
+    const server = build();
+    const schema = (server as any)._registeredTools['create_calendar_event'].inputSchema;
+    for (const type of ['CALL', 'EVENT', 'REMINDER'] as const) {
+      const result = schema.safeParse({
+        title: 'Test',
+        type,
+        startAt: '2026-07-25T10:00:00.000Z',
+      });
+      expect(result.success).toBe(true);
+    }
   });
 });
