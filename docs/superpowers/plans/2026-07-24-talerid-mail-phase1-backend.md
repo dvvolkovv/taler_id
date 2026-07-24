@@ -1380,3 +1380,13 @@ Expected: `N passed, 0 failed` (≈16 проверок). При падениях
 - Spec coverage: инфра (T1-2), модели (T3), конфиг (T4), провижининг+retry (T8), app-пароли (T8/T10), мост+санитизация+rate-limit (T9), REST (T10), suite (T11-12), deliverability+мониторинг+бэкапы (T13). Онбординг-flow и suspend-при-удалении-аккаунта: онбординг — мобильная часть (Phase 2), backend-API готов (`POST /mail/account`); suspend при удалении юзера — отложено в Phase 2 (в Prisma стоит `onDelete: Cascade` для метаданных; Mailcow-ящик чистится reconcile-скриптом — добавить в Phase 2).
 - Типы согласованы: `user.sub`, `RedisService.getClient()`, `requireActiveAccount()` используются единообразно в T8-T10.
 - Известные точки сверки с реальностью (помечены в шагах): формат ответов Mailcow API (T7 Step 2), сигнатуры imapflow (T9 Step 3), путь RedisService (T8 Step 2).
+
+---
+
+## Status 2026-07-24 — PHASE 1 COMPLETE
+
+- Task 1–2 (инфра): выполнены. Mailcow: домены talerid.io + mail-dev.taler.tirol, DKIM, acme SAN mail.talerid.io, admin@talerid.io + postmaster/abuse алиасы. DNS talerid.io — все 7 записей в DO DNS. **Ожидает Дмитрия:** 4 записи mail-dev в IONOS-зоне taler.tirol (см. таблицу Task 2 Step 2).
+- Task 3–11 (код): выполнены, коммиты 296060b..eee4d92 (backend) + cac485d, 8f48402 (tests). Два ревью-раунда, все замечания исправлены.
+- Task 12: задеплоено на DEV. `npm run test:mail` — **19/19**, регрессия `npm test` — 35/35. На DEV в деплой добавлять `npx prisma generate` после pull (иначе stale client).
+- Task 13: письмо admin@talerid.io → Gmail отправлено (ручная проверка SPF/DKIM за Дмитрием); IP чист в zen.spamhaus/spamcop/barracuda/sorbs; monitor-бокс `mail` зарегистрирован и пушит; бэкапы — DO droplet backups (daily). dovecot auth_cache_ttl снижен до 1 min (отзыв app-паролей ≤60с).
+- Отклонение от плана: mail-tester.com скоринг не автоматизирован — сделать вручную при выходе на PROD.
