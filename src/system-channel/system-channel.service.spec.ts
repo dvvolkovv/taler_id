@@ -69,16 +69,16 @@ describe('SystemChannelService.ensureSeeded', () => {
     expect(prisma.conversationParticipant.createMany).toHaveBeenCalled();
   });
 
-  it('sets avatarUrl on pre-existing channel without one (idempotent backfill)', async () => {
+  it('canonicalizes avatarUrl on pre-existing channel (overwrites stale logo)', async () => {
     const prisma = makePrisma();
     prisma.user.findUnique.mockResolvedValue({ id: 'sys-user' });
-    prisma.conversation.findFirst.mockResolvedValue({ id: 'sys-chan', avatarUrl: null });
+    prisma.conversation.findFirst.mockResolvedValue({ id: 'sys-chan', avatarUrl: 'https://old/brand/logo-dark.png' });
     const svc = new SystemChannelService(prisma, noopGateway, noopMessenger, noopRedis);
     await svc.ensureSeeded();
     expect(prisma.conversation.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 'sys-chan' },
-        data: { avatarUrl: expect.stringContaining('/brand/logo-dark.png') },
+        data: { avatarUrl: expect.stringContaining('/brand/app-icon-dark.png') },
       }),
     );
   });
