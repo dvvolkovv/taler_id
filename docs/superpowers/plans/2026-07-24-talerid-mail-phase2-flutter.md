@@ -1891,7 +1891,7 @@ AppCard(
 - Modify: `lib/features/assistant/tools/assistant_tools_schema.dart`
 - Modify: `lib/features/assistant/tools/assistant_tools_executor.dart`
 
-- [ ] **Step 1: Schema.** В список non-translator tools в `assistantToolSchemas()` добавить 4 схемы (flat realtime-формат, как соседние):
+- [x] **Step 1: Schema.** В список non-translator tools в `assistantToolSchemas()` добавить 4 схемы (flat realtime-формат, как соседние):
 
 ```dart
 {
@@ -1952,7 +1952,7 @@ AppCard(
 },
 ```
 
-- [ ] **Step 2: Executor.** В `assistant_tools_executor.dart` добавить ветки перед финальным `else` (паттерн web_search — прямые вызовы `client` = DioClient):
+- [x] **Step 2: Executor.** В `assistant_tools_executor.dart` добавить ветки перед финальным `else` (паттерн web_search — прямые вызовы `client` = DioClient):
 
 ```dart
 } else if (name == 'check_mail') {
@@ -2035,7 +2035,7 @@ AppCard(
 
 ⚠️ Секьюрити-инвариант: `create_mail_app_password` НЕ возвращает пароль в LLM-контекст. NB: бэкенд отдаёт password в ответе — executor его сознательно выбрасывает.
 
-- [ ] **Step 3:** `flutter analyze` чисто; если есть тесты executor'а (`grep -rl AssistantToolsExecutor test/`) — прогнать. Commit: `git add lib/features/assistant && git commit -m "feat(mail): assistant tools check_mail/read_mail/send_mail/create_mail_app_password"`
+- [x] **Step 3:** `flutter analyze` чисто; если есть тесты executor'а (`grep -rl AssistantToolsExecutor test/`) — прогнать. Commit: `git add lib/features/assistant && git commit -m "feat(mail): assistant tools check_mail/read_mail/send_mail/create_mail_app_password"`
 
 ---
 
@@ -2047,7 +2047,7 @@ AppCard(
 - Modify: `src/mcp/mcp-server.factory.ts`, `src/mcp/mcp.module.ts`, файл scope-констант (`grep -rn "mcp:notes" src/mcp/` — фактическое имя)
 - Test: `src/mcp/mcp-server.factory.spec.ts` (обновить ожидания)
 
-- [ ] **Step 1: Промпты.** В `ru.md` добавить секцию (в `en.md` — английский аналог):
+- [x] **Step 1: Промпты.** В `ru.md` добавить секцию (в `en.md` — английский аналог):
 
 ```markdown
 ПОЧТА (@talerid.io):
@@ -2059,7 +2059,7 @@ AppCard(
 Если tools возвращают no_mailbox_yet — предложи создать адрес в Настройках → Почта.
 ```
 
-- [ ] **Step 2: `src/mcp/tools/mail.tools.ts`** (паттерн messenger.tools.ts; `json`/`err` хелперы — скопируй импорт из соседнего файла):
+- [x] **Step 2: `src/mcp/tools/mail.tools.ts`** (паттерн messenger.tools.ts; `json`/`err` хелперы — скопируй импорт из соседнего файла):
 
 ```typescript
 import { z } from 'zod';
@@ -2134,7 +2134,7 @@ export function registerMailSendTool(
 
 (`create_mail_app_password` в MCP сознательно НЕ добавляем — внешним MCP-клиентам создавать IMAP-креды не даём; он только в in-app ассистенте.)
 
-- [ ] **Step 3: Wiring.** В scope-константы добавить `'mcp:mail.read'`, `'mcp:mail.send'` (по образцу messages.read/send). В `McpServerFactory`: инжект `MailBridgeService`, в `buildServer`:
+- [x] **Step 3: Wiring.** В scope-константы добавить `'mcp:mail.read'`, `'mcp:mail.send'` (по образцу messages.read/send). В `McpServerFactory`: инжект `MailBridgeService`, в `buildServer`:
 
 ```typescript
 if (scopes.includes('mcp:mail.read')) {
@@ -2147,7 +2147,7 @@ if (scopes.includes('mcp:mail.send')) {
 
 В `mcp.module.ts` imports добавить `MailModule` (он экспортирует MailBridgeService — проверь exports в `src/mail/mail.module.ts`, при необходимости добавь).
 
-- [ ] **Step 4: Обновить `mcp-server.factory.spec.ts`** — добавить кейс:
+- [x] **Step 4: Обновить `mcp-server.factory.spec.ts`** — добавить кейс:
 
 ```typescript
 it('mail scopes → mail tools', () => {
@@ -2159,7 +2159,7 @@ it('mail scopes → mail tools', () => {
 
 и поправить существующий «all scopes» кейс (+3 tools). Прогнать: `npx jest src/mcp/ src/assistant/` → зелёные.
 
-- [ ] **Step 5: Commit** — `git add src/ && git commit -m "feat(mail): assistant prompts + MCP mail tools"`
+- [x] **Step 5: Commit** — `git add src/ && git commit -m "feat(mail): assistant prompts + MCP mail tools"`
 
 ---
 
