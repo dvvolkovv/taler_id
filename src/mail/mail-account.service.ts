@@ -60,7 +60,13 @@ export class MailAccountService implements OnModuleInit, OnModuleDestroy {
     const invalid = validateLocalpart(localpart);
     if (invalid) return { localpart, available: false, reason: invalid };
     const taken = await this.prisma.mailAccount.findUnique({ where: { localpart } });
-    return { localpart, available: !taken, reason: taken ? 'TAKEN' : undefined };
+    if (taken) return { localpart, available: false, reason: 'TAKEN' };
+    // Домен может быть общим для нескольких окружений (DEV/TEST на mail-dev.*) —
+    // локальная БД не видит чужие ящики, поэтому сверяемся с Mailcow.
+    if (await this.mailcow.mailboxExists(`${localpart}@${this.domain}`)) {
+      return { localpart, available: false, reason: 'TAKEN' };
+    }
+    return { localpart, available: true };
   }
 
   async createAccount(userId: string, rawLocalpart: string) {

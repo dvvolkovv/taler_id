@@ -38,8 +38,23 @@ export class MailcowClient {
     return !!res.data && typeof res.data === 'object' && 'username' in res.data;
   }
 
+  async setMailboxPassword(username: string, password: string): Promise<void> {
+    const res = await this.http.post('/edit/mailbox', {
+      items: [username],
+      attr: { password, password2: password },
+    });
+    this.ensureSuccess('edit_mailbox_password', res.data);
+  }
+
   async createMailbox(localpart: string, domain: string, password: string, quotaMb: number, name: string): Promise<void> {
-    if (await this.mailboxExists(`${localpart}@${domain}`)) return; // идемпотентность
+    // Retry-идемпотентность: если ящик уже есть (наша прошлая попытка успела его
+    // создать до падения), выравниваем пароль под наш сохранённый секрет.
+    // Чужой (другого env) ящик сюда не попадает — availability сверяется с Mailcow
+    // до создания записи в БД.
+    if (await this.mailboxExists(`${localpart}@${domain}`)) {
+      await this.setMailboxPassword(`${localpart}@${domain}`, password);
+      return;
+    }
     const res = await this.http.post('/add/mailbox', {
       local_part: localpart,
       domain,
