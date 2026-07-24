@@ -422,7 +422,7 @@ git add src/mail/localpart.ts src/mail/localpart.spec.ts && git commit -m "feat(
 
 Тонкая обёртка над HTTP — юнит-тестировать нечего (вся логика — у Mailcow); проверяется e2e-suite'ом Task 12. Endpoint-пути соответствуют Mailcow API v1 (проверить на живом инстансе в Step 2).
 
-- [ ] **Step 1: Реализация `mailcow.client.ts`**
+- [x] **Step 1: Реализация `mailcow.client.ts`**
 
 ```typescript
 import { Injectable, Logger } from '@nestjs/common';
@@ -522,7 +522,7 @@ export class MailcowClient {
 }
 ```
 
-- [ ] **Step 2: Ручная проверка endpoint-путей против живого Mailcow** (версии API отличаются):
+- [x] **Step 2: Ручная проверка endpoint-путей против живого Mailcow** (версии API отличаются):
 
 ```bash
 curl -s -H "X-API-Key: <KEY>" https://mail.selyanska.eu/api/v1/get/mailbox/admin@talerid.io | head -c 200
@@ -530,9 +530,9 @@ curl -s -H "X-API-Key: <KEY>" https://mail.selyanska.eu/api/v1/get/app-passwd/al
 ```
 Expected: JSON-объект mailbox'а; `[]` для app-passwd. Если формат другой — поправить клиент под фактический ответ.
 
-- [ ] **Step 3: Компиляция** — `cd ~/Downloads/taler_id && npx tsc --noEmit -p tsconfig.json` → без ошибок (или `npm run build`).
+- [x] **Step 3: Компиляция** — `cd ~/Downloads/taler_id && npx tsc --noEmit -p tsconfig.json` → без ошибок (или `npm run build`).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/mail/mailcow.client.ts && git commit -m "feat(mail): mailcow API client"
@@ -547,7 +547,7 @@ git add src/mail/mailcow.client.ts && git commit -m "feat(mail): mailcow API cli
 
 Паттерн retry — Redis sorted-set + poll, как в `src/messenger/ai-twin.service.ts` (`RedisService.getClient()`).
 
-- [ ] **Step 1: Реализация `mail-account.service.ts`**
+- [x] **Step 1: Реализация `mail-account.service.ts`**
 
 ```typescript
 import {
@@ -723,9 +723,9 @@ export class MailAccountService implements OnModuleInit, OnModuleDestroy {
 }
 ```
 
-- [ ] **Step 2: Компиляция** — `npx tsc --noEmit` → ok. (Проверить фактический путь/имя `RedisService` — `src/redis/redis.service.ts`; если отличается, поправить import.)
+- [x] **Step 2: Компиляция** — `npx tsc --noEmit` → ok. (Проверить фактический путь/имя `RedisService` — `src/redis/redis.service.ts`; если отличается, поправить import.)
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/mail/mail-account.service.ts && git commit -m "feat(mail): account provisioning with retry + app-passwords"
@@ -738,13 +738,13 @@ git add src/mail/mail-account.service.ts && git commit -m "feat(mail): account p
 **Files:**
 - Create: `~/Downloads/taler_id/src/mail/mail-bridge.service.ts`
 
-- [ ] **Step 1: Установить зависимости**
+- [x] **Step 1: Установить зависимости**
 
 ```bash
 cd ~/Downloads/taler_id && npm install imapflow mailparser sanitize-html && npm install -D @types/mailparser @types/sanitize-html
 ```
 
-- [ ] **Step 2: Реализация `mail-bridge.service.ts`**
+- [x] **Step 2: Реализация `mail-bridge.service.ts`**
 
 ```typescript
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
@@ -964,9 +964,9 @@ function hasAttachmentParts(node: any): boolean {
 }
 ```
 
-- [ ] **Step 3: Компиляция** — `npx tsc --noEmit` → ok. (imapflow типы: если `client.fetch` сигнатура ругается — свериться с установленной версией imapflow, у v1 `fetch(range, query, options)`.)
+- [x] **Step 3: Компиляция** — `npx tsc --noEmit` → ok. (imapflow типы: если `client.fetch` сигнатура ругается — свериться с установленной версией imapflow, у v1 `fetch(range, query, options)`.)
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add package.json package-lock.json src/mail/mail-bridge.service.ts && git commit -m "feat(mail): IMAP/SMTP bridge service"
@@ -982,7 +982,7 @@ git add package.json package-lock.json src/mail/mail-bridge.service.ts && git co
 - Create: `~/Downloads/taler_id/src/mail/mail.module.ts`
 - Modify: `~/Downloads/taler_id/src/app.module.ts` (imports)
 
-- [ ] **Step 1: DTO `dto/mail.dto.ts`**
+- [x] **Step 1: DTO `dto/mail.dto.ts`**
 
 ```typescript
 import { IsArray, IsEmail, IsOptional, IsString, MaxLength, ValidateNested } from 'class-validator';
@@ -1024,7 +1024,7 @@ export class SendMessageDto {
 }
 ```
 
-- [ ] **Step 2: Контроллер `mail.controller.ts`**
+- [x] **Step 2: Контроллер `mail.controller.ts`**
 
 ```typescript
 import {
@@ -1139,7 +1139,7 @@ export class MailController {
 }
 ```
 
-- [ ] **Step 3: Модуль `mail.module.ts`**
+- [x] **Step 3: Модуль `mail.module.ts`**
 
 ```typescript
 import { Module } from '@nestjs/common';
@@ -1156,7 +1156,7 @@ import { MailcowClient } from './mailcow.client';
 export class MailModule {}
 ```
 
-- [ ] **Step 4: Зарегистрировать в `src/app.module.ts`** — добавить `MailModule` в `imports` рядом с `EmailModule` + import-строку:
+- [x] **Step 4: Зарегистрировать в `src/app.module.ts`** — добавить `MailModule` в `imports` рядом с `EmailModule` + import-строку:
 
 ```typescript
 import { MailModule } from './mail/mail.module';
@@ -1164,14 +1164,14 @@ import { MailModule } from './mail/mail.module';
     MailModule,
 ```
 
-- [ ] **Step 5: Полная сборка + существующие unit-тесты**
+- [x] **Step 5: Полная сборка + существующие unit-тесты**
 
 ```bash
 cd ~/Downloads/taler_id && npm run build && npx jest src/mail/
 ```
 Expected: build ok; mail-специфичные spec'и зелёные.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/mail/ src/app.module.ts && git commit -m "feat(mail): REST controller + module wiring"
