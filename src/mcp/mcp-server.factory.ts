@@ -17,7 +17,9 @@ export class McpServerFactory {
     private readonly calendar: CalendarService,
     private readonly notes: NotesService,
     private readonly messenger: MessengerService,
-    private readonly gateway: Pick<MessengerGateway, 'deliverNewMessage'>,
+    // конкретный класс (не Pick<>): mapped-type в DI-конструкторе даёт metadata
+    // `Object` → Nest не резолвит зависимость (boot-crash на DEV 2026-07-24)
+    private readonly gateway: MessengerGateway,
   ) {}
 
   buildServer(userId: string, scopes: string[]): McpServer {
