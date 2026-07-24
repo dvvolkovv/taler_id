@@ -34,6 +34,14 @@ export default () => ({
       pass: process.env.SMTP_PASS || '',
     },
   },
+  mail: {
+    mailcowUrl: process.env.MAILCOW_API_URL || 'https://mail.selyanska.eu',
+    mailcowApiKey: process.env.MAILCOW_API_KEY || '',
+    domain: process.env.MAIL_DOMAIN || 'mail-dev.taler.tirol',
+    clientHost: process.env.MAIL_CLIENT_HOST || 'mail.talerid.io', // хост в инструкции для внешних клиентов
+    masterKey: process.env.MAIL_MASTER_KEY || '', // 64 hex chars = 32 bytes AES-256
+    sendDailyLimit: parseInt(process.env.MAIL_SEND_DAILY_LIMIT ?? '50', 10) || 50,
+  },
   // KYC config (we run against an internal mock_ss service — SumSub-compatible
   // wire contract, no HMAC, no app token; the env names keep the `SUMSUB_`
   // prefix to avoid breaking existing infra/scripts/secrets).
