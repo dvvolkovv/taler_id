@@ -17,6 +17,7 @@ import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import * as fs from 'fs';
 import { EmailService } from '../email/email.service';
+import { SYSTEM_USER_EMAIL } from '../system-channel/system-channel.constants';
 
 @Injectable()
 export class AuthService {
@@ -460,6 +461,10 @@ export class AuthService {
   async forgotPassword(email: string) {
     const normalized = email?.trim().toLowerCase();
     if (!normalized) return { sent: true };
+
+    // Silent no-op for system account: mirrors the user-not-found path to
+    // prevent enumeration while blocking the reset flow for this account.
+    if (normalized === SYSTEM_USER_EMAIL) return { sent: true };
 
     const user = await this.prisma.user.findUnique({
       where: { email: normalized },

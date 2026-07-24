@@ -3,10 +3,13 @@ import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { MessengerGateway } from '../messenger/messenger.gateway';
 import { MessengerService } from '../messenger/messenger.service';
+import {
+  SYSTEM_USER_EMAIL,
+  SYSTEM_USERNAME,
+  SYSTEM_CHANNEL_NAME,
+} from './system-channel.constants';
 
-export const SYSTEM_USER_EMAIL = 'system@talerid.io';
-export const SYSTEM_USERNAME = 'talerid';
-export const SYSTEM_CHANNEL_NAME = 'Taler ID — Новости';
+export { SYSTEM_USER_EMAIL, SYSTEM_USERNAME, SYSTEM_CHANNEL_NAME };
 
 @Injectable()
 export class SystemChannelService implements OnApplicationBootstrap {
