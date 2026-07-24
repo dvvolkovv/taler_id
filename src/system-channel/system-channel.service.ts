@@ -93,4 +93,16 @@ export class SystemChannelService implements OnApplicationBootstrap {
 
     return { userId: sysUser.id, channelId: channel.id };
   }
+
+  async subscribeUser(userId: string): Promise<void> {
+    const channels = await this.prisma.conversation.findMany({
+      where: { isSystem: true },
+      select: { id: true },
+    });
+    if (channels.length === 0) return;
+    await this.prisma.conversationParticipant.createMany({
+      data: channels.map((c) => ({ conversationId: c.id, userId, role: 'SUBSCRIBER' })),
+      skipDuplicates: true,
+    });
+  }
 }

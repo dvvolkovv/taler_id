@@ -1322,6 +1322,9 @@ export class MessengerService {
   async unsubscribeFromChannel(channelId: string, userId: string) {
     const conv = await this._getConversationOrThrow(channelId);
     if (conv.type !== 'CHANNEL') throw new BadRequestException('Not a channel');
+    if ((conv as any).isSystem) {
+      throw new ForbiddenException('Нельзя отписаться от системного канала');
+    }
     const existing = await this.prisma.conversationParticipant.findUnique({
       where: { conversationId_userId: { conversationId: channelId, userId } },
     });
