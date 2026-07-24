@@ -36,12 +36,18 @@ export function registerMailReadTools(
     'Читает письмо по uid (из check_mail). Возвращает текст письма.',
     { uid: z.number().int().describe('uid письма из check_mail') },
     async ({ uid }) => {
-      const msg = await bridge.getMessage(userId, uid);
-      return json({
-        from: msg.from, to: msg.to, subject: msg.subject, date: msg.date,
-        text: msg.text.slice(0, 4000),
-        attachments: msg.attachments.map((a: { filename: string }) => a.filename),
-      });
+      try {
+        const msg = await bridge.getMessage(userId, uid);
+        return json({
+          from: msg.from, to: msg.to, subject: msg.subject, date: msg.date,
+          text: msg.text.slice(0, 4000),
+          attachments: msg.attachments.map((a: { filename: string }) => a.filename),
+        });
+      } catch (e) {
+        return err((e as Error).message.includes('not_found')
+          ? 'message_not_found'
+          : 'mail_unavailable');
+      }
     },
   );
 }
@@ -60,8 +66,14 @@ export function registerMailSendTool(
       text: z.string().min(1).describe('Текст письма'),
     },
     async ({ to, subject, text }) => {
-      await bridge.sendMessage(userId, { to, subject, text });
-      return json({ ok: true, sent_to: to });
+      try {
+        await bridge.sendMessage(userId, { to, subject, text });
+        return json({ ok: true, sent_to: to });
+      } catch (e) {
+        return err((e as Error).message.includes('daily_limit')
+          ? 'daily_send_limit_reached'
+          : 'mail_unavailable');
+      }
     },
   );
 }
