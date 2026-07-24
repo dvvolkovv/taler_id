@@ -54,6 +54,25 @@ export class MailController {
     return { ok: true };
   }
 
+  // ── Папки ──────────────────────────────────────────────────
+
+  @Get('folders')
+  listFolders(@CurrentUser() user: any) {
+    return this.bridge.listFolders(user.sub);
+  }
+
+  @Post('folders')
+  async createFolder(@CurrentUser() user: any, @Body() dto: { name: string }) {
+    await this.bridge.createFolder(user.sub, dto.name);
+    return { ok: true };
+  }
+
+  @Delete('folders/:path')
+  async deleteFolder(@CurrentUser() user: any, @Param('path') path: string) {
+    await this.bridge.deleteFolder(user.sub, decodeURIComponent(path));
+    return { ok: true };
+  }
+
   // ── Письма ─────────────────────────────────────────────────
 
   @Get('messages')

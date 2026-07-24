@@ -7,6 +7,7 @@ import sanitizeHtml from 'sanitize-html';
 import { RedisService } from '../redis/redis.service';
 import { MailAccountService } from './mail-account.service';
 import { decryptSecret } from './mail-crypto';
+import { mapFolderEntry, SPECIAL_ORDER } from './mail-folders.util';
 
 export interface MailListItem {
   uid: number;
@@ -53,6 +54,48 @@ export class MailBridgeService {
     } finally {
       await client.logout().catch(() => client.close());
     }
+  }
+
+  async listFolders(userId: string) {
+    return this.withImap(userId, async (client) => {
+      const boxes = await client.list({ statusQuery: { messages: true, unseen: true } });
+      const folders = boxes
+        .filter((b) => !b.flags?.has('\\Noselect'))
+        .map((b) => {
+          const { path, role } = mapFolderEntry({ path: b.path, specialUse: b.specialUse, flags: b.flags ?? new Set() });
+          return {
+            path,
+            role,
+            name: b.name,
+            total: b.status?.messages ?? 0,
+            unseen: b.status?.unseen ?? 0,
+          };
+        });
+      folders.sort((a, b) => SPECIAL_ORDER[a.role] - SPECIAL_ORDER[b.role] || a.path.localeCompare(b.path));
+      return { folders };
+    });
+  }
+
+  async createFolder(userId: string, name: string): Promise<void> {
+    const safe = (name ?? '').trim();
+    if (!safe || safe.length > 64 || /[\/%*"\\]/.test(safe)) throw new BadRequestException('folder_name_invalid');
+    await this.withImap(userId, async (client) => {
+      await client.mailboxCreate(safe).catch((e: any) => {
+        if (String(e?.message).includes('ALREADYEXISTS')) throw new BadRequestException('folder_exists');
+        throw e;
+      });
+    });
+  }
+
+  async deleteFolder(userId: string, path: string): Promise<void> {
+    await this.withImap(userId, async (client) => {
+      const boxes = await client.list();
+      const box = boxes.find((b) => b.path === path);
+      if (!box) throw new NotFoundException('folder_not_found');
+      const { role } = mapFolderEntry({ path: box.path, specialUse: box.specialUse, flags: box.flags ?? new Set() });
+      if (role !== 'custom') throw new BadRequestException('folder_protected');
+      await client.mailboxDelete(path);
+    });
   }
 
   async listMessages(userId: string, folder = 'INBOX', beforeUid?: number, limit = 30): Promise<{ items: MailListItem[]; nextCursor: number | null }> {
