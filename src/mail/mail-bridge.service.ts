@@ -3,10 +3,14 @@ import { ConfigService } from '@nestjs/config';
 import { ImapFlow } from 'imapflow';
 import { simpleParser, ParsedMail } from 'mailparser';
 import * as nodemailer from 'nodemailer';
+import MailComposer from 'nodemailer/lib/mail-composer';
 import sanitizeHtml from 'sanitize-html';
 import { RedisService } from '../redis/redis.service';
 import { MailAccountService } from './mail-account.service';
 import { decryptSecret } from './mail-crypto';
+import { mapFolderEntry, SPECIAL_ORDER } from './mail-folders.util';
+
+const PROTECTED_NAMES = new Set(['inbox', 'sent', 'sent messages', 'drafts', 'junk', 'spam', 'trash', 'deleted messages', 'archive']);
 
 export interface MailListItem {
   uid: number;
@@ -37,6 +41,10 @@ export class MailBridgeService {
     this.sendDailyLimit = config.get<number>('mail.sendDailyLimit')!;
   }
 
+  private assertFolderName(folder: string): void {
+    if (!folder || /[\x00-\x1f\x7f]/.test(folder)) throw new BadRequestException('folder_invalid');
+  }
+
   private async withImap<T>(userId: string, fn: (client: ImapFlow, address: string) => Promise<T>): Promise<T> {
     const account = await this.accounts.requireActiveAccount(userId);
     const address = this.accounts.address(account);
@@ -55,7 +63,54 @@ export class MailBridgeService {
     }
   }
 
+  async listFolders(userId: string) {
+    return this.withImap(userId, async (client) => {
+      const boxes = await client.list({ statusQuery: { messages: true, unseen: true } });
+      const folders = boxes
+        .filter((b) => !b.flags?.has('\\Noselect'))
+        .map((b) => {
+          const { path, role } = mapFolderEntry({ path: b.path, specialUse: b.specialUse, flags: b.flags ?? new Set() });
+          return {
+            path,
+            role,
+            name: b.name,
+            total: b.status?.messages ?? 0,
+            unseen: b.status?.unseen ?? 0,
+          };
+        });
+      folders.sort((a, b) => SPECIAL_ORDER[a.role] - SPECIAL_ORDER[b.role] || a.path.localeCompare(b.path));
+      return { folders };
+    });
+  }
+
+  async createFolder(userId: string, name: string): Promise<void> {
+    const safe = (name ?? '').trim();
+    if (!safe || safe.length > 64 || /[\/%*"\\]/.test(safe) || /[\x00-\x1f\x7f]/.test(safe)) throw new BadRequestException('folder_name_invalid');
+    await this.withImap(userId, async (client) => {
+      await client.mailboxCreate(safe).catch((e: any) => {
+        if (String(e?.message).includes('ALREADYEXISTS')) throw new BadRequestException('folder_exists');
+        throw e;
+      });
+    });
+  }
+
+  async deleteFolder(userId: string, path: string): Promise<void> {
+    await this.withImap(userId, async (client) => {
+      const boxes = await client.list();
+      const box = boxes.find((b) => b.path === path);
+      if (!box) throw new NotFoundException('folder_not_found');
+      const { role } = mapFolderEntry({ path: box.path, specialUse: box.specialUse, flags: box.flags ?? new Set() });
+      if (role !== 'custom') throw new BadRequestException('folder_protected');
+      if (PROTECTED_NAMES.has(box.path.toLowerCase()) || PROTECTED_NAMES.has(String(box.name ?? '').toLowerCase())) {
+        throw new BadRequestException('folder_protected');
+      }
+      if (box.flags?.has('\\HasChildren')) throw new BadRequestException('folder_has_children');
+      await client.mailboxDelete(path);
+    });
+  }
+
   async listMessages(userId: string, folder = 'INBOX', beforeUid?: number, limit = 30): Promise<{ items: MailListItem[]; nextCursor: number | null }> {
+    this.assertFolderName(folder);
     return this.withImap(userId, async (client) => {
       // Minor-2: неизвестный фолдер
       let lock: Awaited<ReturnType<typeof client.getMailboxLock>>;
@@ -132,12 +187,13 @@ export class MailBridgeService {
     });
   }
 
-  async getMessage(userId: string, uid: number) {
+  async getMessage(userId: string, uid: number, folder = 'INBOX') {
+    this.assertFolderName(folder);
     return this.withImap(userId, async (client) => {
-      // Minor-2: неизвестный фолдер (INBOX фиксирован, но обернём для консистентности)
+      // Minor-2: неизвестный фолдер
       let lock: Awaited<ReturnType<typeof client.getMailboxLock>>;
       try {
-        lock = await client.getMailboxLock('INBOX');
+        lock = await client.getMailboxLock(folder);
       } catch {
         throw new NotFoundException('folder_not_found');
       }
@@ -168,11 +224,12 @@ export class MailBridgeService {
     });
   }
 
-  async getAttachment(userId: string, uid: number, index: number) {
+  async getAttachment(userId: string, uid: number, index: number, folder = 'INBOX') {
+    this.assertFolderName(folder);
     return this.withImap(userId, async (client) => {
       let lock: Awaited<ReturnType<typeof client.getMailboxLock>>;
       try {
-        lock = await client.getMailboxLock('INBOX');
+        lock = await client.getMailboxLock(folder);
       } catch {
         throw new NotFoundException('folder_not_found');
       }
@@ -216,9 +273,15 @@ export class MailBridgeService {
     });
   }
 
-  async setSeen(userId: string, uid: number, seen: boolean): Promise<void> {
+  async setSeen(userId: string, uid: number, seen: boolean, folder = 'INBOX'): Promise<void> {
+    this.assertFolderName(folder);
     await this.withImap(userId, async (client) => {
-      const lock = await client.getMailboxLock('INBOX');
+      let lock: Awaited<ReturnType<typeof client.getMailboxLock>>;
+      try {
+        lock = await client.getMailboxLock(folder);
+      } catch {
+        throw new NotFoundException('folder_not_found');
+      }
       try {
         if (seen) await client.messageFlagsAdd(String(uid), ['\\Seen'], { uid: true });
         else await client.messageFlagsRemove(String(uid), ['\\Seen'], { uid: true });
@@ -228,11 +291,47 @@ export class MailBridgeService {
     });
   }
 
-  async deleteMessage(userId: string, uid: number): Promise<void> {
+  async deleteMessage(userId: string, uid: number, folder = 'INBOX'): Promise<void> {
+    this.assertFolderName(folder);
     await this.withImap(userId, async (client) => {
-      const lock = await client.getMailboxLock('INBOX');
+      const boxes = await client.list();
+      const trash = boxes.find((b) => b.specialUse === '\\Trash');
+      const inTrash = trash && folder === trash.path;
+      let lock: Awaited<ReturnType<typeof client.getMailboxLock>>;
       try {
-        await client.messageDelete(String(uid), { uid: true });
+        lock = await client.getMailboxLock(folder);
+      } catch {
+        throw new NotFoundException('folder_not_found');
+      }
+      try {
+        if (trash && !inTrash) {
+          const res = await client.messageMove(String(uid), trash.path, { uid: true });
+          if (!res || (res.uidMap instanceof Map && res.uidMap.size === 0)) throw new NotFoundException('message_not_found');
+        } else {
+          const ok = await client.messageDelete(String(uid), { uid: true });
+          if (!ok) throw new NotFoundException('message_not_found');
+        }
+      } finally {
+        lock.release();
+      }
+    });
+  }
+
+  async moveMessage(userId: string, uid: number, fromFolder: string, toFolder: string): Promise<void> {
+    this.assertFolderName(fromFolder);
+    this.assertFolderName(toFolder);
+    await this.withImap(userId, async (client) => {
+      const boxes = await client.list();
+      if (!boxes.some((b) => b.path === toFolder)) throw new NotFoundException('folder_not_found');
+      let lock: Awaited<ReturnType<typeof client.getMailboxLock>>;
+      try {
+        lock = await client.getMailboxLock(fromFolder);
+      } catch {
+        throw new NotFoundException('folder_not_found');
+      }
+      try {
+        const res = await client.messageMove(String(uid), toFolder, { uid: true });
+        if (!res || (res.uidMap instanceof Map && res.uidMap.size === 0)) throw new NotFoundException('message_not_found');
       } finally {
         lock.release();
       }
@@ -259,7 +358,8 @@ export class MailBridgeService {
     // Minor-1: валидация inReplyTo — некорректный формат игнорируется
     const inReplyToHeader = /^<[^\s@>]+@[^\s>]+>$/.test(input.inReplyTo ?? '') ? input.inReplyTo : undefined;
 
-    await transport.sendMail({
+    // Строим raw MIME один раз: и для отправки, и для копии в Отправленные
+    const mail = new MailComposer({
       from: address,
       to: input.to,
       subject: input.subject,
@@ -270,6 +370,55 @@ export class MailBridgeService {
         filename: a.filename,
         content: Buffer.from(a.contentBase64, 'base64'),
       })),
+    });
+    const raw: Buffer = await mail.compile().build();
+    await transport.sendMail({ envelope: { from: address, to: [input.to] }, raw });
+    // Копия в Отправленные — best-effort: сбой APPEND не должен ронять отправку
+    try {
+      await this.withImap(userId, async (client) => {
+        const boxes = await client.list();
+        const sent = boxes.find((b) => b.specialUse === '\\Sent');
+        if (sent) await client.append(sent.path, raw, ['\\Seen']);
+      });
+    } catch (e) {
+      this.logger.warn(`sent-copy append failed for ${address}: ${(e as Error).message}`);
+    }
+  }
+
+  async saveDraft(
+    userId: string,
+    input: { to?: string; subject?: string; text?: string; replaceUid?: number },
+  ): Promise<{ uid: number | null }> {
+    const account = await this.accounts.requireActiveAccount(userId);
+    const address = this.accounts.address(account);
+    const mail = new MailComposer({
+      from: address,
+      to: input.to || undefined,
+      subject: input.subject ?? '',
+      text: input.text ?? '',
+    });
+    const raw: Buffer = await mail.compile().build();
+    return this.withImap(userId, async (client) => {
+      const boxes = await client.list();
+      const drafts = boxes.find((b) => b.specialUse === '\\Drafts');
+      if (!drafts) throw new NotFoundException('folder_not_found');
+      if (input.replaceUid) {
+        const lock = await client.getMailboxLock(drafts.path);
+        try {
+          await client.messageDelete(String(input.replaceUid), { uid: true });
+        } finally {
+          lock.release();
+        }
+      }
+      const res = await client.append(drafts.path, raw, ['\\Draft', '\\Seen']);
+      return { uid: (res && 'uid' in res ? (res as any).uid : null) ?? null };
+    });
+  }
+
+  async unreadCount(userId: string): Promise<{ unseen: number }> {
+    return this.withImap(userId, async (client) => {
+      const st = await client.status('INBOX', { unseen: true });
+      return { unseen: st.unseen ?? 0 };
     });
   }
 
