@@ -884,7 +884,16 @@
 
         // Show creator info if available
         const cName = data.creatorName;
-        const cAvatar = data.creatorAvatar;
+        let cAvatar = data.creatorAvatar;
+        // Rewrite to same-origin: the API returns an absolute api.talerid.io URL,
+        // which is CORP-blocked (and DPI-blocked for CIS users) when the page is
+        // served via the ru/ru2 edge domains.
+        if (cAvatar) {
+          try {
+            const u = new URL(cAvatar, location.origin);
+            cAvatar = location.origin + u.pathname + u.search;
+          } catch (_) {}
+        }
         if (cName) {
           const infoEl = document.getElementById('creator-info');
           const avatarEl = document.getElementById('creator-avatar');
