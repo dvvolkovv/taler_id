@@ -1,4 +1,4 @@
-import { UnauthorizedException } from '@nestjs/common';
+import { ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { McpAuthGuard } from './mcp-auth.guard';
 
 function ctx(authHeader?: string) {
@@ -34,6 +34,20 @@ describe('McpAuthGuard', () => {
   it('rejects unknown/expired token', async () => {
     provider.AccessToken.find.mockResolvedValue(undefined);
     const { ctx: c } = ctx('Bearer nope');
+    await expect(guard.canActivate(c)).rejects.toThrow(UnauthorizedException);
+  });
+
+  it('maps provider/adapter failure to 503, not 401', async () => {
+    provider.AccessToken.find.mockRejectedValue(new Error('redis down'));
+    const { ctx: c } = ctx('Bearer any');
+    await expect(guard.canActivate(c)).rejects.toThrow(ServiceUnavailableException);
+  });
+
+  it('rejects token flagged isExpired', async () => {
+    provider.AccessToken.find.mockResolvedValue({
+      accountId: 'user-1', clientId: 'c', scope: 'mcp:calendar', isExpired: true,
+    });
+    const { ctx: c } = ctx('Bearer stale');
     await expect(guard.canActivate(c)).rejects.toThrow(UnauthorizedException);
   });
 

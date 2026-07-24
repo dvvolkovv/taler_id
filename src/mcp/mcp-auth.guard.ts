@@ -3,6 +3,8 @@ import {
   ExecutionContext,
   Inject,
   Injectable,
+  Logger,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { OIDC_PROVIDER } from '../oidc/oidc.service';
@@ -15,6 +17,8 @@ export interface McpAuthContext {
 
 @Injectable()
 export class McpAuthGuard implements CanActivate {
+  private readonly logger = new Logger(McpAuthGuard.name);
+
   constructor(@Inject(OIDC_PROVIDER) private readonly provider: any) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -39,10 +43,17 @@ export class McpAuthGuard implements CanActivate {
       throw new UnauthorizedException('Missing bearer token');
     }
 
-    const at = await this.provider.AccessToken.find(token).catch(
-      () => undefined,
-    );
-    if (!at?.accountId) {
+    let at: any;
+    try {
+      at = await this.provider.AccessToken.find(token);
+    } catch (err) {
+      this.logger.warn(
+        `Token store lookup failed: ${(err as Error).message}`,
+      );
+      throw new ServiceUnavailableException('Token validation unavailable');
+    }
+
+    if (!at?.accountId || (at as any).isExpired) {
       throw new UnauthorizedException('Invalid or expired token');
     }
 
