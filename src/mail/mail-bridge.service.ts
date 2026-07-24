@@ -181,12 +181,12 @@ export class MailBridgeService {
     });
   }
 
-  async getMessage(userId: string, uid: number) {
+  async getMessage(userId: string, uid: number, folder = 'INBOX') {
     return this.withImap(userId, async (client) => {
-      // Minor-2: неизвестный фолдер (INBOX фиксирован, но обернём для консистентности)
+      // Minor-2: неизвестный фолдер
       let lock: Awaited<ReturnType<typeof client.getMailboxLock>>;
       try {
-        lock = await client.getMailboxLock('INBOX');
+        lock = await client.getMailboxLock(folder);
       } catch {
         throw new NotFoundException('folder_not_found');
       }
@@ -217,11 +217,11 @@ export class MailBridgeService {
     });
   }
 
-  async getAttachment(userId: string, uid: number, index: number) {
+  async getAttachment(userId: string, uid: number, index: number, folder = 'INBOX') {
     return this.withImap(userId, async (client) => {
       let lock: Awaited<ReturnType<typeof client.getMailboxLock>>;
       try {
-        lock = await client.getMailboxLock('INBOX');
+        lock = await client.getMailboxLock(folder);
       } catch {
         throw new NotFoundException('folder_not_found');
       }
@@ -265,9 +265,14 @@ export class MailBridgeService {
     });
   }
 
-  async setSeen(userId: string, uid: number, seen: boolean): Promise<void> {
+  async setSeen(userId: string, uid: number, seen: boolean, folder = 'INBOX'): Promise<void> {
     await this.withImap(userId, async (client) => {
-      const lock = await client.getMailboxLock('INBOX');
+      let lock: Awaited<ReturnType<typeof client.getMailboxLock>>;
+      try {
+        lock = await client.getMailboxLock(folder);
+      } catch {
+        throw new NotFoundException('folder_not_found');
+      }
       try {
         if (seen) await client.messageFlagsAdd(String(uid), ['\\Seen'], { uid: true });
         else await client.messageFlagsRemove(String(uid), ['\\Seen'], { uid: true });
@@ -277,11 +282,41 @@ export class MailBridgeService {
     });
   }
 
-  async deleteMessage(userId: string, uid: number): Promise<void> {
+  async deleteMessage(userId: string, uid: number, folder = 'INBOX'): Promise<void> {
     await this.withImap(userId, async (client) => {
-      const lock = await client.getMailboxLock('INBOX');
+      const boxes = await client.list();
+      const trash = boxes.find((b) => b.specialUse === '\\Trash');
+      const inTrash = trash && folder === trash.path;
+      let lock: Awaited<ReturnType<typeof client.getMailboxLock>>;
       try {
-        await client.messageDelete(String(uid), { uid: true });
+        lock = await client.getMailboxLock(folder);
+      } catch {
+        throw new NotFoundException('folder_not_found');
+      }
+      try {
+        if (trash && !inTrash) {
+          await client.messageMove(String(uid), trash.path, { uid: true });
+        } else {
+          await client.messageDelete(String(uid), { uid: true });
+        }
+      } finally {
+        lock.release();
+      }
+    });
+  }
+
+  async moveMessage(userId: string, uid: number, fromFolder: string, toFolder: string): Promise<void> {
+    await this.withImap(userId, async (client) => {
+      const boxes = await client.list();
+      if (!boxes.some((b) => b.path === toFolder)) throw new NotFoundException('folder_not_found');
+      let lock: Awaited<ReturnType<typeof client.getMailboxLock>>;
+      try {
+        lock = await client.getMailboxLock(fromFolder);
+      } catch {
+        throw new NotFoundException('folder_not_found');
+      }
+      try {
+        await client.messageMove(String(uid), toFolder, { uid: true });
       } finally {
         lock.release();
       }

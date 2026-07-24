@@ -86,8 +86,8 @@ export class MailController {
   }
 
   @Get('messages/:uid')
-  getMessage(@CurrentUser() user: any, @Param('uid', ParseIntPipe) uid: number) {
-    return this.bridge.getMessage(user.sub, uid);
+  getMessage(@CurrentUser() user: any, @Param('uid', ParseIntPipe) uid: number, @Query('folder') folder?: string) {
+    return this.bridge.getMessage(user.sub, uid, folder || 'INBOX');
   }
 
   @Get('messages/:uid/attachments/:index')
@@ -96,8 +96,9 @@ export class MailController {
     @Param('uid', ParseIntPipe) uid: number,
     @Param('index', ParseIntPipe) index: number,
     @Res() res: Response,
+    @Query('folder') folder?: string,
   ) {
-    const att = await this.bridge.getAttachment(user.sub, uid, index);
+    const att = await this.bridge.getAttachment(user.sub, uid, index, folder || 'INBOX');
     // C2: санитизация filename — только безопасные символы
     const safe = att.filename.replace(/[^\w.\- ]/g, '_');
     // C2: не отдавать image/* напрямую — всегда application/octet-stream для неизвестных типов
@@ -119,20 +120,31 @@ export class MailController {
   }
 
   @Post('messages/:uid/read')
-  async markRead(@CurrentUser() user: any, @Param('uid', ParseIntPipe) uid: number) {
-    await this.bridge.setSeen(user.sub, uid, true);
+  async markRead(@CurrentUser() user: any, @Param('uid', ParseIntPipe) uid: number, @Query('folder') folder?: string) {
+    await this.bridge.setSeen(user.sub, uid, true, folder || 'INBOX');
     return { ok: true };
   }
 
   @Post('messages/:uid/unread')
-  async markUnread(@CurrentUser() user: any, @Param('uid', ParseIntPipe) uid: number) {
-    await this.bridge.setSeen(user.sub, uid, false);
+  async markUnread(@CurrentUser() user: any, @Param('uid', ParseIntPipe) uid: number, @Query('folder') folder?: string) {
+    await this.bridge.setSeen(user.sub, uid, false, folder || 'INBOX');
+    return { ok: true };
+  }
+
+  @Post('messages/:uid/move')
+  async moveMessage(
+    @CurrentUser() user: any,
+    @Param('uid', ParseIntPipe) uid: number,
+    @Body() dto: { fromFolder?: string; toFolder: string },
+  ) {
+    if (!dto?.toFolder) throw new BadRequestException('to_folder_required');
+    await this.bridge.moveMessage(user.sub, uid, dto.fromFolder || 'INBOX', dto.toFolder);
     return { ok: true };
   }
 
   @Delete('messages/:uid')
-  async deleteMessage(@CurrentUser() user: any, @Param('uid', ParseIntPipe) uid: number) {
-    await this.bridge.deleteMessage(user.sub, uid);
+  async deleteMessage(@CurrentUser() user: any, @Param('uid', ParseIntPipe) uid: number, @Query('folder') folder?: string) {
+    await this.bridge.deleteMessage(user.sub, uid, folder || 'INBOX');
     return { ok: true };
   }
 }
