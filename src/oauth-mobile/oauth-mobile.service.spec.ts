@@ -170,6 +170,7 @@ describe('OAuthMobileService.getGrantInfo', () => {
         { key: 'profile', label: 'Профиль', description: 'Имя, фамилия, аватар' },
         { key: 'email', label: 'Email', description: 'Email адрес' },
       ],
+      scopeDescriptions: {},
       remembered: false,
     });
   });
@@ -204,6 +205,50 @@ describe('OAuthMobileService.getGrantInfo', () => {
 
     const result = await svc.getGrantInfo('user-1', baseParams);
     expect(result.remembered).toBe(false);
+  });
+
+  it('includes scopeDescriptions for mcp scopes and omits unknown scopes', async () => {
+    providerMock.Client.find.mockResolvedValue({
+      clientId: 'mcp-client',
+      clientName: 'MCP Client',
+      redirectUris: ['https://example.com/cb'],
+      scope: 'mcp:calendar mcp:messages.read openid',
+      tokenEndpointAuthMethod: 'none',
+    });
+    (prisma.oAuthGrant as any).findFirst.mockResolvedValue(null);
+
+    const result = await svc.getGrantInfo('user-1', {
+      ...baseParams,
+      client_id: 'mcp-client',
+      scope: 'mcp:calendar mcp:messages.read openid',
+    });
+
+    expect(result.scopeDescriptions).toEqual({
+      'mcp:calendar': {
+        ru: 'Просмотр и управление календарём и напоминаниями',
+        en: 'View and manage your calendar and reminders',
+      },
+      'mcp:messages.read': {
+        ru: 'Чтение ваших сообщений и списка контактов',
+        en: 'Read your messages and contact list',
+      },
+    });
+    // openid is not an MCP scope — must not appear in scopeDescriptions
+    expect(result.scopeDescriptions['openid']).toBeUndefined();
+  });
+
+  it('returns empty scopeDescriptions when no mcp scopes requested', async () => {
+    providerMock.Client.find.mockResolvedValue({
+      clientId: 'mybook',
+      clientName: 'MyBook',
+      redirectUris: ['https://example.com/cb'],
+      scope: 'profile email',
+      tokenEndpointAuthMethod: 'none',
+    });
+    (prisma.oAuthGrant as any).findFirst.mockResolvedValue(null);
+
+    const result = await svc.getGrantInfo('user-1', baseParams);
+    expect(result.scopeDescriptions).toEqual({});
   });
 });
 
