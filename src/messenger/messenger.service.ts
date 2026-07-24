@@ -1926,6 +1926,28 @@ export class MessengerService {
     return !!contact;
   }
 
+  async listContacts(userId: string) {
+    const requests = await this.prisma.contactRequest.findMany({
+      where: {
+        status: 'ACCEPTED',
+        OR: [{ senderId: userId }, { receiverId: userId }],
+      },
+      select: { senderId: true, receiverId: true },
+    });
+    const ids = requests.map((r) =>
+      r.senderId === userId ? r.receiverId : r.senderId,
+    );
+    if (ids.length === 0) return [];
+    return this.prisma.user.findMany({
+      where: { id: { in: ids } },
+      select: {
+        id: true,
+        username: true,
+        profile: { select: { firstName: true, lastName: true } },
+      },
+    });
+  }
+
   async getContactStatus(
     myId: string,
     targetIdOrUsername: string,
