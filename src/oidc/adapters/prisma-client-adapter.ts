@@ -10,6 +10,9 @@ export class PrismaClientAdapter {
     const c = await this.prisma.oAuthClient.findUnique({ where: { clientId: id } });
     if (!c) return undefined;
 
+    // Dynamic clients registered via DCR: return stored metadata as-is.
+    if (c.isDynamic) return c.dcrMetadata as Record<string, any>;
+
     // Hardcoded post-logout redirect URIs for system clients until the
     // OAuthClient model gains a postLogoutRedirectUris column.
     let postLogoutRedirectUris: string[] | undefined;
@@ -49,22 +52,44 @@ export class PrismaClientAdapter {
     };
   }
 
-  // The remaining Adapter methods are required by the oidc-provider interface
-  // but are never invoked for the Client model in this project. Clients are
-  // managed via the OAuthRegistrationController, not via OIDC dynamic
-  // registration exposed by oidc-provider itself. Throwing is intentional —
-  // any call here would indicate a misconfiguration.
-  async upsert(_id: string, _payload: any, _expiresIn: number): Promise<void> {
-    throw new Error('PrismaClientAdapter.upsert is not implemented');
+  // Dynamic Client Registration (DCR): oidc-provider calls upsert() to persist
+  // a newly-registered client. We strip offline_access from scope — that grant
+  // is reserved for manually-verified B2B partners (verifiedPartner=true) and
+  // must not be auto-granted via open registration.
+  async upsert(id: string, payload: any, _expiresIn: number): Promise<void> {
+    const scope = String(payload.scope ?? '')
+      .split(' ')
+      .filter((s) => s && s !== 'offline_access')
+      .join(' ');
+    const metadata = { ...payload, scope };
+    await this.prisma.oAuthClient.upsert({
+      where: { clientId: id },
+      create: {
+        clientId: id,
+        clientSecret: payload.client_secret ?? '',
+        name: payload.client_name ?? id,
+        redirectUris: payload.redirect_uris ?? [],
+        allowedScopes: scope.split(' ').filter(Boolean),
+        isDynamic: true,
+        dcrMetadata: metadata,
+      },
+      update: { dcrMetadata: metadata, redirectUris: payload.redirect_uris ?? [] },
+    });
   }
+
   async findByUserCode(_userCode: string): Promise<undefined> { return undefined; }
   async findByUid(_uid: string): Promise<undefined> { return undefined; }
   async consume(_id: string): Promise<void> {
     throw new Error('PrismaClientAdapter.consume is not implemented');
   }
-  async destroy(_id: string): Promise<void> {
-    throw new Error('PrismaClientAdapter.destroy is not implemented');
+
+  // DCR: oidc-provider calls destroy() when a client is deleted. We guard with
+  // isDynamic=true so that accidental calls cannot remove statically-configured
+  // clients even if a bug passes the wrong id.
+  async destroy(id: string): Promise<void> {
+    await this.prisma.oAuthClient.deleteMany({ where: { clientId: id, isDynamic: true } });
   }
+
   async revokeByGrantId(_grantId: string): Promise<void> {
     throw new Error('PrismaClientAdapter.revokeByGrantId is not implemented');
   }
