@@ -904,7 +904,7 @@ GoRoute(
 - Modify: `lib/core/router/post_login_redirect.dart`
 - Modify: `lib/core/storage/secure_storage_service.dart` (флаг «отложил настройку»)
 
-- [ ] **Step 1: Флаг в SecureStorageService** (по образцу `isOnboardingSeen`):
+- [x] **Step 1: Флаг в SecureStorageService** (по образцу `isOnboardingSeen`):
 
 ```dart
 static const _mailSetupDismissedKey = 'mail_setup_dismissed';
@@ -917,7 +917,7 @@ Future<void> setMailSetupDismissed() => write(_mailSetupDismissedKey, 'true');
 
 (Сверь фактические имена методов read/write в этом сервисе и повтори соседний паттерн.)
 
-- [ ] **Step 2: Гейт в `post_login_redirect.dart`.** После проверки onboarding, перед переходом на defaultRoute:
+- [x] **Step 2: Гейт в `post_login_redirect.dart`.** После проверки onboarding, перед переходом на defaultRoute:
 
 ```dart
 // Гейт выбора почтового адреса: показываем один раз после онбординга,
@@ -941,7 +941,7 @@ if (seen) {
 }
 ```
 
-- [ ] **Step 3: `mail_address_setup_screen.dart`** — fullscreen: заголовок `l10n.mailNoAccountTitle`, поле localpart с суффиксом `@talerid.io` (домен показывать из ответа availability не нужно — используй статический текст `@' + domain`; домен возьми из первого успешного `checkAvailability` ответа? Нет — домен известен только бэкенду; показывай просто `@…` до первого ответа, а после создания покажи полный `account.address`). Debounce 400мс на ввод → `checkAvailability`; под полем — статус (available/taken/invalid/reserved из l10n). Кнопка `mailCreateAddress` активна только при `available`. Кнопка «Позже» → `storage.setMailSetupDismissed()` → `postLoginNavigate`-подобный переход на дефолтный route.
+- [x] **Step 3: `mail_address_setup_screen.dart`** — fullscreen: заголовок `l10n.mailNoAccountTitle`, поле localpart с суффиксом `@talerid.io` (домен показывать из ответа availability не нужно — используй статический текст `@' + domain`; домен возьми из первого успешного `checkAvailability` ответа? Нет — домен известен только бэкенду; показывай просто `@…` до первого ответа, а после создания покажи полный `account.address`). Debounce 400мс на ввод → `checkAvailability`; под полем — статус (available/taken/invalid/reserved из l10n). Кнопка `mailCreateAddress` активна только при `available`. Кнопка «Позже» → `storage.setMailSetupDismissed()` → `postLoginNavigate`-подобный переход на дефолтный route.
 
 ```dart
 import 'dart:async';
@@ -1100,7 +1100,7 @@ class _MailAddressSetupScreenState extends State<MailAddressSetupScreen> {
 
 ⚠️ Суффикс `@talerid.io` — только визуальный дефолт; фактический домен возвращает бэкенд (`account.address`). На dev-flavor будет `@mail-dev.taler.tirol` — не критично для UX, но если просто: после первого availability-ответа домен неизвестен, оставить как есть.
 
-- [ ] **Step 4: `flutter analyze` чисто, commit** — `git add lib/ && git commit -m "feat(mail): address setup screen + post-login gate"`
+- [x] **Step 4: `flutter analyze` чисто, commit** — `git add lib/ && git commit -m "feat(mail): address setup screen + post-login gate"`
 
 ---
 
@@ -1112,7 +1112,7 @@ class _MailAddressSetupScreenState extends State<MailAddressSetupScreen> {
 - Create: `lib/features/mail/presentation/screens/mail_compose_screen.dart`
 - Create: `lib/features/mail/presentation/widgets/mail_tile.dart`
 
-- [ ] **Step 1: `mail_tile.dart`**
+- [x] **Step 1: `mail_tile.dart`**
 
 ```dart
 import 'package:flutter/material.dart';
@@ -1172,7 +1172,7 @@ class MailTile extends StatelessWidget {
 }
 ```
 
-- [ ] **Step 2: `mail_inbox_screen.dart`** — BlocProvider(create: sl<MailBloc>()..add(MailInboxRequested())), RefreshIndicator + ListView с MailTile, скролл-триггер `MailLoadMoreRequested` за 200px до конца, FAB compose, состояния: loading → spinner; noAccount → CTA `context.go(RouteConstants.mailAddressSetup)`; error → текст+retry; empty → `l10n.mailInboxEmpty`. AppBar title `l10n.mailTitle` + subtitle-адрес `state.account?.address`, action-иконка `Icons.key` → `context.push('/mail/app-passwords')`.
+- [x] **Step 2: `mail_inbox_screen.dart`** — BlocProvider(create: sl<MailBloc>()..add(MailInboxRequested())), RefreshIndicator + ListView с MailTile, скролл-триггер `MailLoadMoreRequested` за 200px до конца, FAB compose, состояния: loading → spinner; noAccount → CTA `context.go(RouteConstants.mailAddressSetup)`; error → текст+retry; empty → `l10n.mailInboxEmpty`. AppBar title `l10n.mailTitle` + subtitle-адрес `state.account?.address`, action-иконка `Icons.key` → `context.push('/mail/app-passwords')`.
 
 ```dart
 import 'package:flutter/material.dart';
@@ -1325,7 +1325,7 @@ class _MailInboxView extends StatelessWidget {
 }
 ```
 
-- [ ] **Step 3: `mail_detail_screen.dart`** — свой локальный fetch (без глобального блока): `FutureBuilder(sl<IMailRepository>().getMessage(uid))`. HTML → `WebViewController..loadHtmlString` в тёмной обёртке; если html==null → SelectableText(text). Вложения — чипы: тап → `downloadAttachment` → `getTemporaryDirectory()` (path_provider) → `OpenFilex.open(path)`. AppBar actions: reply (push compose с extra `{replyTo: fromAddress-часть, replySubject: 'Re: '+subject, replyMessageId: messageId}`), delete (repo.deleteMessage → pop), mark-unread (repo.setSeen(uid,false) → pop).
+- [x] **Step 3: `mail_detail_screen.dart`** — свой локальный fetch (без глобального блока): `FutureBuilder(sl<IMailRepository>().getMessage(uid))`. HTML → `WebViewController..loadHtmlString` в тёмной обёртке; если html==null → SelectableText(text). Вложения — чипы: тап → `downloadAttachment` → `getTemporaryDirectory()` (path_provider) → `OpenFilex.open(path)`. AppBar actions: reply (push compose с extra `{replyTo: fromAddress-часть, replySubject: 'Re: '+subject, replyMessageId: messageId}`), delete (repo.deleteMessage → pop), mark-unread (repo.setSeen(uid,false) → pop).
 
 ```dart
 import 'dart:io';
@@ -1501,7 +1501,7 @@ class _MailBodyState extends State<_MailBody> {
 
 ⚠️ `webview_flutter` не работает на desktop (macOS/Windows/Linux). Гейт: `if (PlatformUtils.instance.isDesktop || html == null) → SelectableText(text)` — на десктопе показываем plain-text вариант (у бэкенда text есть всегда). Добавь этот гейт в `initState`.
 
-- [ ] **Step 4: `mail_compose_screen.dart`** — поля to/subject/body, кнопка attach (file_picker, суммарно ≤10MB, файлы копятся чипами), отправка через `sl<IMailRepository>().sendMessage(...)` → SnackBar `l10n.mailSent` → pop. 429/`mail_send_daily_limit` в ошибке → SnackBar `l10n.mailSendLimitReached`.
+- [x] **Step 4: `mail_compose_screen.dart`** — поля to/subject/body, кнопка attach (file_picker, суммарно ≤10MB, файлы копятся чипами), отправка через `sl<IMailRepository>().sendMessage(...)` → SnackBar `l10n.mailSent` → pop. 429/`mail_send_daily_limit` в ошибке → SnackBar `l10n.mailSendLimitReached`.
 
 ```dart
 import 'dart:convert';
@@ -1653,7 +1653,7 @@ class _MailComposeScreenState extends State<MailComposeScreen> {
 }
 ```
 
-- [ ] **Step 5:** `flutter analyze lib/features/mail` чисто; `flutter test test/mail/` зелёный. Commit: `git add lib/features/mail && git commit -m "feat(mail): inbox, detail, compose screens"`
+- [x] **Step 5:** `flutter analyze lib/features/mail` чисто; `flutter test test/mail/` зелёный. Commit: `git add lib/features/mail && git commit -m "feat(mail): inbox, detail, compose screens"`
 
 ---
 
@@ -1663,7 +1663,7 @@ class _MailComposeScreenState extends State<MailComposeScreen> {
 - Create: `lib/features/mail/presentation/screens/mail_app_passwords_screen.dart`
 - Modify: `lib/features/settings/presentation/screens/settings_screen.dart`
 
-- [ ] **Step 1: `mail_app_passwords_screen.dart`** — StatefulWidget, локальный fetch. Верх: карточка `l10n.mailClientSettingsTitle` с host/993/465/login (из `getAccount().clientSettings`) + hint `l10n.mailAppPasswordsHint`. Список паролей (label, createdAt, кнопка revoke с confirm-диалогом). FAB → диалог с полем label → `createAppPassword` → **модалка одноразового показа**: крупный моноширинный пароль + кнопка copy (`Clipboard.setData` + SnackBar `mailAppPasswordCopied`) + текст `mailAppPasswordShownOnce` + параметры подключения.
+- [x] **Step 1: `mail_app_passwords_screen.dart`** — StatefulWidget, локальный fetch. Верх: карточка `l10n.mailClientSettingsTitle` с host/993/465/login (из `getAccount().clientSettings`) + hint `l10n.mailAppPasswordsHint`. Список паролей (label, createdAt, кнопка revoke с confirm-диалогом). FAB → диалог с полем label → `createAppPassword` → **модалка одноразового показа**: крупный моноширинный пароль + кнопка copy (`Clipboard.setData` + SnackBar `mailAppPasswordCopied`) + текст `mailAppPasswordShownOnce` + параметры подключения.
 
 ```dart
 import 'package:flutter/material.dart';
@@ -1854,7 +1854,7 @@ class _MailAppPasswordsScreenState extends State<MailAppPasswordsScreen> {
 }
 ```
 
-- [ ] **Step 2: Settings-секция.** В `settings_screen.dart` по паттерну существующих секций (`_sectionHeader` + `AppCard` + `_navTile`) добавить перед секцией Billing:
+- [x] **Step 2: Settings-секция.** В `settings_screen.dart` по паттерну существующих секций (`_sectionHeader` + `AppCard` + `_navTile`) добавить перед секцией Billing:
 
 ```dart
 _sectionHeader(l10n.mailSectionHeader),
@@ -1881,7 +1881,7 @@ AppCard(
 
 (Сверь фактические сигнатуры `_sectionHeader`/`_navTile`/`AppCard` в файле и повтори их.)
 
-- [ ] **Step 3:** `flutter analyze` чисто. Commit: `git add lib/ && git commit -m "feat(mail): app passwords screen + settings entry"`
+- [x] **Step 3:** `flutter analyze` чисто. Commit: `git add lib/ && git commit -m "feat(mail): app passwords screen + settings entry"`
 
 ---
 
