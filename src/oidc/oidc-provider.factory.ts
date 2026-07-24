@@ -4,6 +4,7 @@ import type Redis from 'ioredis';
 import type { PrismaService } from '../prisma/prisma.service';
 import { RedisOidcAdapter } from './adapters/redis-adapter.js';
 import { PrismaClientAdapter } from './adapters/prisma-client-adapter.js';
+import { MCP_SCOPES } from '../mcp/mcp.constants';
 
 export interface OidcProviderConfig {
   issuer: string;
@@ -63,10 +64,8 @@ export async function createOidcProvider(config: OidcProviderConfig) {
       'kyc',
       'wallet',
       'offline_access',
-      'mcp:calendar',
-      'mcp:notes',
-      'mcp:messages.read',
-      'mcp:messages.send',
+      // единый источник — mcp.constants: новый MCP-scope нельзя «забыть» в OIDC
+      ...MCP_SCOPES,
     ],
 
     features: {
