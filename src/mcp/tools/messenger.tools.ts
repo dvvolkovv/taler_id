@@ -1,8 +1,10 @@
 import { z } from 'zod';
-import { HttpException } from '@nestjs/common';
+import { HttpException, Logger } from '@nestjs/common';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { MessengerService } from '../../messenger/messenger.service';
-import type { Server } from 'socket.io';
+import type { MessengerGateway } from '../../messenger/messenger.gateway';
+
+const mcpMessengerLog = new Logger('McpMessengerTools');
 
 function json(data: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(data) }] };
@@ -23,13 +25,14 @@ type MessengerReadSvc = Pick<
 type MessengerSendSvc = Pick<
   MessengerService,
   | 'hasContactWith'
+  | 'isBlockedBy'
   | 'getOrCreateDirectConversation'
   | 'createMessage'
   | 'getMessageById'
   | 'getUserDisplayName'
 >;
 
-type GatewayLike = { server: Pick<Server, 'to'> };
+type GatewayLike = Pick<MessengerGateway, 'deliverNewMessage'>;
 
 /**
  * Read-only messenger tools: contacts, conversations, messages, search.
@@ -155,22 +158,52 @@ export function registerMessengerSendTool(
         );
       }
 
+      // Block gate: mirror the socket send path (messenger.gateway.ts
+      // handleMessage, DIRECT-conv branch) which refuses to persist when
+      // sender is blocked by recipient. isBlockedBy is bi-directional
+      // (either side blocked the other) — stricter than the socket check,
+      // acceptable for MCP where an agent shouldn't be nudging around
+      // blocked relationships in either direction.
+      const blocked = await svc.isBlockedBy(userId, contact_id);
+      if (blocked) {
+        return err(
+          'Отправка запрещена: пользователь заблокирован или заблокировал вас.',
+        );
+      }
+
       // Get or create direct conversation
       const conv = await svc.getOrCreateDirectConversation(userId, contact_id);
 
       // Create the message
-      const message = await svc.createMessage(conv.id, userId, text) as { id: string; deduped?: boolean };
+      const message = (await svc.createMessage(conv.id, userId, text)) as {
+        id: string;
+        deduped?: boolean;
+      };
 
       // Broadcast only if not a dedup hit
       if (!message.deduped) {
         const full = await svc.getMessageById(message.id);
         if (full) {
           const senderName = await svc.getUserDisplayName(userId);
-          (gateway.server.to(conv.id) as any).emit('new_message', {
-            ...full,
-            senderName,
-            reactions: [],
-          });
+          const enriched = { ...full, senderName, reactions: [] };
+          // Full delivery parity with the socket path: room broadcast +
+          // per-participant new_message emit + block skip + markDelivered
+          // + message_updated + FCM push (mute-respecting). Extracted into
+          // gateway.deliverNewMessage() so both paths share one code path.
+          // Wrapped in try/catch: the message is already persisted — a
+          // delivery-side failure (FCM outage, Socket.IO adapter blip)
+          // should not 500 the MCP tool and make the agent think the send
+          // was rejected. Log server-side, still return success.
+          try {
+            await gateway.deliverNewMessage(enriched, userId, conv.id, {
+              senderName,
+            });
+          } catch (e) {
+            mcpMessengerLog.error(
+              `deliverNewMessage failed after persist (user=${userId} conv=${conv.id} msg=${message.id}): ${(e as Error).message}`,
+              (e as Error).stack,
+            );
+          }
         }
       }
 

@@ -14,6 +14,7 @@ function makeSvc(overrides: Record<string, jest.Mock> = {}) {
     getMessages: jest.fn().mockResolvedValue({ messages: [], nextCursor: undefined }),
     searchMessages: jest.fn().mockResolvedValue([]),
     hasContactWith: jest.fn().mockResolvedValue(true),
+    isBlockedBy: jest.fn().mockResolvedValue(false),
     getOrCreateDirectConversation: jest.fn().mockResolvedValue({ id: 'conv2' }),
     createMessage: jest.fn().mockResolvedValue({ id: 'msg1', deduped: false }),
     getMessageById: jest.fn().mockResolvedValue({ id: 'msg1', content: 'hello', sentAt: new Date() }),
@@ -22,12 +23,10 @@ function makeSvc(overrides: Record<string, jest.Mock> = {}) {
   };
 }
 
-function makeGateway() {
+function makeGateway(overrides: Record<string, jest.Mock> = {}) {
   return {
-    server: {
-      to: jest.fn().mockReturnThis(),
-      emit: jest.fn(),
-    },
+    deliverNewMessage: jest.fn().mockResolvedValue(undefined),
+    ...overrides,
   };
 }
 
@@ -154,30 +153,49 @@ describe('registerMessengerSendTool', () => {
 
   it('refuses to send when hasContactWith returns false (no createMessage called)', async () => {
     const svc = makeSvc({ hasContactWith: jest.fn().mockResolvedValue(false) });
-    const { server } = build(svc);
+    const gw = makeGateway();
+    const { server } = build(svc, gw);
     const tool = (server as any)._registeredTools['send_message'];
     const result = await tool.handler({ contact_id: 'stranger', text: 'hello' }, {} as any);
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/контакт/i);
     expect(svc.createMessage).not.toHaveBeenCalled();
     expect(svc.getOrCreateDirectConversation).not.toHaveBeenCalled();
+    expect(gw.deliverNewMessage).not.toHaveBeenCalled();
+  });
+
+  // ─── block gate ───
+
+  it('refuses to send when isBlockedBy returns true (no createMessage called)', async () => {
+    const svc = makeSvc({ isBlockedBy: jest.fn().mockResolvedValue(true) });
+    const gw = makeGateway();
+    const { server } = build(svc, gw);
+    const tool = (server as any)._registeredTools['send_message'];
+    const result = await tool.handler({ contact_id: 'c1', text: 'hi' }, {} as any);
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/заблокиров/i);
+    expect(svc.createMessage).not.toHaveBeenCalled();
+    expect(svc.getOrCreateDirectConversation).not.toHaveBeenCalled();
+    expect(gw.deliverNewMessage).not.toHaveBeenCalled();
   });
 
   // ─── happy path ───
 
-  it('happy path: creates conversation, sends message, broadcasts, returns ids', async () => {
+  it('happy path: creates conversation, sends message, calls deliverNewMessage, returns ids', async () => {
     const gw = makeGateway();
+    const fullMsg = { id: 'msg42', content: 'hi', sentAt: new Date() };
     const svc = makeSvc({
       createMessage: jest.fn().mockResolvedValue({ id: 'msg42', deduped: false }),
-      getMessageById: jest.fn().mockResolvedValue({ id: 'msg42', content: 'hi', sentAt: new Date() }),
+      getMessageById: jest.fn().mockResolvedValue(fullMsg),
       getUserDisplayName: jest.fn().mockResolvedValue('Bob'),
     });
     const { server } = build(svc, gw);
     const tool = (server as any)._registeredTools['send_message'];
     const result = await tool.handler({ contact_id: 'c1', text: 'hi' }, {} as any);
 
-    // contact gate checked
+    // contact gate + block gate checked
     expect(svc.hasContactWith).toHaveBeenCalledWith('user-1', 'c1');
+    expect(svc.isBlockedBy).toHaveBeenCalledWith('user-1', 'c1');
 
     // conversation obtained
     expect(svc.getOrCreateDirectConversation).toHaveBeenCalledWith('user-1', 'c1');
@@ -188,11 +206,13 @@ describe('registerMessengerSendTool', () => {
     // full message fetched for broadcast
     expect(svc.getMessageById).toHaveBeenCalledWith('msg42');
 
-    // broadcast emitted to conv room
-    expect(gw.server.to).toHaveBeenCalledWith('conv2');
-    expect(gw.server.emit).toHaveBeenCalledWith(
-      'new_message',
+    // deliverNewMessage called with the enriched message
+    expect(gw.deliverNewMessage).toHaveBeenCalledTimes(1);
+    expect(gw.deliverNewMessage).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'msg42', senderName: 'Bob', reactions: [] }),
+      'user-1',
+      'conv2',
+      { senderName: 'Bob' },
     );
 
     // result shape
@@ -202,7 +222,7 @@ describe('registerMessengerSendTool', () => {
 
   // ─── deduped path ───
 
-  it('deduped path: no broadcast, still returns ids', async () => {
+  it('deduped path: no delivery, still returns ids', async () => {
     const gw = makeGateway();
     const svc = makeSvc({
       createMessage: jest.fn().mockResolvedValue({ id: 'msg99', deduped: true }),
@@ -212,7 +232,7 @@ describe('registerMessengerSendTool', () => {
     const result = await tool.handler({ contact_id: 'c1', text: 'hi' }, {} as any);
 
     expect(svc.getMessageById).not.toHaveBeenCalled();
-    expect(gw.server.emit).not.toHaveBeenCalled();
+    expect(gw.deliverNewMessage).not.toHaveBeenCalled();
 
     const data = JSON.parse(result.content[0].text);
     expect(data).toEqual({ message_id: 'msg99', conversation_id: 'conv2' });
@@ -220,7 +240,7 @@ describe('registerMessengerSendTool', () => {
 
   // ─── getMessageById returns null ───
 
-  it('no broadcast and no crash when getMessageById returns null', async () => {
+  it('no delivery and no crash when getMessageById returns null', async () => {
     const gw = makeGateway();
     const svc = makeSvc({
       createMessage: jest.fn().mockResolvedValue({ id: 'msg55', deduped: false }),
@@ -230,9 +250,30 @@ describe('registerMessengerSendTool', () => {
     const tool = (server as any)._registeredTools['send_message'];
     const result = await tool.handler({ contact_id: 'c1', text: 'hi' }, {} as any);
 
-    expect(gw.server.emit).not.toHaveBeenCalled();
+    expect(gw.deliverNewMessage).not.toHaveBeenCalled();
     const data = JSON.parse(result.content[0].text);
     expect(data.message_id).toBe('msg55');
+  });
+
+  // ─── delivery failure ───
+
+  it('delivery failure: tool still returns success json (message is persisted)', async () => {
+    const gw = makeGateway({
+      deliverNewMessage: jest.fn().mockRejectedValue(new Error('fcm outage')),
+    });
+    const svc = makeSvc({
+      createMessage: jest.fn().mockResolvedValue({ id: 'msg77', deduped: false }),
+      getMessageById: jest.fn().mockResolvedValue({ id: 'msg77', content: 'hi' }),
+    });
+    const { server } = build(svc, gw);
+    const tool = (server as any)._registeredTools['send_message'];
+    const result = await tool.handler({ contact_id: 'c1', text: 'hi' }, {} as any);
+
+    // Not an error result — the message row exists, delivery is best-effort.
+    expect(result.isError).toBeUndefined();
+    const data = JSON.parse(result.content[0].text);
+    expect(data).toEqual({ message_id: 'msg77', conversation_id: 'conv2' });
+    expect(gw.deliverNewMessage).toHaveBeenCalledTimes(1);
   });
 
   // ─── text min 1 char ───

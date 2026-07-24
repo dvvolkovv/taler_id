@@ -281,7 +281,15 @@ export class MessengerGateway
           messageId: msg.id,
         });
       }
-      this.server.to(payload.conversationId).emit('new_message', enrichedMsg);
+      // Room broadcast + per-participant delivery (FCM push, blocks,
+      // markDelivered) is now shared with the MCP send_message tool via
+      // deliverNewMessage() — see method below.
+      await this.deliverNewMessage(
+        enrichedMsg,
+        client.data.userId,
+        payload.conversationId,
+        { silent: payload.silent, senderName },
+      );
 
       // AI Analyst: dispatch user message to Claude Worker asynchronously.
       // The response will appear as a new system message in the same chat.
@@ -374,75 +382,6 @@ export class MessengerGateway
         return;
       }
 
-      const participants = await this.service.getParticipants(
-        payload.conversationId,
-      );
-      for (const p of participants) {
-        if (p.userId === client.data.userId) continue;
-        // Skip delivery if recipient has blocked sender
-        const isBlocked = await this.prisma.blockedUser.findFirst({
-          where: { blockerId: p.userId, blockedId: client.data.userId },
-        });
-        if (isBlocked) continue;
-        this.server.to(`user:${p.userId}`).emit('new_message', enrichedMsg);
-        const socketsInConv = await this.server
-          .in(payload.conversationId)
-          .fetchSockets();
-        const recipientInConv = socketsInConv.some(
-          (s) => s.data.userId === p.userId,
-        );
-        const sockets = await this.server.in(`user:${p.userId}`).fetchSockets();
-        const isOnline = sockets.length > 0;
-        if (isOnline) {
-          await this.service.markDelivered(msg.id);
-          this.server
-            .to(`user:${client.data.userId}`)
-            .emit('message_updated', { id: msg.id, isDelivered: true });
-        }
-        this.logger.log(
-          `FCM: recipientId=${p.userId} online=${isOnline} inConv=${recipientInConv} → push=${!recipientInConv}`,
-        );
-        if (!recipientInConv && !payload.silent) {
-          const muted = await this.service.isParticipantMuted(
-            payload.conversationId,
-            p.userId,
-          );
-          if (muted) {
-            this.logger.log(`FCM skipped for ${p.userId}: conversation muted`);
-          } else {
-            const fcmTokens = await this.service.getFcmTokens(p.userId);
-            if (fcmTokens.length) {
-              const pushText = (() => {
-                const c = payload.content ?? '';
-                if (c.startsWith('[CONTACT]')) return '📇 Контакт';
-                if (c.startsWith('[POLL]')) return '📊 Опрос';
-                if (payload.fileUrl) {
-                  const ft = payload.fileType ?? '';
-                  if (ft === 'image') return '🖼 Фото';
-                  if (ft === 'video') return '🎥 Видео';
-                  if (ft === 'audio') return '🎵 Аудио';
-                  return '📎 Файл';
-                }
-                return c;
-              })();
-              // Fan out to every logged-in device of the recipient.
-              for (const fcmToken of fcmTokens) {
-                this.fcmService
-                  .sendNewMessage(
-                    fcmToken,
-                    senderName,
-                    pushText,
-                    payload.conversationId,
-                  )
-                  .then(() => this.logger.log(`FCM sent to ${p.userId}`))
-                  .catch((e) =>
-                    this.logger.error(`FCM failed for ${p.userId}:`, e),
-                  );
-              }
-            }
-          }
-        }
-      }
     } catch (e) {
       // Observability: message-send failures were silently swallowed (only emitted to
       // the client) — a stale-client / missing-column break shipped dead pushes for a
@@ -452,6 +391,106 @@ export class MessengerGateway
         (e as Error).stack,
       );
       client.emit('error', { message: (e as Error).message });
+    }
+  }
+
+  /**
+   * Post-persist delivery for a new message. Broadcasts to the conversation
+   * room, then per-participant: skips blocked recipients, emits per-user
+   * new_message, marks delivered when the recipient has any live socket,
+   * and fires FCM push when the recipient is NOT currently viewing the
+   * conversation (respecting per-participant mute + opts.silent).
+   *
+   * Shared with the MCP send_message tool (see mcp/tools/messenger.tools.ts)
+   * so MCP-originated messages get identical delivery semantics — before the
+   * extraction, MCP-sent messages were silent for offline recipients, ignored
+   * blocks, and never bumped delivered status.
+   *
+   * @param enrichedMsg  Persisted message row + { senderName, reactions: [] }.
+   * @param senderId     Sending user id.
+   * @param conversationId  Target conversation id.
+   * @param opts.silent  If true, skip FCM push (matches socket payload.silent).
+   * @param opts.senderName  Optional pre-resolved sender display name for FCM
+   *                         push title; defaults to enrichedMsg.senderName.
+   */
+  async deliverNewMessage(
+    enrichedMsg: any,
+    senderId: string,
+    conversationId: string,
+    opts: { silent?: boolean; senderName?: string } = {},
+  ): Promise<void> {
+    // 1) Room broadcast — every socket joined to the conv room hears it.
+    this.server.to(conversationId).emit('new_message', enrichedMsg);
+
+    // 2) Per-participant delivery: per-user emit, blocks, delivered, FCM.
+    const senderName =
+      opts.senderName ?? (enrichedMsg?.senderName as string | undefined) ?? '';
+    const participants = await this.service.getParticipants(conversationId);
+    for (const p of participants) {
+      if (p.userId === senderId) continue;
+      // Skip delivery if recipient has blocked sender
+      const isBlocked = await this.prisma.blockedUser.findFirst({
+        where: { blockerId: p.userId, blockedId: senderId },
+      });
+      if (isBlocked) continue;
+      this.server.to(`user:${p.userId}`).emit('new_message', enrichedMsg);
+      const socketsInConv = await this.server
+        .in(conversationId)
+        .fetchSockets();
+      const recipientInConv = socketsInConv.some(
+        (s) => s.data.userId === p.userId,
+      );
+      const sockets = await this.server.in(`user:${p.userId}`).fetchSockets();
+      const isOnline = sockets.length > 0;
+      if (isOnline) {
+        await this.service.markDelivered(enrichedMsg.id);
+        this.server
+          .to(`user:${senderId}`)
+          .emit('message_updated', { id: enrichedMsg.id, isDelivered: true });
+      }
+      this.logger.log(
+        `FCM: recipientId=${p.userId} online=${isOnline} inConv=${recipientInConv} → push=${!recipientInConv}`,
+      );
+      if (!recipientInConv && !opts.silent) {
+        const muted = await this.service.isParticipantMuted(
+          conversationId,
+          p.userId,
+        );
+        if (muted) {
+          this.logger.log(`FCM skipped for ${p.userId}: conversation muted`);
+        } else {
+          const fcmTokens = await this.service.getFcmTokens(p.userId);
+          if (fcmTokens.length) {
+            const pushText = (() => {
+              const c = (enrichedMsg?.content as string | null) ?? '';
+              if (c.startsWith('[CONTACT]')) return '📇 Контакт';
+              if (c.startsWith('[POLL]')) return '📊 Опрос';
+              if (enrichedMsg?.fileUrl) {
+                const ft = (enrichedMsg?.fileType as string | null) ?? '';
+                if (ft === 'image') return '🖼 Фото';
+                if (ft === 'video') return '🎥 Видео';
+                if (ft === 'audio') return '🎵 Аудио';
+                return '📎 Файл';
+              }
+              return c;
+            })();
+            // Fan out to every logged-in device of the recipient.
+            for (const fcmToken of fcmTokens) {
+              this.fcmService
+                .sendNewMessage(
+                  fcmToken,
+                  senderName,
+                  pushText,
+                  conversationId,
+                )
+                .then(() => this.logger.log(`FCM sent to ${p.userId}`))
+                .catch((e) =>
+                  this.logger.error(`FCM failed for ${p.userId}:`, e),
+                );
+            }
+          }
+        }
+      }
     }
   }
 
