@@ -248,6 +248,7 @@ model Conversation {
   invitePolicy   String                    @default("all")
   autoDeleteDays Int?
   topicsEnabled  Boolean                   @default(false)
+  isSystem       Boolean                   @default(false)
   participants   ConversationParticipant[]
   messages       Message[]
   topics         Topic[]
