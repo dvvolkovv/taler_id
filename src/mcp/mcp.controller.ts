@@ -1,15 +1,9 @@
-import { All, Controller, Get, Post, Req, Res, UseGuards } from '@nestjs/common';
+import { All, Controller, Get, Logger, Post, Req, Res, UseGuards } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { McpAuthGuard } from './mcp-auth.guard';
 import { McpServerFactory } from './mcp-server.factory';
-
-const MCP_SCOPES = [
-  'mcp:calendar',
-  'mcp:notes',
-  'mcp:messages.read',
-  'mcp:messages.send',
-];
+import { MCP_SCOPES } from './mcp.constants';
 
 @Controller()
 export class McpController {
@@ -27,18 +21,49 @@ export class McpController {
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
     });
-    res.on('close', () => {
-      transport.close();
-      server.close();
-    });
-    await server.connect(transport);
-    await transport.handleRequest(req, res, (req as any).body);
+
+    // Guard against double-close: SDK WebStandardStreamableHTTPServerTransport.close()
+    // calls onclose unconditionally — not idempotent. Both res.on('close') and the
+    // finally block below can fire, so we deduplicate with this flag.
+    let closed = false;
+    const cleanup = async () => {
+      if (closed) return;
+      closed = true;
+      await transport.close();
+      await server.close();
+    };
+
+    res.on('close', () => { void cleanup(); });
+
+    try {
+      await server.connect(transport);
+      await transport.handleRequest(req, res, (req as any).body);
+    } catch (e) {
+      Logger.error(
+        `MCP request failed: ${(e as Error).message}`,
+        undefined,
+        'McpController',
+      );
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: '2.0',
+          error: { code: -32603, message: 'Internal error' },
+          id: null,
+        });
+      }
+    } finally {
+      await cleanup();
+    }
   }
 
   // Catch GET/DELETE/PATCH/etc. on /mcp — return a proper JSON-RPC error.
   // The @Post above has already claimed POST so this All catches everything else.
   @All('mcp')
-  methodNotAllowed(@Res() res: Response) {
+  methodNotAllowed(@Req() req: Request, @Res() res: Response) {
+    res.setHeader('Allow', 'POST');
+    if (req.method === 'OPTIONS') {
+      return res.status(204).end();
+    }
     res.status(405).json({
       jsonrpc: '2.0',
       error: { code: -32000, message: 'Method not allowed. Use POST.' },
