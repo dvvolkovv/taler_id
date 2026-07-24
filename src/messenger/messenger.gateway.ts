@@ -448,20 +448,30 @@ export class MessengerGateway
     const senderName =
       opts.senderName ?? (enrichedMsg?.senderName as string | undefined) ?? '';
     const participants = await this.service.getParticipants(conversationId);
+    // Один cross-node fetchSockets на весь fan-out, не per-participant:
+    // на системном канале (24k участников) внутрицикловой вызов делал 24k
+    // одинаковых запросов и валился по таймауту (PROD 2026-07-24).
+    let socketsInConv: any[] = [];
+    try {
+      socketsInConv = await this.server.in(conversationId).fetchSockets();
+    } catch (e) {
+      this.logger.warn(
+        `fanOut: conv fetchSockets failed (${(e as Error).message}) — считаем всех вне разговора`,
+      );
+    }
+    const userIdsInConv = new Set(
+      socketsInConv.map((s) => s.data?.userId).filter(Boolean),
+    );
     for (const p of participants) {
       if (p.userId === senderId) continue;
+      try {
       // Skip delivery if recipient has blocked sender
       const isBlocked = await this.prisma.blockedUser.findFirst({
         where: { blockerId: p.userId, blockedId: senderId },
       });
       if (isBlocked) continue;
       this.server.to(`user:${p.userId}`).emit('new_message', enrichedMsg);
-      const socketsInConv = await this.server
-        .in(conversationId)
-        .fetchSockets();
-      const recipientInConv = socketsInConv.some(
-        (s) => s.data.userId === p.userId,
-      );
+      const recipientInConv = userIdsInConv.has(p.userId);
       const sockets = await this.server.in(`user:${p.userId}`).fetchSockets();
       const isOnline = sockets.length > 0;
       if (isOnline) {
@@ -512,6 +522,13 @@ export class MessengerGateway
             }
           }
         }
+      }
+      } catch (e) {
+        // Один недоставленный участник не должен обрывать fan-out остальным
+        // (инцидент PROD 2026-07-24: fetchSockets timeout убил рассылку 24k юзерам)
+        this.logger.warn(
+          `fanOut: delivery to ${p.userId} failed: ${(e as Error).message}`,
+        );
       }
     }
   }

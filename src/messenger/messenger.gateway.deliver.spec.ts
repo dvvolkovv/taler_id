@@ -273,4 +273,48 @@ describe('MessengerGateway.deliverNewMessage', () => {
     });
     expect(mockFcm.sendNewMessage).not.toHaveBeenCalled();
   });
+
+  it('continues fan-out when one participant fails (resilience)', async () => {
+    (mockMessenger.getParticipants as jest.Mock).mockResolvedValue([
+      { userId: 'sender' },
+      { userId: 'broken' },
+      { userId: 'recipient' },
+    ]);
+    // блок-запрос для broken падает, для recipient — нет
+    (mockPrisma.blockedUser.findFirst as jest.Mock).mockImplementation(
+      async ({ where }: any) => {
+        if (where.blockerId === 'broken') throw new Error('db timeout');
+        return null;
+      },
+    );
+    await gateway.fanOutToParticipants(
+      { id: 'm1', content: 'hi' },
+      'sender',
+      'conv-1',
+      {},
+    );
+    // recipient всё равно получил per-user emit
+    expect(
+      emitted.some((e) => e.room === 'user:recipient' && e.event === 'new_message'),
+    ).toBe(true);
+  });
+
+  it('conv-level fetchSockets failure does not abort fan-out (everyone treated offline)', async () => {
+    socketsInConv = null as any; // заставим общий fetchSockets кинуть
+    const origIn = (gateway as any).server.in.bind((gateway as any).server);
+    (gateway as any).server.in = (room: string) => {
+      if (!room.startsWith('user:')) {
+        return { fetchSockets: async () => { throw new Error('cross-node timeout'); } };
+      }
+      return origIn(room);
+    };
+    await gateway.fanOutToParticipants(
+      { id: 'm2', content: 'hello' },
+      'sender',
+      'conv-1',
+      {},
+    );
+    // FCM ушёл (recipient оффлайн/вне разговора)
+    expect(mockFcm.sendNewMessage).toHaveBeenCalled();
+  });
 });
