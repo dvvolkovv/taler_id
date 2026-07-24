@@ -61,6 +61,8 @@ export class SystemChannelService implements OnApplicationBootstrap {
     }
 
     // 2. Ensure system channel exists
+    // Логотип раздаётся самим бэкендом (public/brand), у каждого окружения свой URL
+    const avatarUrl = `${process.env.BASE_URL || 'http://localhost:3000'}/brand/logo-dark.png`;
     let channel = await this.prisma.conversation.findFirst({
       where: { isSystem: true },
     });
@@ -70,10 +72,17 @@ export class SystemChannelService implements OnApplicationBootstrap {
           type: 'CHANNEL',
           isSystem: true,
           name: SYSTEM_CHANNEL_NAME,
+          avatarUrl,
           participants: {
             create: { userId: sysUser.id, role: 'OWNER' },
           },
         },
+      });
+    } else if (!channel.avatarUrl) {
+      // канал мог быть создан до появления аватара — идемпотентный догон
+      channel = await this.prisma.conversation.update({
+        where: { id: channel.id },
+        data: { avatarUrl },
       });
     }
 

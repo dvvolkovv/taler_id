@@ -14,6 +14,7 @@ function makePrisma() {
     conversation: {
       findFirst: jest.fn().mockResolvedValue(null),
       create: jest.fn().mockResolvedValue({ id: 'sys-chan' }),
+      update: jest.fn().mockResolvedValue({ id: 'sys-chan', avatarUrl: 'set' }),
     },
     conversationParticipant: {
       createMany: jest.fn().mockResolvedValue({ count: 2 }),
@@ -66,6 +67,20 @@ describe('SystemChannelService.ensureSeeded', () => {
     expect(prisma.user.create).not.toHaveBeenCalled();
     expect(prisma.conversation.create).not.toHaveBeenCalled();
     expect(prisma.conversationParticipant.createMany).toHaveBeenCalled();
+  });
+
+  it('sets avatarUrl on pre-existing channel without one (idempotent backfill)', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue({ id: 'sys-user' });
+    prisma.conversation.findFirst.mockResolvedValue({ id: 'sys-chan', avatarUrl: null });
+    const svc = new SystemChannelService(prisma, noopGateway, noopMessenger, noopRedis);
+    await svc.ensureSeeded();
+    expect(prisma.conversation.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'sys-chan' },
+        data: { avatarUrl: expect.stringContaining('/brand/logo-dark.png') },
+      }),
+    );
   });
 
   it('background seed swallows errors (bootstrap must never crash the app)', async () => {
