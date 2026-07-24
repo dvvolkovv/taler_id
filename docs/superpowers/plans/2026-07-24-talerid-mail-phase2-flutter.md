@@ -2217,3 +2217,13 @@ Push о новых письмах, папки/поиск/threading, платны
 - Известные точки сверки с реальностью (в шагах): методы DioClient (getBytes/delete), сигнатуры _navTile/AppCard, имена scope-констант MCP, наличие path_provider в pubspec (есть почти наверняка — используется повсеместно; если нет, добавить).
 
 
+
+---
+
+## Status 2026-07-24 — PHASE 2 CODE COMPLETE (Tasks 1-9)
+
+- Tasks 1-8 выполнены субагентами в 3 батча, каждый с двухэтапным ревью; все Critical/Important исправлены (ApiException-404, delete-rollback, path-traversal вложений, WebView CSP+NavigationDelegate, login-gate caching, error-guards в tools).
+- Сверх плана по запросу Дмитрия: 8-я «планета» почты на орбитальном хоуме + иконка в desktop activity bar (`d17095d`).
+- Task 9: mobile flutter test 938/938; integration-тест на эмуляторе прошёл целиком (включая Mail-шаги и 8 иконок; 2 первых прогона падали из-за эмулятора — DeadSystemException, не приложения); backend jest mcp/assistant зелёный; DEV задеплоен, test:mail 19/19, smoke 35/35. Всё запушено (mobile dev f13dc7f, backend dev deb0662).
+- Финальное приёмочное ревью: ACCEPT.
+- **Task 10 (ручной гейт на устройстве) — за Дмитрием**; после него — dev-релиз (APK/TestFlight) и стандартный pipeline DEV→TEST→PROD с bump'ом /app/version.
