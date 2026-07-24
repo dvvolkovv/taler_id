@@ -1187,20 +1187,20 @@ git add src/mail/ src/app.module.ts && git commit -m "feat(mail): REST controlle
 
 Паттерн — `channels_test.ts`: axios + `check()`, счётчики passed/failed, exit code. Реальный IMAP-логин app-паролем — через `imapflow`.
 
-- [ ] **Step 1: Установить imapflow в тест-репо**
+- [x] **Step 1: Установить imapflow в тест-репо**
 
 ```bash
 cd ~/Downloads/taler_id_tests && npm install imapflow
 ```
 
-- [ ] **Step 2: Добавить scripts в `package.json`**
+- [x] **Step 2: Добавить scripts в `package.json`**
 
 ```json
 "test:mail": "npx ts-node mail_test.ts",
 "test:mail:prod": "BASE_URL=https://id.taler.tirol npx ts-node mail_test.ts"
 ```
 
-- [ ] **Step 3: Написать `mail_test.ts`**
+- [x] **Step 3: Написать `mail_test.ts`**
 
 ```typescript
 /**
@@ -1316,9 +1316,9 @@ async function main() {
 main().catch((e) => { console.error(e); process.exit(1); });
 ```
 
-- [ ] **Step 4: Проверить компиляцию suite'а** — `npx tsc --noEmit mail_test.ts` (или просто запуск в Task 12; до деплоя бэкенда suite упадёт на 404 — это ожидаемо).
+- [x] **Step 4: Проверить компиляцию suite'а** — `npx tsc --noEmit mail_test.ts` (или просто запуск в Task 12; до деплоя бэкенда suite упадёт на 404 — это ожидаемо).
 
-- [ ] **Step 5: Commit (репо taler_id_tests)**
+- [x] **Step 5: Commit (репо taler_id_tests)**
 
 ```bash
 cd ~/Downloads/taler_id_tests && git add mail_test.ts package.json package-lock.json && git commit -m "test: mail hosting e2e suite (test:mail)"
