@@ -74,6 +74,27 @@ export class MailController {
     return { ok: true };
   }
 
+  // ── Черновики и счётчик непрочитанных ──────────────────────
+
+  @Post('drafts')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  async saveDraft(
+    @CurrentUser() user: any,
+    @Body() dto: { to?: string; subject?: string; text?: string; replaceUid?: number },
+  ) {
+    return this.bridge.saveDraft(user.sub, dto);
+  }
+
+  @Get('unread-count')
+  async unreadCount(@CurrentUser() user: any) {
+    try {
+      return await this.bridge.unreadCount(user.sub);
+    } catch {
+      // нет ящика / временная ошибка IMAP — орбита не должна получать 4xx/5xx
+      return { unseen: 0 };
+    }
+  }
+
   // ── Письма ─────────────────────────────────────────────────
 
   @Get('messages')

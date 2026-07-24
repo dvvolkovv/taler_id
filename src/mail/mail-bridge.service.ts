@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { ImapFlow } from 'imapflow';
 import { simpleParser, ParsedMail } from 'mailparser';
 import * as nodemailer from 'nodemailer';
+import MailComposer from 'nodemailer/lib/mail-composer';
 import sanitizeHtml from 'sanitize-html';
 import { RedisService } from '../redis/redis.service';
 import { MailAccountService } from './mail-account.service';
@@ -357,7 +358,8 @@ export class MailBridgeService {
     // Minor-1: валидация inReplyTo — некорректный формат игнорируется
     const inReplyToHeader = /^<[^\s@>]+@[^\s>]+>$/.test(input.inReplyTo ?? '') ? input.inReplyTo : undefined;
 
-    await transport.sendMail({
+    // Строим raw MIME один раз: и для отправки, и для копии в Отправленные
+    const mail = new MailComposer({
       from: address,
       to: input.to,
       subject: input.subject,
@@ -368,6 +370,55 @@ export class MailBridgeService {
         filename: a.filename,
         content: Buffer.from(a.contentBase64, 'base64'),
       })),
+    });
+    const raw: Buffer = await mail.compile().build();
+    await transport.sendMail({ envelope: { from: address, to: [input.to] }, raw });
+    // Копия в Отправленные — best-effort: сбой APPEND не должен ронять отправку
+    try {
+      await this.withImap(userId, async (client) => {
+        const boxes = await client.list();
+        const sent = boxes.find((b) => b.specialUse === '\\Sent');
+        if (sent) await client.append(sent.path, raw, ['\\Seen']);
+      });
+    } catch (e) {
+      this.logger.warn(`sent-copy append failed for ${address}: ${(e as Error).message}`);
+    }
+  }
+
+  async saveDraft(
+    userId: string,
+    input: { to?: string; subject?: string; text?: string; replaceUid?: number },
+  ): Promise<{ uid: number | null }> {
+    const account = await this.accounts.requireActiveAccount(userId);
+    const address = this.accounts.address(account);
+    const mail = new MailComposer({
+      from: address,
+      to: input.to || undefined,
+      subject: input.subject ?? '',
+      text: input.text ?? '',
+    });
+    const raw: Buffer = await mail.compile().build();
+    return this.withImap(userId, async (client) => {
+      const boxes = await client.list();
+      const drafts = boxes.find((b) => b.specialUse === '\\Drafts');
+      if (!drafts) throw new NotFoundException('folder_not_found');
+      if (input.replaceUid) {
+        const lock = await client.getMailboxLock(drafts.path);
+        try {
+          await client.messageDelete(String(input.replaceUid), { uid: true });
+        } finally {
+          lock.release();
+        }
+      }
+      const res = await client.append(drafts.path, raw, ['\\Draft', '\\Seen']);
+      return { uid: (res && 'uid' in res ? (res as any).uid : null) ?? null };
+    });
+  }
+
+  async unreadCount(userId: string): Promise<{ unseen: number }> {
+    return this.withImap(userId, async (client) => {
+      const st = await client.status('INBOX', { unseen: true });
+      return { unseen: st.unseen ?? 0 };
     });
   }
 
