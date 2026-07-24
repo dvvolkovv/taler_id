@@ -83,7 +83,7 @@ export class AppController {
     // defaults preserve aeza (prod/dev) behaviour when these vars are unset.
     const latest = {
       version: env.APP_LATEST_VERSION || '1.1.18',
-      build: parseInt(env.APP_LATEST_BUILD || '216', 10),
+      build: parseInt(env.APP_LATEST_BUILD || '217', 10),
     };
     const androidUrl =
       env.APP_UPDATE_URL_ANDROID ||

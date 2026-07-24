@@ -12,6 +12,22 @@ export interface AppRelease {
 export const APP_RELEASES: AppRelease[] = [
   {
     version: '1.1.18',
+    build: 217,
+    date: '2026-07-24',
+    flavor: 'dev',
+    notes_ru:
+      'Сборка 217 — почта @talerid.io, доработки по отзывам.\n\n' +
+      '📧 Письма теперь открываются на светлом фоне — как в привычных почтовых приложениях.\n\n' +
+      '✉️ Исправлено оформление экрана ответа: подписи полей «Кому» и «Тема» больше не обрезаются.\n\n' +
+      '📬 Список писем стал чище: убраны разделительные линии, предпросмотр показывает текст письма без служебных символов.',
+    notes_en:
+      'Build 217 — @talerid.io mail, feedback fixes.\n\n' +
+      '📧 Emails now open on a light background — like in familiar mail apps.\n\n' +
+      '✉️ Fixed the reply screen layout: the To and Subject field labels are no longer clipped.\n\n' +
+      '📬 A cleaner message list: divider lines removed, previews show the message text without technical artifacts.',
+  },
+  {
+    version: '1.1.18',
     build: 216,
     date: '2026-07-19',
     flavor: 'both',
