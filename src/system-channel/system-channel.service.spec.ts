@@ -1,3 +1,4 @@
+import { NotFoundException } from '@nestjs/common';
 import { SystemChannelService } from './system-channel.service';
 
 function makePrisma() {
@@ -206,5 +207,53 @@ describe('SystemChannelService.autopostLatestRelease', () => {
     const svc = new SystemChannelService(prisma, gateway, messenger, redis);
     await svc.autopostLatestRelease();
     expect(messenger.createMessage).toHaveBeenCalled();
+  });
+});
+
+describe('SystemChannelService.postNews', () => {
+  it('posts manual critical news with metadata', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue({ id: 'sys-user' });
+    prisma.conversation.findFirst.mockResolvedValue({ id: 'sys-chan' });
+    const messenger = {
+      createMessage: jest.fn().mockResolvedValue({ id: 'm1' }),
+      getMessageById: jest.fn().mockResolvedValue({ id: 'm1' }),
+    } as any;
+    const svc = new SystemChannelService(prisma, { deliverNewMessage: jest.fn() } as any, messenger, makeRedis());
+    const res = await svc.postNews({ type: 'critical', text_ru: 'Обновитесь до 1.2.0', minVersion: '1.2.0' });
+    expect(messenger.createMessage).toHaveBeenCalledWith(
+      'sys-chan', 'sys-user', expect.stringContaining('Обновитесь'),
+      undefined, undefined, undefined,
+      expect.objectContaining({ newsType: 'critical', minVersion: '1.2.0' }),
+    );
+    expect(res).toEqual({ messageId: 'm1' });
+  });
+
+  it('formats RU+EN when text_en provided', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue({ id: 'sys-user' });
+    prisma.conversation.findFirst.mockResolvedValue({ id: 'sys-chan' });
+    const messenger = {
+      createMessage: jest.fn().mockResolvedValue({ id: 'm2' }),
+      getMessageById: jest.fn().mockResolvedValue({ id: 'm2' }),
+    } as any;
+    const svc = new SystemChannelService(prisma, { deliverNewMessage: jest.fn() } as any, messenger, makeRedis());
+    await svc.postNews({ type: 'news', text_ru: 'Новости', text_en: 'News update' });
+    const calledContent: string = messenger.createMessage.mock.calls[0][2];
+    expect(calledContent).toContain('— EN —');
+    expect(calledContent).toContain('Новости');
+    expect(calledContent).toContain('News update');
+  });
+
+  it('throws NotFoundException when channel not seeded', async () => {
+    const prisma = makePrisma();
+    // user exists but channel is null (conversation.findFirst returns null by default)
+    prisma.user.findUnique.mockResolvedValue({ id: 'sys-user' });
+    const messenger = {
+      createMessage: jest.fn(),
+      getMessageById: jest.fn(),
+    } as any;
+    const svc = new SystemChannelService(prisma, { deliverNewMessage: jest.fn() } as any, messenger, makeRedis());
+    await expect(svc.postNews({ type: 'news', text_ru: 'Test' })).rejects.toThrow(NotFoundException);
   });
 });

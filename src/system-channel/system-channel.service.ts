@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, OnApplicationBootstrap } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { MessengerGateway } from '../messenger/messenger.gateway';
@@ -160,6 +160,24 @@ export class SystemChannelService implements OnApplicationBootstrap {
       );
     }
     return { messageId: msg.id };
+  }
+
+  async postNews(dto: {
+    type: 'news' | 'critical';
+    text_ru: string;
+    text_en?: string;
+    minVersion?: string;
+  }): Promise<{ messageId: string }> {
+    const channel = await this.prisma.conversation.findFirst({ where: { isSystem: true } });
+    const sysUser = await this.prisma.user.findUnique({ where: { email: SYSTEM_USER_EMAIL } });
+    if (!channel || !sysUser) throw new NotFoundException('System channel is not seeded');
+    const content = dto.text_en
+      ? `${dto.text_ru}\n\n— EN —\n\n${dto.text_en}`
+      : dto.text_ru;
+    return this.post(channel.id, sysUser.id, content, {
+      newsType: dto.type,
+      ...(dto.minVersion ? { minVersion: dto.minVersion } : {}),
+    });
   }
 
   async subscribeUser(userId: string): Promise<void> {

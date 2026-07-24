@@ -10,13 +10,18 @@ import {
   UseGuards,
   HttpCode,
   HttpStatus,
+  BadRequestException,
 } from '@nestjs/common';
 import { AdminService } from './admin.service';
 import { AdminGuard } from './admin.guard';
+import { SystemChannelService } from '../system-channel/system-channel.service';
 
 @Controller('admin')
 export class AdminController {
-  constructor(private readonly adminService: AdminService) {}
+  constructor(
+    private readonly adminService: AdminService,
+    private readonly systemChannel: SystemChannelService,
+  ) {}
 
   @Post('auth/login')
   @HttpCode(HttpStatus.OK)
@@ -110,5 +115,17 @@ export class AdminController {
   @UseGuards(AdminGuard)
   deleteTenant(@Param('id') id: string) {
     return this.adminService.deleteTenant(id);
+  }
+
+  @Post('system-channel/post')
+  @UseGuards(AdminGuard)
+  @HttpCode(HttpStatus.OK)
+  async postSystemNews(
+    @Body() body: { type: 'news' | 'critical'; text_ru: string; text_en?: string; minVersion?: string },
+  ) {
+    if (!body?.text_ru || !['news', 'critical'].includes(body?.type)) {
+      throw new BadRequestException('type (news|critical) and text_ru are required');
+    }
+    return this.systemChannel.postNews(body);
   }
 }
