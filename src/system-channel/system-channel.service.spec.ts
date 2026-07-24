@@ -68,11 +68,13 @@ describe('SystemChannelService.ensureSeeded', () => {
     expect(prisma.conversationParticipant.createMany).toHaveBeenCalled();
   });
 
-  it('onApplicationBootstrap swallows seed errors', async () => {
+  it('background seed swallows errors (bootstrap must never crash the app)', async () => {
     const prisma = makePrisma();
     prisma.user.findUnique.mockRejectedValue(new Error('db down'));
     const svc = new SystemChannelService(prisma, noopGateway, noopMessenger, noopRedis);
-    await expect(svc.onApplicationBootstrap()).resolves.toBeUndefined();
+    await expect((svc as any).seedInBackground()).resolves.toBeUndefined();
+    // сам bootstrap — синхронный fire-and-forget, не блокирует app.listen()
+    expect(svc.onApplicationBootstrap()).toBeUndefined();
   });
 
   it('backfill uses SUBSCRIBER role for regular users', async () => {

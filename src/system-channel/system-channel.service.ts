@@ -24,7 +24,13 @@ export class SystemChannelService implements OnApplicationBootstrap {
     private readonly redis: RedisService,
   ) {}
 
-  async onApplicationBootstrap() {
+  onApplicationBootstrap() {
+    // Fire-and-forget: fan-out релизного поста (FCM сотням юзеров) не должен
+    // блокировать app.listen() — на DEV задержал старт на ~10с (2026-07-24)
+    void this.seedInBackground();
+  }
+
+  private async seedInBackground() {
     try {
       await this.ensureSeeded();
       await this.autopostLatestRelease();
