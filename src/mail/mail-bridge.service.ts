@@ -79,23 +79,46 @@ export class MailBridgeService {
         const pageUids = filtered.slice(0, limit);
         if (!pageUids.length) return { items: [], nextCursor: null };
 
-        // фетчим только нужные письма
-        const items: MailListItem[] = [];
+        // фетчим только метаданные нужных писем (BODY[TEXT] сознательно НЕ берём:
+        // для multipart это сырой MIME с boundary/Content-Type — мусор в предпросмотре)
+        const metas: { uid: number; envelope: any; flags: Set<string> | undefined; bodyStructure: any }[] = [];
         for await (const msg of client.fetch(
           pageUids.join(','),
-          { uid: true, envelope: true, flags: true, bodyStructure: true, bodyParts: ['text'] },
+          { uid: true, envelope: true, flags: true, bodyStructure: true },
           { uid: true },
         )) {
-          const text = msg.bodyParts?.get('text')?.toString('utf8') ?? '';
+          metas.push({ uid: msg.uid, envelope: msg.envelope, flags: msg.flags, bodyStructure: msg.bodyStructure });
+        }
+
+        // Сниппет — из настоящей text-части (по bodyStructure), докачиваем per-message.
+        // ВАЖНО: download нельзя вызывать внутри for-await fetch — потому вторым проходом.
+        const items: MailListItem[] = [];
+        for (const meta of metas) {
+          let snippet = '';
+          const preview = findPreviewPart(meta.bodyStructure);
+          if (preview) {
+            try {
+              const dl = await client.download(String(meta.uid), preview.part, { uid: true });
+              if (dl?.content) {
+                const chunks: Buffer[] = [];
+                for await (const chunk of dl.content) chunks.push(chunk as Buffer);
+                let text = Buffer.concat(chunks).toString('utf8').slice(0, 4096);
+                if (preview.html) text = stripHtmlForSnippet(text);
+                snippet = text.replace(/\s+/g, ' ').trim().slice(0, 120);
+              }
+            } catch (e) {
+              this.logger.warn(`snippet download failed uid=${meta.uid}: ${(e as Error).message}`);
+            }
+          }
           items.push({
-            uid: msg.uid,
-            from: msg.envelope?.from?.[0]?.name || msg.envelope?.from?.[0]?.address || '',
-            fromAddress: msg.envelope?.from?.[0]?.address || '',
-            subject: msg.envelope?.subject || '',
-            date: (msg.envelope?.date ?? new Date()).toISOString(),
-            seen: msg.flags?.has('\\Seen') ?? false,
-            snippet: text.replace(/\s+/g, ' ').trim().slice(0, 120),
-            hasAttachments: hasAttachmentParts(msg.bodyStructure),
+            uid: meta.uid,
+            from: meta.envelope?.from?.[0]?.name || meta.envelope?.from?.[0]?.address || '',
+            fromAddress: meta.envelope?.from?.[0]?.address || '',
+            subject: meta.envelope?.subject || '',
+            date: (meta.envelope?.date ?? new Date()).toISOString(),
+            seen: meta.flags?.has('\\Seen') ?? false,
+            snippet,
+            hasAttachments: hasAttachmentParts(meta.bodyStructure),
           });
         }
         // поддерживаем порядок по убыванию UID
@@ -273,6 +296,43 @@ function hasAttachmentParts(node: any): boolean {
   if (!node) return false;
   if (node.disposition === 'attachment') return true;
   return (node.childNodes ?? []).some((c: any) => hasAttachmentParts(c));
+}
+
+/** Первая не-attachment text/plain часть (или text/html как fallback) для предпросмотра. */
+function findPreviewPart(node: any): { part: string; html: boolean } | null {
+  const leaves: { part: string; type: string }[] = [];
+  const walk = (n: any) => {
+    if (!n) return;
+    if (n.childNodes?.length) {
+      for (const c of n.childNodes) walk(c);
+      return;
+    }
+    if (n.disposition === 'attachment') return;
+    const type = String(n.type ?? '').toLowerCase();
+    if (type === 'text/plain' || type === 'text/html') {
+      // singlepart-письмо: у корня нет part-идентификатора — в IMAP это часть '1'
+      leaves.push({ part: n.part ?? '1', type });
+    }
+  };
+  walk(node);
+  const plain = leaves.find((l) => l.type === 'text/plain');
+  if (plain) return { part: plain.part, html: false };
+  const html = leaves.find((l) => l.type === 'text/html');
+  if (html) return { part: html.part, html: true };
+  return null;
+}
+
+function stripHtmlForSnippet(html: string): string {
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#\d+;/g, ' ');
 }
 
 // C3: рекурсивный обход bodyStructure для сбора attachment-частей с их MIME-адресом
