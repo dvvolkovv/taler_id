@@ -74,6 +74,7 @@ export async function createOidcProvider(config: OidcProviderConfig) {
       revocation: { enabled: true },
       userinfo: { enabled: true },
       registration: {
+        // env читается при старте — для переключения нужен рестарт процесса
         enabled: process.env.OIDC_DCR_ENABLED === 'true',
       },
     },
@@ -82,6 +83,8 @@ export async function createOidcProvider(config: OidcProviderConfig) {
       required: () => true,
     },
 
+    // сужение дефолта намеренное: JWT-методы (client_secret_jwt/private_key_jwt)
+    // не использует ни один клиент; 'none' нужен public MCP-клиентам (PKCE)
     clientAuthMethods: ['client_secret_basic', 'client_secret_post', 'none'],
 
     responseTypes: ['code'],
