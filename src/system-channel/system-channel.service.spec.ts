@@ -124,3 +124,42 @@ describe('SystemChannelService.subscribeUser', () => {
     expect(prisma.conversationParticipant.createMany).not.toHaveBeenCalled();
   });
 });
+
+describe('SystemChannelService.autopostLatestRelease', () => {
+  it('posts when latest release not yet posted', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue({ id: 'sys-user' });
+    prisma.conversation.findFirst.mockResolvedValue({ id: 'sys-chan' });
+    (prisma as any).message = { findFirst: jest.fn().mockResolvedValue(null) };
+    const messenger = {
+      createMessage: jest.fn().mockResolvedValue({ id: 'm1' }),
+      getMessageById: jest.fn().mockResolvedValue({ id: 'm1', content: 'x' }),
+    } as any;
+    const gateway = { deliverNewMessage: jest.fn() } as any;
+    const svc = new SystemChannelService(prisma, gateway, messenger);
+    await svc.autopostLatestRelease();
+    expect(messenger.createMessage).toHaveBeenCalledWith(
+      'sys-chan', 'sys-user', expect.stringContaining('🚀 Taler ID'),
+      undefined, undefined, undefined,
+      expect.objectContaining({ newsType: 'release' }),
+    );
+    expect(gateway.deliverNewMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ senderName: 'Taler ID' }),
+      'sys-user', 'sys-chan', expect.objectContaining({ senderName: 'Taler ID' }),
+    );
+  });
+
+  it('skips when latest already posted', async () => {
+    const { APP_RELEASES } = require('../app-releases');
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue({ id: 'sys-user' });
+    prisma.conversation.findFirst.mockResolvedValue({ id: 'sys-chan' });
+    (prisma as any).message = {
+      findFirst: jest.fn().mockResolvedValue({ metadata: { version: APP_RELEASES[0].version } }),
+    };
+    const messenger = { createMessage: jest.fn(), getMessageById: jest.fn() } as any;
+    const svc = new SystemChannelService(prisma, { deliverNewMessage: jest.fn() } as any, messenger);
+    await svc.autopostLatestRelease();
+    expect(messenger.createMessage).not.toHaveBeenCalled();
+  });
+});

@@ -8,6 +8,7 @@ import {
   SYSTEM_USERNAME,
   SYSTEM_CHANNEL_NAME,
 } from './system-channel.constants';
+import { APP_RELEASES } from '../app-releases';
 
 export { SYSTEM_USER_EMAIL, SYSTEM_USERNAME, SYSTEM_CHANNEL_NAME };
 
@@ -24,7 +25,7 @@ export class SystemChannelService implements OnApplicationBootstrap {
   async onApplicationBootstrap() {
     try {
       await this.ensureSeeded();
-      // autopostLatestRelease() will be added in Task 5 — not called yet
+      await this.autopostLatestRelease();
     } catch (e) {
       this.logger.error(
         `System channel seed failed: ${(e as Error).message}`,
@@ -92,6 +93,59 @@ export class SystemChannelService implements OnApplicationBootstrap {
     }
 
     return { userId: sysUser.id, channelId: channel.id };
+  }
+
+  async autopostLatestRelease(): Promise<void> {
+    const latest = APP_RELEASES[0];
+    if (!latest) return;
+    const channel = await this.prisma.conversation.findFirst({
+      where: { isSystem: true },
+    });
+    const sysUser = await this.prisma.user.findUnique({
+      where: { email: SYSTEM_USER_EMAIL },
+    });
+    if (!channel || !sysUser) return;
+    const lastPost = await this.prisma.message.findFirst({
+      where: {
+        conversationId: channel.id,
+        metadata: { path: ['newsType'], equals: 'release' },
+      },
+      orderBy: { sentAt: 'desc' },
+    });
+    if ((lastPost?.metadata as any)?.version === latest.version) return;
+    const content = `🚀 Taler ID ${latest.version}\n\n${latest.notes_ru}\n\n— EN —\n\n${latest.notes_en}`;
+    await this.post(channel.id, sysUser.id, content, {
+      newsType: 'release',
+      version: latest.version,
+    });
+    this.logger.log(`Release ${latest.version} posted to system channel`);
+  }
+
+  private async post(
+    channelId: string,
+    senderId: string,
+    content: string,
+    metadata: Record<string, any>,
+  ): Promise<{ messageId: string }> {
+    const msg = await this.messenger.createMessage(
+      channelId,
+      senderId,
+      content,
+      undefined,
+      undefined,
+      undefined,
+      metadata,
+    );
+    const full = await this.messenger.getMessageById(msg.id);
+    if (full) {
+      await this.gateway.deliverNewMessage(
+        { ...full, senderName: 'Taler ID', reactions: [] },
+        senderId,
+        channelId,
+        { senderName: 'Taler ID' },
+      );
+    }
+    return { messageId: msg.id };
   }
 
   async subscribeUser(userId: string): Promise<void> {

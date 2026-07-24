@@ -237,4 +237,25 @@ describe('MessengerGateway.deliverNewMessage', () => {
     expect(broadcastSpy).toHaveBeenCalledWith(baseMsg, 'conv-1');
     expect(fanOutSpy).toHaveBeenCalledWith(baseMsg, 'sender', 'conv-1', {});
   });
+
+  // ── Critical-news bypass mute ─────────────────────────────────────────────
+  it('critical newsType bypasses mute: FCM sent even when conversation is muted', async () => {
+    (mockMessenger.isParticipantMuted as jest.Mock).mockResolvedValue(true);
+    const criticalMsg = {
+      ...baseMsg,
+      metadata: { newsType: 'critical' },
+    };
+    await gateway.deliverNewMessage(criticalMsg, 'sender', 'conv-1');
+    expect(mockFcm.sendNewMessage).toHaveBeenCalled();
+  });
+
+  it('non-critical newsType respects mute: FCM NOT sent when conversation is muted', async () => {
+    (mockMessenger.isParticipantMuted as jest.Mock).mockResolvedValue(true);
+    const newsMsg = {
+      ...baseMsg,
+      metadata: { newsType: 'news' },
+    };
+    await gateway.deliverNewMessage(newsMsg, 'sender', 'conv-1');
+    expect(mockFcm.sendNewMessage).not.toHaveBeenCalled();
+  });
 });

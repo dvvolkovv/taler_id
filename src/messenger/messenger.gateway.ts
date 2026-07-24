@@ -474,10 +474,10 @@ export class MessengerGateway
         `FCM: recipientId=${p.userId} online=${isOnline} inConv=${recipientInConv} → push=${!recipientInConv}`,
       );
       if (!recipientInConv && !opts.silent) {
-        const muted = await this.service.isParticipantMuted(
-          conversationId,
-          p.userId,
-        );
+        const isCriticalNews = enrichedMsg?.metadata?.newsType === 'critical';
+        const muted = isCriticalNews
+          ? false // critical system-channel news bypasses mute
+          : await this.service.isParticipantMuted(conversationId, p.userId);
         if (muted) {
           this.logger.log(`FCM skipped for ${p.userId}: conversation muted`);
         } else {
