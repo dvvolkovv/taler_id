@@ -502,6 +502,8 @@ export class MessengerService {
           ? (conv._count?.participants ?? conv.participants.length)
           : undefined,
       isSubscribed: conv.type === 'CHANNEL' ? !!myParticipant : undefined,
+      // системный канал (Taler ID — Новости): клиенты не могут отписаться
+      isSystem: conv.isSystem ? true : undefined,
     };
   }
 
