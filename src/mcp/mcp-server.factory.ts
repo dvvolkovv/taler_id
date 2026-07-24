@@ -4,12 +4,14 @@ import { CalendarService } from '../calendar/calendar.service';
 import { NotesService } from '../notes/notes.service';
 import { MessengerService } from '../messenger/messenger.service';
 import { MessengerGateway } from '../messenger/messenger.gateway';
+import { MailBridgeService } from '../mail/mail-bridge.service';
 import { registerCalendarTools } from './tools/calendar.tools';
 import { registerNotesTools } from './tools/notes.tools';
 import {
   registerMessengerReadTools,
   registerMessengerSendTool,
 } from './tools/messenger.tools';
+import { registerMailReadTools, registerMailSendTool } from './tools/mail.tools';
 
 @Injectable()
 export class McpServerFactory {
@@ -20,6 +22,7 @@ export class McpServerFactory {
     // конкретный класс (не Pick<>): mapped-type в DI-конструкторе даёт metadata
     // `Object` → Nest не резолвит зависимость (boot-crash на DEV 2026-07-24)
     private readonly gateway: MessengerGateway,
+    private readonly mailBridge: MailBridgeService,
   ) {}
 
   buildServer(userId: string, scopes: string[]): McpServer {
@@ -35,6 +38,12 @@ export class McpServerFactory {
     }
     if (scopes.includes('mcp:messages.send')) {
       registerMessengerSendTool(server, this.messenger, this.gateway, userId);
+    }
+    if (scopes.includes('mcp:mail.read')) {
+      registerMailReadTools(server, this.mailBridge, userId);
+    }
+    if (scopes.includes('mcp:mail.send')) {
+      registerMailSendTool(server, this.mailBridge, userId);
     }
     return server;
   }

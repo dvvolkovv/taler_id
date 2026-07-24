@@ -1,3 +1,8 @@
+// Prevent Jest from walking into ESM-only transitive deps (sanitize-html → htmlparser2)
+jest.mock('../mail/mail-bridge.service', () => ({
+  MailBridgeService: jest.fn(),
+}));
+
 import { McpServerFactory } from './mcp-server.factory';
 
 describe('McpServerFactory scope filtering', () => {
@@ -6,6 +11,7 @@ describe('McpServerFactory scope filtering', () => {
     { findAll: jest.fn(), create: jest.fn(), update: jest.fn(), remove: jest.fn() } as any,
     { listContacts: jest.fn(), getConversations: jest.fn(), getMessages: jest.fn(), searchMessages: jest.fn(), hasContactWith: jest.fn(), isBlockedBy: jest.fn(), getOrCreateDirectConversation: jest.fn(), createMessage: jest.fn(), getMessageById: jest.fn(), getUserDisplayName: jest.fn() } as any,
     { deliverNewMessage: jest.fn() } as any,
+    { listMessages: jest.fn(), getMessage: jest.fn(), sendMessage: jest.fn() } as any,
   );
 
   function toolNames(scopes: string[]) {
@@ -33,5 +39,15 @@ describe('McpServerFactory scope filtering', () => {
 
   it('all scopes → 14 tools', () => {
     expect(toolNames(['mcp:calendar','mcp:notes','mcp:messages.read','mcp:messages.send'])).toHaveLength(14);
+  });
+
+  it('mail scopes → mail tools', () => {
+    expect(toolNames(['mcp:mail.read', 'mcp:mail.send'])).toEqual([
+      'check_mail', 'read_mail', 'send_mail',
+    ]);
+  });
+
+  it('all scopes including mail → 17 tools', () => {
+    expect(toolNames(['mcp:calendar','mcp:notes','mcp:messages.read','mcp:messages.send','mcp:mail.read','mcp:mail.send'])).toHaveLength(17);
   });
 });

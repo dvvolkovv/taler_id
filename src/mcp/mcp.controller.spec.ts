@@ -1,3 +1,8 @@
+// Prevent Jest from walking into ESM-only transitive deps (sanitize-html → htmlparser2)
+jest.mock('../mail/mail-bridge.service', () => ({
+  MailBridgeService: jest.fn(),
+}));
+
 import { McpController } from './mcp.controller';
 
 function makeRes(method: string) {

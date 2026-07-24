@@ -10,6 +10,8 @@ describe('AssistantInstructionsService', () => {
     expect(res.body).toContain('ЗАДАЧА ДЛЯ АНАЛИТИКА');
     expect(res.body).toContain('ask_analyst ПОВТОРНО');
     expect(res.body).toContain('КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО');
+    expect(res.body).toContain('ПОЧТА (@talerid.io)');
+    expect(res.body).toContain('check_mail');
     expect(res.updatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
@@ -17,6 +19,7 @@ describe('AssistantInstructionsService', () => {
     const res = service.getInstructions('en');
     expect(res.locale).toBe('en');
     expect(res.body).toContain('AI ANALYST');
+    expect(res.body).toContain('MAIL (@talerid.io)');
   });
 
   it('falls back to en for unknown locale', () => {
