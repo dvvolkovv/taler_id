@@ -1,4 +1,5 @@
 import { All, Controller, Get, Logger, Post, Req, Res, UseGuards } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { McpAuthGuard } from './mcp-auth.guard';
@@ -10,6 +11,13 @@ export class McpController {
   constructor(private readonly factory: McpServerFactory) {}
 
   // POST /mcp — Streamable HTTP MCP endpoint (stateless, no sticky sessions needed)
+  // Повышенные лимиты против глобальных (100/мин): AI-агент делает десятки
+  // tool-вызовов подряд; глобальный medium-лимит выбивался даже e2e-suite'ом.
+  @Throttle({
+    short: { ttl: 1000, limit: 30 },
+    medium: { ttl: 60_000, limit: 600 },
+    long: { ttl: 3_600_000, limit: 10_000 },
+  })
   @Post('mcp')
   @UseGuards(McpAuthGuard)
   async handle(@Req() req: Request, @Res() res: Response) {
