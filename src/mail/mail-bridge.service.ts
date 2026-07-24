@@ -9,6 +9,8 @@ import { MailAccountService } from './mail-account.service';
 import { decryptSecret } from './mail-crypto';
 import { mapFolderEntry, SPECIAL_ORDER } from './mail-folders.util';
 
+const PROTECTED_NAMES = new Set(['inbox', 'sent', 'sent messages', 'drafts', 'junk', 'spam', 'trash', 'deleted messages', 'archive']);
+
 export interface MailListItem {
   uid: number;
   from: string;
@@ -78,7 +80,7 @@ export class MailBridgeService {
 
   async createFolder(userId: string, name: string): Promise<void> {
     const safe = (name ?? '').trim();
-    if (!safe || safe.length > 64 || /[\/%*"\\]/.test(safe)) throw new BadRequestException('folder_name_invalid');
+    if (!safe || safe.length > 64 || /[\/%*"\\]/.test(safe) || /[\x00-\x1f\x7f]/.test(safe)) throw new BadRequestException('folder_name_invalid');
     await this.withImap(userId, async (client) => {
       await client.mailboxCreate(safe).catch((e: any) => {
         if (String(e?.message).includes('ALREADYEXISTS')) throw new BadRequestException('folder_exists');
@@ -94,6 +96,10 @@ export class MailBridgeService {
       if (!box) throw new NotFoundException('folder_not_found');
       const { role } = mapFolderEntry({ path: box.path, specialUse: box.specialUse, flags: box.flags ?? new Set() });
       if (role !== 'custom') throw new BadRequestException('folder_protected');
+      if (PROTECTED_NAMES.has(box.path.toLowerCase()) || PROTECTED_NAMES.has(String(box.name ?? '').toLowerCase())) {
+        throw new BadRequestException('folder_protected');
+      }
+      if (box.flags?.has('\\HasChildren')) throw new BadRequestException('folder_has_children');
       await client.mailboxDelete(path);
     });
   }

@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Delete, Get, Param, ParseIntPipe, Post, Query, Res, UseGuards,
+  BadRequestException, Body, Controller, Delete, Get, Param, ParseIntPipe, Post, Query, Res, UseGuards,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
@@ -67,9 +67,10 @@ export class MailController {
     return { ok: true };
   }
 
-  @Delete('folders/:path')
-  async deleteFolder(@CurrentUser() user: any, @Param('path') path: string) {
-    await this.bridge.deleteFolder(user.sub, decodeURIComponent(path));
+  @Delete('folders')
+  async deleteFolder(@CurrentUser() user: any, @Query('path') path: string) {
+    if (!path) throw new BadRequestException('folder_path_required');
+    await this.bridge.deleteFolder(user.sub, path);
     return { ok: true };
   }
 
