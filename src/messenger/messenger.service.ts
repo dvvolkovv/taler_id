@@ -338,13 +338,12 @@ export class MessengerService {
   // ─── Existing methods (updated) ───
 
   async getConversations(userId: string) {
-    const conversations = await this.prisma.conversation.findMany({
+    const bare = await this.prisma.conversation.findMany({
       where: {
         participants: { some: { userId } },
         NOT: { type: 'AI_ASSISTANT' },
       },
       include: {
-        participants: true,
         _count: { select: { participants: true } },
         messages: {
           where: { deletedAt: null, NOT: { hiddenFor: { some: { userId } } } },
@@ -355,10 +354,41 @@ export class MessengerService {
       orderBy: { createdAt: 'desc' },
     });
 
+    // Каналы (в т.ч. системный «Taler ID — Новости») могут иметь десятки тысяч
+    // подписчиков — грузить их всех в список бесед нельзя (24k строк на запрос,
+    // а «первый чужой участник» превращался в случайное имя вроде «Smoke Test»
+    // в качестве otherUserName). Для каналов берём только СВОЮ строку участника
+    // (роль/мьют/lastReadAt), для остальных типов — всех, как раньше.
+    const channelIds = bare.filter((c) => c.type === 'CHANNEL').map((c) => c.id);
+    const dyadIds = bare.filter((c) => c.type !== 'CHANNEL').map((c) => c.id);
+    const parts = await this.prisma.conversationParticipant.findMany({
+      where: {
+        OR: [
+          ...(dyadIds.length ? [{ conversationId: { in: dyadIds } }] : []),
+          ...(channelIds.length
+            ? [{ conversationId: { in: channelIds }, userId }]
+            : []),
+        ],
+      },
+    });
+    const partsByConv: Record<string, typeof parts> = {};
+    for (const p of parts) {
+      (partsByConv[p.conversationId] ??= []).push(p);
+    }
+    const conversations = bare.map((c) => ({
+      ...c,
+      participants: partsByConv[c.id] ?? [],
+    }));
+
     const allUserIds = [
-      ...new Set(
-        conversations.flatMap((c) => c.participants.map((p) => p.userId)),
-      ),
+      ...new Set([
+        ...conversations.flatMap((c) => c.participants.map((p) => p.userId)),
+        // Отправители последних сообщений (например, системный юзер канала —
+        // он НЕ участник, но его имя нужно для превью «Taler ID: …»)
+        ...conversations
+          .map((c) => c.messages?.[0]?.senderId)
+          .filter((id): id is string => !!id),
+      ]),
     ];
     const users = await this.prisma.user.findMany({
       where: { id: { in: allUserIds } },
@@ -435,9 +465,13 @@ export class MessengerService {
     const myParticipant = conv.participants.find(
       (p: any) => p.userId === currentUserId,
     );
-    const otherParticipant = conv.participants.find(
-      (p: any) => p.userId !== currentUserId,
-    );
+    // У каналов нет «собеседника»: первый попавшийся из тысяч подписчиков
+    // давал случайное имя/аватар в списке чатов (инцидент «Smoke Test» в
+    // системном канале на PROD, 2026-07-24).
+    const otherParticipant =
+      conv.type === 'CHANNEL'
+        ? null
+        : conv.participants.find((p: any) => p.userId !== currentUserId);
     const otherUser =
       otherParticipant && userMap ? userMap[otherParticipant.userId] : null;
     const otherFirstLast = otherUser
@@ -476,7 +510,7 @@ export class MessengerService {
       name: conv.name ?? null,
       avatarUrl: conv.avatarUrl ?? null,
       description: conv.description ?? null,
-      participantCount: conv.participants.length,
+      participantCount: conv._count?.participants ?? conv.participants.length,
       myRole: myParticipant?.role ?? null,
       participantIds: conv.participants.map((p: any) => p.userId),
       lastMessageContent: lastMsg?.content ?? null,
