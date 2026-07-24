@@ -11,6 +11,8 @@ import { encryptSecret, decryptSecret } from './mail-crypto';
 import { normalizeLocalpart, validateLocalpart } from './localpart';
 
 const RETRY_ZSET = 'mail:provision:retry';
+const RETRY_ATTEMPTS_HASH = 'mail:provision:attempts';
+const RETRY_MAX_ATTEMPTS = 10;
 const RETRY_POLL_MS = 30_000;
 const RETRY_DELAY_MS = 60_000;
 
@@ -69,15 +71,28 @@ export class MailAccountService implements OnModuleInit, OnModuleDestroy {
     if (!available) throw new BadRequestException(`localpart_${(reason ?? 'invalid').toLowerCase()}`);
 
     const masterPassword = generatePassword();
-    const account = await this.prisma.mailAccount.create({
-      data: {
-        userId,
-        localpart,
-        domain: this.domain,
-        status: 'PROVISIONING',
-        masterSecret: encryptSecret(masterPassword, this.masterKey),
-      },
-    });
+    // I1: ловим гонку — два параллельных запроса могут пройти findUnique одновременно
+    let account: Awaited<ReturnType<typeof this.prisma.mailAccount.create>>;
+    try {
+      account = await this.prisma.mailAccount.create({
+        data: {
+          userId,
+          localpart,
+          domain: this.domain,
+          status: 'PROVISIONING',
+          masterSecret: encryptSecret(masterPassword, this.masterKey),
+        },
+      });
+    } catch (e: any) {
+      if (e?.code === 'P2002') {
+        const target: string[] = e?.meta?.target ?? [];
+        if (target.includes('userId') || target.includes('user_id')) {
+          throw new ConflictException('mail_account_already_exists');
+        }
+        throw new BadRequestException('localpart_taken');
+      }
+      throw e;
+    }
 
     await this.provision(account.id, localpart, masterPassword);
     return this.getAccount(userId);
@@ -87,6 +102,8 @@ export class MailAccountService implements OnModuleInit, OnModuleDestroy {
     try {
       await this.mailcow.createMailbox(localpart, this.domain, masterPassword, 1024, localpart);
       await this.prisma.mailAccount.update({ where: { id: accountId }, data: { status: 'ACTIVE' } });
+      // I2: при успехе сбрасываем счётчик попыток
+      await this.redis.getClient().hdel(RETRY_ATTEMPTS_HASH, accountId);
       this.logger.log(`provisioned ${localpart}@${this.domain}`);
     } catch (e) {
       this.logger.warn(`provision failed for ${localpart}, scheduling retry: ${(e as Error).message}`);
@@ -98,9 +115,23 @@ export class MailAccountService implements OnModuleInit, OnModuleDestroy {
     const client = this.redis.getClient();
     const due: string[] = await client.zrangebyscore(RETRY_ZSET, '-inf', String(Date.now()));
     for (const accountId of due) {
-      await client.zrem(RETRY_ZSET, accountId);
+      // I3: атомарный zrem — только один инстанс обработает задачу
+      const removed: number = await client.zrem(RETRY_ZSET, accountId);
+      if (!removed) continue;
+
+      // I2: проверяем счётчик попыток
+      const attempts = await client.hincrby(RETRY_ATTEMPTS_HASH, accountId, 1);
+      if (attempts > RETRY_MAX_ATTEMPTS) {
+        this.logger.error(`provision permanently failed for accountId=${accountId} after ${RETRY_MAX_ATTEMPTS} retries — giving up`);
+        await client.hdel(RETRY_ATTEMPTS_HASH, accountId);
+        continue;
+      }
+
       const account = await this.prisma.mailAccount.findUnique({ where: { id: accountId } });
-      if (!account || account.status !== 'PROVISIONING') continue;
+      if (!account || account.status !== 'PROVISIONING') {
+        await client.hdel(RETRY_ATTEMPTS_HASH, accountId);
+        continue;
+      }
       await this.provision(account.id, account.localpart, decryptSecret(account.masterSecret, this.masterKey));
     }
   }

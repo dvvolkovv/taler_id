@@ -57,14 +57,32 @@ export class MailBridgeService {
 
   async listMessages(userId: string, folder = 'INBOX', beforeUid?: number, limit = 30): Promise<{ items: MailListItem[]; nextCursor: number | null }> {
     return this.withImap(userId, async (client) => {
-      const lock = await client.getMailboxLock(folder);
+      // Minor-2: неизвестный фолдер
+      let lock: Awaited<ReturnType<typeof client.getMailboxLock>>;
+      try {
+        lock = await client.getMailboxLock(folder);
+      } catch {
+        throw new NotFoundException('folder_not_found');
+      }
       try {
         const mailbox = client.mailbox;
         if (!mailbox || mailbox.exists === 0) return { items: [], nextCursor: null };
-        const range: string = beforeUid ? `1:${beforeUid - 1}` : '1:*';
+
+        // C1: ищем только UID-ы, без скачивания содержимого
+        const allUids: number[] = await client.search({}, { uid: true }) as number[];
+        if (!allUids.length) return { items: [], nextCursor: null };
+
+        // фильтрация по курсору
+        const filtered = beforeUid ? allUids.filter((u) => u < beforeUid) : allUids;
+        // сортировка по убыванию, берём страницу
+        filtered.sort((a, b) => b - a);
+        const pageUids = filtered.slice(0, limit);
+        if (!pageUids.length) return { items: [], nextCursor: null };
+
+        // фетчим только нужные письма
         const items: MailListItem[] = [];
         for await (const msg of client.fetch(
-          range,
+          pageUids.join(','),
           { uid: true, envelope: true, flags: true, bodyStructure: true, bodyParts: ['text'] },
           { uid: true },
         )) {
@@ -80,9 +98,11 @@ export class MailBridgeService {
             hasAttachments: hasAttachmentParts(msg.bodyStructure),
           });
         }
+        // поддерживаем порядок по убыванию UID
         items.sort((a, b) => b.uid - a.uid);
-        const page = items.slice(0, limit);
-        return { items: page, nextCursor: page.length === limit ? page[page.length - 1].uid : null };
+        // nextCursor: минимальный UID страницы, если вернулось ровно limit
+        const nextCursor = items.length === limit ? items[items.length - 1].uid : null;
+        return { items, nextCursor };
       } finally {
         lock.release();
       }
@@ -91,7 +111,13 @@ export class MailBridgeService {
 
   async getMessage(userId: string, uid: number) {
     return this.withImap(userId, async (client) => {
-      const lock = await client.getMailboxLock('INBOX');
+      // Minor-2: неизвестный фолдер (INBOX фиксирован, но обернём для консистентности)
+      let lock: Awaited<ReturnType<typeof client.getMailboxLock>>;
+      try {
+        lock = await client.getMailboxLock('INBOX');
+      } catch {
+        throw new NotFoundException('folder_not_found');
+      }
       try {
         const dl = await client.download(String(uid), undefined, { uid: true });
         if (!dl?.content) throw new NotFoundException('message_not_found');
@@ -121,8 +147,40 @@ export class MailBridgeService {
 
   async getAttachment(userId: string, uid: number, index: number) {
     return this.withImap(userId, async (client) => {
-      const lock = await client.getMailboxLock('INBOX');
+      let lock: Awaited<ReturnType<typeof client.getMailboxLock>>;
       try {
+        lock = await client.getMailboxLock('INBOX');
+      } catch {
+        throw new NotFoundException('folder_not_found');
+      }
+      try {
+        // C3: пробуем скачать только нужную MIME-часть через bodyStructure
+        const [msgMeta] = await (async () => {
+          const msgs: any[] = [];
+          for await (const m of client.fetch(String(uid), { uid: true, bodyStructure: true }, { uid: true })) {
+            msgs.push(m);
+          }
+          return msgs;
+        })();
+
+        if (msgMeta?.bodyStructure) {
+          const parts = collectAttachmentParts(msgMeta.bodyStructure);
+          const partInfo = parts[index];
+          if (partInfo) {
+            const dl = await client.download(String(uid), partInfo.part, { uid: true });
+            if (dl?.content) {
+              const chunks: Buffer[] = [];
+              for await (const chunk of dl.content) chunks.push(chunk as Buffer);
+              return {
+                filename: partInfo.filename,
+                contentType: partInfo.contentType,
+                content: Buffer.concat(chunks),
+              };
+            }
+          }
+        }
+
+        // fallback: качаем всё письмо и парсим через simpleParser
         const dl = await client.download(String(uid), undefined, { uid: true });
         if (!dl?.content) throw new NotFoundException('message_not_found');
         const parsed = await simpleParser(dl.content);
@@ -175,13 +233,16 @@ export class MailBridgeService {
       secure: true,
       auth: { user: address, pass: decryptSecret(account.masterSecret, this.masterKey) },
     });
+    // Minor-1: валидация inReplyTo — некорректный формат игнорируется
+    const inReplyToHeader = /^<[^\s@>]+@[^\s>]+>$/.test(input.inReplyTo ?? '') ? input.inReplyTo : undefined;
+
     await transport.sendMail({
       from: address,
       to: input.to,
       subject: input.subject,
       text: input.text,
-      inReplyTo: input.inReplyTo,
-      references: input.inReplyTo,
+      inReplyTo: inReplyToHeader,
+      references: inReplyToHeader,
       attachments: (input.attachments ?? []).map((a) => ({
         filename: a.filename,
         content: Buffer.from(a.contentBase64, 'base64'),
@@ -212,4 +273,28 @@ function hasAttachmentParts(node: any): boolean {
   if (!node) return false;
   if (node.disposition === 'attachment') return true;
   return (node.childNodes ?? []).some((c: any) => hasAttachmentParts(c));
+}
+
+// C3: рекурсивный обход bodyStructure для сбора attachment-частей с их MIME-адресом
+interface AttachmentPartInfo {
+  part: string;
+  filename: string;
+  contentType: string;
+}
+
+function collectAttachmentParts(node: any, parentPart = ''): AttachmentPartInfo[] {
+  if (!node) return [];
+  const results: AttachmentPartInfo[] = [];
+  if (node.disposition === 'attachment') {
+    const filename =
+      node.dispositionParameters?.filename ??
+      node.parameters?.name ??
+      (node.part ? `attachment-${node.part}` : 'attachment');
+    const contentType = node.type ? `${node.type}/${node.subtype}` : 'application/octet-stream';
+    results.push({ part: node.part ?? parentPart, filename, contentType });
+  }
+  for (const child of node.childNodes ?? []) {
+    results.push(...collectAttachmentParts(child, node.part ?? parentPart));
+  }
+  return results;
 }

@@ -78,8 +78,16 @@ export class MailController {
     @Res() res: Response,
   ) {
     const att = await this.bridge.getAttachment(user.sub, uid, index);
-    res.setHeader('Content-Type', att.contentType || 'application/octet-stream');
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(att.filename)}"`);
+    // C2: санитизация filename — только безопасные символы
+    const safe = att.filename.replace(/[^\w.\- ]/g, '_');
+    // C2: не отдавать image/* напрямую — всегда application/octet-stream для неизвестных типов
+    const contentType = (att.contentType ?? '').startsWith('image/') ? att.contentType : 'application/octet-stream';
+    res.setHeader('Content-Type', contentType);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${safe}"; filename*=UTF-8''${encodeURIComponent(att.filename)}`,
+    );
+    res.setHeader('X-Content-Type-Options', 'nosniff');
     res.send(att.content);
   }
 

@@ -26,7 +26,9 @@ export class MailcowClient {
     const arr = Array.isArray(data) ? data : [data];
     const ok = arr.some((r: any) => r?.type === 'success');
     if (!ok) {
-      this.logger.error(`mailcow ${op} failed: ${JSON.stringify(data).slice(0, 500)}`);
+      // I4: редактируем чувствительные поля перед логированием
+      const redacted = JSON.stringify(data).replace(/"(password|password2|app_passwd|app_passwd2)":"[^"]*"/g, '"$1":"***"');
+      this.logger.error(`mailcow ${op} failed: ${redacted.slice(0, 500)}`);
       throw new Error(`mailcow_${op}_failed`);
     }
   }
@@ -67,6 +69,10 @@ export class MailcowClient {
   }
 
   async createAppPassword(username: string, label: string, password: string): Promise<number> {
+    // Minor-3: снимаем snapshot id'ов до создания, чтобы не путаться при дублирующихся label
+    const before = await this.listAppPasswords(username);
+    const maxId = Math.max(0, ...before.map((p) => p.id));
+
     const res = await this.http.post('/add/app-passwd', {
       username,
       app_name: label,
@@ -78,7 +84,8 @@ export class MailcowClient {
     this.ensureSuccess('add_app_passwd', res.data);
     // id созданного пароля Mailcow в ответе не отдаёт — перечитываем список
     const list = await this.listAppPasswords(username);
-    const created = list.filter((p) => p.name === label).sort((a, b) => b.id - a.id)[0];
+    // берём запись с id строго больше maxId (атомарно определяем созданную)
+    const created = list.filter((p) => p.id > maxId).sort((a, b) => a.id - b.id)[0];
     if (!created) throw new Error('mailcow_app_passwd_not_found_after_create');
     return created.id;
   }
