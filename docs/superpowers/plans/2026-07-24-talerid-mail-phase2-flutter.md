@@ -36,7 +36,7 @@
 
 Entities — простые классы без Freezed (паттерн `features/contacts`), чтобы не плодить codegen.
 
-- [ ] **Step 1: `mail_entities.dart`**
+- [x] **Step 1: `mail_entities.dart`**
 
 ```dart
 class MailAccountEntity {
@@ -238,7 +238,7 @@ class MailAvailabilityEntity {
 }
 ```
 
-- [ ] **Step 2: `mail_remote_datasource.dart`** (паттерн messenger_remote_datasource)
+- [x] **Step 2: `mail_remote_datasource.dart`** (паттерн messenger_remote_datasource)
 
 ```dart
 import 'dart:typed_data';
@@ -355,7 +355,7 @@ class MailRemoteDataSource {
 
 ⚠️ Если у `DioClient` нет `getBytes`/`delete` — проверь `lib/core/api/dio_client.dart` и добавь недостающие методы по образцу `get` (для bytes: `Options(responseType: ResponseType.bytes)`), это единственное допустимое изменение core.
 
-- [ ] **Step 3: `i_mail_repository.dart` + `mail_repository_impl.dart`** — интерфейс повторяет datasource 1:1, impl тонко делегирует (без кэша в Phase 2):
+- [x] **Step 3: `i_mail_repository.dart` + `mail_repository_impl.dart`** — интерфейс повторяет datasource 1:1, impl тонко делегирует (без кэша в Phase 2):
 
 ```dart
 // i_mail_repository.dart
@@ -441,9 +441,9 @@ class MailRepositoryImpl implements IMailRepository {
 }
 ```
 
-- [ ] **Step 4: Компиляция** — `cd ~/Downloads/taler_id_mobile/.worktrees/dev-merge && flutter analyze lib/features/mail` → no issues.
+- [x] **Step 4: Компиляция** — `cd ~/Downloads/taler_id_mobile/.worktrees/dev-merge && flutter analyze lib/features/mail` → no issues.
 
-- [ ] **Step 5: Commit** — `git add lib/features/mail lib/core/api && git commit -m "feat(mail): entities, datasource, repository"`
+- [x] **Step 5: Commit** — `git add lib/features/mail lib/core/api && git commit -m "feat(mail): entities, datasource, repository"`
 
 ---
 
@@ -455,7 +455,7 @@ class MailRepositoryImpl implements IMailRepository {
 - Create: `lib/features/mail/presentation/bloc/mail_bloc.dart`
 - Test: `test/mail/mail_bloc_test.dart`
 
-- [ ] **Step 1: Написать падающий тест `test/mail/mail_bloc_test.dart`**
+- [x] **Step 1: Написать падающий тест `test/mail/mail_bloc_test.dart`**
 
 ```dart
 import 'dart:typed_data';
@@ -601,9 +601,9 @@ void main() {
 }
 ```
 
-- [ ] **Step 2: Убедиться, что падает** — `flutter test test/mail/mail_bloc_test.dart` → FAIL (files missing).
+- [x] **Step 2: Убедиться, что падает** — `flutter test test/mail/mail_bloc_test.dart` → FAIL (files missing).
 
-- [ ] **Step 3: `mail_event.dart`**
+- [x] **Step 3: `mail_event.dart`**
 
 ```dart
 import 'package:equatable/equatable.dart';
@@ -638,7 +638,7 @@ class MailDeleteRequested extends MailEvent {
 }
 ```
 
-- [ ] **Step 4: `mail_state.dart`**
+- [x] **Step 4: `mail_state.dart`**
 
 ```dart
 import 'package:equatable/equatable.dart';
@@ -691,7 +691,7 @@ class MailState extends Equatable {
 }
 ```
 
-- [ ] **Step 5: `mail_bloc.dart`**
+- [x] **Step 5: `mail_bloc.dart`**
 
 ```dart
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -782,9 +782,9 @@ class MailBloc extends Bloc<MailEvent, MailState> {
 }
 ```
 
-- [ ] **Step 6: Тесты зелёные** — `flutter test test/mail/mail_bloc_test.dart` → all passed.
+- [x] **Step 6: Тесты зелёные** — `flutter test test/mail/mail_bloc_test.dart` → all passed.
 
-- [ ] **Step 7: Commit** — `git add lib/features/mail test/mail && git commit -m "feat(mail): MailBloc with inbox pagination and flags"`
+- [x] **Step 7: Commit** — `git add lib/features/mail test/mail && git commit -m "feat(mail): MailBloc with inbox pagination and flags"`
 
 ---
 
@@ -795,7 +795,7 @@ class MailBloc extends Bloc<MailEvent, MailState> {
 - Modify: `lib/core/router/app_router.dart` + файл RouteConstants (`grep -rn "class RouteConstants" lib/` — фактический путь)
 - Modify: `lib/l10n/app_en.arb`, `lib/l10n/app_ru.arb`
 
-- [ ] **Step 1: DI** — в `setupDependencies` рядом с messenger-блоком:
+- [x] **Step 1: DI** — в `setupDependencies` рядом с messenger-блоком:
 
 ```dart
 // Mail
@@ -810,7 +810,7 @@ sl.registerFactory<MailBloc>(() => MailBloc(repo: sl<IMailRepository>()));
 
 (`registerFactory` для блока — состояние inbox не нужно держать глобально; экраны создают через `BlocProvider(create: ...)`.)
 
-- [ ] **Step 2: RouteConstants + routes.** В RouteConstants добавить:
+- [x] **Step 2: RouteConstants + routes.** В RouteConstants добавить:
 
 ```dart
 static const String mail = '/mail';
@@ -850,7 +850,7 @@ GoRoute(
 
 ⚠️ Порядок вложенных routes важен: `compose` и `app-passwords` — ДО `:uid`, иначе go_router сматчит их как uid.
 
-- [ ] **Step 3: l10n.** В `app_en.arb` добавить (и русские аналоги в `app_ru.arb`):
+- [x] **Step 3: l10n.** В `app_en.arb` добавить (и русские аналоги в `app_ru.arb`):
 
 ```json
 "mailTitle": "Mail",
@@ -893,7 +893,7 @@ GoRoute(
 
 Затем `flutter gen-l10n` (или `flutter pub get` — как принято в репо, генерация в build).
 
-- [ ] **Step 4: Commit** — `git add lib/core lib/l10n && git commit -m "feat(mail): DI, routes, l10n strings"` (может не скомпилироваться до Task 4-6 — если analyze падает на несуществующих экранах, создать в этом же коммите пустые заглушки экранов `Scaffold(body: SizedBox())` в файлах из Task 4-6 и наполнить их там).
+- [x] **Step 4: Commit** — `git add lib/core lib/l10n && git commit -m "feat(mail): DI, routes, l10n strings"` (может не скомпилироваться до Task 4-6 — если analyze падает на несуществующих экранах, создать в этом же коммите пустые заглушки экранов `Scaffold(body: SizedBox())` в файлах из Task 4-6 и наполнить их там).
 
 ---
 
