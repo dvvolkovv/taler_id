@@ -40,6 +40,10 @@ export class MailBridgeService {
     this.sendDailyLimit = config.get<number>('mail.sendDailyLimit')!;
   }
 
+  private assertFolderName(folder: string): void {
+    if (!folder || /[\x00-\x1f\x7f]/.test(folder)) throw new BadRequestException('folder_invalid');
+  }
+
   private async withImap<T>(userId: string, fn: (client: ImapFlow, address: string) => Promise<T>): Promise<T> {
     const account = await this.accounts.requireActiveAccount(userId);
     const address = this.accounts.address(account);
@@ -105,6 +109,7 @@ export class MailBridgeService {
   }
 
   async listMessages(userId: string, folder = 'INBOX', beforeUid?: number, limit = 30): Promise<{ items: MailListItem[]; nextCursor: number | null }> {
+    this.assertFolderName(folder);
     return this.withImap(userId, async (client) => {
       // Minor-2: неизвестный фолдер
       let lock: Awaited<ReturnType<typeof client.getMailboxLock>>;
@@ -182,6 +187,7 @@ export class MailBridgeService {
   }
 
   async getMessage(userId: string, uid: number, folder = 'INBOX') {
+    this.assertFolderName(folder);
     return this.withImap(userId, async (client) => {
       // Minor-2: неизвестный фолдер
       let lock: Awaited<ReturnType<typeof client.getMailboxLock>>;
@@ -218,6 +224,7 @@ export class MailBridgeService {
   }
 
   async getAttachment(userId: string, uid: number, index: number, folder = 'INBOX') {
+    this.assertFolderName(folder);
     return this.withImap(userId, async (client) => {
       let lock: Awaited<ReturnType<typeof client.getMailboxLock>>;
       try {
@@ -266,6 +273,7 @@ export class MailBridgeService {
   }
 
   async setSeen(userId: string, uid: number, seen: boolean, folder = 'INBOX'): Promise<void> {
+    this.assertFolderName(folder);
     await this.withImap(userId, async (client) => {
       let lock: Awaited<ReturnType<typeof client.getMailboxLock>>;
       try {
@@ -283,6 +291,7 @@ export class MailBridgeService {
   }
 
   async deleteMessage(userId: string, uid: number, folder = 'INBOX'): Promise<void> {
+    this.assertFolderName(folder);
     await this.withImap(userId, async (client) => {
       const boxes = await client.list();
       const trash = boxes.find((b) => b.specialUse === '\\Trash');
@@ -295,9 +304,11 @@ export class MailBridgeService {
       }
       try {
         if (trash && !inTrash) {
-          await client.messageMove(String(uid), trash.path, { uid: true });
+          const res = await client.messageMove(String(uid), trash.path, { uid: true });
+          if (!res || (res.uidMap instanceof Map && res.uidMap.size === 0)) throw new NotFoundException('message_not_found');
         } else {
-          await client.messageDelete(String(uid), { uid: true });
+          const ok = await client.messageDelete(String(uid), { uid: true });
+          if (!ok) throw new NotFoundException('message_not_found');
         }
       } finally {
         lock.release();
@@ -306,6 +317,8 @@ export class MailBridgeService {
   }
 
   async moveMessage(userId: string, uid: number, fromFolder: string, toFolder: string): Promise<void> {
+    this.assertFolderName(fromFolder);
+    this.assertFolderName(toFolder);
     await this.withImap(userId, async (client) => {
       const boxes = await client.list();
       if (!boxes.some((b) => b.path === toFolder)) throw new NotFoundException('folder_not_found');
@@ -316,7 +329,8 @@ export class MailBridgeService {
         throw new NotFoundException('folder_not_found');
       }
       try {
-        await client.messageMove(String(uid), toFolder, { uid: true });
+        const res = await client.messageMove(String(uid), toFolder, { uid: true });
+        if (!res || (res.uidMap instanceof Map && res.uidMap.size === 0)) throw new NotFoundException('message_not_found');
       } finally {
         lock.release();
       }
