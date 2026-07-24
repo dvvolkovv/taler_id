@@ -51,25 +51,20 @@ export function registerNotesTools(
     'create_note',
     'Создаёт новую заметку пользователя. ' +
       'Обязательные поля: title (заголовок) и content (содержимое). ' +
-      'Необязательные: id (UUID — если нужен клиентский ID), source (источник, например ASSISTANT).',
+      'Необязательное: source (источник, например ASSISTANT).',
     {
       title: z.string().describe('Заголовок заметки'),
       content: z.string().describe('Содержимое заметки'),
-      id: z
-        .string()
-        .optional()
-        .describe('UUID заметки (необязательно — сервер генерирует автоматически)'),
       source: z
         .string()
         .optional()
         .describe('Источник создания заметки (например, MANUAL или ASSISTANT)'),
     },
-    async ({ title, content, id, source }) => {
-      const data: { title: string; content: string; id?: string; source?: string } = {
+    async ({ title, content, source }) => {
+      const data: { title: string; content: string; source?: string } = {
         title,
         content,
       };
-      if (id !== undefined) data.id = id;
       if (source !== undefined) data.source = source;
       const result = await notes.create(userId, data);
       return json(result);

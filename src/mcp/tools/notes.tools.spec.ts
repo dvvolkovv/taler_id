@@ -78,17 +78,16 @@ describe('notes tools', () => {
     expect(JSON.parse(result.content[0].text)).toEqual({ id: 'n2', title: 'New note', content: 'body' });
   });
 
-  it('create_note passes optional id and source when provided', async () => {
+  it('create_note passes optional source when provided (no id — server generates)', async () => {
     const server = build();
     const tool = (server as any)._registeredTools['create_note'];
     await tool.handler(
-      { title: 'Titled', content: 'body', id: 'custom-id', source: 'ASSISTANT' },
+      { title: 'Titled', content: 'body', source: 'ASSISTANT' },
       {} as any,
     );
     expect(notes.create).toHaveBeenCalledWith('user-1', {
       title: 'Titled',
       content: 'body',
-      id: 'custom-id',
       source: 'ASSISTANT',
     });
   });
