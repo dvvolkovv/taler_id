@@ -95,7 +95,7 @@ export class VoiceService {
     // via its HTTP endpoint, but nothing in the clients currently asks for it
     // — and letting it auto-join collides with the new ai-twin-agent fallback.
     console.log(
-      `[createRoom] room=${roomName} region=${cis ? 'cis' : 'eu'} initiator=${initiatorId} withAi=${withAi} sfu=${sfu.wsUrl} — auto-join suppressed`,
+      `[createRoom] room=${roomName} initiator=${initiatorId} withAi=${withAi} sfu=${sfu.wsUrl} — auto-join suppressed`,
     );
     return { roomName, token, livekitWsUrl: sfu.wsUrl };
   }
