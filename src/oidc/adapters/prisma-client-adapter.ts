@@ -4,6 +4,9 @@ export class PrismaClientAdapter {
   constructor(
     private readonly prisma: PrismaService,
     private readonly walletxClientSecret: string,
+    // Confidential B2B partner secrets are kept in env (like walletx) rather
+    // than in the DB row, so the OAuthClient table never stores a live secret.
+    private readonly linkeonPartnerClientSecret?: string,
   ) {}
 
   async find(id: string): Promise<Record<string, any> | undefined> {
@@ -43,7 +46,12 @@ export class PrismaClientAdapter {
 
     return {
       client_id: c.clientId,
-      client_secret: c.clientId === 'walletx' ? this.walletxClientSecret : c.clientSecret,
+      client_secret:
+        c.clientId === 'walletx'
+          ? this.walletxClientSecret
+          : c.clientId === 'linkeon-partner' && this.linkeonPartnerClientSecret
+            ? this.linkeonPartnerClientSecret
+            : c.clientSecret,
       client_name: c.name,
       redirect_uris: c.redirectUris,
       scope: c.allowedScopes.join(' '),

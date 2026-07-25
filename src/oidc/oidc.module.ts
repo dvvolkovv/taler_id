@@ -34,6 +34,11 @@ import { createOidcProvider } from './oidc-provider.factory.js';
         const walletxClientSecret =
           process.env.WALLETX_CLIENT_SECRET || 'walletx_secret_2026';
 
+        // Confidential secret for the linkeon-partner verifiedPartner client,
+        // kept in env (undefined falls back to the DB row's clientSecret).
+        const linkeonPartnerClientSecret =
+          process.env.LINKEON_PARTNER_CLIENT_SECRET || undefined;
+
         return createOidcProvider({
           issuer,
           prisma,
@@ -42,6 +47,7 @@ import { createOidcProvider } from './oidc-provider.factory.js';
           publicKeyPath,
           cookieKeys,
           walletxClientSecret,
+          linkeonPartnerClientSecret,
         });
       },
       inject: [ConfigService, PrismaService, RedisService],
