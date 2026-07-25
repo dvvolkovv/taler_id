@@ -44,6 +44,13 @@ export class PrismaClientAdapter {
     const isPublicClient = c.clientId === 'taler-id-developers';
     const tokenEndpointAuthMethod = isPublicClient ? 'none' : 'client_secret_basic';
 
+    // Server-to-server clients (no redirect_uris, e.g. the verifiedPartner
+    // provisioning client) don't use the interactive code flow — their tokens
+    // are minted server-side and refreshed via grant_type=refresh_token. Giving
+    // them response_types:['code'] would force a redirect_uri (oidc-provider:
+    // "redirect_uris must contain members"), so we advertise refresh_token only.
+    const serverToServer = !isPublicClient && c.redirectUris.length === 0;
+
     return {
       client_id: c.clientId,
       client_secret:
@@ -57,8 +64,10 @@ export class PrismaClientAdapter {
       scope: c.allowedScopes.join(' '),
       logo_uri: c.logoUri ?? undefined,
       token_endpoint_auth_method: tokenEndpointAuthMethod,
-      grant_types: ['authorization_code', 'refresh_token'],
-      response_types: ['code'],
+      grant_types: serverToServer
+        ? ['refresh_token']
+        : ['authorization_code', 'refresh_token'],
+      response_types: serverToServer ? [] : ['code'],
       ...(postLogoutRedirectUris
         ? { post_logout_redirect_uris: postLogoutRedirectUris }
         : {}),
