@@ -93,6 +93,9 @@ export class SystemChannelService implements OnApplicationBootstrap {
     let cursor: string | undefined;
     for (;;) {
       const users = await this.prisma.user.findMany({
+        // Удалённые (deletedAt) аккаунты не подписываем — иначе рестарт
+        // бэкенда возвращал в канал тысячи вычищенных тест-юзеров.
+        where: { deletedAt: null },
         take: BATCH,
         ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
         orderBy: { id: 'asc' },
