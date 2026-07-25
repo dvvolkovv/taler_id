@@ -32,18 +32,41 @@ export class DeviceKeysService {
     }
 
     const userPk = this.extractUserPk(dto.certificate);
+    const devicePk = dto.devicePk.toLowerCase();
 
-    const record = await this.prisma.deviceKey.create({
-      data: {
-        userId,
-        devicePk: dto.devicePk.toLowerCase(),
-        userPk,
-        algorithm: SUPPORTED_ALG,
-        validUntil: new Date(dto.validUntilEpochMs),
-        certificate: dto.certificate,
-        signature: dto.signature.toLowerCase(),
-      },
+    // Идемпотентность: приложение переотправляет тот же ключ (реинсталл,
+    // релогин, ретраи при звонке) — голый create падал P2002 → 500 в звонке
+    // (инцидент TEST 2026-07-25).
+    const existing = await this.prisma.deviceKey.findUnique({
+      where: { devicePk },
     });
+    if (existing && existing.userId !== userId) {
+      throw new BadRequestException('device_key_owned_by_another_user');
+    }
+
+    const data = {
+      userId,
+      devicePk,
+      userPk,
+      algorithm: SUPPORTED_ALG,
+      validUntil: new Date(dto.validUntilEpochMs),
+      certificate: dto.certificate,
+      signature: dto.signature.toLowerCase(),
+      revokedAt: null,
+    };
+    let record;
+    try {
+      record = existing
+        ? await this.prisma.deviceKey.update({ where: { devicePk }, data })
+        : await this.prisma.deviceKey.create({ data });
+    } catch (e: any) {
+      // Гонка двух одновременных регистраций одного ключа
+      if (e?.code === 'P2002') {
+        record = await this.prisma.deviceKey.update({ where: { devicePk }, data });
+      } else {
+        throw e;
+      }
+    }
 
     // Fan-out push to this user's contacts (fire-and-forget).
     this.fcm.sendKeyUpdate(userId).catch(() => {
