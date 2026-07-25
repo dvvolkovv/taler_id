@@ -205,6 +205,7 @@ export class MailBridgeService {
         return {
           uid,
           from: parsed.from?.text ?? '',
+          fromAddress: parsed.from?.value?.[0]?.address ?? '',
           to: parsed.to ? (Array.isArray(parsed.to) ? parsed.to : [parsed.to]).map((t) => t.text).join(', ') : '',
           subject: parsed.subject ?? '',
           date: (parsed.date ?? new Date()).toISOString(),
