@@ -67,14 +67,31 @@ export class VoiceService {
     region?: string,
   ) {
     const cis = region === 'cis';
-    const roomName = (cis ? 'call-ru-' : 'call-') + uuidv4();
-    const sfu = this.sfuFor(roomName);
-    await sfu.client.createRoom({
-      name: roomName,
-      emptyTimeout: 300,
-      departureTimeout: 60,
-      maxParticipants: 10,
-    });
+    let roomName = (cis ? 'call-ru-' : 'call-') + uuidv4();
+    let sfu = this.sfuFor(roomName);
+    try {
+      await sfu.client.createRoom({
+        name: roomName,
+        emptyTimeout: 300,
+        departureTimeout: 60,
+        maxParticipants: 10,
+      });
+    } catch (e) {
+      if (!cis) throw e;
+      // RU-SFU недоступен (инцидент 2026-07-25: ECONNREFUSED 92.53.64.147:7880
+      // → 500 на звонке). Падаем на EU-SFU: звонок пройдёт, latency выше.
+      this.log.warn(
+        `RU SFU unavailable (${(e as Error).message}) — falling back to EU SFU`,
+      );
+      roomName = 'call-' + uuidv4();
+      sfu = this.sfuFor(roomName);
+      await sfu.client.createRoom({
+        name: roomName,
+        emptyTimeout: 300,
+        departureTimeout: 60,
+        maxParticipants: 10,
+      });
+    }
     const token = await this.makeToken(roomName, initiatorId, sessionId);
     try {
       await this.prisma.callLog.create({
