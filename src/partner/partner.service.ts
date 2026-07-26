@@ -6,8 +6,10 @@ import {
   InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
+import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { OIDC_PROVIDER } from '../oidc/oidc.service';
+import { MailAccountService } from '../mail/mail-account.service';
 import { ProvisionDto } from './dto/provision.dto';
 
 export const PARTNER_CLIENT_ID = 'linkeon-partner';
@@ -27,6 +29,7 @@ export class PartnerService {
   constructor(
     private readonly prisma: PrismaService,
     @Inject(OIDC_PROVIDER) private readonly provider: any,
+    private readonly mailAccounts: MailAccountService,
   ) {}
 
   async provision(dto: ProvisionDto): Promise<ProvisionResult> {
@@ -53,6 +56,14 @@ export class PartnerService {
       dto.email,
       dto.firstName,
     );
+
+    // Auto-provision an @talerid.io mailbox when mail scope is granted, so
+    // check_mail/read_mail/send_mail don't return no_mailbox_yet. Idempotent
+    // (skips if the user already has one) and non-fatal (a mailbox failure must
+    // not block token issuance — a repeat provision retries).
+    if (/(^|\s)mcp:mail\./.test(scope)) {
+      await this.ensureMailbox(user.id, dto.firstName);
+    }
 
     const tokens = await this.mintTokens(user.id, scope);
 
@@ -134,6 +145,37 @@ export class PartnerService {
   }
 
   /**
+   * Ensure the user has an @talerid.io mailbox (idempotent, best-effort).
+   * Skips if one already exists; on localpart collision retries with a fresh
+   * auto-name; any other failure is logged and swallowed so token issuance is
+   * never blocked (the mail tools then report no_mailbox_yet and a repeat
+   * provision retries).
+   */
+  private async ensureMailbox(userId: string, firstName?: string): Promise<void> {
+    const existing = await this.prisma.mailAccount.findUnique({
+      where: { userId },
+      select: { id: true },
+    });
+    if (existing) return;
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const localpart = generateLocalpart(firstName);
+      try {
+        await this.mailAccounts.createAccount(userId, localpart);
+        this.logger.log(`provisioned mailbox ${localpart} for user ${userId}`);
+        return;
+      } catch (e) {
+        const msg = (e as Error).message || '';
+        if (msg === 'mail_account_already_exists') return; // concurrent create won
+        if (msg.includes('localpart_') || msg.includes('taken')) continue; // collision → new name
+        this.logger.warn(`mailbox provisioning failed for ${userId}: ${msg}`);
+        return; // non-fatal
+      }
+    }
+    this.logger.warn(`mailbox provisioning gave up (localpart collisions) for ${userId}`);
+  }
+
+  /**
    * Issue real provider access + refresh tokens (validated by the same
    * MCP guard as any other token) for the linkeon-partner client, tied to a
    * fresh Grant. Linkeon later refreshes via the standard
@@ -188,6 +230,20 @@ export function normalizePhone(raw: string): string | null {
   const digits = String(raw).replace(/[^0-9]/g, '');
   if (digits.length < 7 || digits.length > 15) return null;
   return `+${digits}`;
+}
+
+// Auto-generate a valid, ~unique mailbox localpart. Slug of firstName (ASCII,
+// accents stripped) when usable, else "user"; always suffixed with random hex
+// for uniqueness. Matches src/mail/localpart LOCALPART_RE and is never reserved
+// (the suffix guarantees it). Collisions are retried by the caller.
+export function generateLocalpart(firstName?: string): string {
+  const base = String(firstName ?? '')
+    .toLowerCase()
+    .normalize('NFKD') // decompose accents; the [^a-z0-9] strip drops the marks
+    .replace(/[^a-z0-9]/g, '')
+    .slice(0, 18);
+  const stem = base.length >= 2 ? base : 'user';
+  return `${stem}${randomBytes(4).toString('hex')}`;
 }
 
 // Granted scope = requested ∩ allowed (must be non-empty and all requested must
