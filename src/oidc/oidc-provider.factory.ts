@@ -14,6 +14,7 @@ export interface OidcProviderConfig {
   publicKeyPath: string;
   cookieKeys: string[];
   walletxClientSecret: string;
+  linkeonPartnerClientSecret?: string;
 }
 
 export async function createOidcProvider(config: OidcProviderConfig) {
@@ -33,6 +34,7 @@ export async function createOidcProvider(config: OidcProviderConfig) {
         return new PrismaClientAdapter(
           config.prisma,
           config.walletxClientSecret,
+          config.linkeonPartnerClientSecret,
         );
       }
       return new RedisOidcAdapter(model, config.redisClient);
