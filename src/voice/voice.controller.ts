@@ -25,6 +25,7 @@ import { VoiceService } from './voice.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RecorderSecretGuard } from './guards/recorder-secret.guard';
 import { RoomAccessGuard } from './guards/room-access.guard';
+import { LK_API_KEY, LK_API_SECRET } from '../common/livekit-credentials';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { parseUserId } from '../common/participant-identity';
 import { FileStorageService } from '../common/file-storage.service';
@@ -36,8 +37,8 @@ import { GroupCallService } from './group-call/group-call.service';
 @Controller('voice')
 export class VoiceController {
   private readonly webhookReceiver = new WebhookReceiver(
-    process.env.LIVEKIT_API_KEY ?? 'lkdevkey',
-    process.env.LIVEKIT_API_SECRET ?? 'lkSecret2024TalerID',
+    LK_API_KEY,
+    LK_API_SECRET,
   );
   private readonly webhookLogger = new Logger('LiveKitWebhook');
 

@@ -14,6 +14,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { verify, type JwtPayload } from 'jsonwebtoken';
 import * as fs from 'fs';
 import { isApiAccessToken } from './common/utils/access-token.util';
+import { assertLivekitCredentials } from './common/livekit-credentials';
 import { json } from 'express';
 import { VoiceGateService } from './voice-gate/voice-gate.service';
 import { PcmWindow, wrapWavMono, pcmRms16 } from './voice-gate/pcm-window';
@@ -32,6 +33,10 @@ const ALLOWED_REALTIME_MODELS = new Set(
 );
 
 async function bootstrap() {
+  // Refuse to start on credentials published in this repo, rather than coming
+  // up and signing room tokens anyone could forge.
+  assertLivekitCredentials();
+
   const app = await NestFactory.create(AppModule, {
     logger: ['log', 'warn', 'error'],
     rawBody: true,

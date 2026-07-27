@@ -31,8 +31,14 @@ import { createOidcProvider } from './oidc-provider.factory.js';
         const publicKeyPath =
           configService.get<string>('jwt.publicKeyPath') || '';
 
+        // Same shape as linkeon-partner below: undefined means "use the secret
+        // stored on the OAuthClient row". It used to fall back to a literal
+        // committed in this file, so any environment without the variable set
+        // authenticated the walletx client with a secret published in the repo
+        // — and rotating the DB row changed nothing, because the constant
+        // overrode it.
         const walletxClientSecret =
-          process.env.WALLETX_CLIENT_SECRET || 'walletx_secret_2026';
+          process.env.WALLETX_CLIENT_SECRET || undefined;
 
         // Confidential secret for the linkeon-partner verifiedPartner client,
         // kept in env (undefined falls back to the DB row's clientSecret).

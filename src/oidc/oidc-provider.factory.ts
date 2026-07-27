@@ -13,7 +13,7 @@ export interface OidcProviderConfig {
   privateKeyPath: string;
   publicKeyPath: string;
   cookieKeys: string[];
-  walletxClientSecret: string;
+  walletxClientSecret?: string;
   linkeonPartnerClientSecret?: string;
 }
 

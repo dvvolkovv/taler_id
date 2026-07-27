@@ -3,9 +3,9 @@ import type { PrismaService } from '../../prisma/prisma.service';
 export class PrismaClientAdapter {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly walletxClientSecret: string,
-    // Confidential B2B partner secrets are kept in env (like walletx) rather
-    // than in the DB row, so the OAuthClient table never stores a live secret.
+    // Confidential B2B partner secrets may be kept in env rather than in the DB
+    // row. Undefined means the OAuthClient row is authoritative.
+    private readonly walletxClientSecret?: string,
     private readonly linkeonPartnerClientSecret?: string,
   ) {}
 
@@ -54,7 +54,7 @@ export class PrismaClientAdapter {
     return {
       client_id: c.clientId,
       client_secret:
-        c.clientId === 'walletx'
+        c.clientId === 'walletx' && this.walletxClientSecret
           ? this.walletxClientSecret
           : c.clientId === 'linkeon-partner' && this.linkeonPartnerClientSecret
             ? this.linkeonPartnerClientSecret

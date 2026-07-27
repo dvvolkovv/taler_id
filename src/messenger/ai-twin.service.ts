@@ -17,8 +17,7 @@ import { parseUserId } from '../common/participant-identity';
 import { FeatureDisabledException } from '../billing/exceptions/feature-disabled.exception';
 
 const LK_HOST = process.env.LIVEKIT_HOST || 'http://localhost:7880';
-const LK_API_KEY = process.env.LIVEKIT_API_KEY || 'lkdevkey';
-const LK_API_SECRET = process.env.LIVEKIT_API_SECRET || 'lkSecret2024TalerID';
+import { LK_API_KEY, LK_API_SECRET } from '../common/livekit-credentials';
 
 // Name of the registered livekit-agents worker (see ~/ai-twin-agent/agent.py).
 const AI_TWIN_AGENT_NAME = 'ai-twin-agent';

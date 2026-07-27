@@ -10,9 +10,7 @@ import * as jwt from 'jsonwebtoken';
 import * as fs from 'fs';
 import { PrismaService } from '../../prisma/prisma.service';
 import { isApiAccessToken } from '../../common/utils/access-token.util';
-
-const LK_API_SECRET =
-  process.env.LIVEKIT_API_SECRET || 'lkSecret2024TalerID';
+import { LK_API_SECRET } from '../../common/livekit-credentials';
 
 /**
  * Proves the caller is entitled to act on `:roomName`.

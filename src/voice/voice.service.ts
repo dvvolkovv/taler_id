@@ -19,8 +19,7 @@ import { PricingService } from '../billing/services/pricing.service';
 import { FEATURE_KEYS } from '../billing/constants/feature-keys';
 
 const LK_HOST = process.env.LIVEKIT_HOST || 'http://localhost:7880';
-const LK_API_KEY = process.env.LIVEKIT_API_KEY || 'lkdevkey';
-const LK_API_SECRET = process.env.LIVEKIT_API_SECRET || 'lkSecret2024TalerID';
+import { LK_API_KEY, LK_API_SECRET } from '../common/livekit-credentials';
 const LK_WS_URL = process.env.LIVEKIT_WS_URL || 'ws://localhost:7880';
 // Region-routed second SFU: CIS calls run on the Selectel SFU (box1), EU calls
 // on the DO media SFU. Both share the LiveKit API key, so a token is valid on
