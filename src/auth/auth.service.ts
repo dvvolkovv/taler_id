@@ -22,6 +22,12 @@ import { EmailService } from '../email/email.service';
 import { SYSTEM_USER_EMAIL } from '../system-channel/system-channel.constants';
 import { SystemChannelService } from '../system-channel/system-channel.service';
 
+/**
+ * How long a spent refresh token is remembered so that replaying it is
+ * recognised as theft rather than reported as a plain "invalid token".
+ */
+const REFRESH_REPLAY_WINDOW_SECONDS = 24 * 60 * 60;
+
 const TWO_FA_CHALLENGE_TTL_SECONDS = 300;
 /** Wrong codes tolerated per challenge before it is discarded. */
 const MAX_2FA_ATTEMPTS = 5;
@@ -282,13 +288,50 @@ export class AuthService {
   }
 
   async refreshTokens(refreshToken: string, ip: string, userAgent: string) {
-    // Verify the refresh token is in Redis
-    const sessionId = await this.redis.get(`refresh:${refreshToken}`);
-    if (!sessionId)
-      throw new UnauthorizedException('Invalid or expired refresh token');
+    // Claim the token atomically. GET followed by DEL left a window in which
+    // two concurrent requests both saw the token and both got a fresh pair.
+    const sessionId = await this.redis
+      .getClient()
+      .getdel(`refresh:${refreshToken}`);
 
-    // Invalidate old refresh token (rotation)
-    await this.redis.del(`refresh:${refreshToken}`);
+    if (!sessionId) {
+      // A token that was already spent being presented again is the signature
+      // of a stolen refresh token: the honest client has long since rotated to
+      // the next one, so whoever holds this one copied it. Failing the single
+      // request would leave the thief free to keep trying — revoke the session
+      // instead, which invalidates their tokens and the victim's alike.
+      const replayed = await this.redis.get(`refresh:used:${refreshToken}`);
+      if (replayed) {
+        await this.prisma.session.updateMany({
+          where: { id: replayed, isRevoked: false },
+          data: { isRevoked: true },
+        });
+        const revokedSession = await this.prisma.session.findUnique({
+          where: { id: replayed },
+          select: { userId: true },
+        });
+        if (revokedSession) {
+          await this.auditLog(
+            revokedSession.userId,
+            'REFRESH_REUSE_DETECTED',
+            ip,
+            userAgent,
+            { sessionId: replayed },
+          );
+        }
+        throw new UnauthorizedException(
+          'Refresh token reuse detected — session revoked',
+        );
+      }
+      throw new UnauthorizedException('Invalid or expired refresh token');
+    }
+
+    // Remember the spent token briefly so the replay above can be recognised.
+    await this.redis.setEx(
+      `refresh:used:${refreshToken}`,
+      REFRESH_REPLAY_WINDOW_SECONDS,
+      sessionId,
+    );
 
     const session = await this.prisma.session.findUnique({
       where: { id: sessionId },
@@ -296,6 +339,13 @@ export class AuthService {
     });
     if (!session || session.isRevoked)
       throw new UnauthorizedException('Session revoked');
+    // getSessions() filters on expiresAt, so an expired session disappears from
+    // the user's session list — but this path never checked it, and each
+    // refresh minted another 30-day token without moving Session.expiresAt.
+    // A session the user can no longer see could therefore be refreshed
+    // forever.
+    if (session.expiresAt <= new Date())
+      throw new UnauthorizedException('Session expired');
 
     // Generate new token pair
     const newTokens = await this.generateTokens(session.user, session.id);
