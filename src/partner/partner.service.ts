@@ -233,11 +233,18 @@ export class PartnerService {
         throw new ConflictException('phone_belongs_to_another_account');
       }
       // v1 doesn't merge messenger identity — refuse rather than lose data.
-      const [msgs, parts] = await Promise.all([
+      // Only REAL correspondence blocks the merge: messages the dupe sent, or
+      // membership in a DIRECT/GROUP conversation. System CHANNELs (broadcast,
+      // every user is auto-subscribed) are not correspondence — they're dropped
+      // with the dupe, so they must not trip the guard (false-positive fixed
+      // 2026-07-27: a fresh dupe's only membership is the all-users channel).
+      const [msgs, realConvs] = await Promise.all([
         this.prisma.message.count({ where: { senderId: owner.id } }),
-        this.prisma.conversationParticipant.count({ where: { userId: owner.id } }),
+        this.prisma.conversationParticipant.count({
+          where: { userId: owner.id, conversation: { type: { not: 'CHANNEL' } } },
+        }),
       ]);
-      if (msgs > 0 || parts > 0) throw new ConflictException('merge_has_messenger_data');
+      if (msgs > 0 || realConvs > 0) throw new ConflictException('merge_has_messenger_data');
 
       // Mail: move the dupe's mailbox to the target if it has none, else drop
       // the dupe's mailbox (mailcow + row) before deleting the dupe.
@@ -263,6 +270,10 @@ export class PartnerService {
           await tx.mailAccount.update({ where: { userId: owner.id }, data: { userId: target.id } });
           merged.mail = 'moved';
         }
+        // Drop the dupe's channel/conversation memberships (system CHANNEL etc.)
+        // so the user delete below isn't blocked by a participant FK. Any real
+        // DIRECT/GROUP membership was already refused by the guard above.
+        await tx.conversationParticipant.deleteMany({ where: { userId: owner.id } });
         await tx.user.delete({ where: { id: owner.id } }); // frees the unique phone
         await tx.user.update({ where: { id: target.id }, data: { phone, phoneVerified: true } });
       });
