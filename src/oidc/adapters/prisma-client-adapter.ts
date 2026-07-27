@@ -40,8 +40,10 @@ export class PrismaClientAdapter {
     // no client_secret, so token_endpoint_auth_method must be 'none'.
     // Confidential clients (server-side integrations with stored secrets) use
     // 'client_secret_basic'. The Developer Portal SPA at /developers/ is the
-    // canonical public client.
-    const isPublicClient = c.clientId === 'taler-id-developers';
+    // canonical public client; linkeon-partner-web is the account-linking
+    // login client (code flow + PKCE, no secret — only mints an id_token).
+    const PUBLIC_CLIENTS = new Set(['taler-id-developers', 'linkeon-partner-web']);
+    const isPublicClient = PUBLIC_CLIENTS.has(c.clientId);
     const tokenEndpointAuthMethod = isPublicClient ? 'none' : 'client_secret_basic';
 
     // Server-to-server clients (no redirect_uris, e.g. the verifiedPartner

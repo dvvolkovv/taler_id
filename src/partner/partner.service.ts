@@ -5,14 +5,22 @@ import {
   Injectable,
   InternalServerErrorException,
   Logger,
+  UnauthorizedException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { JwtService } from '@nestjs/jwt';
 import { randomBytes } from 'crypto';
+import * as fs from 'fs';
 import { PrismaService } from '../prisma/prisma.service';
 import { OIDC_PROVIDER } from '../oidc/oidc.service';
 import { MailAccountService } from '../mail/mail-account.service';
 import { ProvisionDto } from './dto/provision.dto';
+import { AttachPhoneDto } from './dto/attach-phone.dto';
 
 export const PARTNER_CLIENT_ID = 'linkeon-partner';
+export const PARTNER_WEB_CLIENT_ID = 'linkeon-partner-web';
+// Reject id_tokens older than this (anti-replay of a captured login token).
+const ID_TOKEN_MAX_AGE_SEC = 600;
 
 export interface ProvisionResult {
   access_token: string;
@@ -22,15 +30,36 @@ export interface ProvisionResult {
   talerid_user_id: string;
 }
 
+export interface AttachPhoneResult {
+  talerid_user_id: string;
+  attached: true;
+  merged: {
+    notes: number;
+    calendar: number;
+    mail: 'moved' | 'dropped' | 'none';
+    duplicate_deleted: boolean;
+  };
+}
+
 @Injectable()
 export class PartnerService {
   private readonly logger = new Logger(PartnerService.name);
+  private readonly jwtPublicKey: string;
+  private readonly oidcIssuer: string;
 
   constructor(
     private readonly prisma: PrismaService,
     @Inject(OIDC_PROVIDER) private readonly provider: any,
     private readonly mailAccounts: MailAccountService,
-  ) {}
+    private readonly jwt: JwtService,
+    config: ConfigService,
+  ) {
+    const pub = config.get<string>('jwt.publicKeyPath') ?? '';
+    this.jwtPublicKey = pub ? fs.readFileSync(pub, 'utf8') : '';
+    this.oidcIssuer =
+      config.get<string>('oidc.issuer') ||
+      `${config.get<string>('baseUrl') || 'http://localhost:3000'}/oauth`;
+  }
 
   async provision(dto: ProvisionDto): Promise<ProvisionResult> {
     const phone = normalizePhone(dto.phone);
@@ -142,6 +171,113 @@ export class PartnerService {
     });
     this.logger.log(`provisioned new user ${created.id} for ${phone}`);
     return created;
+  }
+
+  /**
+   * Attach a Linkeon-SMS-verified phone to the EXISTING TalerID account the
+   * user logged into (proven by an id_token from the linkeon-partner-web code
+   * flow), merging any phone-provisioned duplicate. Lets email-first users link
+   * instead of getting a second phone account. See contract §4.
+   */
+  async attachPhone(dto: AttachPhoneDto): Promise<AttachPhoneResult> {
+    const phone = normalizePhone(dto.phone);
+    if (!phone) throw new BadRequestException('phone must be a valid E.164 number');
+
+    // 1. Verify id_token: our RS256 key, our issuer, aud = web client, fresh.
+    let payload: any;
+    try {
+      payload = this.jwt.verify(dto.id_token, {
+        publicKey: this.jwtPublicKey,
+        algorithms: ['RS256'],
+        issuer: this.oidcIssuer,
+        audience: PARTNER_WEB_CLIENT_ID,
+      });
+    } catch (e) {
+      throw new UnauthorizedException(`invalid_id_token: ${(e as Error).message}`);
+    }
+    const iat = Number(payload?.iat ?? 0);
+    if (!iat || Date.now() / 1000 - iat > ID_TOKEN_MAX_AGE_SEC) {
+      throw new UnauthorizedException('invalid_id_token: stale');
+    }
+    const sub = String(payload?.sub ?? '');
+    if (!sub) throw new UnauthorizedException('invalid_id_token: no sub');
+
+    // 2. Target = the account the user logged into.
+    const target = await this.prisma.user.findUnique({
+      where: { id: sub },
+      select: { id: true, phone: true, mailAccount: { select: { id: true } } },
+    });
+    if (!target) throw new UnauthorizedException('invalid_id_token: account not found');
+
+    const noMerge = { notes: 0, calendar: 0, mail: 'none' as const, duplicate_deleted: false };
+    // 3. Idempotent: phone already attached to this account.
+    if (target.phone === phone) {
+      return { talerid_user_id: target.id, attached: true, merged: noMerge };
+    }
+    // 4. Gate: account already has a DIFFERENT phone — never silently swap.
+    if (target.phone && target.phone !== phone) {
+      throw new ConflictException('account_has_different_phone');
+    }
+
+    // 5. Who owns this phone (the would-be duplicate)?
+    const owner = await this.prisma.user.findUnique({
+      where: { phone },
+      select: { id: true, passwordHash: true, emailVerified: true, mailAccount: { select: { id: true } } },
+    });
+
+    const merged = { notes: 0, calendar: 0, mail: 'none' as 'moved' | 'dropped' | 'none', duplicate_deleted: false };
+
+    if (owner && owner.id !== target.id) {
+      // A "real" account (password or verified email) is not a mergeable dupe.
+      if (owner.passwordHash || owner.emailVerified) {
+        throw new ConflictException('phone_belongs_to_another_account');
+      }
+      // v1 doesn't merge messenger identity — refuse rather than lose data.
+      const [msgs, parts] = await Promise.all([
+        this.prisma.message.count({ where: { senderId: owner.id } }),
+        this.prisma.conversationParticipant.count({ where: { userId: owner.id } }),
+      ]);
+      if (msgs > 0 || parts > 0) throw new ConflictException('merge_has_messenger_data');
+
+      // Mail: move the dupe's mailbox to the target if it has none, else drop
+      // the dupe's mailbox (mailcow + row) before deleting the dupe.
+      let moveMail = false;
+      if (owner.mailAccount) {
+        if (target.mailAccount) {
+          await this.mailAccounts.deleteAccount(owner.id);
+          merged.mail = 'dropped';
+        } else {
+          moveMail = true;
+        }
+      }
+
+      await this.prisma.$transaction(async (tx) => {
+        merged.notes = (
+          await tx.note.updateMany({ where: { userId: owner.id }, data: { userId: target.id } })
+        ).count;
+        merged.calendar = (
+          await tx.calendarEvent.updateMany({ where: { userId: owner.id }, data: { userId: target.id } })
+        ).count;
+        await tx.calendarInvite.updateMany({ where: { userId: owner.id }, data: { userId: target.id } });
+        if (moveMail) {
+          await tx.mailAccount.update({ where: { userId: owner.id }, data: { userId: target.id } });
+          merged.mail = 'moved';
+        }
+        await tx.user.delete({ where: { id: owner.id } }); // frees the unique phone
+        await tx.user.update({ where: { id: target.id }, data: { phone, phoneVerified: true } });
+      });
+      merged.duplicate_deleted = true;
+      this.logger.log(`attach-phone: merged dupe ${owner.id} -> ${target.id} ${JSON.stringify(merged)}`);
+    } else {
+      // No duplicate — just attach the phone.
+      await this.prisma.user.update({
+        where: { id: target.id },
+        data: { phone, phoneVerified: true },
+      });
+      this.logger.log(`attach-phone: attached phone to ${target.id} (no dupe)`);
+    }
+
+    return { talerid_user_id: target.id, attached: true, merged };
   }
 
   /**
