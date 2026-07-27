@@ -114,20 +114,35 @@ export class KycService {
   }
 
   async handleWebhook(body: Buffer, signature: string) {
-    // Verify webhook signature only if SUMSUB_WEBHOOK_SECRET is configured.
-    // Mock_ss may or may not sign — keep the path optional.
+    // This endpoint is public and unauthenticated, so the signature is the only
+    // thing standing between a stranger and "this applicant is verified".
     const webhookSecret = process.env.SUMSUB_WEBHOOK_SECRET || '';
-    if (webhookSecret) {
-      const expectedSignature = crypto
-        .createHmac('sha256', webhookSecret)
-        .update(body)
-        .digest('hex');
-      if (signature !== expectedSignature) {
-        this.logger.warn(
-          `KYC webhook sig mismatch: received="${signature}" expected="${expectedSignature}" secret_len=${webhookSecret.length} body_len=${body.length}`,
-        );
-        throw new BadRequestException('Invalid webhook signature');
-      }
+    if (!webhookSecret) {
+      // Verification used to be skipped entirely when the secret was unset,
+      // which turns the endpoint into an open door. All three environments set
+      // it (checked); refuse rather than accept unsigned callbacks.
+      this.logger.error(
+        'KYC webhook rejected: SUMSUB_WEBHOOK_SECRET is not configured',
+      );
+      throw new BadRequestException('Webhook signature verification unavailable');
+    }
+
+    const expectedSignature = crypto
+      .createHmac('sha256', webhookSecret)
+      .update(body)
+      .digest('hex');
+
+    if (!this.signaturesMatch(signature, expectedSignature)) {
+      // Deliberately terse: the previous message logged `expected`, a valid
+      // HMAC for a body the sender fully controls, plus the secret's length.
+      // That made a public endpoint into a signing oracle for anyone who can
+      // read backend logs — and pm2/journalctl output here is shipped to a
+      // Telegram group and to automated diagnostics, so that audience is far
+      // wider than the set of people holding the secret.
+      this.logger.warn(
+        `KYC webhook signature mismatch (body_len=${body.length})`,
+      );
+      throw new BadRequestException('Invalid webhook signature');
     }
 
     const payload = JSON.parse(body.toString());
@@ -395,5 +410,20 @@ export class KycService {
       );
     }
     return data;
+  }
+  /**
+   * Constant-time signature comparison.
+   *
+   * `!==` on hex strings returns as soon as two characters differ, which leaks
+   * how much of a guess was correct.
+   */
+  private signaturesMatch(received: string, expected: string): boolean {
+    if (typeof received !== 'string' || received.length !== expected.length) {
+      return false;
+    }
+    return crypto.timingSafeEqual(
+      Buffer.from(received, 'utf8'),
+      Buffer.from(expected, 'utf8'),
+    );
   }
 }
