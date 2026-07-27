@@ -271,39 +271,45 @@ export class OidcInteractionController {
       orConditions.push({ phone: identifier });
     }
 
-    // Check lockout
-    const lockoutKey = `lockout:${identifier}`;
-    const lockout = await this.redis.get(lockoutKey);
-    if (lockout) {
+    const user = await this.prisma.user.findFirst({
+      where: { OR: orConditions, deletedAt: null },
+    });
+
+    // Lockout has to be read under the same key the failure counter writes.
+    // This used to read `lockout:<email>` while writing `lockout:<userId>`, so
+    // the two never met and password guessing on this route was unlimited.
+    // Unknown identifiers get their own bucket, so enumeration is throttled too.
+    const subject = user?.id ?? `identifier:${identifier.toLowerCase()}`;
+    if (await this.redis.get(`lockout:${subject}`)) {
       throw new ForbiddenException(
         'Account locked due to too many failed attempts',
       );
     }
 
-    const user = await this.prisma.user.findFirst({
-      where: { OR: orConditions, deletedAt: null },
-    });
-
     if (!user?.passwordHash) {
+      await this.registerFailedAttempt(subject);
       throw new UnauthorizedException('Invalid credentials');
     }
 
     const isValid = await bcrypt.compare(password, user.passwordHash);
     if (!isValid) {
-      // Increment failed attempts
-      const failedKey = `failed:${user.id}`;
-      const attempts = await this.redis.incr(failedKey);
-      await this.redis.expire(failedKey, 900);
-      if (attempts >= 5) {
-        await this.redis.setEx(`lockout:${user.id}`, 900, '1');
-        await this.redis.del(failedKey);
-      }
+      await this.registerFailedAttempt(user.id);
       throw new UnauthorizedException('Invalid credentials');
     }
 
     // Clear failed attempts
     await this.redis.del(`failed:${user.id}`);
     return user;
+  }
+
+  private async registerFailedAttempt(subject: string) {
+    const failedKey = `failed:${subject}`;
+    const attempts = await this.redis.incr(failedKey);
+    await this.redis.expire(failedKey, 900);
+    if (attempts >= 5) {
+      await this.redis.setEx(`lockout:${subject}`, 900, '1');
+      await this.redis.del(failedKey);
+    }
   }
 
   private async auditLog(userId: string, action: string, req: any, meta?: any) {

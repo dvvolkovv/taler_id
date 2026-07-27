@@ -536,6 +536,16 @@ async function bootstrap() {
 
   // Mount oidc-provider at /oauth
   const expressApp = app.getHttpAdapter().getInstance();
+
+  // nginx terminates TLS and forwards to us over loopback (on DO the managed
+  // LB and the Selectel RU edge sit in front of nginx, which resolves the real
+  // client via real_ip before proxying). Without this Express reports the
+  // proxy's own address as req.ip, so the global ThrottlerGuard buckets every
+  // client on the planet into a single counter — the per-IP limits never bite
+  // — and audit log and session rows record the proxy instead of the caller.
+  // Trusting only loopback means an outside client cannot forge
+  // X-Forwarded-For: the header is rewritten by our own nginx.
+  expressApp.set('trust proxy', process.env.TRUST_PROXY ?? 'loopback');
   const oidcProvider = app.get(OIDC_PROVIDER);
   oidcProvider.proxy = true;
 

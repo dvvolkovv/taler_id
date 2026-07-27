@@ -118,9 +118,11 @@ export class AuthService {
       include: { totpSecret: true },
     });
 
-    // Check lockout
-    const lockoutKey = `lockout:${user?.id || 'unknown'}`;
-    const lockout = await this.redis.get(lockoutKey);
+    // Must match the key incrementFailedAttempts() writes below. For an unknown
+    // account that key is `ip:<ip>`, so checking a literal `unknown` bucket
+    // meant misses were counted but never enforced.
+    const lockoutSubject = user?.id || `ip:${ip}`;
+    const lockout = await this.redis.get(`lockout:${lockoutSubject}`);
     if (lockout) {
       throw new ForbiddenException(
         'Account locked due to too many failed attempts. Try again later.',
@@ -128,7 +130,7 @@ export class AuthService {
     }
 
     if (!user || !user.passwordHash) {
-      await this.incrementFailedAttempts(user?.id || `ip:${ip}`, ip);
+      await this.incrementFailedAttempts(lockoutSubject, ip);
       await this.auditLog(null, 'LOGIN_FAILED', ip, userAgent, {
         reason: 'user_not_found',
       });
