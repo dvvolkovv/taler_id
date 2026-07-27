@@ -34,6 +34,22 @@ const isoDateOrDatetime = (description: string) =>
     .describe(description);
 
 /**
+ * Expand a date-only bound (YYYY-MM-DD) to cover the whole UTC day, so a range
+ * like from=2026-09-01&to=2026-09-15 includes events at any time on Sep 15
+ * (a bare date would otherwise mean that day's 00:00 and exclude same-day
+ * events). Full datetimes and undefined pass through unchanged.
+ */
+const expandRangeBound = (
+  v: string | undefined,
+  edge: 'start' | 'end',
+): string | undefined => {
+  if (!v) return v;
+  return /^\d{4}-\d{2}-\d{2}$/.test(v)
+    ? `${v}T${edge === 'start' ? '00:00:00.000' : '23:59:59.999'}Z`
+    : v;
+};
+
+/**
  * Known CalendarEventType values from Prisma enum CalendarEventType.
  * Defined in prisma/schema.prisma: CALL | EVENT | REMINDER
  */
@@ -61,7 +77,11 @@ export function registerCalendarTools(
       to: isoDateOrDatetime('Конец диапазона (ISO 8601 дата или datetime), например 2026-07-31 или 2026-07-31T23:59:59Z').optional(),
     },
     async ({ from, to }) => {
-      const events = await calendar.findByRange(userId, from, to);
+      const events = await calendar.findByRange(
+        userId,
+        expandRangeBound(from, 'start'),
+        expandRangeBound(to, 'end'),
+      );
       return json(events);
     },
   );

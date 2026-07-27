@@ -148,8 +148,16 @@ export function registerMessengerSendTool(
         .string()
         .min(1)
         .describe('Текст сообщения (не менее 1 символа)'),
+      idempotency_key: z
+        .string()
+        .optional()
+        .describe(
+          'Опционально: ключ идемпотентности. Повторный send_message с тем же ключом ' +
+            'от того же пользователя не отправит дубль (вернёт исходное сообщение). ' +
+            'Генерируй один ключ на логическую отправку и переиспользуй при ретрае.',
+        ),
     },
-    async ({ contact_id, text }) => {
+    async ({ contact_id, text, idempotency_key }) => {
       // Security gate: only contacts may receive messages
       const isContact = await svc.hasContactWith(userId, contact_id);
       if (!isContact) {
@@ -174,8 +182,21 @@ export function registerMessengerSendTool(
       // Get or create direct conversation
       const conv = await svc.getOrCreateDirectConversation(userId, contact_id);
 
-      // Create the message
-      const message = (await svc.createMessage(conv.id, userId, text)) as {
+      // Create the message. When the caller supplies an idempotency_key we
+      // pass it as clientTempId — the (senderId, clientTempId) unique index
+      // gives exact, safe retry idempotency (a repeat with the same key
+      // returns the original as deduped; a genuine later message with a new
+      // key always goes through — no time-window false-dedup).
+      const message = (await svc.createMessage(
+        conv.id,
+        userId,
+        text,
+        undefined, // fileData
+        undefined, // topicId
+        undefined, // isSystem
+        undefined, // metadata
+        idempotency_key, // clientTempId
+      )) as {
         id: string;
         deduped?: boolean;
       };
