@@ -13,6 +13,7 @@ import { RedisIoAdapter } from './redis-io.adapter';
 import { WebSocket, WebSocketServer } from 'ws';
 import { verify, type JwtPayload } from 'jsonwebtoken';
 import * as fs from 'fs';
+import { isApiAccessToken } from './common/utils/access-token.util';
 import { json } from 'express';
 import { VoiceGateService } from './voice-gate/voice-gate.service';
 import { PcmWindow, wrapWavMono, pcmRms16 } from './voice-gate/pcm-window';
@@ -669,6 +670,9 @@ async function bootstrap() {
       const payload = verify(token, jwtPublicKey, {
         algorithms: ['RS256'],
       }) as JwtPayload & { sub?: string };
+      // OIDC ID tokens carry the same signature — they must not open the
+      // realtime proxy, which spends OpenAI credits on the server key.
+      if (!isApiAccessToken(payload)) throw new Error('Not an access token');
       userIdFromToken =
         typeof payload?.sub === 'string' ? payload.sub : null;
     } catch {

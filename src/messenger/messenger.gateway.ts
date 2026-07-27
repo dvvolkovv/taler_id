@@ -25,6 +25,7 @@ import { FcmService } from '../common/fcm.service';
 import { ApnsService } from '../common/apns.service';
 import * as jwt from 'jsonwebtoken';
 import * as fs from 'fs';
+import { isApiAccessToken } from '../common/utils/access-token.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import {
@@ -87,6 +88,8 @@ export class MessengerGateway
       const payload = jwt.verify(token, this.publicKey, {
         algorithms: ['RS256'],
       }) as any;
+      // OIDC ID tokens are signed with the same key — reject them here too.
+      if (!isApiAccessToken(payload)) throw new Error('Not an access token');
       client.data.userId = payload.sub;
       client.data.connectedAt = Date.now();
       client.join(`user:${payload.sub}`);

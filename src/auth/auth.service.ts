@@ -10,6 +10,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
+import { ACCESS_TOKEN_TYPE } from '../common/utils/access-token.util';
 import * as bcrypt from 'bcrypt';
 import { generateSecret, generateURI, verify as otpVerify } from 'otplib';
 import * as QRCode from 'qrcode';
@@ -391,6 +392,9 @@ export class AuthService {
       phone: user.phone,
       kyc_status: kyc?.status || 'UNVERIFIED',
       session_id: sessionId,
+      // Marks this as an API access token. The OIDC provider signs its tokens
+      // with the same key pair, so verifiers need more than a valid signature.
+      typ: ACCESS_TOKEN_TYPE,
     };
 
     const accessToken = this.jwtService.sign(payload, {
