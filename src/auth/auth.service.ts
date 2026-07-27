@@ -22,6 +22,10 @@ import { EmailService } from '../email/email.service';
 import { SYSTEM_USER_EMAIL } from '../system-channel/system-channel.constants';
 import { SystemChannelService } from '../system-channel/system-channel.service';
 
+const TWO_FA_CHALLENGE_TTL_SECONDS = 300;
+/** Wrong codes tolerated per challenge before it is discarded. */
+const MAX_2FA_ATTEMPTS = 5;
+
 @Injectable()
 export class AuthService {
   private readonly privateKey: string;
@@ -152,7 +156,11 @@ export class AuthService {
     // Check if 2FA is enabled
     if (user.totpSecret?.verified) {
       const challengeToken = uuidv4();
-      await this.redis.setEx(`2fa_challenge:${challengeToken}`, 300, user.id); // 5 min TTL
+      await this.redis.setEx(
+        `2fa_challenge:${challengeToken}`,
+        TWO_FA_CHALLENGE_TTL_SECONDS,
+        user.id,
+      );
       return { next: '2fa', challengeToken };
     }
 
@@ -183,10 +191,31 @@ export class AuthService {
       secret: user.totpSecret.secret,
     });
     if (!result.valid) {
-      await this.auditLog(userId, '2FA_FAILED', ip, userAgent);
+      // A challenge used to survive its full 5 minutes no matter how many codes
+      // were tried against it, and nothing counted the failures — six digits is
+      // a million values, and the TOTP window accepts neighbouring codes too.
+      // Burn the challenge after a handful of misses so guessing costs a fresh
+      // password authentication each time.
+      const attemptsKey = `2fa_attempts:${challengeToken}`;
+      const attempts = await this.redis.incr(attemptsKey);
+      await this.redis.expire(attemptsKey, TWO_FA_CHALLENGE_TTL_SECONDS);
+
+      if (attempts >= MAX_2FA_ATTEMPTS) {
+        await this.redis.del(`2fa_challenge:${challengeToken}`);
+        await this.redis.del(attemptsKey);
+        await this.auditLog(userId, '2FA_CHALLENGE_BURNED', ip, userAgent, {
+          attempts,
+        });
+        throw new UnauthorizedException(
+          'Too many invalid codes — sign in again',
+        );
+      }
+
+      await this.auditLog(userId, '2FA_FAILED', ip, userAgent, { attempts });
       throw new UnauthorizedException('Invalid 2FA code');
     }
 
+    await this.redis.del(`2fa_attempts:${challengeToken}`);
     await this.redis.del(`2fa_challenge:${challengeToken}`);
     await this.auditLog(userId, 'LOGIN_SUCCESS', ip, userAgent);
     const session = await this.createSession(userId, ip, userAgent);
@@ -522,6 +551,9 @@ export class AuthService {
     newPassword: string,
     ip: string,
     userAgent: string,
+    // Kept optional so older callers still compile; when absent every session
+    // is revoked, including the caller's.
+    currentSessionId?: string,
   ) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user?.passwordHash) throw new UnauthorizedException('User not found');
@@ -547,7 +579,23 @@ export class AuthService {
       data: { passwordHash },
     });
 
-    await this.auditLog(userId, 'PASSWORD_CHANGED', ip, userAgent);
+    // Changing the password is how a user reacts to a suspected compromise, so
+    // it has to end the intruder's access. Sessions were left untouched before,
+    // which meant a stolen refresh token stayed valid for its full 30 days.
+    // The caller's own session survives — they just proved they know the
+    // current password. Access tokens already issued live out their 2h TTL.
+    await this.prisma.session.updateMany({
+      where: {
+        userId,
+        isRevoked: false,
+        ...(currentSessionId ? { id: { not: currentSessionId } } : {}),
+      },
+      data: { isRevoked: true },
+    });
+
+    await this.auditLog(userId, 'PASSWORD_CHANGED', ip, userAgent, {
+      otherSessionsRevoked: true,
+    });
     return { changed: true };
   }
 
@@ -579,7 +627,17 @@ export class AuthService {
       data: { passwordHash },
     });
 
-    await this.auditLog(user.id, 'PASSWORD_RESET', '', '');
+    // A reset is the recovery path for an account the user may have lost
+    // control of, so every existing session goes — there is no "current"
+    // session to spare here, the user is not signed in.
+    await this.prisma.session.updateMany({
+      where: { userId: user.id, isRevoked: false },
+      data: { isRevoked: true },
+    });
+
+    await this.auditLog(user.id, 'PASSWORD_RESET', '', '', {
+      allSessionsRevoked: true,
+    });
     return { reset: true };
   }
 }

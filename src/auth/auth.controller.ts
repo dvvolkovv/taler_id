@@ -199,6 +199,7 @@ export class AuthController {
       dto.newPassword,
       req.ip ?? '',
       req.headers['user-agent'] ?? '',
+      user.session_id,
     );
   }
 }
