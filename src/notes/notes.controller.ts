@@ -12,6 +12,7 @@ import {
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { NotesService } from './notes.service';
+import { UpdateNoteDto } from './dto/update-note.dto';
 
 @Controller('notes')
 @UseGuards(JwtAuthGuard)
@@ -48,7 +49,7 @@ export class NotesController {
   update(
     @CurrentUser() user: any,
     @Param('id') id: string,
-    @Body() body: { title?: string; content?: string; expectedUpdatedAt?: string },
+    @Body() body: UpdateNoteDto,
   ) {
     return this.service.update(user.sub, id, body);
   }

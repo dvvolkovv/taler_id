@@ -11,6 +11,7 @@ import {
   UseGuards,
   UseInterceptors,
   UploadedFile,
+  BadRequestException,
   ForbiddenException,
   Logger,
   Res,
@@ -45,6 +46,15 @@ import { PrismaService } from '../prisma/prisma.service';
 import { VideoTranscodeService } from '../common/video-transcode.service';
 import { FcmService } from '../common/fcm.service';
 import sharp = require('sharp');
+
+/**
+ * Ceiling for a chunked upload, in bytes. Without one, /messenger/files/init
+ * accepted any declared size and parts streamed into MinIO until the volume
+ * filled. Override with MESSENGER_MAX_UPLOAD_BYTES.
+ */
+const MAX_UPLOAD_BYTES = Number(
+  process.env.MESSENGER_MAX_UPLOAD_BYTES ?? 512 * 1024 * 1024,
+);
 
 @Controller('messenger')
 @UseGuards(JwtAuthGuard)
@@ -777,6 +787,18 @@ export class MessengerController {
     @Body() body: { fileName: string; fileSize: number; mimeType: string },
     @CurrentUser() user: any,
   ) {
+    // No ceiling used to exist here, so a caller could open a multipart upload
+    // of any declared size and stream parts into MinIO until the volume filled.
+    const size = Number(body.fileSize);
+    if (!Number.isFinite(size) || size <= 0) {
+      throw new BadRequestException('fileSize must be a positive number');
+    }
+    if (size > MAX_UPLOAD_BYTES) {
+      throw new BadRequestException(
+        `File too large: limit is ${Math.floor(MAX_UPLOAD_BYTES / 1024 / 1024)} MB`,
+      );
+    }
+
     const ext = extname(body.fileName);
     const s3Key = `files/${uuidv4()}${ext}`;
     const uploadId = await this.fileStorage.createMultipartUpload(
