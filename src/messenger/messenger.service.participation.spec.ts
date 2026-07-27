@@ -174,6 +174,22 @@ describe('MessengerService write-path participation checks', () => {
     });
   });
 
+  describe('createTopic', () => {
+    it('refuses to add a topic to a group the caller is not in', async () => {
+      prisma.conversation = {
+        findUnique: jest.fn().mockResolvedValue({ id: 'conv-1', type: 'GROUP' }),
+      };
+      prisma.topic.create = jest.fn();
+      prisma.conversationParticipant.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.createTopic('conv-1', 'intruder', 'Their topic'),
+      ).rejects.toThrow(ForbiddenException);
+
+      expect(prisma.topic.create).not.toHaveBeenCalled();
+    });
+  });
+
   describe('getTopics', () => {
     it('refuses to list topics of a foreign conversation', async () => {
       prisma.conversationParticipant.findUnique.mockResolvedValue(null);

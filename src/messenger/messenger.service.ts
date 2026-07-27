@@ -1732,6 +1732,11 @@ export class MessengerService {
     const conv = await this._getConversationOrThrow(conversationId);
     if (conv.type !== 'GROUP')
       throw new BadRequestException('Topics only for groups');
+    // Being a group was the only requirement here, so anyone could add topics
+    // to a group they are not in. deleteTopic already goes through
+    // assertGroupRole; creation was the gap.
+    await this.assertParticipant(conversationId, userId);
+
     return this.prisma.topic.create({
       data: { conversationId, title, icon: icon || '💬', createdBy: userId },
     });

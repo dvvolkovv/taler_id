@@ -21,10 +21,19 @@ import { createOidcProvider } from './oidc-provider.factory.js';
           configService.get<string>('oidc.issuer') ||
           `${configService.get<string>('baseUrl') || 'http://localhost:3000'}/oauth`;
 
-        const cookieKeysStr =
-          configService.get<string>('oidc.cookieKeys') ||
-          'taler-oidc-default-key';
-        const cookieKeys = cookieKeysStr.split(',');
+        // These keys sign the provider's interaction/session cookies, so the
+        // literal that used to sit here as a fallback would let anyone reading
+        // this repository forge a signed OIDC session. All three environments
+        // set OIDC_COOKIE_KEYS today (checked before removing it) — refuse to
+        // start rather than quietly falling back to a published value.
+        const cookieKeysStr = configService.get<string>('oidc.cookieKeys');
+        if (!cookieKeysStr || cookieKeysStr === 'taler-oidc-default-key') {
+          throw new Error(
+            'OIDC_COOKIE_KEYS must be set to a private value — it signs the ' +
+              'OIDC session cookies. See .env.example.',
+          );
+        }
+        const cookieKeys = cookieKeysStr.split(',').filter(Boolean);
 
         const privateKeyPath =
           configService.get<string>('jwt.privateKeyPath') || '';
