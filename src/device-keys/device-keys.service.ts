@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -77,7 +78,7 @@ export class DeviceKeysService {
   }
 
   async listForContact(
-    _callerId: string,
+    callerId: string,
     contactUserId: string,
   ): Promise<DeviceKeyResponseDto[]> {
     const user = await this.prisma.user.findUnique({
@@ -85,6 +86,15 @@ export class DeviceKeysService {
     });
     if (!user) {
       throw new NotFoundException(`User ${contactUserId} not found`);
+    }
+
+    // The caller id used to be ignored (`_callerId`), so any authenticated user
+    // could enumerate anyone's devices: how many they have and when each was
+    // registered. The certificates themselves are public keys, but the device
+    // list is not meant to be. Mesh only ever fetches these for a contact —
+    // on opening their chat, or on a mesh_key_update push from them.
+    if (callerId !== contactUserId) {
+      await this.assertMaySeeKeysOf(callerId, contactUserId);
     }
     const rows = await this.prisma.deviceKey.findMany({
       where: {
@@ -149,5 +159,42 @@ export class DeviceKeysService {
       revokedAt: row.revokedAt ? (row.revokedAt as Date).toISOString() : null,
       createdAt: (row.createdAt as Date).toISOString(),
     };
+  }
+  /**
+   * Device lists are visible to accepted contacts only.
+   *
+   * Conversations are also accepted: pairs that predate the contact-request
+   * feature talk to each other without a ContactRequest row, and the messenger
+   * makes the same allowance when creating a conversation.
+   */
+  private async assertMaySeeKeysOf(
+    callerId: string,
+    contactUserId: string,
+  ): Promise<void> {
+    const accepted = await this.prisma.contactRequest.findFirst({
+      where: {
+        status: 'ACCEPTED',
+        OR: [
+          { senderId: callerId, receiverId: contactUserId },
+          { senderId: contactUserId, receiverId: callerId },
+        ],
+      },
+      select: { id: true },
+    });
+    if (accepted) return;
+
+    const sharedConversation = await this.prisma.conversation.findFirst({
+      where: {
+        type: 'DIRECT',
+        AND: [
+          { participants: { some: { userId: callerId } } },
+          { participants: { some: { userId: contactUserId } } },
+        ],
+      },
+      select: { id: true },
+    });
+    if (sharedConversation) return;
+
+    throw new ForbiddenException('Not a contact');
   }
 }
