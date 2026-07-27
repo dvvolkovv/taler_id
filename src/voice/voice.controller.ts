@@ -24,6 +24,7 @@ import { WebhookReceiver } from 'livekit-server-sdk';
 import { VoiceService } from './voice.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RecorderSecretGuard } from './guards/recorder-secret.guard';
+import { RoomAccessGuard } from './guards/room-access.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { parseUserId } from '../common/participant-identity';
 import { FileStorageService } from '../common/file-storage.service';
@@ -331,19 +332,25 @@ export class VoiceController {
     return { ok: true };
   }
 
-  // ─── Meeting Recorder (no auth — protected by roomName UUID) ───
+  // ─── Meeting Recorder ───
+  // Requires proof of entitlement to the room: either a LiveKit grant for it
+  // (web guests) or a Taler ID token of a participant/personal-room owner.
+  // The room name alone is not a secret — see RoomAccessGuard.
 
   @Post('rooms/:roomName/recorder/start')
+  @UseGuards(RoomAccessGuard)
   startRecorder(@Param('roomName') roomName: string, @Body() body: any) {
     return this.service.startRecorder(roomName, body?.withAi !== false);
   }
 
   @Post('rooms/:roomName/recorder/stop')
+  @UseGuards(RoomAccessGuard)
   stopRecorder(@Param('roomName') roomName: string) {
     return this.service.stopRecorder(roomName);
   }
 
   @Get('rooms/:roomName/recorder/status')
+  @UseGuards(RoomAccessGuard)
   getRecorderStatus(@Param('roomName') roomName: string) {
     return this.service.getRecorderStatus(roomName);
   }
