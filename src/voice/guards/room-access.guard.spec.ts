@@ -55,7 +55,10 @@ describe('RoomAccessGuard', () => {
   });
 
   beforeEach(() => {
-    prisma = { callLog: { findUnique: jest.fn().mockResolvedValue(null) } };
+    prisma = {
+      callLog: { findUnique: jest.fn().mockResolvedValue(null) },
+      publicRoom: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
     guard = new RoomAccessGuard(prisma, {
       get: () => publicKeyPath,
     } as any);
@@ -123,6 +126,21 @@ describe('RoomAccessGuard', () => {
       'personal-abcdef12-deadbeef',
       `Bearer ${userToken('99999999-3456-7890-abcd-ef1234567890')}`,
     );
+    await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenException);
+  });
+
+  it('accepts the creator of a temporary room', async () => {
+    // tmp-/pub- rooms have no CallLog; ownership lives in PublicRoom.
+    prisma.publicRoom.findFirst.mockResolvedValue({ id: 'pr-1' });
+
+    const ctx = ctxFor('tmp-abcdef', `Bearer ${userToken('owner-1')}`);
+    await expect(guard.canActivate(ctx)).resolves.toBe(true);
+  });
+
+  it('rejects a stranger at a temporary room they did not create', async () => {
+    prisma.publicRoom.findFirst.mockResolvedValue(null);
+
+    const ctx = ctxFor('tmp-abcdef', `Bearer ${userToken('stranger')}`);
     await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenException);
   });
 

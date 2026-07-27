@@ -85,6 +85,16 @@ export class RoomAccessGuard implements CanActivate {
     // Owner of the personal room, by naming convention.
     if (roomName.startsWith(`personal-${userId.substring(0, 8)}`)) return true;
 
+    // Rooms created via /voice/rooms/temporary and /rooms/public live in
+    // PublicRoom, not CallLog — their creator owns them and must be able to
+    // drive the recorder. Missing this locked the owner out of their own
+    // temporary room (caught by the meeting-recording smoke suite).
+    const publicRoom = await this.prisma.publicRoom.findFirst({
+      where: { roomName, creatorId: userId },
+      select: { id: true },
+    });
+    if (publicRoom) return true;
+
     const log = await this.prisma.callLog.findUnique({ where: { roomName } });
     if (!log) return false;
     return log.participantIds.includes(userId);
