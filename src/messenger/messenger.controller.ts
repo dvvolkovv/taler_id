@@ -1187,8 +1187,11 @@ export class MessengerController {
   }
 
   @Get('messages/:messageId/poll')
-  async getPoll(@Param('messageId') messageId: string) {
-    return this.service.getPollByMessageId(messageId);
+  async getPoll(
+    @Param('messageId') messageId: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.getPollByMessageId(messageId, user.sub);
   }
 
   // ─── Threads ───
@@ -1197,8 +1200,9 @@ export class MessengerController {
   async getThread(
     @Param('convId') convId: string,
     @Param('msgId') msgId: string,
+    @CurrentUser() user: any,
   ) {
-    const replies = await this.service.getThreadReplies(msgId);
+    const replies = await this.service.getThreadReplies(msgId, user.sub);
     return replies.map((r) => ({
       ...r,
       senderName: r.sender?.profile?.firstName
@@ -1222,8 +1226,8 @@ export class MessengerController {
   // ─── Topics ───
 
   @Get('conversations/:id/topics')
-  async getTopics(@Param('id') id: string) {
-    return this.service.getTopics(id);
+  async getTopics(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.service.getTopics(id, user.sub);
   }
 
   @Post('conversations/:id/topics')

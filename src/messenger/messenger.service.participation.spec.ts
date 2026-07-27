@@ -11,7 +11,16 @@ describe('MessengerService write-path participation checks', () => {
   beforeEach(() => {
     prisma = {
       conversationParticipant: { findUnique: jest.fn() },
-      message: { create: jest.fn(), findUnique: jest.fn(), findFirst: jest.fn() },
+      message: {
+        create: jest.fn(),
+        findUnique: jest.fn(),
+        findFirst: jest.fn(),
+        findMany: jest.fn(),
+      },
+      poll: { findUnique: jest.fn() },
+      pollOption: { findUnique: jest.fn() },
+      pollVote: { findUnique: jest.fn() },
+      topic: { findMany: jest.fn() },
     };
 
     // Only the collaborators these two paths touch are needed.
@@ -92,6 +101,89 @@ describe('MessengerService write-path participation checks', () => {
 
       expect(msg).toEqual({ id: 'msg-1' });
       expect(prisma.message.create).toHaveBeenCalled();
+    });
+  });
+
+  // Read paths: same defect class, but they leak data rather than inject it.
+  describe('getThreadReplies', () => {
+    it('refuses to return a thread from a foreign conversation', async () => {
+      prisma.message.findUnique.mockResolvedValue({
+        conversationId: 'private-conv',
+      });
+      prisma.conversationParticipant.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.getThreadReplies('msg-1', 'intruder'),
+      ).rejects.toThrow(ForbiddenException);
+
+      expect(prisma.message.findMany).not.toHaveBeenCalled();
+    });
+
+    it('checks the message own conversation, not a caller-supplied one', async () => {
+      // The controller also receives convId from the URL; authorisation must not
+      // depend on it, or naming a conversation you belong to unlocks any thread.
+      prisma.message.findUnique.mockResolvedValue({
+        conversationId: 'private-conv',
+      });
+      prisma.conversationParticipant.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.getThreadReplies('msg-1', 'intruder'),
+      ).rejects.toThrow(ForbiddenException);
+
+      expect(prisma.conversationParticipant.findUnique).toHaveBeenCalledWith({
+        where: {
+          conversationId_userId: {
+            conversationId: 'private-conv',
+            userId: 'intruder',
+          },
+        },
+      });
+    });
+  });
+
+  describe('getPollByMessageId', () => {
+    it('refuses to expose a poll from a foreign conversation', async () => {
+      prisma.message.findUnique.mockResolvedValue({
+        conversationId: 'private-conv',
+      });
+      prisma.conversationParticipant.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.getPollByMessageId('msg-1', 'intruder'),
+      ).rejects.toThrow(ForbiddenException);
+
+      // Poll rows include per-option voter ids — this would de-anonymise them.
+      expect(prisma.poll.findUnique).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('votePoll', () => {
+    it('refuses a vote in a poll the caller cannot see', async () => {
+      prisma.pollOption.findUnique.mockResolvedValue({
+        id: 'opt-1',
+        poll: { message: { conversationId: 'private-conv' } },
+      });
+      prisma.conversationParticipant.findUnique.mockResolvedValue(null);
+
+      await expect(service.votePoll('opt-1', 'intruder')).rejects.toThrow(
+        ForbiddenException,
+      );
+
+      expect(prisma.pollVote.findUnique).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getTopics', () => {
+    it('refuses to list topics of a foreign conversation', async () => {
+      prisma.conversationParticipant.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.getTopics('private-conv', 'intruder'),
+      ).rejects.toThrow(ForbiddenException);
+
+      // Topics are returned enriched with each topic's latest message text.
+      expect(prisma.topic.findMany).not.toHaveBeenCalled();
     });
   });
 });

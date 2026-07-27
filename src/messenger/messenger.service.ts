@@ -1537,9 +1537,11 @@ export class MessengerService {
   async votePoll(optionId: string, userId: string) {
     const option = await this.prisma.pollOption.findUnique({
       where: { id: optionId },
-      include: { poll: true },
+      include: { poll: { include: { message: { select: { conversationId: true } } } } },
     });
     if (!option) throw new NotFoundException('Option not found');
+    // Voting in a poll you cannot see also outs you as a voter to that chat.
+    await this.assertParticipant(option.poll.message.conversationId, userId);
 
     // Check if already voted on this option
     const existing = await this.prisma.pollVote.findUnique({
@@ -1577,7 +1579,16 @@ export class MessengerService {
     });
   }
 
-  async getPollByMessageId(messageId: string) {
+  async getPollByMessageId(messageId: string, userId: string) {
+    // Poll results carry per-option voter ids, so an unchecked read both leaks
+    // the question and de-anonymises who voted for what.
+    const message = await this.prisma.message.findUnique({
+      where: { id: messageId },
+      select: { conversationId: true },
+    });
+    if (!message) throw new NotFoundException('Message not found');
+    await this.assertParticipant(message.conversationId, userId);
+
     return this.prisma.poll.findUnique({
       where: { messageId },
       include: {
@@ -1590,7 +1601,17 @@ export class MessengerService {
   }
   // ─── Threads ───
 
-  async getThreadReplies(messageId: string) {
+  async getThreadReplies(messageId: string, userId: string) {
+    // Resolve the conversation from the message itself rather than trusting the
+    // convId in the URL — otherwise the check is satisfied by naming a
+    // conversation the caller does belong to while reading someone else's thread.
+    const parent = await this.prisma.message.findUnique({
+      where: { id: messageId },
+      select: { conversationId: true },
+    });
+    if (!parent) throw new NotFoundException('Message not found');
+    await this.assertParticipant(parent.conversationId, userId);
+
     return this.prisma.message.findMany({
       where: { threadParentId: messageId, deletedAt: null },
       orderBy: { sentAt: 'asc' },
@@ -1648,7 +1669,10 @@ export class MessengerService {
   }
   // ─── Topics ───
 
-  async getTopics(conversationId: string) {
+  async getTopics(conversationId: string, userId: string) {
+    // Topics come back enriched with the text of each topic's latest message.
+    await this.assertParticipant(conversationId, userId);
+
     const topics = await this.prisma.topic.findMany({
       where: { conversationId },
       orderBy: { createdAt: 'asc' },
