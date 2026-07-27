@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { ProvisionDto } from './dto/provision.dto';
+import { AttachPhoneDto } from './dto/attach-phone.dto';
 import { PartnerSecretGuard } from './partner-secret.guard';
 import { PartnerService } from './partner.service';
 
@@ -23,5 +24,16 @@ export class PartnerController {
   @HttpCode(200)
   async provision(@Body() dto: ProvisionDto) {
     return this.partnerService.provision(dto);
+  }
+
+  // Server-to-server: attach a Linkeon-SMS-verified phone to the EXISTING
+  // account proven by the id_token (from the linkeon-partner-web code flow),
+  // merging any phone-provisioned duplicate. Same guard as provision.
+  @Throttle({ medium: { ttl: 60_000, limit: 30 } })
+  @Post('attach-phone')
+  @UseGuards(PartnerSecretGuard)
+  @HttpCode(200)
+  async attachPhone(@Body() dto: AttachPhoneDto) {
+    return this.partnerService.attachPhone(dto);
   }
 }

@@ -160,6 +160,25 @@ export class MailAccountService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  /**
+   * Delete the user's mailbox (mailcow + DB row); no-op if absent. Used by
+   * partner account-merge to drop a duplicate account's mailbox when the
+   * target already has one. mailcow failure is logged, not fatal (the row is
+   * still removed so the account can be deleted).
+   */
+  async deleteAccount(userId: string): Promise<void> {
+    const account = await this.prisma.mailAccount.findUnique({ where: { userId } });
+    if (!account) return;
+    try {
+      await this.mailcow.deleteMailbox(this.address(account));
+    } catch (e) {
+      this.logger.warn(
+        `mailcow delete failed for ${this.address(account)}: ${(e as Error).message}`,
+      );
+    }
+    await this.prisma.mailAccount.delete({ where: { id: account.id } });
+  }
+
   /** Внутренний доступ для моста: entity + расшифровка masterSecret */
   async requireActiveAccount(userId: string) {
     const account = await this.prisma.mailAccount.findUnique({ where: { userId } });
