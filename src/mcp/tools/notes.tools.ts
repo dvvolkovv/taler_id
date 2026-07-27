@@ -51,14 +51,14 @@ export function registerNotesTools(
     'create_note',
     'Создаёт новую заметку пользователя. ' +
       'Обязательные поля: title (заголовок) и content (содержимое). ' +
-      'Необязательное: source (источник, например ASSISTANT).',
+      'Необязательное: source — enum MANUAL | ASSISTANT (по умолчанию MANUAL).',
     {
       title: z.string().describe('Заголовок заметки'),
       content: z.string().describe('Содержимое заметки'),
       source: z
-        .string()
+        .enum(['MANUAL', 'ASSISTANT'])
         .optional()
-        .describe('Источник создания заметки (например, MANUAL или ASSISTANT)'),
+        .describe('Источник создания заметки: MANUAL или ASSISTANT (по умолчанию MANUAL)'),
     },
     async ({ title, content, source }) => {
       const data: { title: string; content: string; source?: string } = {

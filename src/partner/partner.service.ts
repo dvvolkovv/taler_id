@@ -246,8 +246,12 @@ export function generateLocalpart(firstName?: string): string {
   return `${stem}${randomBytes(4).toString('hex')}`;
 }
 
-// Granted scope = requested ∩ allowed (must be non-empty and all requested must
-// be allowed), plus openid and offline_access when the client allows them.
+// Granted scope = requested ∩ allowed (per contract §2.3): scopes the client
+// isn't allowed are silently dropped, not rejected — so a caller may request a
+// superset and take what's permitted (no per-env request coordination). We only
+// 400 when the request is empty or the intersection yields no usable mcp:* scope
+// (can't mint a token that grants nothing). openid + offline_access are added
+// when the client allows them.
 export function computeGrantedScope(
   requested: string[],
   allowed: string[],
@@ -257,17 +261,15 @@ export function computeGrantedScope(
   if (cleaned.length === 0) {
     throw new BadRequestException('scopes must be a non-empty array');
   }
-  const unknown = cleaned.filter((s) => !allowedSet.has(s));
-  if (unknown.length > 0) {
+  const grantedMcp = cleaned.filter(
+    (s) => s.startsWith('mcp:') && allowedSet.has(s),
+  );
+  if (grantedMcp.length === 0) {
     throw new BadRequestException(
-      `unknown or not-allowed scopes: ${unknown.join(', ')}`,
+      'none of the requested scopes are permitted for this client',
     );
   }
-  const mcp = cleaned.filter((s) => s.startsWith('mcp:'));
-  if (mcp.length === 0) {
-    throw new BadRequestException('at least one mcp:* scope is required');
-  }
-  const parts = new Set<string>(['openid', ...mcp]);
+  const parts = new Set<string>(['openid', ...grantedMcp]);
   if (allowedSet.has('offline_access')) parts.add('offline_access');
   return Array.from(parts).join(' ');
 }
