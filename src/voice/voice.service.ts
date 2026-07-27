@@ -101,15 +101,23 @@ export class VoiceService {
   }
 
   async joinRoom(roomName: string, userId: string, sessionId?: string) {
-    try {
-      const log = await this.prisma.callLog.findUnique({ where: { roomName } });
-      if (log && !log.participantIds.includes(userId)) {
-        await this.prisma.callLog.update({
-          where: { roomName },
-          data: { participantIds: { push: userId } },
-        });
-      }
-    } catch (_) {}
+    // This used to add the caller to participantIds and hand out a token to
+    // whoever asked, so any authenticated user who learned a room name could
+    // walk into someone else's call — and writing themselves into the log made
+    // them look like a legitimate participant afterwards.
+    //
+    // The invite flow is the source of truth instead: handleCallInvite() adds
+    // each callee to participantIds only after the block and contact checks
+    // pass, so membership there means "was invited". Public, temporary and
+    // guest entry go through the /rooms/public/:code/join* routes, not here.
+    const log = await this.prisma.callLog.findUnique({ where: { roomName } });
+    const isPersonalRoomOwner = roomName.startsWith(
+      `personal-${userId.substring(0, 8)}`,
+    );
+    if (!isPersonalRoomOwner && !log?.participantIds.includes(userId)) {
+      throw new ForbiddenException('Not invited to this room');
+    }
+
     return {
       token: await this.makeToken(roomName, userId, sessionId),
       livekitWsUrl: this.sfuFor(roomName).wsUrl,
