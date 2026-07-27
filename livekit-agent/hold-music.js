@@ -12,8 +12,10 @@ const path = require('path');
 const fs = require('fs');
 
 const LK_URL = process.env.LIVEKIT_WS_URL || 'ws://localhost:7880';
-const LK_API_KEY = process.env.LIVEKIT_API_KEY || 'lkdevkey';
-const LK_API_SECRET = process.env.LIVEKIT_API_SECRET || 'lkSecret2024TalerID';
+const { readLivekitCredentials } = require('./livekit-credentials');
+// Throws on startup rather than silently signing tokens with the pair
+// committed to this repository.
+const { apiKey: LK_API_KEY, apiSecret: LK_API_SECRET } = readLivekitCredentials();
 
 const SAMPLE_RATE = 48000;
 const CHANNELS = 1;

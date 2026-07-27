@@ -15,8 +15,10 @@ try {
 }
 
 const LK_URL = process.env.LIVEKIT_WS_URL || 'ws://localhost:7880';
-const LK_API_KEY = process.env.LIVEKIT_API_KEY || 'lkdevkey';
-const LK_API_SECRET = process.env.LIVEKIT_API_SECRET || 'lkSecret2024TalerID';
+const { readLivekitCredentials } = require('./livekit-credentials');
+// Throws on startup rather than silently signing tokens with the pair
+// committed to this repository.
+const { apiKey: LK_API_KEY, apiSecret: LK_API_SECRET } = readLivekitCredentials();
 const OPENAI_KEY = process.env.OPENAI_API_KEY;
 const BACKEND_URL = process.env.BACKEND_URL || 'https://id.taler.tirol';
 const BACKEND_WS_URL = (process.env.BACKEND_URL || 'https://id.taler.tirol').replace(/^http/, 'ws');
