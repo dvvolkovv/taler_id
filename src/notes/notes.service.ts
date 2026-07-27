@@ -70,7 +70,14 @@ export class NotesService {
         });
       }
     }
-    const { expectedUpdatedAt: _ignored, ...patch } = data;
+    // Name the updatable columns instead of spreading the request body: this
+    // is also reached from the MCP update_note tool, which does not pass
+    // through the controller's ValidationPipe. Spreading let a caller set
+    // userId (handing their note to another account), id, or the timestamps.
+    const patch: { title?: string; content?: string } = {};
+    if (data.title !== undefined) patch.title = data.title;
+    if (data.content !== undefined) patch.content = data.content;
+
     return this.prisma.note.update({ where: { id }, data: patch });
   }
 

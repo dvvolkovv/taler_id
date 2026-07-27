@@ -1,10 +1,27 @@
 import {
   CanActivate,
   ExecutionContext,
+  ForbiddenException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
 import { OidcService } from '../oidc/oidc.service';
+
+/**
+ * Clients whose tokens may manage the user's OAuth clients and account.
+ *
+ * These routes are the Developer Portal's own API. Any other client holding an
+ * access token — notably an MCP integration granted something narrow like
+ * `mcp:calendar` — used to reach them all the same, because the guard looked
+ * only at whether the token was valid. Configurable in case another
+ * first-party surface needs them later.
+ */
+const CLIENT_ALLOWLIST = (
+  process.env.OAUTH_MANAGEMENT_CLIENTS ?? 'taler-id-developers'
+)
+  .split(',')
+  .map((c) => c.trim())
+  .filter(Boolean);
 
 /**
  * Validates an OIDC access token issued by our own oidc-provider.
@@ -45,6 +62,17 @@ export class OidcBearerGuard implements CanActivate {
     }
     if (!accessToken.accountId) {
       throw new UnauthorizedException('Token has no associated user');
+    }
+
+    // A valid token is not automatically a token for THIS. Without the check
+    // below, an integration the user granted `mcp:calendar` could list, patch,
+    // rotate the secret of, or delete their OAuth clients, read their account
+    // email, and register new clients in their name — none of which was ever
+    // shown on the consent screen.
+    if (!CLIENT_ALLOWLIST.includes(accessToken.clientId)) {
+      throw new ForbiddenException(
+        'This token is not authorised to manage OAuth clients or the account',
+      );
     }
 
     // Mirror JwtAuthGuard's req.user shape: { sub: <userId> }.

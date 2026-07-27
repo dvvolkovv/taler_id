@@ -20,6 +20,14 @@ describe('DeviceKeysService', () => {
       user: {
         findUnique: jest.fn(),
       },
+      // listForContact now proves the caller may see the target's devices.
+      // These cases are about which keys come back, so the pair is a contact.
+      contactRequest: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'contact-1' }),
+      },
+      conversation: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
     };
     const fcmMock = {
       sendKeyUpdate: jest.fn().mockResolvedValue(undefined),

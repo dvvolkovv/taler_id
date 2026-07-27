@@ -10,6 +10,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
+import { ACCESS_TOKEN_TYPE } from '../common/utils/access-token.util';
 import * as bcrypt from 'bcrypt';
 import { generateSecret, generateURI, verify as otpVerify } from 'otplib';
 import * as QRCode from 'qrcode';
@@ -20,6 +21,16 @@ import * as fs from 'fs';
 import { EmailService } from '../email/email.service';
 import { SYSTEM_USER_EMAIL } from '../system-channel/system-channel.constants';
 import { SystemChannelService } from '../system-channel/system-channel.service';
+
+/**
+ * How long a spent refresh token is remembered so that replaying it is
+ * recognised as theft rather than reported as a plain "invalid token".
+ */
+const REFRESH_REPLAY_WINDOW_SECONDS = 24 * 60 * 60;
+
+const TWO_FA_CHALLENGE_TTL_SECONDS = 300;
+/** Wrong codes tolerated per challenge before it is discarded. */
+const MAX_2FA_ATTEMPTS = 5;
 
 @Injectable()
 export class AuthService {
@@ -117,9 +128,11 @@ export class AuthService {
       include: { totpSecret: true },
     });
 
-    // Check lockout
-    const lockoutKey = `lockout:${user?.id || 'unknown'}`;
-    const lockout = await this.redis.get(lockoutKey);
+    // Must match the key incrementFailedAttempts() writes below. For an unknown
+    // account that key is `ip:<ip>`, so checking a literal `unknown` bucket
+    // meant misses were counted but never enforced.
+    const lockoutSubject = user?.id || `ip:${ip}`;
+    const lockout = await this.redis.get(`lockout:${lockoutSubject}`);
     if (lockout) {
       throw new ForbiddenException(
         'Account locked due to too many failed attempts. Try again later.',
@@ -127,7 +140,7 @@ export class AuthService {
     }
 
     if (!user || !user.passwordHash) {
-      await this.incrementFailedAttempts(user?.id || `ip:${ip}`, ip);
+      await this.incrementFailedAttempts(lockoutSubject, ip);
       await this.auditLog(null, 'LOGIN_FAILED', ip, userAgent, {
         reason: 'user_not_found',
       });
@@ -149,7 +162,11 @@ export class AuthService {
     // Check if 2FA is enabled
     if (user.totpSecret?.verified) {
       const challengeToken = uuidv4();
-      await this.redis.setEx(`2fa_challenge:${challengeToken}`, 300, user.id); // 5 min TTL
+      await this.redis.setEx(
+        `2fa_challenge:${challengeToken}`,
+        TWO_FA_CHALLENGE_TTL_SECONDS,
+        user.id,
+      );
       return { next: '2fa', challengeToken };
     }
 
@@ -180,10 +197,31 @@ export class AuthService {
       secret: user.totpSecret.secret,
     });
     if (!result.valid) {
-      await this.auditLog(userId, '2FA_FAILED', ip, userAgent);
+      // A challenge used to survive its full 5 minutes no matter how many codes
+      // were tried against it, and nothing counted the failures — six digits is
+      // a million values, and the TOTP window accepts neighbouring codes too.
+      // Burn the challenge after a handful of misses so guessing costs a fresh
+      // password authentication each time.
+      const attemptsKey = `2fa_attempts:${challengeToken}`;
+      const attempts = await this.redis.incr(attemptsKey);
+      await this.redis.expire(attemptsKey, TWO_FA_CHALLENGE_TTL_SECONDS);
+
+      if (attempts >= MAX_2FA_ATTEMPTS) {
+        await this.redis.del(`2fa_challenge:${challengeToken}`);
+        await this.redis.del(attemptsKey);
+        await this.auditLog(userId, '2FA_CHALLENGE_BURNED', ip, userAgent, {
+          attempts,
+        });
+        throw new UnauthorizedException(
+          'Too many invalid codes — sign in again',
+        );
+      }
+
+      await this.auditLog(userId, '2FA_FAILED', ip, userAgent, { attempts });
       throw new UnauthorizedException('Invalid 2FA code');
     }
 
+    await this.redis.del(`2fa_attempts:${challengeToken}`);
     await this.redis.del(`2fa_challenge:${challengeToken}`);
     await this.auditLog(userId, 'LOGIN_SUCCESS', ip, userAgent);
     const session = await this.createSession(userId, ip, userAgent);
@@ -250,13 +288,50 @@ export class AuthService {
   }
 
   async refreshTokens(refreshToken: string, ip: string, userAgent: string) {
-    // Verify the refresh token is in Redis
-    const sessionId = await this.redis.get(`refresh:${refreshToken}`);
-    if (!sessionId)
-      throw new UnauthorizedException('Invalid or expired refresh token');
+    // Claim the token atomically. GET followed by DEL left a window in which
+    // two concurrent requests both saw the token and both got a fresh pair.
+    const sessionId = await this.redis
+      .getClient()
+      .getdel(`refresh:${refreshToken}`);
 
-    // Invalidate old refresh token (rotation)
-    await this.redis.del(`refresh:${refreshToken}`);
+    if (!sessionId) {
+      // A token that was already spent being presented again is the signature
+      // of a stolen refresh token: the honest client has long since rotated to
+      // the next one, so whoever holds this one copied it. Failing the single
+      // request would leave the thief free to keep trying — revoke the session
+      // instead, which invalidates their tokens and the victim's alike.
+      const replayed = await this.redis.get(`refresh:used:${refreshToken}`);
+      if (replayed) {
+        await this.prisma.session.updateMany({
+          where: { id: replayed, isRevoked: false },
+          data: { isRevoked: true },
+        });
+        const revokedSession = await this.prisma.session.findUnique({
+          where: { id: replayed },
+          select: { userId: true },
+        });
+        if (revokedSession) {
+          await this.auditLog(
+            revokedSession.userId,
+            'REFRESH_REUSE_DETECTED',
+            ip,
+            userAgent,
+            { sessionId: replayed },
+          );
+        }
+        throw new UnauthorizedException(
+          'Refresh token reuse detected — session revoked',
+        );
+      }
+      throw new UnauthorizedException('Invalid or expired refresh token');
+    }
+
+    // Remember the spent token briefly so the replay above can be recognised.
+    await this.redis.setEx(
+      `refresh:used:${refreshToken}`,
+      REFRESH_REPLAY_WINDOW_SECONDS,
+      sessionId,
+    );
 
     const session = await this.prisma.session.findUnique({
       where: { id: sessionId },
@@ -264,6 +339,13 @@ export class AuthService {
     });
     if (!session || session.isRevoked)
       throw new UnauthorizedException('Session revoked');
+    // getSessions() filters on expiresAt, so an expired session disappears from
+    // the user's session list — but this path never checked it, and each
+    // refresh minted another 30-day token without moving Session.expiresAt.
+    // A session the user can no longer see could therefore be refreshed
+    // forever.
+    if (session.expiresAt <= new Date())
+      throw new UnauthorizedException('Session expired');
 
     // Generate new token pair
     const newTokens = await this.generateTokens(session.user, session.id);
@@ -391,6 +473,9 @@ export class AuthService {
       phone: user.phone,
       kyc_status: kyc?.status || 'UNVERIFIED',
       session_id: sessionId,
+      // Marks this as an API access token. The OIDC provider signs its tokens
+      // with the same key pair, so verifiers need more than a valid signature.
+      typ: ACCESS_TOKEN_TYPE,
     };
 
     const accessToken = this.jwtService.sign(payload, {
@@ -516,6 +601,9 @@ export class AuthService {
     newPassword: string,
     ip: string,
     userAgent: string,
+    // Kept optional so older callers still compile; when absent every session
+    // is revoked, including the caller's.
+    currentSessionId?: string,
   ) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user?.passwordHash) throw new UnauthorizedException('User not found');
@@ -541,7 +629,23 @@ export class AuthService {
       data: { passwordHash },
     });
 
-    await this.auditLog(userId, 'PASSWORD_CHANGED', ip, userAgent);
+    // Changing the password is how a user reacts to a suspected compromise, so
+    // it has to end the intruder's access. Sessions were left untouched before,
+    // which meant a stolen refresh token stayed valid for its full 30 days.
+    // The caller's own session survives — they just proved they know the
+    // current password. Access tokens already issued live out their 2h TTL.
+    await this.prisma.session.updateMany({
+      where: {
+        userId,
+        isRevoked: false,
+        ...(currentSessionId ? { id: { not: currentSessionId } } : {}),
+      },
+      data: { isRevoked: true },
+    });
+
+    await this.auditLog(userId, 'PASSWORD_CHANGED', ip, userAgent, {
+      otherSessionsRevoked: true,
+    });
     return { changed: true };
   }
 
@@ -573,7 +677,17 @@ export class AuthService {
       data: { passwordHash },
     });
 
-    await this.auditLog(user.id, 'PASSWORD_RESET', '', '');
+    // A reset is the recovery path for an account the user may have lost
+    // control of, so every existing session goes — there is no "current"
+    // session to spare here, the user is not signed in.
+    await this.prisma.session.updateMany({
+      where: { userId: user.id, isRevoked: false },
+      data: { isRevoked: true },
+    });
+
+    await this.auditLog(user.id, 'PASSWORD_RESET', '', '', {
+      allSessionsRevoked: true,
+    });
     return { reset: true };
   }
 }

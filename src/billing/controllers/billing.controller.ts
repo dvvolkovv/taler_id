@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  ForbiddenException,
   Get,
   NotFoundException,
   Param,
@@ -71,6 +72,14 @@ export class BillingController {
 
   @Post('purchase/:pkgId')
   async purchase(@CurrentUser() user: any, @Param('pkgId') pkgId: string) {
+    // Credits real balance without taking payment. The DEV/TEST smoke suites
+    // depend on it, so it stays opt-in per environment rather than removed —
+    // but it must never be reachable in production.
+    // env is read at startup; flipping it requires a process restart.
+    if (process.env.BILLING_STUB_PURCHASE_ENABLED !== 'true') {
+      throw new ForbiddenException('stub purchases are disabled');
+    }
+
     const userId = user.sub;
     const pkg = PACKAGES_BY_ID[pkgId];
     if (!pkg) throw new NotFoundException(`unknown package ${pkgId}`);

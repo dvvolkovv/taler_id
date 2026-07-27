@@ -786,6 +786,9 @@
   <script>
     const API_BASE = location.hostname.includes('staging') ? '' : '/api';
     let room = null;
+    // LiveKit grant for this room — also our proof of entitlement when calling
+    // room-scoped backend routes such as the recorder (see RoomAccessGuard).
+    let lkToken = '';
     let roomCode = '';
     let roomTitle = 'Голосовая комната';
     let micEnabled = true;
@@ -967,6 +970,7 @@
     }
 
     async function connectToRoom(token) {
+      lkToken = token;
       const { Room, RoomEvent, Track, VideoPresets } = LivekitClient;
       // Cap publish bitrates — without maxBitrate WebRTC pushes ~2+ Mbps for
       // 720p camera and captures screen share at native display resolution
@@ -2313,7 +2317,10 @@
       try {
         const res = await fetch(`${API_BASE}/voice/rooms/${room.name}/recorder/start`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${lkToken}`,
+          },
           body: JSON.stringify({ withAi: false }),
         });
         if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -2330,7 +2337,10 @@
     async function stopServerRecording() {
       if (!srvRecActive) return;
       try {
-        await fetch(`${API_BASE}/voice/rooms/${room.name}/recorder/stop`, { method: 'POST' });
+        await fetch(`${API_BASE}/voice/rooms/${room.name}/recorder/stop`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${lkToken}` },
+        });
         showNotification('Запись на сервере сохранена', 'success');
       } catch (err) {
         console.error('[SRV-REC] Stop failed:', err);
@@ -2843,7 +2853,10 @@
     async function startTranslatorAgent() {
       if (!room) return;
       try {
-        await fetch(`${API_BASE}/voice/rooms/${room.name}/translator/public/start`, { method: 'POST' });
+        await fetch(`${API_BASE}/voice/rooms/${room.name}/translator/public/start`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${lkToken}` },
+        });
         await setServerLang(translatorLang);
       } catch (e) {
         console.error('[TRANSLATOR] Start failed:', e);
@@ -2853,7 +2866,10 @@
     async function stopTranslatorAgent() {
       if (!room) return;
       try {
-        await fetch(`${API_BASE}/voice/rooms/${room.name}/translator/public/stop`, { method: 'POST' });
+        await fetch(`${API_BASE}/voice/rooms/${room.name}/translator/public/stop`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${lkToken}` },
+        });
       } catch (e) {
         console.error('[TRANSLATOR] Stop failed:', e);
       }
@@ -2864,7 +2880,10 @@
       try {
         await fetch(`${API_BASE}/voice/rooms/${room.name}/set-lang-public`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${lkToken}`,
+          },
           body: JSON.stringify({ identity: localIdentity, lang }),
         });
       } catch (e) {

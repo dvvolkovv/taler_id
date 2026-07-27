@@ -24,6 +24,8 @@ import { WebhookReceiver } from 'livekit-server-sdk';
 import { VoiceService } from './voice.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RecorderSecretGuard } from './guards/recorder-secret.guard';
+import { RoomAccessGuard } from './guards/room-access.guard';
+import { LK_API_KEY, LK_API_SECRET } from '../common/livekit-credentials';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { parseUserId } from '../common/participant-identity';
 import { FileStorageService } from '../common/file-storage.service';
@@ -35,8 +37,8 @@ import { GroupCallService } from './group-call/group-call.service';
 @Controller('voice')
 export class VoiceController {
   private readonly webhookReceiver = new WebhookReceiver(
-    process.env.LIVEKIT_API_KEY ?? 'lkdevkey',
-    process.env.LIVEKIT_API_SECRET ?? 'lkSecret2024TalerID',
+    LK_API_KEY,
+    LK_API_SECRET,
   );
   private readonly webhookLogger = new Logger('LiveKitWebhook');
 
@@ -331,19 +333,25 @@ export class VoiceController {
     return { ok: true };
   }
 
-  // ─── Meeting Recorder (no auth — protected by roomName UUID) ───
+  // ─── Meeting Recorder ───
+  // Requires proof of entitlement to the room: either a LiveKit grant for it
+  // (web guests) or a Taler ID token of a participant/personal-room owner.
+  // The room name alone is not a secret — see RoomAccessGuard.
 
   @Post('rooms/:roomName/recorder/start')
+  @UseGuards(RoomAccessGuard)
   startRecorder(@Param('roomName') roomName: string, @Body() body: any) {
     return this.service.startRecorder(roomName, body?.withAi !== false);
   }
 
   @Post('rooms/:roomName/recorder/stop')
+  @UseGuards(RoomAccessGuard)
   stopRecorder(@Param('roomName') roomName: string) {
     return this.service.stopRecorder(roomName);
   }
 
   @Get('rooms/:roomName/recorder/status')
+  @UseGuards(RoomAccessGuard)
   getRecorderStatus(@Param('roomName') roomName: string) {
     return this.service.getRecorderStatus(roomName);
   }
@@ -396,19 +404,26 @@ export class VoiceController {
     return this.service.translatorSelftest();
   }
 
-  // ─── Public Translator (no auth — protected by roomName UUID) ───
+  // ─── Public Translator ───
+  // For web guests, who hold a LiveKit grant rather than a Taler ID token.
+  // Starting a translator spins up an OpenAI Realtime session on the server's
+  // key, so entitlement to the room has to be proven — the room name is not a
+  // secret (see RoomAccessGuard).
 
   @Post('rooms/:roomName/translator/public/start')
+  @UseGuards(RoomAccessGuard)
   startTranslatorPublic(@Param('roomName') roomName: string) {
     return this.service.startTranslator(roomName);
   }
 
   @Post('rooms/:roomName/translator/public/stop')
+  @UseGuards(RoomAccessGuard)
   stopTranslatorPublic(@Param('roomName') roomName: string) {
     return this.service.stopTranslator(roomName);
   }
 
   @Post('rooms/:roomName/set-lang-public')
+  @UseGuards(RoomAccessGuard)
   setTranslatorLangPublic(
     @Param('roomName') roomName: string,
     @Body('identity') identity: string,

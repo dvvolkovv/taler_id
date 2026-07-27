@@ -230,7 +230,11 @@ export class ProfileService {
     });
 
     await this.prisma.$transaction([
-      this.prisma.document.deleteMany({ where: { profileId: profile?.id } }),
+      // Prisma drops `undefined` filters, so `profileId: profile?.id` would match
+      // every row and wipe the whole Document table for a user without a Profile.
+      ...(profile
+        ? [this.prisma.document.deleteMany({ where: { profileId: profile.id } })]
+        : []),
       this.prisma.kycRecord.deleteMany({ where: { userId } }),
       this.prisma.session.deleteMany({ where: { userId } }),
       this.prisma.totpSecret.deleteMany({ where: { userId } }),

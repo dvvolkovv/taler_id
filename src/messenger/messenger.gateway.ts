@@ -25,6 +25,7 @@ import { FcmService } from '../common/fcm.service';
 import { ApnsService } from '../common/apns.service';
 import * as jwt from 'jsonwebtoken';
 import * as fs from 'fs';
+import { isApiAccessToken } from '../common/utils/access-token.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import {
@@ -87,6 +88,8 @@ export class MessengerGateway
       const payload = jwt.verify(token, this.publicKey, {
         algorithms: ['RS256'],
       }) as any;
+      // OIDC ID tokens are signed with the same key — reject them here too.
+      if (!isApiAccessToken(payload)) throw new Error('Not an access token');
       client.data.userId = payload.sub;
       client.data.connectedAt = Date.now();
       client.join(`user:${payload.sub}`);
@@ -1192,6 +1195,18 @@ export class MessengerGateway
    */
   emitToUser(userId: string, event: string, data: any) {
     this.server.to(`user:${userId}`).emit(event, data);
+  }
+
+  /**
+   * Removes every socket of `userId` from a conversation's Socket.IO room.
+   *
+   * Room membership is granted on `join` and used to be kept until the socket
+   * disconnected, so a user removed from a group went on receiving its live
+   * messages for the rest of their session. Goes through the Redis adapter, so
+   * it also reaches sockets held by the other app node.
+   */
+  evictFromConversationRoom(userId: string, conversationId: string) {
+    this.server.in(`user:${userId}`).socketsLeave(conversationId);
   }
 
   /** Get user's preferred language from their profile. Defaults to 'en'. */

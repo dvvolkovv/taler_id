@@ -11,6 +11,7 @@ import {
   UseGuards,
   UseInterceptors,
   UploadedFile,
+  BadRequestException,
   ForbiddenException,
   Logger,
   Res,
@@ -45,6 +46,15 @@ import { PrismaService } from '../prisma/prisma.service';
 import { VideoTranscodeService } from '../common/video-transcode.service';
 import { FcmService } from '../common/fcm.service';
 import sharp = require('sharp');
+
+/**
+ * Ceiling for a chunked upload, in bytes. Without one, /messenger/files/init
+ * accepted any declared size and parts streamed into MinIO until the volume
+ * filled. Override with MESSENGER_MAX_UPLOAD_BYTES.
+ */
+const MAX_UPLOAD_BYTES = Number(
+  process.env.MESSENGER_MAX_UPLOAD_BYTES ?? 512 * 1024 * 1024,
+);
 
 @Controller('messenger')
 @UseGuards(JwtAuthGuard)
@@ -242,6 +252,9 @@ export class MessengerController {
     @CurrentUser() user: any,
   ) {
     await this.service.removeGroupMember(id, user.sub, uid);
+    // Drop their sockets from the room before announcing it, or they keep
+    // receiving the group's messages until they reconnect.
+    this.gateway.evictFromConversationRoom(uid, id);
     await this.gateway.emitToConversationParticipants(
       id,
       'group_member_removed',
@@ -319,6 +332,7 @@ export class MessengerController {
   @Post('conversations/:id/leave')
   async leaveGroup(@Param('id') id: string, @CurrentUser() user: any) {
     await this.service.leaveGroup(id, user.sub);
+    this.gateway.evictFromConversationRoom(user.sub, id);
     await this.gateway.emitToConversationParticipants(
       id,
       'group_member_removed',
@@ -773,6 +787,18 @@ export class MessengerController {
     @Body() body: { fileName: string; fileSize: number; mimeType: string },
     @CurrentUser() user: any,
   ) {
+    // No ceiling used to exist here, so a caller could open a multipart upload
+    // of any declared size and stream parts into MinIO until the volume filled.
+    const size = Number(body.fileSize);
+    if (!Number.isFinite(size) || size <= 0) {
+      throw new BadRequestException('fileSize must be a positive number');
+    }
+    if (size > MAX_UPLOAD_BYTES) {
+      throw new BadRequestException(
+        `File too large: limit is ${Math.floor(MAX_UPLOAD_BYTES / 1024 / 1024)} MB`,
+      );
+    }
+
     const ext = extname(body.fileName);
     const s3Key = `files/${uuidv4()}${ext}`;
     const uploadId = await this.fileStorage.createMultipartUpload(
@@ -1183,8 +1209,11 @@ export class MessengerController {
   }
 
   @Get('messages/:messageId/poll')
-  async getPoll(@Param('messageId') messageId: string) {
-    return this.service.getPollByMessageId(messageId);
+  async getPoll(
+    @Param('messageId') messageId: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.getPollByMessageId(messageId, user.sub);
   }
 
   // ─── Threads ───
@@ -1193,8 +1222,9 @@ export class MessengerController {
   async getThread(
     @Param('convId') convId: string,
     @Param('msgId') msgId: string,
+    @CurrentUser() user: any,
   ) {
-    const replies = await this.service.getThreadReplies(msgId);
+    const replies = await this.service.getThreadReplies(msgId, user.sub);
     return replies.map((r) => ({
       ...r,
       senderName: r.sender?.profile?.firstName
@@ -1218,8 +1248,8 @@ export class MessengerController {
   // ─── Topics ───
 
   @Get('conversations/:id/topics')
-  async getTopics(@Param('id') id: string) {
-    return this.service.getTopics(id);
+  async getTopics(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.service.getTopics(id, user.sub);
   }
 
   @Post('conversations/:id/topics')

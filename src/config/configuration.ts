@@ -11,7 +11,9 @@ export default () => ({
     issuer:
       process.env.OIDC_ISSUER ||
       `${process.env.BASE_URL || 'http://localhost:3000'}/oauth`,
-    cookieKeys: process.env.OIDC_COOKIE_KEYS || 'taler-oidc-default-key',
+    // No fallback: a committed value would let anyone forge a signed OIDC
+    // session cookie. OidcModule refuses to start without it.
+    cookieKeys: process.env.OIDC_COOKIE_KEYS,
   },
   database: {
     url: process.env.DATABASE_URL,

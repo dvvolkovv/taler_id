@@ -13,11 +13,30 @@ import { RedisIoAdapter } from './redis-io.adapter';
 import { WebSocket, WebSocketServer } from 'ws';
 import { verify, type JwtPayload } from 'jsonwebtoken';
 import * as fs from 'fs';
+import { isApiAccessToken } from './common/utils/access-token.util';
+import { assertLivekitCredentials } from './common/livekit-credentials';
 import { json } from 'express';
 import { VoiceGateService } from './voice-gate/voice-gate.service';
 import { PcmWindow, wrapWavMono, pcmRms16 } from './voice-gate/pcm-window';
 
+// The realtime proxy talks to OpenAI on the server's own API key, and the model
+// used to come straight from a query parameter — so anyone holding a token
+// could point it at the most expensive realtime model and burn credits at
+// whatever rate they liked. No shipped client sends `model` at all; the
+// parameter survives only as an allow-listed override for experiments.
+const DEFAULT_REALTIME_MODEL = 'gpt-realtime-mini-2025-12-15';
+const ALLOWED_REALTIME_MODELS = new Set(
+  (process.env.REALTIME_ALLOWED_MODELS ?? DEFAULT_REALTIME_MODEL)
+    .split(',')
+    .map((m) => m.trim())
+    .filter(Boolean),
+);
+
 async function bootstrap() {
+  // Refuse to start on credentials published in this repo, rather than coming
+  // up and signing room tokens anyone could forge.
+  assertLivekitCredentials();
+
   const app = await NestFactory.create(AppModule, {
     logger: ['log', 'warn', 'error'],
     rawBody: true,
@@ -535,6 +554,16 @@ async function bootstrap() {
 
   // Mount oidc-provider at /oauth
   const expressApp = app.getHttpAdapter().getInstance();
+
+  // nginx terminates TLS and forwards to us over loopback (on DO the managed
+  // LB and the Selectel RU edge sit in front of nginx, which resolves the real
+  // client via real_ip before proxying). Without this Express reports the
+  // proxy's own address as req.ip, so the global ThrottlerGuard buckets every
+  // client on the planet into a single counter — the per-IP limits never bite
+  // — and audit log and session rows record the proxy instead of the caller.
+  // Trusting only loopback means an outside client cannot forge
+  // X-Forwarded-For: the header is rewritten by our own nginx.
+  expressApp.set('trust proxy', process.env.TRUST_PROXY ?? 'loopback');
   const oidcProvider = app.get(OIDC_PROVIDER);
   oidcProvider.proxy = true;
 
@@ -669,6 +698,9 @@ async function bootstrap() {
       const payload = verify(token, jwtPublicKey, {
         algorithms: ['RS256'],
       }) as JwtPayload & { sub?: string };
+      // OIDC ID tokens carry the same signature — they must not open the
+      // realtime proxy, which spends OpenAI credits on the server key.
+      if (!isApiAccessToken(payload)) throw new Error('Not an access token');
       userIdFromToken =
         typeof payload?.sub === 'string' ? payload.sub : null;
     } catch {
@@ -678,7 +710,17 @@ async function bootstrap() {
     }
     const billingSessionId = url.searchParams.get('billingSessionId');
     wss.handleUpgrade(req, socket, head, (clientWs) => {
-      const model = url.searchParams.get('model') ?? 'gpt-realtime-mini-2025-12-15';
+      const requestedModel = url.searchParams.get('model');
+      if (requestedModel && !ALLOWED_REALTIME_MODELS.has(requestedModel)) {
+        Logger.warn(
+          `proxy: refused model "${requestedModel}" (userId=${userIdFromToken}), using default`,
+          'RealtimeProxy',
+        );
+      }
+      const model =
+        requestedModel && ALLOWED_REALTIME_MODELS.has(requestedModel)
+          ? requestedModel
+          : DEFAULT_REALTIME_MODEL;
       // Per-session voice-gate state
       let ownerEmbedding: number[] = [];
       let responseInFlight = false;

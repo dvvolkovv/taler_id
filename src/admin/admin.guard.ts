@@ -8,6 +8,7 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
+import { isApiAccessToken } from '../common/utils/access-token.util';
 
 @Injectable()
 export class AdminGuard implements CanActivate {
@@ -29,6 +30,9 @@ export class AdminGuard implements CanActivate {
         algorithms: ['RS256'],
         publicKey,
       } as any);
+      // OIDC ID tokens share the signing key; only API access tokens qualify.
+      if (!isApiAccessToken(payload))
+        throw new UnauthorizedException('Invalid token');
       if (!payload.isAdmin)
         throw new ForbiddenException('Admin access required');
       req.user = payload;

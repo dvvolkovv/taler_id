@@ -14,6 +14,7 @@ describe('MessengerService.createMessage phantom guard', () => {
   let service: MessengerService;
   let mockPrisma: {
     message: { create: jest.Mock; findFirst: jest.Mock };
+    conversationParticipant: { findUnique: jest.Mock };
   };
 
   const CONV = 'conv-1';
@@ -23,6 +24,12 @@ describe('MessengerService.createMessage phantom guard', () => {
   beforeEach(async () => {
     mockPrisma = {
       message: { create: jest.fn(), findFirst: jest.fn() },
+      // createMessage asserts conversation membership before anything else.
+      conversationParticipant: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ conversationId: CONV, userId: SENDER }),
+      },
     };
     const mod = await Test.createTestingModule({
       providers: [

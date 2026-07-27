@@ -19,8 +19,7 @@ import { PricingService } from '../billing/services/pricing.service';
 import { FEATURE_KEYS } from '../billing/constants/feature-keys';
 
 const LK_HOST = process.env.LIVEKIT_HOST || 'http://localhost:7880';
-const LK_API_KEY = process.env.LIVEKIT_API_KEY || 'lkdevkey';
-const LK_API_SECRET = process.env.LIVEKIT_API_SECRET || 'lkSecret2024TalerID';
+import { LK_API_KEY, LK_API_SECRET } from '../common/livekit-credentials';
 const LK_WS_URL = process.env.LIVEKIT_WS_URL || 'ws://localhost:7880';
 // Region-routed second SFU: CIS calls run on the Selectel SFU (box1), EU calls
 // on the DO media SFU. Both share the LiveKit API key, so a token is valid on
@@ -101,15 +100,23 @@ export class VoiceService {
   }
 
   async joinRoom(roomName: string, userId: string, sessionId?: string) {
-    try {
-      const log = await this.prisma.callLog.findUnique({ where: { roomName } });
-      if (log && !log.participantIds.includes(userId)) {
-        await this.prisma.callLog.update({
-          where: { roomName },
-          data: { participantIds: { push: userId } },
-        });
-      }
-    } catch (_) {}
+    // This used to add the caller to participantIds and hand out a token to
+    // whoever asked, so any authenticated user who learned a room name could
+    // walk into someone else's call — and writing themselves into the log made
+    // them look like a legitimate participant afterwards.
+    //
+    // The invite flow is the source of truth instead: handleCallInvite() adds
+    // each callee to participantIds only after the block and contact checks
+    // pass, so membership there means "was invited". Public, temporary and
+    // guest entry go through the /rooms/public/:code/join* routes, not here.
+    const log = await this.prisma.callLog.findUnique({ where: { roomName } });
+    const isPersonalRoomOwner = roomName.startsWith(
+      `personal-${userId.substring(0, 8)}`,
+    );
+    if (!isPersonalRoomOwner && !log?.participantIds.includes(userId)) {
+      throw new ForbiddenException('Not invited to this room');
+    }
+
     return {
       token: await this.makeToken(roomName, userId, sessionId),
       livekitWsUrl: this.sfuFor(roomName).wsUrl,

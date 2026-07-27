@@ -8,12 +8,34 @@ export class EmailService {
   private transporter: nodemailer.Transporter;
 
   constructor(private readonly config: ConfigService) {
+    const host = this.config.get<string>('email.smtp.host');
+
+    // This connection carries login OTP codes and the SMTP credentials
+    // themselves, so an unverified peer means anyone able to intercept the
+    // route can read both. Verification is nevertheless OFF by default,
+    // because mail.taler.tirol still presents a self-signed certificate that
+    // expired in October 2024 — turning it on before the certificate is fixed
+    // would stop OTP delivery, i.e. stop people signing in.
+    //
+    // Flip SMTP_TLS_REJECT_UNAUTHORIZED=true the moment that host gets a valid
+    // certificate; nothing else needs to change.
+    const rejectUnauthorized =
+      process.env.SMTP_TLS_REJECT_UNAUTHORIZED === 'true';
+
+    if (!rejectUnauthorized) {
+      this.logger.warn(
+        `SMTP TLS certificate verification is disabled for ${host} — OTP codes ` +
+          'and SMTP credentials are exposed to an active network attacker. ' +
+          'Fix the certificate and set SMTP_TLS_REJECT_UNAUTHORIZED=true.',
+      );
+    }
+
     this.transporter = nodemailer.createTransport({
-      host: this.config.get<string>('email.smtp.host'),
+      host,
       port: this.config.get<number>('email.smtp.port'),
       secure: false,
       requireTLS: true,
-      tls: { rejectUnauthorized: false }, // mail.taler.tirol cert may be self-signed or expired
+      tls: { rejectUnauthorized },
       auth: {
         user: this.config.get<string>('email.smtp.user'),
         pass: this.config.get<string>('email.smtp.pass'),

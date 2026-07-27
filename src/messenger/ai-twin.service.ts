@@ -17,8 +17,7 @@ import { parseUserId } from '../common/participant-identity';
 import { FeatureDisabledException } from '../billing/exceptions/feature-disabled.exception';
 
 const LK_HOST = process.env.LIVEKIT_HOST || 'http://localhost:7880';
-const LK_API_KEY = process.env.LIVEKIT_API_KEY || 'lkdevkey';
-const LK_API_SECRET = process.env.LIVEKIT_API_SECRET || 'lkSecret2024TalerID';
+import { LK_API_KEY, LK_API_SECRET } from '../common/livekit-credentials';
 
 // Name of the registered livekit-agents worker (see ~/ai-twin-agent/agent.py).
 const AI_TWIN_AGENT_NAME = 'ai-twin-agent';
@@ -208,8 +207,16 @@ export class AiTwinService implements OnModuleInit, OnModuleDestroy {
     if (!expired.length) return;
 
     for (const member of expired) {
-      // Always remove first so a slow handler never double-fires.
-      await client.zrem(TIMER_ZSET_KEY, member);
+      // ZREM is atomic and reports how many members it actually removed, which
+      // makes it the claim: exactly one caller can get 1. Every backend process
+      // ticks once a second against the same Redis, and PROD runs two app
+      // nodes, so both used to read the same member here, both remove it, and
+      // both carry on — offering the AI twin twice for one call, dispatching
+      // two agents into the room and billing for both. Discarding zrem's
+      // result was the whole gap; the comment below only ever held within a
+      // single process.
+      const claimed = await client.zrem(TIMER_ZSET_KEY, member);
+      if (claimed === 0) continue;
 
       const raw = await client.get(TIMER_META_PREFIX + member);
       await client.del(TIMER_META_PREFIX + member);

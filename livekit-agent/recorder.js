@@ -17,8 +17,10 @@ const os = require('os');
 const { randomUUID: uuidv4 } = require('crypto');
 
 const LK_URL = process.env.LIVEKIT_WS_URL || 'ws://localhost:7880';
-const LK_API_KEY = process.env.LIVEKIT_API_KEY || 'lkdevkey';
-const LK_API_SECRET = process.env.LIVEKIT_API_SECRET || 'lkSecret2024TalerID';
+const { readLivekitCredentials } = require('./livekit-credentials');
+// Throws on startup rather than silently signing tokens with the pair
+// committed to this repository.
+const { apiKey: LK_API_KEY, apiSecret: LK_API_SECRET } = readLivekitCredentials();
 const OPENAI_KEY = process.env.OPENAI_API_KEY;
 const BACKEND_URL = process.env.BACKEND_URL || 'https://id.taler.tirol';
 const RECORDER_SECRET = process.env.RECORDER_SHARED_SECRET || '';

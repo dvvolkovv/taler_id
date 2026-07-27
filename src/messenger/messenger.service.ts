@@ -780,6 +780,12 @@ export class MessengerService {
     clientTempId?: string,
     phantomSuspect?: boolean,
   ) {
+    // Every write path — socket, REST, MCP, informer bot, system channel —
+    // funnels through here, so this is the single place that has to prove the
+    // sender belongs to the conversation. Without it any authenticated user
+    // could post into an arbitrary conversation by guessing its id.
+    await this.assertParticipant(conversationId, senderId);
+
     // Phantom-resend content dedup (incidents 2026-07-10 and 2026-07-17):
     // stale pre-1.0.98 client outboxes re-fire old messages on every socket
     // reconnect. Ancient clients send no clientTempId at all; 1.0.8x-era
@@ -1531,9 +1537,11 @@ export class MessengerService {
   async votePoll(optionId: string, userId: string) {
     const option = await this.prisma.pollOption.findUnique({
       where: { id: optionId },
-      include: { poll: true },
+      include: { poll: { include: { message: { select: { conversationId: true } } } } },
     });
     if (!option) throw new NotFoundException('Option not found');
+    // Voting in a poll you cannot see also outs you as a voter to that chat.
+    await this.assertParticipant(option.poll.message.conversationId, userId);
 
     // Check if already voted on this option
     const existing = await this.prisma.pollVote.findUnique({
@@ -1571,7 +1579,16 @@ export class MessengerService {
     });
   }
 
-  async getPollByMessageId(messageId: string) {
+  async getPollByMessageId(messageId: string, userId: string) {
+    // Poll results carry per-option voter ids, so an unchecked read both leaks
+    // the question and de-anonymises who voted for what.
+    const message = await this.prisma.message.findUnique({
+      where: { id: messageId },
+      select: { conversationId: true },
+    });
+    if (!message) throw new NotFoundException('Message not found');
+    await this.assertParticipant(message.conversationId, userId);
+
     return this.prisma.poll.findUnique({
       where: { messageId },
       include: {
@@ -1584,7 +1601,17 @@ export class MessengerService {
   }
   // ─── Threads ───
 
-  async getThreadReplies(messageId: string) {
+  async getThreadReplies(messageId: string, userId: string) {
+    // Resolve the conversation from the message itself rather than trusting the
+    // convId in the URL — otherwise the check is satisfied by naming a
+    // conversation the caller does belong to while reading someone else's thread.
+    const parent = await this.prisma.message.findUnique({
+      where: { id: messageId },
+      select: { conversationId: true },
+    });
+    if (!parent) throw new NotFoundException('Message not found');
+    await this.assertParticipant(parent.conversationId, userId);
+
     return this.prisma.message.findMany({
       where: { threadParentId: messageId, deletedAt: null },
       orderBy: { sentAt: 'asc' },
@@ -1615,6 +1642,11 @@ export class MessengerService {
     threadParentId: string,
     fileData?: any,
   ) {
+    // Does not go through createMessage, so it needs its own check: matching
+    // the parent's conversationId only proves the thread is consistent, not
+    // that the sender may write to it.
+    await this.assertParticipant(conversationId, senderId);
+
     const parent = await this.prisma.message.findUnique({
       where: { id: threadParentId },
     });
@@ -1637,7 +1669,10 @@ export class MessengerService {
   }
   // ─── Topics ───
 
-  async getTopics(conversationId: string) {
+  async getTopics(conversationId: string, userId: string) {
+    // Topics come back enriched with the text of each topic's latest message.
+    await this.assertParticipant(conversationId, userId);
+
     const topics = await this.prisma.topic.findMany({
       where: { conversationId },
       orderBy: { createdAt: 'asc' },
@@ -1697,6 +1732,11 @@ export class MessengerService {
     const conv = await this._getConversationOrThrow(conversationId);
     if (conv.type !== 'GROUP')
       throw new BadRequestException('Topics only for groups');
+    // Being a group was the only requirement here, so anyone could add topics
+    // to a group they are not in. deleteTopic already goes through
+    // assertGroupRole; creation was the gap.
+    await this.assertParticipant(conversationId, userId);
+
     return this.prisma.topic.create({
       data: { conversationId, title, icon: icon || '💬', createdBy: userId },
     });
