@@ -242,6 +242,9 @@ export class MessengerController {
     @CurrentUser() user: any,
   ) {
     await this.service.removeGroupMember(id, user.sub, uid);
+    // Drop their sockets from the room before announcing it, or they keep
+    // receiving the group's messages until they reconnect.
+    this.gateway.evictFromConversationRoom(uid, id);
     await this.gateway.emitToConversationParticipants(
       id,
       'group_member_removed',
@@ -319,6 +322,7 @@ export class MessengerController {
   @Post('conversations/:id/leave')
   async leaveGroup(@Param('id') id: string, @CurrentUser() user: any) {
     await this.service.leaveGroup(id, user.sub);
+    this.gateway.evictFromConversationRoom(user.sub, id);
     await this.gateway.emitToConversationParticipants(
       id,
       'group_member_removed',

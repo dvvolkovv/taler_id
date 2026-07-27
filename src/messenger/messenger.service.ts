@@ -780,6 +780,12 @@ export class MessengerService {
     clientTempId?: string,
     phantomSuspect?: boolean,
   ) {
+    // Every write path — socket, REST, MCP, informer bot, system channel —
+    // funnels through here, so this is the single place that has to prove the
+    // sender belongs to the conversation. Without it any authenticated user
+    // could post into an arbitrary conversation by guessing its id.
+    await this.assertParticipant(conversationId, senderId);
+
     // Phantom-resend content dedup (incidents 2026-07-10 and 2026-07-17):
     // stale pre-1.0.98 client outboxes re-fire old messages on every socket
     // reconnect. Ancient clients send no clientTempId at all; 1.0.8x-era
@@ -1615,6 +1621,11 @@ export class MessengerService {
     threadParentId: string,
     fileData?: any,
   ) {
+    // Does not go through createMessage, so it needs its own check: matching
+    // the parent's conversationId only proves the thread is consistent, not
+    // that the sender may write to it.
+    await this.assertParticipant(conversationId, senderId);
+
     const parent = await this.prisma.message.findUnique({
       where: { id: threadParentId },
     });

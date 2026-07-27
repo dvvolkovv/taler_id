@@ -1197,6 +1197,18 @@ export class MessengerGateway
     this.server.to(`user:${userId}`).emit(event, data);
   }
 
+  /**
+   * Removes every socket of `userId` from a conversation's Socket.IO room.
+   *
+   * Room membership is granted on `join` and used to be kept until the socket
+   * disconnected, so a user removed from a group went on receiving its live
+   * messages for the rest of their session. Goes through the Redis adapter, so
+   * it also reaches sockets held by the other app node.
+   */
+  evictFromConversationRoom(userId: string, conversationId: string) {
+    this.server.in(`user:${userId}`).socketsLeave(conversationId);
+  }
+
   /** Get user's preferred language from their profile. Defaults to 'en'. */
   private async getUserLang(userId: string): Promise<'ru' | 'en'> {
     const profile = await this.prisma.profile.findUnique({
