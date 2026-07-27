@@ -18,6 +18,19 @@ import { json } from 'express';
 import { VoiceGateService } from './voice-gate/voice-gate.service';
 import { PcmWindow, wrapWavMono, pcmRms16 } from './voice-gate/pcm-window';
 
+// The realtime proxy talks to OpenAI on the server's own API key, and the model
+// used to come straight from a query parameter — so anyone holding a token
+// could point it at the most expensive realtime model and burn credits at
+// whatever rate they liked. No shipped client sends `model` at all; the
+// parameter survives only as an allow-listed override for experiments.
+const DEFAULT_REALTIME_MODEL = 'gpt-realtime-mini-2025-12-15';
+const ALLOWED_REALTIME_MODELS = new Set(
+  (process.env.REALTIME_ALLOWED_MODELS ?? DEFAULT_REALTIME_MODEL)
+    .split(',')
+    .map((m) => m.trim())
+    .filter(Boolean),
+);
+
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     logger: ['log', 'warn', 'error'],
@@ -692,7 +705,17 @@ async function bootstrap() {
     }
     const billingSessionId = url.searchParams.get('billingSessionId');
     wss.handleUpgrade(req, socket, head, (clientWs) => {
-      const model = url.searchParams.get('model') ?? 'gpt-realtime-mini-2025-12-15';
+      const requestedModel = url.searchParams.get('model');
+      if (requestedModel && !ALLOWED_REALTIME_MODELS.has(requestedModel)) {
+        Logger.warn(
+          `proxy: refused model "${requestedModel}" (userId=${userIdFromToken}), using default`,
+          'RealtimeProxy',
+        );
+      }
+      const model =
+        requestedModel && ALLOWED_REALTIME_MODELS.has(requestedModel)
+          ? requestedModel
+          : DEFAULT_REALTIME_MODEL;
       // Per-session voice-gate state
       let ownerEmbedding: number[] = [];
       let responseInFlight = false;

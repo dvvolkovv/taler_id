@@ -2853,7 +2853,10 @@
     async function startTranslatorAgent() {
       if (!room) return;
       try {
-        await fetch(`${API_BASE}/voice/rooms/${room.name}/translator/public/start`, { method: 'POST' });
+        await fetch(`${API_BASE}/voice/rooms/${room.name}/translator/public/start`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${lkToken}` },
+        });
         await setServerLang(translatorLang);
       } catch (e) {
         console.error('[TRANSLATOR] Start failed:', e);
@@ -2863,7 +2866,10 @@
     async function stopTranslatorAgent() {
       if (!room) return;
       try {
-        await fetch(`${API_BASE}/voice/rooms/${room.name}/translator/public/stop`, { method: 'POST' });
+        await fetch(`${API_BASE}/voice/rooms/${room.name}/translator/public/stop`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${lkToken}` },
+        });
       } catch (e) {
         console.error('[TRANSLATOR] Stop failed:', e);
       }
@@ -2874,7 +2880,10 @@
       try {
         await fetch(`${API_BASE}/voice/rooms/${room.name}/set-lang-public`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${lkToken}`,
+          },
           body: JSON.stringify({ identity: localIdentity, lang }),
         });
       } catch (e) {

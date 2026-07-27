@@ -403,19 +403,26 @@ export class VoiceController {
     return this.service.translatorSelftest();
   }
 
-  // ─── Public Translator (no auth — protected by roomName UUID) ───
+  // ─── Public Translator ───
+  // For web guests, who hold a LiveKit grant rather than a Taler ID token.
+  // Starting a translator spins up an OpenAI Realtime session on the server's
+  // key, so entitlement to the room has to be proven — the room name is not a
+  // secret (see RoomAccessGuard).
 
   @Post('rooms/:roomName/translator/public/start')
+  @UseGuards(RoomAccessGuard)
   startTranslatorPublic(@Param('roomName') roomName: string) {
     return this.service.startTranslator(roomName);
   }
 
   @Post('rooms/:roomName/translator/public/stop')
+  @UseGuards(RoomAccessGuard)
   stopTranslatorPublic(@Param('roomName') roomName: string) {
     return this.service.stopTranslator(roomName);
   }
 
   @Post('rooms/:roomName/set-lang-public')
+  @UseGuards(RoomAccessGuard)
   setTranslatorLangPublic(
     @Param('roomName') roomName: string,
     @Body('identity') identity: string,
