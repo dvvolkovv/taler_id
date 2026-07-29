@@ -4,6 +4,26 @@ import * as fs from 'fs';
 import { createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 
+/**
+ * How long a call push stays worth delivering. A ringing call is only
+ * meaningful while it rings — after that the push must be dropped rather than
+ * queued, or the callee's phone rings for a call that is already over the next
+ * time they come online. Matches the 30s expiry used for direct VoIP pushes in
+ * apns.service.ts.
+ */
+const CALL_RINGING_TTL_MS = 30 * 1000;
+
+/**
+ * A cancellation is only useful while the invite it cancels can still be on
+ * screen, so it outlives the invite by a short margin and no longer.
+ */
+const CALL_CANCEL_TTL_MS = 60 * 1000;
+
+/** `apns-expiration` is an absolute unix timestamp, in seconds. */
+function apnsExpiryIn(ttlMs: number): string {
+  return String(Math.floor(Date.now() / 1000) + Math.floor(ttlMs / 1000));
+}
+
 @Injectable()
 export class FcmService {
   private readonly logger = new Logger(FcmService.name);
@@ -132,6 +152,11 @@ export class FcmService {
         },
         android: {
           priority: 'high',
+          // Without this FCM keeps an undelivered push for its default four
+          // weeks and hands it over the moment the phone comes back online —
+          // the callee's device starts ringing for a call that ended long ago.
+          // sendGroupCallInvite already does this; 1-on-1 calls were missed.
+          ttl: CALL_RINGING_TTL_MS,
           notification: {
             title: 'Входящий звонок',
             body: `${fromName} звонит вам`,
@@ -150,6 +175,9 @@ export class FcmService {
           headers: {
             'apns-priority': '5',
             'apns-push-type': 'background',
+            // Same reasoning for the iOS fallback path through FCM. The direct
+            // VoIP path in apns.service.ts already sets a 30s expiry.
+            'apns-expiration': apnsExpiryIn(CALL_RINGING_TTL_MS),
           },
         },
       });
@@ -441,12 +469,14 @@ export class FcmService {
         },
         android: {
           priority: 'high',
+          ttl: CALL_CANCEL_TTL_MS,
         },
         apns: {
           payload: { aps: { contentAvailable: true } },
           headers: {
             'apns-priority': '5',
             'apns-push-type': 'background',
+            'apns-expiration': apnsExpiryIn(CALL_CANCEL_TTL_MS),
           },
         },
       });
