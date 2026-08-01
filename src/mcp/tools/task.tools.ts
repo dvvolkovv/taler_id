@@ -187,7 +187,23 @@ export function registerScheduleTool(
         calendar.findByRange(userId, from, to),
         tasks.list(userId, { from, to, includeDone }),
       ]);
-      return json({ events, tasks: taskList });
+      // list_schedule is a WINDOWED view ("расписание за окно"), unlike
+      // list_tasks which returns the full one-off backlog. Keep only tasks
+      // that actually land in [from,to]: routines with ≥1 occurrence in the
+      // window, and one-off tasks whose due or deadline falls in the window.
+      const fromMs = Date.parse(from);
+      const toMs = Date.parse(to);
+      const inWindow = (iso?: string | null) => {
+        if (!iso) return false;
+        const t = Date.parse(iso);
+        return !Number.isNaN(t) && t >= fromMs && t <= toMs;
+      };
+      const scheduledTasks = taskList.filter((t: any) =>
+        Array.isArray(t.occurrences)
+          ? t.occurrences.length > 0
+          : inWindow(t.due) || inWindow(t.deadline),
+      );
+      return json({ events, tasks: scheduledTasks });
     },
   );
 }
