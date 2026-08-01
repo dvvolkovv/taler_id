@@ -58,6 +58,39 @@ const calendarEventType = z
   .enum(CALENDAR_EVENT_TYPES)
   .describe('Тип события: CALL (звонок), EVENT (встреча/событие), REMINDER (напоминание)');
 
+/**
+ * Recurrence rule — canonical shape per calendar API spec §3.3.
+ * Stored freeform; the server expands recurring events into occurrences.
+ */
+const RECURRENCE_WEEKDAYS = ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU'] as const;
+const recurrenceSchema = z
+  .object({
+    freq: z
+      .enum(['daily', 'weekly', 'monthly'])
+      .describe('Частота повтора: daily | weekly | monthly'),
+    interval: z
+      .number()
+      .int()
+      .min(1)
+      .optional()
+      .describe('Повторять каждые N единиц (по умолчанию 1)'),
+    byDay: z
+      .array(z.enum(RECURRENCE_WEEKDAYS))
+      .optional()
+      .describe('Дни недели для weekly, например ["MO","WE","FR"]'),
+    count: z
+      .number()
+      .int()
+      .min(1)
+      .optional()
+      .describe('Ограничение по числу повторов'),
+    until: z
+      .string()
+      .optional()
+      .describe('ISO 8601 — повторять до этой даты включительно'),
+  })
+  .describe('Правило повтора (spec §3.3). Указывай только для повторяющихся событий.');
+
 export function registerCalendarTools(
   server: McpServer,
   calendar: Pick<
@@ -112,7 +145,8 @@ export function registerCalendarTools(
     'create_calendar_event',
     'Создаёт новое событие в календаре пользователя. ' +
       'Обязательные поля: title (название), type (тип: CALL/EVENT/REMINDER), startAt (начало). ' +
-      'Необязательные: endAt (конец), description (описание), reminder_minutes_before (за сколько минут до начала напомнить).',
+      'Необязательные: endAt (конец), description (описание), reminder_minutes_before, ' +
+      'recurrence (повтор), idempotency_key (стабильный ключ против дублей).',
     {
       title: z.string().describe('Название события'),
       type: calendarEventType,
@@ -129,14 +163,33 @@ export function registerCalendarTools(
         .positive()
         .optional()
         .describe('За сколько минут до начала выслать напоминание'),
+      recurrence: recurrenceSchema.optional(),
+      idempotency_key: z
+        .string()
+        .optional()
+        .describe(
+          'Ключ идемпотентности (стабильный uid). Повторный create с тем же ключом ' +
+            'возвращает существующее событие вместо создания дубля.',
+        ),
     },
-    async ({ title, type, startAt, endAt, description, reminder_minutes_before }) => {
+    async ({
+      title,
+      type,
+      startAt,
+      endAt,
+      description,
+      reminder_minutes_before,
+      recurrence,
+      idempotency_key,
+    }) => {
       const createData: Parameters<CalendarService['create']>[1] = {
         title,
         type,
         startAt,
         ...(endAt !== undefined ? { endAt } : {}),
         ...(description !== undefined ? { description } : {}),
+        ...(recurrence !== undefined ? { recurrence } : {}),
+        ...(idempotency_key !== undefined ? { id: idempotency_key } : {}),
         ...(reminder_minutes_before !== undefined
           ? {
               reminderAt: new Date(
@@ -177,6 +230,10 @@ export function registerCalendarTools(
         .positive()
         .optional()
         .describe('За сколько минут до начала напомнить (вычисляется от startAt; если startAt не передан в этом же вызове — игнорируется)'),
+      recurrence: recurrenceSchema
+        .nullable()
+        .optional()
+        .describe('Новое правило повтора (spec §3.3); null — снять повтор.'),
     },
     async ({
       id,
@@ -187,6 +244,7 @@ export function registerCalendarTools(
       description,
       allDay,
       reminder_minutes_before,
+      recurrence,
     }) => {
       try {
         const updateData: Record<string, unknown> = {};
@@ -196,6 +254,7 @@ export function registerCalendarTools(
         if (endAt !== undefined) updateData.endAt = endAt;
         if (description !== undefined) updateData.description = description;
         if (allDay !== undefined) updateData.allDay = allDay;
+        if (recurrence !== undefined) updateData.recurrence = recurrence;
         if (reminder_minutes_before !== undefined) {
           // reminderAt is computed from startAt if provided, otherwise the
           // service will use the existing startAt — but the update path in

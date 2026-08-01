@@ -83,43 +83,102 @@ export class CalendarService {
     );
   }
 
+  // Recurrence is stored freeform (Json). Canonical shape (spec §3.3):
+  //   { freq: daily|weekly|monthly, interval?, byDay?: [MO..SU], count?, until? }
+  // Back-compat: the mobile app writes { frequency, interval, endAt } — we read
+  // freq ?? frequency and until ?? endAt so both shapes expand. `count`/`until`
+  // bound the SERIES (counted from startAt), independent of the [from,to] window.
   private expandRecurrence(event: any, from: Date, to: Date): any[] {
     const rec = event.recurrence;
-    if (!rec?.frequency)
+    const freq: string | undefined = rec?.freq ?? rec?.frequency;
+    if (!freq) {
       return event.startAt >= from && event.startAt <= to ? [event] : [];
+    }
 
-    const frequency: string = rec.frequency;
-    const interval: number = rec.interval || 1;
-    const recEnd: Date | null = rec.endAt ? new Date(rec.endAt) : null;
-    const duration: number = event.endAt
-      ? new Date(event.endAt).getTime() - new Date(event.startAt).getTime()
+    const WEEKDAY_INDEX: Record<string, number> = {
+      SU: 0, MO: 1, TU: 2, WE: 3, TH: 4, FR: 5, SA: 6,
+    };
+    const startOfDay = (d: Date) => {
+      const x = new Date(d);
+      x.setHours(0, 0, 0, 0);
+      return x;
+    };
+    const startOfWeekMonday = (d: Date) => {
+      const x = startOfDay(d);
+      const wd = x.getDay();
+      x.setDate(x.getDate() - (wd === 0 ? 6 : wd - 1));
+      return x;
+    };
+
+    const interval = Math.max(1, Number(rec.interval) || 1);
+    const count: number | undefined =
+      typeof rec.count === 'number' && rec.count > 0 ? rec.count : undefined;
+    const until: Date | null =
+      rec.until || rec.endAt ? new Date(rec.until ?? rec.endAt) : null;
+    const byDay: Set<number> | null =
+      Array.isArray(rec.byDay) && rec.byDay.length
+        ? new Set(
+            (rec.byDay as string[])
+              .map((d) => WEEKDAY_INDEX[d])
+              .filter((n) => n !== undefined),
+          )
+        : null;
+
+    const start = new Date(event.startAt);
+    const duration = event.endAt
+      ? new Date(event.endAt).getTime() - start.getTime()
       : 0;
-
     const occurrences: any[] = [];
-    let current = new Date(event.startAt);
+    let emitted = 0;
+    // Records one series occurrence; returns false when the series must stop.
+    const emit = (d: Date): boolean => {
+      if (until && d > until) return false;
+      if (d >= from && d <= to) {
+        occurrences.push({
+          ...event,
+          startAt: new Date(d),
+          endAt: event.endAt ? new Date(d.getTime() + duration) : null,
+        });
+      }
+      emitted++;
+      return !(count && emitted >= count);
+    };
 
-    // Advance to first occurrence on or after `from`
-    let safety = 0;
-    while (current < from && safety < 10000) {
-      current = this.advanceDate(current, frequency, interval);
-      if (recEnd && current > recEnd) return occurrences;
-      safety++;
+    if (freq === 'weekly' && byDay) {
+      const anchor = startOfWeekMonday(start).getTime();
+      const timeOfDayMs = start.getTime() - startOfDay(start).getTime();
+      let day = startOfDay(start);
+      let safety = 0;
+      while (safety < 4000) {
+        safety++;
+        const occ = new Date(day.getTime() + timeOfDayMs);
+        if (occ >= start) {
+          const weekIdx = Math.round(
+            (startOfWeekMonday(occ).getTime() - anchor) / (7 * 86400000),
+          );
+          if (weekIdx % interval === 0 && byDay.has(occ.getDay())) {
+            if (!emit(occ)) break;
+          }
+        }
+        if (occ > to && (!until || occ <= until)) break;
+        day = new Date(day);
+        day.setDate(day.getDate() + 1);
+      }
+    } else {
+      let current = new Date(start);
+      let safety = 0;
+      while (safety < 6000) {
+        safety++;
+        if (until && current > until) break;
+        if (current > to) break;
+        if (!emit(current)) break;
+        current = this.advanceDate(current, freq, interval);
+      }
     }
 
-    // Collect occurrences within [from, to]
-    safety = 0;
-    while (current <= to && safety < 500) {
-      if (recEnd && current > recEnd) break;
-      occurrences.push({
-        ...event,
-        startAt: new Date(current),
-        endAt: event.endAt ? new Date(current.getTime() + duration) : null,
-      });
-      current = this.advanceDate(current, frequency, interval);
-      safety++;
-    }
-
-    return occurrences;
+    return occurrences.sort(
+      (a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime(),
+    );
   }
 
   private advanceDate(date: Date, frequency: string, interval: number): Date {
@@ -165,11 +224,10 @@ export class CalendarService {
       contactIds?: string[];
       createdBy?: string;
       displayTime?: string;
-      recurrence?: {
-        frequency: string;
-        interval?: number;
-        endAt?: string;
-      } | null;
+      // Freeform recurrence JSON. Canonical (spec §3.3):
+      // { freq, interval?, byDay?, count?, until? }. Legacy mobile shape
+      // { frequency, interval, endAt } is still accepted (see expandRecurrence).
+      recurrence?: Record<string, any> | null;
     },
   ) {
     if (data.id) {
