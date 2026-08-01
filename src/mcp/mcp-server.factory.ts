@@ -1,11 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { CalendarService } from '../calendar/calendar.service';
+import { TasksService } from '../tasks/tasks.service';
 import { NotesService } from '../notes/notes.service';
 import { MessengerService } from '../messenger/messenger.service';
 import { MessengerGateway } from '../messenger/messenger.gateway';
 import { MailBridgeService } from '../mail/mail-bridge.service';
 import { registerCalendarTools } from './tools/calendar.tools';
+import { registerTaskTools } from './tools/task.tools';
 import { registerNotesTools } from './tools/notes.tools';
 import {
   registerMessengerReadTools,
@@ -17,6 +19,7 @@ import { registerMailReadTools, registerMailSendTool } from './tools/mail.tools'
 export class McpServerFactory {
   constructor(
     private readonly calendar: CalendarService,
+    private readonly tasks: TasksService,
     private readonly notes: NotesService,
     private readonly messenger: MessengerService,
     // конкретный класс (не Pick<>): mapped-type в DI-конструкторе даёт metadata
@@ -29,6 +32,7 @@ export class McpServerFactory {
     const server = new McpServer({ name: 'talerid', version: '1.0.0' });
     if (scopes.includes('mcp:calendar')) {
       registerCalendarTools(server, this.calendar, userId);
+      registerTaskTools(server, this.tasks, userId);
     }
     if (scopes.includes('mcp:notes')) {
       registerNotesTools(server, this.notes, userId);

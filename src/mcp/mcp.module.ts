@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { CalendarModule } from '../calendar/calendar.module';
+import { TasksModule } from '../tasks/tasks.module';
 import { NotesModule } from '../notes/notes.module';
 import { MessengerModule } from '../messenger/messenger.module';
 import { MailModule } from '../mail/mail.module';
@@ -11,6 +12,7 @@ import { McpAuthGuard } from './mcp-auth.guard';
 @Module({
   imports: [
     CalendarModule,
+    TasksModule,
     NotesModule,
     MessengerModule,
     MailModule,

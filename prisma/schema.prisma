@@ -35,6 +35,7 @@ model User {
   notes                Note[]
   calendarEvents       CalendarEvent[]
   calendarInvites      CalendarInvite[]
+  tasks                Task[]
   wallet               UserWallet?
   billingTransactions  BillingTransaction[]
   aiSessions           AiSession[]
@@ -917,4 +918,55 @@ model MailAppPassword {
   revokedAt     DateTime?
 
   @@index([mailAccountId])
+}
+
+enum TaskStatus {
+  PENDING
+  DONE
+  DROPPED
+}
+
+enum TaskOccurrenceStatus {
+  PENDING
+  DONE
+  SKIPPED
+}
+
+// Task / routine — an intention to do something (calendar API spec §3.2).
+// When `recurrence` is set it is a routine; per-date completion lives in
+// TaskOccurrence (§3.4) so one day can be done while others stay pending.
+model Task {
+  id          String           @id @default(uuid())
+  userId      String
+  title       String
+  due         DateTime? // soft time hint
+  deadline    DateTime? // hard deadline (separate from due)
+  note        String?          @db.Text
+  recurrence  Json? // canonical shape §3.3 (freq/interval/byDay/count/until)
+  status      TaskStatus       @default(PENDING)
+  doneAt      DateTime? // server-set on transition to DONE (time analytics)
+  createdBy   String           @default("MANUAL")
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  occurrences TaskOccurrence[]
+
+  @@index([userId, updatedAt])
+  @@index([userId, due])
+}
+
+// Per-date state of a recurring task (routine). Absent occurrence = pending.
+model TaskOccurrence {
+  id             String               @id @default(uuid())
+  taskId         String
+  occurrenceDate String // YYYY-MM-DD
+  status         TaskOccurrenceStatus @default(PENDING)
+  doneAt         DateTime? // server-set on transition to DONE
+  dueOverride    DateTime? // move a single occurrence to another time
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  task           Task                 @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, occurrenceDate])
+  @@index([taskId])
 }

@@ -63,7 +63,7 @@ const calendarEventType = z
  * Stored freeform; the server expands recurring events into occurrences.
  */
 const RECURRENCE_WEEKDAYS = ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU'] as const;
-const recurrenceSchema = z
+export const recurrenceSchema = z
   .object({
     freq: z
       .enum(['daily', 'weekly', 'monthly'])
