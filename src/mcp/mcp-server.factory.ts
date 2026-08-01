@@ -33,6 +33,7 @@ export class McpServerFactory {
     if (scopes.includes('mcp:calendar')) {
       registerCalendarTools(server, this.calendar, userId);
       registerTaskTools(server, this.tasks, userId);
+      registerScheduleTool(server, this.calendar, this.tasks, userId);
     }
     if (scopes.includes('mcp:notes')) {
       registerNotesTools(server, this.notes, userId);
