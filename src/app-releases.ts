@@ -11,6 +11,40 @@ export interface AppRelease {
 // Keep notes user-facing (no internal jargon, no commit hashes).
 export const APP_RELEASES: AppRelease[] = [
   {
+    version: '1.1.21',
+    build: 222,
+    date: '2026-07-30',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.21 — звонки и защита приложения.\n\n' +
+      '📞 Исправлено: звонивший мог не слышать собеседника, хотя тот отвечал. ' +
+      'Проблема была на стороне звонящего — приложение принимало сигнал «вам ответили» ' +
+      'за «ответили с другого устройства» и глушило собственный звук.\n\n' +
+      '🔕 Больше не звонит «из прошлого»: входящий вызов, пришедший пока телефон был ' +
+      'офлайн, теперь не всплывает при возвращении в сеть.\n\n' +
+      '🎙️ Ассистент в звонке: при сворачивании экрана микрофон возвращается собеседнику, ' +
+      'а не остаётся выключенным до конца разговора.\n\n' +
+      '☎️ Две линии: «Завершить этот звонок» больше не обрывает вторую линию.\n\n' +
+      '🔐 PIN-код: попытки ввода теперь считаются между запусками приложения, ' +
+      'а сам код хранится надёжнее. Отключить PIN можно только в настройках — ' +
+      'ассистент этого больше не делает.\n\n' +
+      '🛡️ Данные приложения (ключи, документы) больше не попадают в резервные копии Android.',
+    notes_en:
+      'Release 1.1.21 — calls and app protection.\n\n' +
+      '📞 Fixed: the caller could hear nothing even though the other side had answered. ' +
+      'The bug was on the caller\'s device — it read "your call was answered" as ' +
+      '"answered on another device" and tore down its own audio.\n\n' +
+      '🔕 No more calls from the past: an incoming call that arrived while the phone was ' +
+      'offline no longer pops up when you come back online.\n\n' +
+      '🎙️ In-call assistant: minimising the screen now hands the microphone back to the ' +
+      'call instead of leaving it muted for the rest of it.\n\n' +
+      '☎️ Two lines: "End this call" no longer drops the second line as well.\n\n' +
+      '🔐 PIN: failed attempts now persist across app restarts and the code itself is ' +
+      'stored more securely. Turning the PIN off happens in Settings only — the ' +
+      'assistant can no longer do it.\n\n' +
+      '🛡️ App data (keys, documents) is excluded from Android backups.',
+  },
+  {
     version: '1.1.20',
     build: 219,
     date: '2026-07-24',
