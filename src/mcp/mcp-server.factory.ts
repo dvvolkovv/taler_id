@@ -7,7 +7,7 @@ import { MessengerService } from '../messenger/messenger.service';
 import { MessengerGateway } from '../messenger/messenger.gateway';
 import { MailBridgeService } from '../mail/mail-bridge.service';
 import { registerCalendarTools } from './tools/calendar.tools';
-import { registerTaskTools } from './tools/task.tools';
+import { registerTaskTools, registerScheduleTool } from './tools/task.tools';
 import { registerNotesTools } from './tools/notes.tools';
 import {
   registerMessengerReadTools,

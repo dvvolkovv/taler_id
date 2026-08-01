@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { HttpException } from '@nestjs/common';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { TasksService } from '../../tasks/tasks.service';
+import type { CalendarService } from '../../calendar/calendar.service';
 import { recurrenceSchema } from './calendar.tools';
 
 function json(data: unknown) {
@@ -155,6 +156,38 @@ export function registerTaskTools(
         if (e instanceof HttpException) return err(`Дело ${id} не найдено или нет прав`);
         throw e;
       }
+    },
+  );
+}
+
+/**
+ * list_schedule (spec §4.3) — events + tasks за одно окно одним вызовом.
+ */
+export function registerScheduleTool(
+  server: McpServer,
+  calendar: Pick<CalendarService, 'findByRange'>,
+  tasks: Pick<TasksService, 'list'>,
+  userId: string,
+) {
+  server.tool(
+    'list_schedule',
+    'Единое чтение расписания за окно [from,to]: возвращает { events, tasks } одним ' +
+      'вызовом (события с развёрнутыми повторами + дела/рутины с вхождениями и статусами). ' +
+      'Чтобы не делать два отдельных запроса.',
+    {
+      from: iso.describe('Начало окна (ISO 8601 с таймзоной)'),
+      to: iso.describe('Конец окна (ISO 8601 с таймзоной)'),
+      includeDone: z
+        .boolean()
+        .optional()
+        .describe('Включать выполненные/снятые разовые дела (по умолчанию false)'),
+    },
+    async ({ from, to, includeDone }) => {
+      const [events, taskList] = await Promise.all([
+        calendar.findByRange(userId, from, to),
+        tasks.list(userId, { from, to, includeDone }),
+      ]);
+      return json({ events, tasks: taskList });
     },
   );
 }
