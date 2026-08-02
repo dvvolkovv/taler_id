@@ -12,19 +12,32 @@ import {
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { CalendarService } from './calendar.service';
+import { TasksService } from '../tasks/tasks.service';
 
 @Controller('calendar')
 @UseGuards(JwtAuthGuard)
 export class CalendarController {
-  constructor(private readonly service: CalendarService) {}
+  constructor(
+    private readonly service: CalendarService,
+    private readonly tasks: TasksService,
+  ) {}
 
   @Get()
-  findAll(
+  async findAll(
     @CurrentUser() user: any,
     @Query('from') from?: string,
     @Query('to') to?: string,
   ) {
-    return this.service.findByRange(user.sub, from, to);
+    // Events + task/routine occurrences (read-only synthetic items) so the app
+    // calendar shows routines Linkeon moved from events to tasks.
+    const [events, taskItems] = await Promise.all([
+      this.service.findByRange(user.sub, from, to),
+      this.tasks.occurrencesForCalendar(user.sub, from, to),
+    ]);
+    return [...events, ...taskItems].sort(
+      (a: any, b: any) =>
+        new Date(a.startAt).getTime() - new Date(b.startAt).getTime(),
+    );
   }
 
   @Get('invites')

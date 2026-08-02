@@ -163,6 +163,83 @@ export class TasksService {
     return this.toDto(task);
   }
 
+  /**
+   * Task/routine occurrences shaped as read-only calendar-event items, so the
+   * app's calendar screen (which reads GET /calendar) shows routines like the
+   * user's morning/evening washing — which Linkeon moved from events to tasks.
+   *
+   * Each occurrence is a SEPARATE synthetic event with a unique id
+   * `task:{taskId}:{YYYY-MM-DD}` (the app keys Hive by id and matches a tile to
+   * a day by startAt, so per-occurrence rows are required). `type:'TASK'` is an
+   * already-valid CalendarEventType in the app, so these render on installed
+   * apps with no update. Marker fields (kind/taskId/occurrenceDate/status/
+   * readOnly) are ignored by the current app and used by a future TASK-aware UI.
+   *
+   * This is used ONLY by the app-facing REST controller — NOT findByRange,
+   * which MCP list_calendar_events / list_schedule rely on returning pure events.
+   */
+  async occurrencesForCalendar(userId: string, from?: string, to?: string) {
+    const startDate = from ? new Date(from) : new Date();
+    const endDate = to
+      ? new Date(to)
+      : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    const tasks = await this.prisma.task.findMany({
+      where: { userId },
+      include: { occurrences: true },
+    });
+    const items: any[] = [];
+    for (const task of tasks) {
+      if (isRoutine(task.recurrence)) {
+        const anchor = task.due ?? task.createdAt;
+        const stored = new Map<string, any>(
+          (task.occurrences ?? []).map((o: any) => [o.occurrenceDate, o]),
+        );
+        for (const d of expandOccurrences(
+          new Date(anchor),
+          task.recurrence,
+          startDate,
+          endDate,
+        )) {
+          const ds = toDateStr(d);
+          const occ = stored.get(ds);
+          if (occ && occ.status === 'SKIPPED') continue; // hide skipped days
+          items.push(this.synthCalendarItem(task, d, ds, occ));
+        }
+      } else {
+        if (task.status === 'DONE' || task.status === 'DROPPED') continue;
+        const when = task.due ?? task.deadline;
+        if (when && when >= startDate && when <= endDate) {
+          const w = new Date(when);
+          items.push(this.synthCalendarItem(task, w, toDateStr(w), null));
+        }
+      }
+    }
+    return items;
+  }
+
+  private synthCalendarItem(task: any, when: Date, ds: string, occ: any) {
+    const toIso = (v: any) => (v instanceof Date ? v.toISOString() : v);
+    return {
+      id: `task:${task.id}:${ds}`,
+      title: task.title,
+      description: task.note ?? undefined,
+      type: 'TASK',
+      startAt: when.toISOString(),
+      endAt: null,
+      allDay: false,
+      recurrence: task.recurrence ?? undefined,
+      createdBy: task.createdBy ?? 'MANUAL',
+      createdAt: toIso(task.createdAt),
+      updatedAt: toIso(task.updatedAt),
+      // task-specific markers (ignored by current app):
+      kind: 'task',
+      taskId: task.id,
+      occurrenceDate: ds,
+      status: occ ? lower(occ.status) : lower(task.status),
+      readOnly: true,
+    };
+  }
+
   private async requireOwned(userId: string, id: string) {
     const task = await this.prisma.task.findFirst({
       where: { id, userId },
