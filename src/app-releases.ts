@@ -11,6 +11,39 @@ export interface AppRelease {
 // Keep notes user-facing (no internal jargon, no commit hashes).
 export const APP_RELEASES: AppRelease[] = [
   {
+    version: '1.1.23',
+    build: 224,
+    date: '2026-08-03',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.23 — ссылки открываются в приложении, и связь там, где её резали.\n\n' +
+      '⚠️ Если у вас 1.1.22 — обновитесь: в ней ссылки перехватывались приложением ' +
+      'и упирались в пустой экран.\n\n' +
+      '🔗 Приглашение в комнату и вход через Taler ID на стороннем сайте теперь ' +
+      'открывают экран подтверждения внутри приложения, а после согласия возвращают ' +
+      'на сайт уже с выполненным входом. Раньше это не работало ни разу: ссылку ' +
+      'принимал системный слой, а в приложении её никто не обрабатывал.\n\n' +
+      '🌐 Связь без VPN: если провайдер режет доступ к нашим серверам, приложение ' +
+      'снова само переключается на запасной канал. Звонки при этом идут только по ' +
+      'тем каналам, где они действительно работают.\n\n' +
+      '🔔 Наличие новой версии проверяется при каждом запуске и при возвращении из ' +
+      'фона. Раньше запуск по входящему звонку пропускал и эту проверку, и ' +
+      'подключение к серверу сообщений.',
+    notes_en:
+      'Release 1.1.23 — links open in the app, and connectivity where it was blocked.\n\n' +
+      '⚠️ On 1.1.22? Update: there, links were claimed by the app and led to a blank ' +
+      'screen.\n\n' +
+      '🔗 Room invites and signing in with Taler ID on a partner site now open the ' +
+      'consent screen inside the app, and hand you back to the site signed in. This ' +
+      'never once worked before: the system delivered the link and nothing in the app ' +
+      'was listening for it.\n\n' +
+      '🌐 Connectivity without a VPN: where an ISP blocks our servers, the app falls ' +
+      'back to a working route again. Calls only ever travel routes that can carry them.\n\n' +
+      '🔔 The version check runs on every launch and on returning from the background. ' +
+      'A launch from an incoming call used to skip both it and the message-server ' +
+      'connection.',
+  },
+  {
     version: '1.1.22',
     build: 223,
     date: '2026-08-03',
