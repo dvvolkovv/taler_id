@@ -173,7 +173,7 @@ export class OidcInteractionController {
     };
 
     await this.auditLog(user.id, 'OAUTH_LOGIN', req);
-    return this.oidcService.finishInteraction(req, res, result);
+    return this.finish(req, res, result);
   }
 
   @Post(':uid/consent')
@@ -237,7 +237,34 @@ export class OidcInteractionController {
       scopes: approvedScopes,
     });
 
-    return this.oidcService.finishInteraction(req, res, result);
+    return this.finish(req, res, result);
+  }
+
+  /**
+   * Completes an interaction, answering in whichever shape the caller can act on.
+   *
+   * A 303 is right for a browser navigation, but the consent page submits over
+   * `fetch`: the redirect chain ends at the client's callback, and following a
+   * cross-origin hop from `fetch` is blocked by our CSP `connect-src`, so the
+   * flow died silently at "Allow" for every client with an external callback.
+   * Callers that ask for JSON get the URL to navigate to instead — a top-level
+   * navigation, which CSP does not restrict.
+   *
+   * Redirecting stays the default so existing server-to-server callers, which
+   * follow redirects natively, are unaffected.
+   */
+  private async finish(req: any, res: any, result: any) {
+    const accept = (req.headers?.accept as string | undefined) ?? '';
+    if (!accept.includes('application/json')) {
+      return this.oidcService.finishInteraction(req, res, result);
+    }
+
+    const redirectTo = await this.oidcService.resolveInteractionRedirect(
+      req,
+      res,
+      result,
+    );
+    return res.json({ redirectTo });
   }
 
   @Get(':uid/abort')

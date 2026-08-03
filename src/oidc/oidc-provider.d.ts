@@ -10,6 +10,13 @@ declare module 'oidc-provider' {
       result: any,
       options?: any,
     ): Promise<void>;
+    /** Stores the result and resolves with the URL to continue the flow at. */
+    interactionResult(
+      req: any,
+      res: any,
+      result: any,
+      options?: any,
+    ): Promise<string>;
     Grant: any;
   }
 }

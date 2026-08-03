@@ -108,6 +108,7 @@
         <h3>Permissions requested:</h3>
         <div id="scope-list"></div>
       </div>
+      <div id="consent-error" class="error"></div>
       <div class="actions">
         <button class="btn btn-deny" onclick="abort()">Deny</button>
         <button class="btn btn-allow" onclick="doConsent()">Allow</button>
@@ -129,20 +130,39 @@
       offline_access: { icon: '🔄', name: 'Offline Access', desc: 'Stay connected' },
     };
 
+    // The server answers errors as JSON too, so `res.json()` succeeds on a 400
+    // and only the status tells them apart. Without this check the page hid the
+    // loader, matched neither branch, and left an empty card with no
+    // explanation — which is what an expired interaction used to look like.
     async function loadInteraction() {
+      const loading = document.getElementById('loading');
       try {
-        const res = await fetch(`/oauth/interaction/${uid}`, { credentials: 'include' });
-        interactionData = await res.json();
+        const res = await fetch(`/oauth/interaction/${uid}`, {
+          credentials: 'include',
+          headers: { Accept: 'application/json' },
+        });
+        const data = await res.json().catch(() => ({}));
 
-        document.getElementById('loading').classList.add('hidden');
+        if (!res.ok) {
+          loading.textContent = res.status === 400
+            ? 'This authorization request has expired. Please start again from the application you came from.'
+            : (data.message || 'Could not load authorization details');
+          return;
+        }
 
-        if (interactionData.interaction === 'login') {
+        interactionData = data;
+        loading.classList.add('hidden');
+
+        if (data.interaction === 'login') {
           document.getElementById('login-screen').classList.remove('hidden');
-        } else if (interactionData.interaction === 'consent') {
-          showConsent(interactionData);
+        } else if (data.interaction === 'consent') {
+          showConsent(data);
+        } else {
+          loading.classList.remove('hidden');
+          loading.textContent = 'Unsupported authorization step';
         }
       } catch (e) {
-        document.getElementById('loading').textContent = 'Error loading authorization details';
+        loading.textContent = 'Error loading authorization details';
       }
     }
 
@@ -175,19 +195,13 @@
       try {
         const res = await fetch(`/oauth/interaction/${uid}/login`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
           credentials: 'include',
           body: JSON.stringify({ email, password }),
         });
-        if (res.redirected) {
-          window.location.href = res.url;
-          return;
-        }
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         if (res.ok) {
-          // Follow redirect from oidc-provider
-          if (data.redirectTo) window.location.href = data.redirectTo;
-          else window.location.reload();
+          navigate(data.redirectTo);
         } else {
           document.getElementById('login-error').textContent = data.message || 'Login failed';
         }
@@ -196,24 +210,38 @@
       }
     }
 
+    // Asking for JSON gets the continue-URL back instead of a 303. Letting
+    // `fetch` follow the redirect chain itself does not work: it ends at the
+    // client's own callback, and that cross-origin hop is blocked by our CSP
+    // `connect-src`, so "Allow" appeared to do nothing at all.
     async function doConsent() {
+      const err = document.getElementById('consent-error');
+      err.textContent = '';
       try {
         const res = await fetch(`/oauth/interaction/${uid}/consent`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
           credentials: 'include',
           body: JSON.stringify({}),
         });
-        if (res.redirected) {
-          window.location.href = res.url;
-          return;
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) {
+          navigate(data.redirectTo);
+        } else {
+          err.textContent = data.message === 'invalid_request'
+            ? 'This authorization request has expired. Please start again from the application you came from.'
+            : (data.message || 'Could not complete authorization');
         }
-        const data = await res.json();
-        if (data.redirectTo) window.location.href = data.redirectTo;
-        else window.location.reload();
       } catch (e) {
-        console.error('Consent error:', e);
+        err.textContent = 'Network error';
       }
+    }
+
+    // A top-level navigation, deliberately: it is the only way out of this page
+    // that CSP does not restrict, and the destination is usually another origin.
+    function navigate(url) {
+      if (url) window.location.href = url;
+      else window.location.reload();
     }
 
     async function abort() {

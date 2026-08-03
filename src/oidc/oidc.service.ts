@@ -24,6 +24,22 @@ export class OidcService {
     });
   }
 
+  /**
+   * Stores the interaction result and returns the URL to continue at, instead
+   * of writing a redirect response like `finishInteraction` does.
+   *
+   * The consent page needs this: it submits over `fetch`, and the redirect
+   * chain ends at the client's own callback — a cross-origin hop that our CSP
+   * `connect-src` blocks, so the flow died silently at "Allow". Handing the URL
+   * back as JSON lets the page do a top-level navigation, which CSP does not
+   * police.
+   */
+  async resolveInteractionRedirect(req: any, res: any, result: any) {
+    return this.provider.interactionResult(req, res, result, {
+      mergeWithLastSubmission: false,
+    });
+  }
+
   async findClient(clientId: string) {
     return this.prisma.oAuthClient.findUnique({ where: { clientId } });
   }
