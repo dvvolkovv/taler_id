@@ -11,6 +11,33 @@ export interface AppRelease {
 // Keep notes user-facing (no internal jargon, no commit hashes).
 export const APP_RELEASES: AppRelease[] = [
   {
+    version: '1.1.22',
+    build: 223,
+    date: '2026-08-03',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.22 — задачи в календаре и ссылки, открывающиеся в приложении.\n\n' +
+      '✅ Задачи: теперь в календаре можно создавать не только события, но и задачи. ' +
+      'Задача помечается выполненной одним касанием и выглядит иначе, чем событие.\n\n' +
+      '🗑️ Кнопки «выполнить» и «удалить» стали видимыми — раньше на компьютере до них ' +
+      'было не добраться.\n\n' +
+      '🔗 Ссылки открываются в приложении, а не в браузере: приглашение в комнату, ' +
+      'приглашение в организацию и вход через Taler ID на стороннем сайте. ' +
+      'Раньше это работало только на части адресов, а на talerid.io — не работало вовсе.\n\n' +
+      '🔐 Вход через Taler ID на сайтах-партнёрах: страница подтверждения довела бы ' +
+      'до конца не каждый вход — кнопка «Разрешить» могла молча ничего не делать. Исправлено.',
+    notes_en:
+      'Release 1.1.22 — calendar tasks, and links that open in the app.\n\n' +
+      '✅ Tasks: the calendar now holds tasks as well as events. A task is completed with ' +
+      'a single tap and looks distinct from an event.\n\n' +
+      '🗑️ Complete and delete buttons are now visible — on desktop they were out of reach.\n\n' +
+      '🔗 Links open in the app instead of the browser: room invites, organisation invites, ' +
+      'and signing in with Taler ID on a partner site. This only ever worked on some ' +
+      'addresses, and never on talerid.io.\n\n' +
+      '🔐 Signing in with Taler ID on partner sites: the consent page did not always finish ' +
+      'the flow — "Allow" could silently do nothing. Fixed.',
+  },
+  {
     version: '1.1.21',
     build: 222,
     date: '2026-07-30',
