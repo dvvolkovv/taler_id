@@ -27,12 +27,27 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
+  /**
+   * Непрозрачный идентификатор устройства. Старые клиенты — десктоп, веб,
+   * мобилки до 1.1.24 — его не шлют, и для них вход работает как раньше.
+   */
+  private deviceId(req: Request): string | undefined {
+    const raw = req.headers['x-device-id'];
+    const value = Array.isArray(raw) ? raw[0] : raw;
+    if (!value) return undefined;
+    const trimmed = String(value).trim();
+    // Клиент шлёт uuid v4; всё, что на него не похоже, игнорируем, а не пишем
+    // в базу — иначе кто угодно набьёт таблицу мусором произвольной длины.
+    return /^[0-9a-fA-F-]{16,64}$/.test(trimmed) ? trimmed : undefined;
+  }
+
   @Post('register')
   async register(@Body() dto: RegisterDto, @Req() req: Request) {
     return this.authService.register(
       dto,
       req.ip ?? req.socket?.remoteAddress ?? '',
       req.headers['user-agent'] ?? '',
+      this.deviceId(req),
     );
   }
 
@@ -43,6 +58,7 @@ export class AuthController {
       dto,
       req.ip ?? req.socket?.remoteAddress ?? '',
       req.headers['user-agent'] ?? '',
+      this.deviceId(req),
     );
   }
 
@@ -54,6 +70,7 @@ export class AuthController {
       dto.code,
       req.ip ?? '',
       req.headers['user-agent'] ?? '',
+      this.deviceId(req),
     );
   }
 

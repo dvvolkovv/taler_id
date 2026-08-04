@@ -54,7 +54,12 @@ export class AuthService {
     this.publicKey = fs.readFileSync(publicPath, 'utf8');
   }
 
-  async register(dto: RegisterDto, ip: string, userAgent: string) {
+  async register(
+    dto: RegisterDto,
+    ip: string,
+    userAgent: string,
+    deviceId?: string,
+  ) {
     if (!dto.email && !dto.phone) {
       throw new BadRequestException('Email or phone is required');
     }
@@ -108,11 +113,16 @@ export class AuthService {
       userAgent,
     );
 
-    const session = await this.createSession(user.id, ip, userAgent);
+    const session = await this.createSession(user.id, ip, userAgent, deviceId);
     return this.generateTokens(user, session.id);
   }
 
-  async login(dto: LoginDto, ip: string, userAgent: string) {
+  async login(
+    dto: LoginDto,
+    ip: string,
+    userAgent: string,
+    deviceId?: string,
+  ) {
     const email = dto.email?.trim().toLowerCase();
 
     // Build OR conditions without undefined
@@ -171,7 +181,7 @@ export class AuthService {
     }
 
     await this.auditLog(user.id, 'LOGIN_SUCCESS', ip, userAgent);
-    const session = await this.createSession(user.id, ip, userAgent);
+    const session = await this.createSession(user.id, ip, userAgent, deviceId);
     return this.generateTokens(user, session.id);
   }
 
@@ -180,6 +190,7 @@ export class AuthService {
     code: string,
     ip: string,
     userAgent: string,
+    deviceId?: string,
   ) {
     const userId = await this.redis.get(`2fa_challenge:${challengeToken}`);
     if (!userId)
@@ -224,7 +235,7 @@ export class AuthService {
     await this.redis.del(`2fa_attempts:${challengeToken}`);
     await this.redis.del(`2fa_challenge:${challengeToken}`);
     await this.auditLog(userId, 'LOGIN_SUCCESS', ip, userAgent);
-    const session = await this.createSession(userId, ip, userAgent);
+    const session = await this.createSession(userId, ip, userAgent, deviceId);
     return this.generateTokens(user, session.id);
   }
 
@@ -448,7 +459,12 @@ export class AuthService {
     return { success: true };
   }
 
-  private async createSession(userId: string, ip: string, userAgent: string) {
+  private async createSession(
+    userId: string,
+    ip: string,
+    userAgent: string,
+    deviceId?: string,
+  ) {
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 30); // 30 days
 
@@ -457,6 +473,7 @@ export class AuthService {
         userId,
         ipAddress: ip,
         deviceInfo: userAgent?.substring(0, 200),
+        deviceId: deviceId || null,
         expiresAt,
       },
     });
