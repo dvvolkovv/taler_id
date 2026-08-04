@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { SystemChannelService } from '../system-channel/system-channel.service';
+import { EmailService } from '../email/email.service';
 
 // Mock all ESM/native modules that can't be loaded in Jest
 jest.mock('fs', () => ({
@@ -34,7 +35,12 @@ jest.mock('qrcode', () => ({
 }));
 
 const mockPrisma = {
-  user: { findFirst: jest.fn(), findUnique: jest.fn(), create: jest.fn() },
+  user: {
+    findFirst: jest.fn(),
+    findUnique: jest.fn(),
+    create: jest.fn(),
+    update: jest.fn(),
+  },
   session: {
     create: jest.fn(),
     findMany: jest.fn(),
@@ -52,6 +58,10 @@ const mockPrisma = {
   auditLog: { create: jest.fn() },
 };
 
+// Ротация refresh-токена claim'ит ключ атомарным GETDEL, а не GET+DEL:
+// два параллельных запроса иначе оба получали свежую пару.
+const mockGetdel = jest.fn();
+
 const mockRedis = {
   get: jest.fn(),
   set: jest.fn(),
@@ -59,6 +69,7 @@ const mockRedis = {
   del: jest.fn(),
   incr: jest.fn(),
   expire: jest.fn(),
+  getClient: () => ({ getdel: mockGetdel }),
 };
 
 const mockJwt = {
@@ -94,6 +105,7 @@ describe('AuthService', () => {
         { provide: JwtService, useValue: mockJwt },
         { provide: ConfigService, useValue: mockConfig },
         { provide: SystemChannelService, useValue: { subscribeUser: jest.fn().mockResolvedValue(undefined) } },
+        { provide: EmailService, useValue: { sendOtp: jest.fn() } },
       ],
     }).compile();
     service = module.get<AuthService>(AuthService);
@@ -122,7 +134,7 @@ describe('AuthService', () => {
       expect(result).toHaveProperty('accessToken');
       expect(result).toHaveProperty('refreshToken');
       expect(result.tokenType).toBe('Bearer');
-      expect(result.expiresIn).toBe(900);
+      expect(result.expiresIn).toBe(7200);
     });
 
     it('hashes password before storing', async () => {
@@ -327,7 +339,7 @@ describe('AuthService', () => {
 
   describe('refreshTokens', () => {
     it('returns new token pair for valid refresh token', async () => {
-      mockRedis.get.mockResolvedValue('session-uuid-1');
+      mockGetdel.mockResolvedValue('session-uuid-1');
       mockRedis.del.mockResolvedValue(1);
       mockPrisma.session.findUnique.mockResolvedValue({
         id: 'session-uuid-1',
@@ -358,6 +370,7 @@ describe('AuthService', () => {
     });
 
     it('throws UnauthorizedException for invalid refresh token', async () => {
+      mockGetdel.mockResolvedValue(null);
       mockRedis.get.mockResolvedValue(null);
       await expect(
         service.refreshTokens('invalid', '127.0.0.1', 'Jest'),
@@ -365,7 +378,7 @@ describe('AuthService', () => {
     });
 
     it('throws UnauthorizedException for revoked session', async () => {
-      mockRedis.get.mockResolvedValue('session-revoked');
+      mockGetdel.mockResolvedValue('session-revoked');
       mockRedis.del.mockResolvedValue(1);
       mockPrisma.session.findUnique.mockResolvedValue({
         id: 'session-revoked',
@@ -379,7 +392,7 @@ describe('AuthService', () => {
     });
 
     it('deletes old refresh token from Redis (rotation)', async () => {
-      mockRedis.get.mockResolvedValue('session-uuid-1');
+      mockGetdel.mockResolvedValue('session-uuid-1');
       mockRedis.del.mockResolvedValue(1);
       mockPrisma.session.findUnique.mockResolvedValue({
         id: 'session-uuid-1',
@@ -395,7 +408,7 @@ describe('AuthService', () => {
       mockPrisma.auditLog.create.mockResolvedValue({});
 
       await service.refreshTokens('old-token', '127.0.0.1', 'Jest');
-      expect(mockRedis.del).toHaveBeenCalledWith('refresh:old-token');
+      expect(mockGetdel).toHaveBeenCalledWith('refresh:old-token');
     });
   });
 
