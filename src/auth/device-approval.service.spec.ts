@@ -284,3 +284,91 @@ describe('DeviceApprovalService.claim', () => {
     expect(redis.store.has(`device_approval_id:${approvalId}`)).toBe(false);
   });
 });
+
+// Единственный путь для человека, у которого одно устройство или до остальных
+// не доходят пуши. Без него фича превращается в способ потерять свой аккаунт.
+describe('DeviceApprovalService email fallback', () => {
+  let service: DeviceApprovalService;
+  let prisma: any;
+  let redis: any;
+  let email: any;
+
+  const seed = async () => {
+    const r = await service.createPending({
+      userId: 'u1',
+      deviceId: 'dev-new',
+      deviceInfo: 'Pixel',
+      ip: '1.2.3.4',
+      email: 'a@b.c',
+    });
+    return { token: r.approvalToken };
+  };
+
+  beforeEach(() => {
+    redis = makeRedis();
+    prisma = makePrisma();
+    prisma.session.findMany.mockResolvedValue([]);
+    email = { sendOtp: jest.fn().mockResolvedValue(undefined) };
+    service = new DeviceApprovalService(
+      prisma as any,
+      redis as any,
+      { sendDeviceApprovalRequest: jest.fn() } as any,
+      email as any,
+    );
+  });
+
+  it('sends a six-digit code to the account address', async () => {
+    const { token } = await seed();
+    await service.sendEmailCode(token, 'a@b.c');
+
+    expect(email.sendOtp).toHaveBeenCalledWith(
+      'a@b.c',
+      expect.stringMatching(/^\d{6}$/),
+      expect.any(String),
+    );
+  });
+
+  it('refuses a second send inside the cooldown', async () => {
+    const { token } = await seed();
+    await service.sendEmailCode(token, 'a@b.c');
+    await expect(service.sendEmailCode(token, 'a@b.c')).rejects.toThrow(/wait/i);
+  });
+
+  it('a correct code approves the login and trusts the device', async () => {
+    const { token } = await seed();
+    await service.sendEmailCode(token, 'a@b.c');
+    const code = redis.store.get(`device_approval_code:${token}`)!;
+
+    await service.verifyEmailCode(token, code);
+
+    expect(
+      JSON.parse(redis.store.get(`device_approval:${token}`)!).status,
+    ).toBe('approved');
+    expect(prisma.trustedDevice.upsert).toHaveBeenCalled();
+  });
+
+  it('burns the request after five wrong codes', async () => {
+    const { token } = await seed();
+    await service.sendEmailCode(token, 'a@b.c');
+
+    for (let i = 0; i < 4; i++) {
+      await expect(service.verifyEmailCode(token, '000000')).rejects.toThrow(
+        /invalid/i,
+      );
+    }
+    await expect(service.verifyEmailCode(token, '000000')).rejects.toThrow(
+      /again/i,
+    );
+    expect(redis.store.has(`device_approval:${token}`)).toBe(false);
+  });
+
+  it('will not send a code for an already-resolved request', async () => {
+    const { token } = await seed();
+    const record = JSON.parse(redis.store.get(`device_approval:${token}`)!);
+    await service.reject('u1', record.approvalId);
+
+    await expect(service.sendEmailCode(token, 'a@b.c')).rejects.toThrow(
+      /resolved/i,
+    );
+  });
+});

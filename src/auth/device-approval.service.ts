@@ -15,10 +15,17 @@ import {
   APPROVAL_TTL_SECONDS,
   APPROVAL_CLAIMED_TTL_SECONDS,
   MAX_PENDING_PER_HOUR,
+  MAX_EMAIL_SENDS,
+  MAX_CODE_ATTEMPTS,
+  EMAIL_RESEND_COOLDOWN_SECONDS,
   ApprovalRecord,
   approvalKey,
   approvalIdKey,
   claimedKey,
+  codeKey,
+  codeAttemptsKey,
+  emailSendsKey,
+  emailCooldownKey,
   rateKey,
 } from './device-approval.constants';
 
@@ -267,5 +274,106 @@ export class DeviceApprovalService {
     );
 
     return { status: 'approved', record };
+  }
+
+  /** Чтение записи без изменения статуса. */
+  async peek(approvalToken: string): Promise<ApprovalRecord> {
+    const raw = await this.redis.get(approvalKey(approvalToken));
+    if (!raw) throw new NotFoundException('Approval request not found');
+    return JSON.parse(raw) as ApprovalRecord;
+  }
+
+  /**
+   * Запасной канал для того, у кого одно устройство или до остальных не
+   * доходят пуши. Без него фича превращается в способ потерять доступ
+   * к собственному аккаунту.
+   */
+  async sendEmailCode(approvalToken: string, email: string) {
+    const record = await this.peek(approvalToken);
+    if (record.status !== 'pending')
+      throw new BadRequestException('This request is already resolved');
+
+    if (await this.redis.get(emailCooldownKey(approvalToken))) {
+      throw new BadRequestException(
+        `Please wait ${EMAIL_RESEND_COOLDOWN_SECONDS} seconds before requesting another code`,
+      );
+    }
+
+    const sends = await this.redis.incr(emailSendsKey(approvalToken));
+    await this.redis.expire(emailSendsKey(approvalToken), APPROVAL_TTL_SECONDS);
+    if (sends > MAX_EMAIL_SENDS)
+      throw new BadRequestException('Too many codes requested — sign in again');
+
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    await this.redis.setEx(codeKey(approvalToken), APPROVAL_TTL_SECONDS, code);
+    await this.redis.setEx(
+      emailCooldownKey(approvalToken),
+      EMAIL_RESEND_COOLDOWN_SECONDS,
+      '1',
+    );
+    await this.email.sendOtp(email, code, 'New device sign-in');
+
+    return { sent: true };
+  }
+
+  async verifyEmailCode(approvalToken: string, code: string) {
+    const record = await this.peek(approvalToken);
+
+    const stored = await this.redis.get(codeKey(approvalToken));
+    if (!stored || stored !== code) {
+      // Шесть цифр — миллион вариантов, но подбирать их можно быстро.
+      // Сжигаем ожидание после горстки промахов: каждая новая попытка
+      // тогда стоит заново введённого пароля.
+      const attempts = await this.redis.incr(codeAttemptsKey(approvalToken));
+      await this.redis.expire(
+        codeAttemptsKey(approvalToken),
+        APPROVAL_TTL_SECONDS,
+      );
+      if (attempts >= MAX_CODE_ATTEMPTS) {
+        await this.redis.del(approvalKey(approvalToken));
+        await this.redis.del(approvalIdKey(record.approvalId));
+        await this.redis.del(codeKey(approvalToken));
+        throw new BadRequestException('Too many invalid codes — sign in again');
+      }
+      throw new BadRequestException('Invalid or expired code');
+    }
+
+    await this.redis.del(codeKey(approvalToken));
+    await this.redis.del(codeAttemptsKey(approvalToken));
+
+    record.status = 'approved';
+    await this.save(approvalToken, record);
+    await this.prisma.trustedDevice.upsert({
+      where: {
+        userId_deviceId: {
+          userId: record.userId,
+          deviceId: record.deviceId,
+        },
+      },
+      create: {
+        userId: record.userId,
+        deviceId: record.deviceId,
+        deviceInfo: record.deviceInfo,
+        lastIp: record.ip,
+        lastLocation: record.location,
+      },
+      update: {
+        revokedAt: null,
+        lastSeenAt: new Date(),
+        lastIp: record.ip,
+        lastLocation: record.location,
+      },
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        userId: record.userId,
+        action: 'DEVICE_APPROVED',
+        ipAddress: record.ip,
+        userAgent: record.deviceInfo,
+        meta: { via: 'email', deviceId: record.deviceId },
+      },
+    });
+
+    return { success: true };
   }
 }
