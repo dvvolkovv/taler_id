@@ -136,6 +136,13 @@ export class AuthController {
     return this.deviceApproval.reject(user.sub, approvalId);
   }
 
+  /** Ожидания подтверждения — на случай, когда пуш не дошёл. */
+  @Get('devices/approvals/pending')
+  @UseGuards(JwtAuthGuard)
+  async pendingApprovals(@CurrentUser() user: any) {
+    return this.deviceApproval.listPending(user.sub);
+  }
+
   @Get('devices')
   @UseGuards(JwtAuthGuard)
   async listDevices(@CurrentUser() user: any, @Req() req: Request) {

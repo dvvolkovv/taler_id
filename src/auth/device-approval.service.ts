@@ -22,6 +22,7 @@ import {
   approvalKey,
   approvalIdKey,
   claimedKey,
+  userPendingKey,
   codeKey,
   codeAttemptsKey,
   emailSendsKey,
@@ -95,6 +96,10 @@ export class DeviceApprovalService {
       APPROVAL_TTL_SECONDS,
       approvalToken,
     );
+    // Индекс, по которому доверенное устройство находит ожидания, если пуш
+    // не дошёл — вручную открыв приложение.
+    await this.redis.getClient().sadd(userPendingKey(input.userId), approvalId);
+    await this.redis.expire(userPendingKey(input.userId), APPROVAL_TTL_SECONDS);
 
     const approvers = await this.prisma.session.findMany({
       where: {
@@ -198,6 +203,7 @@ export class DeviceApprovalService {
       },
     });
 
+    await this.forgetPending(userId, approvalId);
     await this.prisma.auditLog.create({
       data: {
         userId,
@@ -219,6 +225,7 @@ export class DeviceApprovalService {
     record.status = 'rejected';
     await this.save(token, record);
 
+    await this.forgetPending(userId, approvalId);
     await this.prisma.auditLog.create({
       data: {
         userId,
@@ -325,6 +332,49 @@ export class DeviceApprovalService {
     });
   }
 
+  /**
+   * Ожидания этого пользователя. Нужны, когда пуш не дошёл: человек открывает
+   * приложение и видит запрос сам.
+   */
+  async listPending(userId: string) {
+    const ids = await this.redis.getClient().smembers(userPendingKey(userId));
+    const out: Array<{
+      approvalId: string;
+      deviceInfo: string;
+      ip: string;
+      location: string | null;
+      createdAt: string;
+    }> = [];
+
+    for (const approvalId of ids) {
+      const token = await this.redis.get(approvalIdKey(approvalId));
+      const raw = token ? await this.redis.get(approvalKey(token)) : null;
+      if (!raw) {
+        // Ожидание истекло или уже разрешено — чистим индекс на ходу.
+        await this.forgetPending(userId, approvalId);
+        continue;
+      }
+      const record = JSON.parse(raw) as ApprovalRecord;
+      if (record.status !== 'pending') {
+        await this.forgetPending(userId, approvalId);
+        continue;
+      }
+      out.push({
+        approvalId,
+        deviceInfo: record.deviceInfo,
+        ip: record.ip,
+        location: record.location,
+        createdAt: record.createdAt,
+      });
+    }
+
+    return out;
+  }
+
+  private async forgetPending(userId: string, approvalId: string) {
+    await this.redis.getClient().srem(userPendingKey(userId), approvalId);
+  }
+
   /** Чтение записи без изменения статуса. */
   async peek(approvalToken: string): Promise<ApprovalRecord> {
     const raw = await this.redis.get(approvalKey(approvalToken));
@@ -413,6 +463,7 @@ export class DeviceApprovalService {
         lastLocation: record.location,
       },
     });
+    await this.forgetPending(record.userId, record.approvalId);
     await this.prisma.auditLog.create({
       data: {
         userId: record.userId,

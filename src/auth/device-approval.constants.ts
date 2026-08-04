@@ -40,6 +40,13 @@ export const emailCooldownKey = (token: string) =>
   `device_approval_cooldown:${token}`;
 export const rateKey = (userId: string) => `device_approval_rate:${userId}`;
 
+/**
+ * Индекс «ожидания этого пользователя». Redis-множество approvalId — без него
+ * найти ожидания по userId можно было бы только сканированием ключей.
+ */
+export const userPendingKey = (userId: string) =>
+  `device_approval_pending:${userId}`;
+
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected';
 
 export interface ApprovalRecord {

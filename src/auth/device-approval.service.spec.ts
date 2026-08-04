@@ -3,9 +3,11 @@ import { DeviceApprovalService } from './device-approval.service';
 function makeRedis() {
   const store = new Map<string, string>();
   const counters = new Map<string, number>();
+  const sets: Record<string, Set<string>> = {};
   return {
     store,
     counters,
+    sets,
     get: jest.fn(async (k: string) => store.get(k) ?? null),
     setEx: jest.fn(async (k: string, _t: number, v: string) => {
       store.set(k, v);
@@ -25,6 +27,15 @@ function makeRedis() {
         store.delete(k);
         return v;
       }),
+      sadd: jest.fn(async (k: string, v: string) => {
+        (sets[k] ??= new Set()).add(v);
+        return 1;
+      }),
+      srem: jest.fn(async (k: string, v: string) => {
+        sets[k]?.delete(v);
+        return 1;
+      }),
+      smembers: jest.fn(async (k: string) => [...(sets[k] ?? [])]),
     }),
   };
 }
@@ -430,5 +441,73 @@ describe('DeviceApprovalService.gateDecision', () => {
     expect(prisma.trustedDevice.count).toHaveBeenCalledWith({
       where: { userId: 'u1', revokedAt: null },
     });
+  });
+});
+
+describe('DeviceApprovalService.listPending', () => {
+  let service: DeviceApprovalService;
+  let redis: any;
+
+  const seed = async () => {
+    const r = await service.createPending({
+      userId: 'u1',
+      deviceId: 'dev-new',
+      deviceInfo: 'Pixel',
+      ip: '1.2.3.4',
+      email: 'a@b.c',
+    });
+    const record = JSON.parse(
+      redis.store.get(`device_approval:${r.approvalToken}`)!,
+    );
+    return { token: r.approvalToken, approvalId: record.approvalId };
+  };
+
+  beforeEach(() => {
+    redis = makeRedis();
+    const prisma = makePrisma();
+    prisma.session.findMany.mockResolvedValue([]);
+    service = new DeviceApprovalService(
+      prisma as any,
+      redis as any,
+      { sendDeviceApprovalRequest: jest.fn() } as any,
+      { sendOtp: jest.fn() } as any,
+    );
+  });
+
+  it('lists a pending request with its device details', async () => {
+    const { approvalId } = await seed();
+
+    const pending = await service.listPending('u1');
+
+    expect(pending).toHaveLength(1);
+    expect(pending[0].approvalId).toBe(approvalId);
+    expect(pending[0].deviceInfo).toBe('Pixel');
+  });
+
+  it('never leaks the secret token into the listing', async () => {
+    const { token } = await seed();
+
+    const pending = await service.listPending('u1');
+
+    expect(JSON.stringify(pending)).not.toContain(token);
+  });
+
+  it('drops a resolved request from the index', async () => {
+    const { approvalId } = await seed();
+    await service.approve('u1', approvalId);
+
+    expect(await service.listPending('u1')).toHaveLength(0);
+  });
+
+  it('prunes entries whose record has expired', async () => {
+    const { token, approvalId } = await seed();
+    redis.store.delete(`device_approval:${token}`);
+
+    expect(await service.listPending('u1')).toHaveLength(0);
+    expect(redis.sets['device_approval_pending:u1'].has(approvalId)).toBe(false);
+  });
+
+  it('shows nothing for a user with no pending requests', async () => {
+    expect(await service.listPending('nobody')).toEqual([]);
   });
 });
