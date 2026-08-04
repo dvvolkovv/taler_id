@@ -372,3 +372,63 @@ describe('DeviceApprovalService email fallback', () => {
     );
   });
 });
+
+describe('DeviceApprovalService.gateDecision', () => {
+  let service: DeviceApprovalService;
+  let prisma: any;
+
+  beforeEach(() => {
+    prisma = makePrisma();
+    service = new DeviceApprovalService(
+      prisma as any,
+      makeRedis() as any,
+      { sendDeviceApprovalRequest: jest.fn() } as any,
+      { sendOtp: jest.fn() } as any,
+    );
+  });
+
+  it('lets a legacy client through — no device id, no gate', async () => {
+    prisma.trustedDevice.count.mockResolvedValue(3);
+    expect(await service.gateDecision('u1', undefined, true)).toBe('allow');
+  });
+
+  it('lets the very first device through — there would be nothing to ask', async () => {
+    prisma.trustedDevice.count.mockResolvedValue(0);
+    prisma.trustedDevice.findFirst.mockResolvedValue(null);
+    expect(await service.gateDecision('u1', 'dev-1', true)).toBe('allow');
+  });
+
+  it('lets a known device through', async () => {
+    prisma.trustedDevice.count.mockResolvedValue(2);
+    prisma.trustedDevice.findFirst.mockResolvedValue({
+      id: 't1',
+      revokedAt: null,
+    });
+    expect(await service.gateDecision('u1', 'dev-1', true)).toBe('allow');
+  });
+
+  it('gates an unknown device when the toggle is on', async () => {
+    prisma.trustedDevice.count.mockResolvedValue(2);
+    prisma.trustedDevice.findFirst.mockResolvedValue(null);
+    expect(await service.gateDecision('u1', 'dev-new', true)).toBe('approve');
+  });
+
+  it('does not gate when the user has the toggle off', async () => {
+    prisma.trustedDevice.count.mockResolvedValue(2);
+    prisma.trustedDevice.findFirst.mockResolvedValue(null);
+    expect(await service.gateDecision('u1', 'dev-new', false)).toBe('allow');
+  });
+
+  it('only counts devices that are not revoked — revoking must mean something', async () => {
+    prisma.trustedDevice.count.mockResolvedValue(2);
+    prisma.trustedDevice.findFirst.mockResolvedValue(null);
+    await service.gateDecision('u1', 'dev-old', true);
+
+    expect(prisma.trustedDevice.findFirst).toHaveBeenCalledWith({
+      where: { userId: 'u1', deviceId: 'dev-old', revokedAt: null },
+    });
+    expect(prisma.trustedDevice.count).toHaveBeenCalledWith({
+      where: { userId: 'u1', revokedAt: null },
+    });
+  });
+});

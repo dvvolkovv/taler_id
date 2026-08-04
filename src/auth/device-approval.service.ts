@@ -276,6 +276,55 @@ export class DeviceApprovalService {
     return { status: 'approved', record };
   }
 
+  /**
+   * Единственное место, где решается, нужен ли шлюз. Три случая пропускают
+   * вход без вопросов, и каждый — сознательный:
+   *   - клиент не прислал deviceId (десктоп, веб, мобилки до 1.1.24);
+   *   - тумблер у пользователя выключен;
+   *   - у аккаунта ещё нет ни одного доверенного устройства — подтверждать
+   *     было бы нечем, и это заперло бы человека снаружи.
+   */
+  async gateDecision(
+    userId: string,
+    deviceId: string | undefined,
+    approvalEnabled: boolean,
+  ): Promise<'allow' | 'approve'> {
+    if (!deviceId) return 'allow';
+    if (!approvalEnabled) return 'allow';
+
+    const known = await this.prisma.trustedDevice.findFirst({
+      where: { userId, deviceId, revokedAt: null },
+    });
+    if (known) return 'allow';
+
+    const trustedCount = await this.prisma.trustedDevice.count({
+      where: { userId, revokedAt: null },
+    });
+    if (trustedCount === 0) return 'allow';
+
+    return 'approve';
+  }
+
+  /** Отмечает устройство как виденное; создаёт запись, если её ещё нет. */
+  async touch(
+    userId: string,
+    deviceId: string | undefined,
+    deviceInfo: string,
+    ip: string,
+  ) {
+    if (!deviceId) return;
+    await this.prisma.trustedDevice.upsert({
+      where: { userId_deviceId: { userId, deviceId } },
+      create: {
+        userId,
+        deviceId,
+        deviceInfo: deviceInfo?.substring(0, 200) ?? '',
+        lastIp: ip,
+      },
+      update: { lastSeenAt: new Date(), lastIp: ip },
+    });
+  }
+
   /** Чтение записи без изменения статуса. */
   async peek(approvalToken: string): Promise<ApprovalRecord> {
     const raw = await this.redis.get(approvalKey(approvalToken));
