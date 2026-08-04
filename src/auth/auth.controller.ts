@@ -15,6 +15,12 @@ import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto, Login2faDto, RefreshDto } from './dto/login.dto';
 import {
+  ApprovalTokenDto,
+  ApprovalCodeDto,
+} from './dto/device-approval.dto';
+import { DeviceApprovalService } from './device-approval.service';
+import { TrustedDeviceService } from './trusted-device.service';
+import {
   ForgotPasswordDto,
   VerifyForgotCodeDto,
   ResetPasswordDto,
@@ -25,7 +31,11 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly deviceApproval: DeviceApprovalService,
+    private readonly trustedDevices: TrustedDeviceService,
+  ) {}
 
   /**
    * Непрозрачный идентификатор устройства. Старые клиенты — десктоп, веб,
@@ -71,6 +81,79 @@ export class AuthController {
       req.ip ?? '',
       req.headers['user-agent'] ?? '',
       this.deviceId(req),
+    );
+  }
+
+  // ── Подтверждение входа с нового устройства ──
+
+  /** Опрос новым устройством, пока оно ждёт ответа. */
+  @Post('login/device-approval/status')
+  @HttpCode(HttpStatus.OK)
+  async approvalStatus(@Body() dto: ApprovalTokenDto, @Req() req: Request) {
+    return this.authService.claimDeviceApproval(
+      dto.approvalToken,
+      req.ip ?? '',
+      req.headers['user-agent'] ?? '',
+    );
+  }
+
+  /** Запасной канал: прислать код на адрес аккаунта. */
+  @Post('login/device-approval/email')
+  @HttpCode(HttpStatus.OK)
+  async approvalEmail(@Body() dto: ApprovalTokenDto) {
+    return this.authService.sendDeviceApprovalEmail(dto.approvalToken);
+  }
+
+  @Post('login/device-approval/verify')
+  @HttpCode(HttpStatus.OK)
+  async approvalVerify(@Body() dto: ApprovalCodeDto, @Req() req: Request) {
+    await this.deviceApproval.verifyEmailCode(dto.approvalToken, dto.code);
+    return this.authService.claimDeviceApproval(
+      dto.approvalToken,
+      req.ip ?? '',
+      req.headers['user-agent'] ?? '',
+    );
+  }
+
+  /** Вызывается с уже доверенного устройства пользователя. */
+  @Post('devices/approvals/:approvalId/approve')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  async approveDevice(
+    @CurrentUser() user: any,
+    @Param('approvalId') approvalId: string,
+  ) {
+    return this.deviceApproval.approve(user.sub, approvalId);
+  }
+
+  @Post('devices/approvals/:approvalId/reject')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  async rejectDevice(
+    @CurrentUser() user: any,
+    @Param('approvalId') approvalId: string,
+  ) {
+    return this.deviceApproval.reject(user.sub, approvalId);
+  }
+
+  @Get('devices')
+  @UseGuards(JwtAuthGuard)
+  async listDevices(@CurrentUser() user: any, @Req() req: Request) {
+    return this.trustedDevices.list(user.sub, this.deviceId(req));
+  }
+
+  @Delete('devices/:id')
+  @UseGuards(JwtAuthGuard)
+  async revokeDevice(
+    @CurrentUser() user: any,
+    @Param('id') id: string,
+    @Req() req: Request,
+  ) {
+    return this.trustedDevices.revoke(
+      user.sub,
+      id,
+      req.ip ?? '',
+      req.headers['user-agent'] ?? '',
     );
   }
 

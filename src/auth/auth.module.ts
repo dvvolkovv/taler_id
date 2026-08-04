@@ -7,6 +7,10 @@ import { JwtStrategy } from './jwt.strategy';
 import { PrismaModule } from '../prisma/prisma.module';
 import { RedisModule } from '../redis/redis.module';
 import { SystemChannelModule } from '../system-channel/system-channel.module';
+import { DeviceApprovalService } from './device-approval.service';
+import { TrustedDeviceService } from './trusted-device.service';
+// FcmService не завёрнут в общий модуль — каждый потребитель объявляет его сам.
+import { FcmService } from '../common/fcm.service';
 
 @Module({
   imports: [
@@ -17,7 +21,13 @@ import { SystemChannelModule } from '../system-channel/system-channel.module';
     SystemChannelModule,
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy],
-  exports: [AuthService, JwtStrategy],
+  providers: [
+    AuthService,
+    JwtStrategy,
+    DeviceApprovalService,
+    TrustedDeviceService,
+    FcmService,
+  ],
+  exports: [AuthService, JwtStrategy, DeviceApprovalService],
 })
 export class AuthModule {}

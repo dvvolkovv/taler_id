@@ -230,6 +230,50 @@ export class AuthService {
     return this.generateTokens(user, session.id);
   }
 
+  /**
+   * Забор токенов новым устройством после одобрения. Сессия заводится с ip и
+   * user-agent, записанными в момент попытки входа, а не текущего опроса:
+   * иначе в списке сессий появилось бы устройство с чужими приметами.
+   */
+  async claimDeviceApproval(
+    approvalToken: string,
+    ip: string,
+    userAgent: string,
+  ) {
+    const outcome = await this.deviceApproval.claim(approvalToken);
+
+    if (outcome.status !== 'approved') return { status: outcome.status };
+
+    const record = outcome.record!;
+    const user = await this.prisma.user.findUnique({
+      where: { id: record.userId },
+    });
+    if (!user) throw new UnauthorizedException('User not found');
+
+    await this.auditLog(user.id, 'LOGIN_SUCCESS', ip, userAgent, {
+      via: 'device_approval',
+    });
+    const session = await this.createSession(
+      user.id,
+      record.ip,
+      record.deviceInfo,
+      record.deviceId,
+    );
+    const tokens = await this.generateTokens(user, session.id);
+    return { status: 'approved', ...tokens };
+  }
+
+  async sendDeviceApprovalEmail(approvalToken: string) {
+    const record = await this.deviceApproval.peek(approvalToken);
+    const user = await this.prisma.user.findUnique({
+      where: { id: record.userId },
+      select: { email: true },
+    });
+    if (!user?.email)
+      throw new BadRequestException('No email address on this account');
+    return this.deviceApproval.sendEmailCode(approvalToken, user.email);
+  }
+
   async verify2fa(
     challengeToken: string,
     code: string,
