@@ -13,10 +13,12 @@ import { FcmService } from '../common/fcm.service';
 import { EmailService } from '../email/email.service';
 import {
   APPROVAL_TTL_SECONDS,
+  APPROVAL_CLAIMED_TTL_SECONDS,
   MAX_PENDING_PER_HOUR,
   ApprovalRecord,
   approvalKey,
   approvalIdKey,
+  claimedKey,
   rateKey,
 } from './device-approval.constants';
 
@@ -221,5 +223,49 @@ export class DeviceApprovalService {
     });
 
     return { success: true };
+  }
+
+  /**
+   * Опрашивается новым устройством, пока оно ждёт ответа.
+   *
+   * Забор одобренной записи атомарный (`GETDEL`): два опроса, прилетевших
+   * одновременно, не должны выдать две сессии на один вход. Проигравший
+   * получает `claimed`, а не `expired` — иначе человеку, который только что
+   * вошёл, показали бы ошибку.
+   */
+  async claim(approvalToken: string): Promise<{
+    status: 'pending' | 'approved' | 'rejected' | 'expired' | 'claimed';
+    record?: ApprovalRecord;
+  }> {
+    const raw = await this.redis.get(approvalKey(approvalToken));
+
+    if (!raw) {
+      const claimed = await this.redis.get(claimedKey(approvalToken));
+      return { status: claimed ? 'claimed' : 'expired' };
+    }
+
+    const record = JSON.parse(raw) as ApprovalRecord;
+
+    if (record.status === 'pending') return { status: 'pending' };
+
+    if (record.status === 'rejected') {
+      await this.redis.del(approvalKey(approvalToken));
+      await this.redis.del(approvalIdKey(record.approvalId));
+      return { status: 'rejected' };
+    }
+
+    const taken = await this.redis
+      .getClient()
+      .getdel(approvalKey(approvalToken));
+    if (!taken) return { status: 'claimed' };
+
+    await this.redis.del(approvalIdKey(record.approvalId));
+    await this.redis.setEx(
+      claimedKey(approvalToken),
+      APPROVAL_CLAIMED_TTL_SECONDS,
+      '1',
+    );
+
+    return { status: 'approved', record };
   }
 }

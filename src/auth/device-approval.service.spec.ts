@@ -213,3 +213,74 @@ describe('DeviceApprovalService approve/reject', () => {
     );
   });
 });
+
+describe('DeviceApprovalService.claim', () => {
+  let service: DeviceApprovalService;
+  let prisma: any;
+  let redis: any;
+
+  const seed = async () => {
+    const r = await service.createPending({
+      userId: 'u1',
+      deviceId: 'dev-new',
+      deviceInfo: 'Pixel',
+      ip: '1.2.3.4',
+      email: 'a@b.c',
+    });
+    const record = JSON.parse(
+      redis.store.get(`device_approval:${r.approvalToken}`)!,
+    );
+    return { token: r.approvalToken, approvalId: record.approvalId };
+  };
+
+  beforeEach(() => {
+    redis = makeRedis();
+    prisma = makePrisma();
+    prisma.session.findMany.mockResolvedValue([]);
+    service = new DeviceApprovalService(
+      prisma as any,
+      redis as any,
+      { sendDeviceApprovalRequest: jest.fn() } as any,
+      { sendOtp: jest.fn() } as any,
+    );
+  });
+
+  it('hands the approved record over exactly once', async () => {
+    const { token, approvalId } = await seed();
+    await service.approve('u1', approvalId);
+
+    const first = await service.claim(token);
+    expect(first.status).toBe('approved');
+    expect(first.record?.deviceId).toBe('dev-new');
+
+    // Второй опрос не должен породить вторую сессию на тот же вход.
+    const second = await service.claim(token);
+    expect(second.status).toBe('claimed');
+    expect(second.record).toBeUndefined();
+  });
+
+  it('reports pending while nobody has answered', async () => {
+    const { token } = await seed();
+    expect((await service.claim(token)).status).toBe('pending');
+  });
+
+  it('reports expired for an unknown token', async () => {
+    expect((await service.claim('nope')).status).toBe('expired');
+  });
+
+  it('reports rejected and clears the record', async () => {
+    const { token, approvalId } = await seed();
+    await service.reject('u1', approvalId);
+
+    expect((await service.claim(token)).status).toBe('rejected');
+    expect(redis.store.has(`device_approval:${token}`)).toBe(false);
+  });
+
+  it('frees the approval id so it cannot be replayed after the claim', async () => {
+    const { token, approvalId } = await seed();
+    await service.approve('u1', approvalId);
+    await service.claim(token);
+
+    expect(redis.store.has(`device_approval_id:${approvalId}`)).toBe(false);
+  });
+});
