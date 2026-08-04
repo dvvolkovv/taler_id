@@ -21,6 +21,8 @@ import * as fs from 'fs';
 import { EmailService } from '../email/email.service';
 import { SYSTEM_USER_EMAIL } from '../system-channel/system-channel.constants';
 import { SystemChannelService } from '../system-channel/system-channel.service';
+import { DeviceApprovalService } from './device-approval.service';
+import { NEW_DEVICE_APPROVAL_DEFAULT } from './device-approval.constants';
 
 /**
  * How long a spent refresh token is remembered so that replaying it is
@@ -45,6 +47,7 @@ export class AuthService {
     private redis: RedisService,
     private emailService: EmailService,
     private readonly systemChannel: SystemChannelService,
+    private readonly deviceApproval: DeviceApprovalService,
   ) {
     const privatePath =
       this.configService.get<string>('jwt.privateKeyPath') ?? '';
@@ -114,6 +117,9 @@ export class AuthService {
     );
 
     const session = await this.createSession(user.id, ip, userAgent, deviceId);
+    // Первое устройство аккаунта доверяем сразу: gateDecision всё равно
+    // пропустил бы его, но пусть запись существует с самого начала.
+    await this.deviceApproval.touch(user.id, deviceId, userAgent, ip);
     return this.generateTokens(user, session.id);
   }
 
@@ -180,6 +186,45 @@ export class AuthService {
       return { next: '2fa', challengeToken };
     }
 
+    return this.completeLogin(user, ip, userAgent, deviceId);
+  }
+
+  /**
+   * Общий хвост успешной аутентификации — единственное место, где решается,
+   * выдать сессию сразу или отправить вход ждать подтверждения. И `login()`,
+   * и `verify2fa()` проходят через него: пройденный TOTP не должен быть
+   * лазейкой мимо шлюза.
+   */
+  private async completeLogin(
+    user: any,
+    ip: string,
+    userAgent: string,
+    deviceId: string | undefined,
+  ) {
+    const profile = await this.prisma.profile.findUnique({
+      where: { userId: user.id },
+      select: { newDeviceApproval: true },
+    });
+    const enabled = profile?.newDeviceApproval ?? NEW_DEVICE_APPROVAL_DEFAULT;
+
+    const decision = await this.deviceApproval.gateDecision(
+      user.id,
+      deviceId,
+      enabled,
+    );
+
+    if (decision === 'approve') {
+      const pending = await this.deviceApproval.createPending({
+        userId: user.id,
+        deviceId: deviceId!,
+        deviceInfo: userAgent,
+        ip,
+        email: user.email,
+      });
+      return { next: 'device_approval', ...pending };
+    }
+
+    await this.deviceApproval.touch(user.id, deviceId, userAgent, ip);
     await this.auditLog(user.id, 'LOGIN_SUCCESS', ip, userAgent);
     const session = await this.createSession(user.id, ip, userAgent, deviceId);
     return this.generateTokens(user, session.id);
@@ -234,9 +279,7 @@ export class AuthService {
 
     await this.redis.del(`2fa_attempts:${challengeToken}`);
     await this.redis.del(`2fa_challenge:${challengeToken}`);
-    await this.auditLog(userId, 'LOGIN_SUCCESS', ip, userAgent);
-    const session = await this.createSession(userId, ip, userAgent, deviceId);
-    return this.generateTokens(user, session.id);
+    return this.completeLogin(user, ip, userAgent, deviceId);
   }
 
   async setupTotp(userId: string) {

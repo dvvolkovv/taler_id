@@ -13,6 +13,7 @@ import {
 import * as bcrypt from 'bcrypt';
 import { SystemChannelService } from '../system-channel/system-channel.service';
 import { EmailService } from '../email/email.service';
+import { DeviceApprovalService } from './device-approval.service';
 
 // Mock all ESM/native modules that can't be loaded in Jest
 jest.mock('fs', () => ({
@@ -56,6 +57,7 @@ const mockPrisma = {
     deleteMany: jest.fn(),
   },
   auditLog: { create: jest.fn() },
+  profile: { findUnique: jest.fn().mockResolvedValue(null) },
 };
 
 // Ротация refresh-токена claim'ит ключ атомарным GETDEL, а не GET+DEL:
@@ -106,6 +108,16 @@ describe('AuthService', () => {
         { provide: ConfigService, useValue: mockConfig },
         { provide: SystemChannelService, useValue: { subscribeUser: jest.fn().mockResolvedValue(undefined) } },
         { provide: EmailService, useValue: { sendOtp: jest.fn() } },
+        {
+          // «Устройство знакомо» — базовый случай, на который рассчитаны все
+          // проверки ниже. Сам шлюз проверяется в auth.service.new-device.spec.ts.
+          provide: DeviceApprovalService,
+          useValue: {
+            gateDecision: jest.fn().mockResolvedValue('allow'),
+            touch: jest.fn().mockResolvedValue(undefined),
+            createPending: jest.fn(),
+          },
+        },
       ],
     }).compile();
     service = module.get<AuthService>(AuthService);

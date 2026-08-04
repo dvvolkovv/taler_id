@@ -94,4 +94,92 @@ describe('AuthService device identity', () => {
       }),
     );
   });
+
+  it('withholds tokens and returns an approval token for an unknown device', async () => {
+    prisma.profile.findUnique.mockResolvedValue({ newDeviceApproval: true });
+    deviceApproval.gateDecision.mockResolvedValue('approve');
+    deviceApproval.createPending.mockResolvedValue({
+      approvalToken: 'tok',
+      approverCount: 2,
+      emailAvailable: true,
+      expiresIn: 600,
+    });
+
+    const result: any = await service.login(
+      { email: 'a@b.c', password: 'pw' },
+      '1.2.3.4',
+      'UA',
+      'dev-new',
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        next: 'device_approval',
+        approvalToken: 'tok',
+      }),
+    );
+    expect(result.accessToken).toBeUndefined();
+    expect(prisma.session.create).not.toHaveBeenCalled();
+  });
+
+  it('passing 2FA does not bypass the device gate', async () => {
+    prisma.profile.findUnique.mockResolvedValue({ newDeviceApproval: true });
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'u1',
+      email: 'a@b.c',
+      totpSecret: { secret: 'SECRET', verified: true },
+    });
+    redis.get.mockResolvedValue('u1');
+    deviceApproval.gateDecision.mockResolvedValue('approve');
+    deviceApproval.createPending.mockResolvedValue({
+      approvalToken: 'tok2',
+      approverCount: 1,
+      emailAvailable: true,
+      expiresIn: 600,
+    });
+
+    const result: any = await service.verify2fa(
+      'chal',
+      '123456',
+      '1.2.3.4',
+      'UA',
+      'dev-new',
+    );
+
+    expect(result.next).toBe('device_approval');
+    expect(prisma.session.create).not.toHaveBeenCalled();
+  });
+
+  it('marks a known device as seen on every successful login', async () => {
+    await service.login(
+      { email: 'a@b.c', password: 'pw' },
+      '1.2.3.4',
+      'UA',
+      'dev-known',
+    );
+
+    expect(deviceApproval.touch).toHaveBeenCalledWith(
+      'u1',
+      'dev-known',
+      'UA',
+      '1.2.3.4',
+    );
+  });
+
+  it('falls back to the code default when the profile row is missing', async () => {
+    prisma.profile.findUnique.mockResolvedValue(null);
+
+    await service.login(
+      { email: 'a@b.c', password: 'pw' },
+      '1.2.3.4',
+      'UA',
+      'dev-new',
+    );
+
+    expect(deviceApproval.gateDecision).toHaveBeenCalledWith(
+      'u1',
+      'dev-new',
+      false,
+    );
+  });
 });
