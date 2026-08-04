@@ -143,3 +143,73 @@ describe('DeviceApprovalService.createPending', () => {
     expect(result.emailAvailable).toBe(false);
   });
 });
+
+describe('DeviceApprovalService approve/reject', () => {
+  let service: DeviceApprovalService;
+  let prisma: any;
+  let redis: any;
+
+  const seed = async () => {
+    const r = await service.createPending({
+      userId: 'u1',
+      deviceId: 'dev-new',
+      deviceInfo: 'Pixel',
+      ip: '1.2.3.4',
+      email: 'a@b.c',
+    });
+    const record = JSON.parse(
+      redis.store.get(`device_approval:${r.approvalToken}`)!,
+    );
+    return { token: r.approvalToken, approvalId: record.approvalId };
+  };
+
+  beforeEach(() => {
+    redis = makeRedis();
+    prisma = makePrisma();
+    prisma.session.findMany.mockResolvedValue([]);
+    service = new DeviceApprovalService(
+      prisma as any,
+      redis as any,
+      { sendDeviceApprovalRequest: jest.fn() } as any,
+      { sendOtp: jest.fn() } as any,
+    );
+  });
+
+  it('marks the record approved and trusts the device right away', async () => {
+    const { token, approvalId } = await seed();
+    await service.approve('u1', approvalId);
+
+    expect(
+      JSON.parse(redis.store.get(`device_approval:${token}`)!).status,
+    ).toBe('approved');
+    expect(prisma.trustedDevice.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId_deviceId: { userId: 'u1', deviceId: 'dev-new' } },
+      }),
+    );
+  });
+
+  it("refuses to approve another user's pending login", async () => {
+    const { approvalId } = await seed();
+    await expect(service.approve('someone-else', approvalId)).rejects.toThrow(
+      /not found/i,
+    );
+    expect(prisma.trustedDevice.upsert).not.toHaveBeenCalled();
+  });
+
+  it('rejection is terminal — the record cannot then be approved', async () => {
+    const { token, approvalId } = await seed();
+    await service.reject('u1', approvalId);
+
+    expect(
+      JSON.parse(redis.store.get(`device_approval:${token}`)!).status,
+    ).toBe('rejected');
+    await expect(service.approve('u1', approvalId)).rejects.toThrow(/rejected/i);
+  });
+
+  it('an unknown approval id is not found rather than silently accepted', async () => {
+    await expect(service.approve('u1', 'no-such-id')).rejects.toThrow(
+      /not found/i,
+    );
+  });
+});

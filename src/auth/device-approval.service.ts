@@ -3,6 +3,8 @@ import {
   Logger,
   HttpException,
   HttpStatus,
+  NotFoundException,
+  BadRequestException,
 } from '@nestjs/common';
 import { v4 as uuidv4 } from 'uuid';
 import { PrismaService } from '../prisma/prisma.service';
@@ -130,5 +132,94 @@ export class DeviceApprovalService {
       emailAvailable: Boolean(input.email),
       expiresIn: APPROVAL_TTL_SECONDS,
     };
+  }
+
+  private async load(approvalId: string): Promise<{
+    token: string;
+    record: ApprovalRecord;
+  }> {
+    const token = await this.redis.get(approvalIdKey(approvalId));
+    if (!token) throw new NotFoundException('Approval request not found');
+    const raw = await this.redis.get(approvalKey(token));
+    if (!raw) throw new NotFoundException('Approval request not found');
+    return { token, record: JSON.parse(raw) as ApprovalRecord };
+  }
+
+  private async save(token: string, record: ApprovalRecord) {
+    // TTL держим исходный: одобрение не должно продлевать окно ожидания.
+    await this.redis.setEx(
+      approvalKey(token),
+      APPROVAL_TTL_SECONDS,
+      JSON.stringify(record),
+    );
+  }
+
+  /** Вызывается с уже доверенного устройства пользователя. */
+  async approve(userId: string, approvalId: string) {
+    const { token, record } = await this.load(approvalId);
+    // Чужое ожидание отвечает тем же «не найдено», что и несуществующее:
+    // иначе по коду ответа можно перебирать чужие approvalId.
+    if (record.userId !== userId)
+      throw new NotFoundException('Approval request not found');
+    if (record.status === 'rejected')
+      throw new BadRequestException('This request was already rejected');
+
+    record.status = 'approved';
+    await this.save(token, record);
+
+    // Доверие выдаём здесь, а не при заборе токенов: если ответ на заборе
+    // потеряется в сети, повторный вход пройдёт уже как со знакомого
+    // устройства — сценарий самозалечивается.
+    await this.prisma.trustedDevice.upsert({
+      where: {
+        userId_deviceId: { userId, deviceId: record.deviceId },
+      },
+      create: {
+        userId,
+        deviceId: record.deviceId,
+        deviceInfo: record.deviceInfo,
+        lastIp: record.ip,
+        lastLocation: record.location,
+      },
+      update: {
+        revokedAt: null,
+        lastSeenAt: new Date(),
+        lastIp: record.ip,
+        lastLocation: record.location,
+      },
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        userId,
+        action: 'DEVICE_APPROVED',
+        ipAddress: record.ip,
+        userAgent: record.deviceInfo,
+        meta: { approvalId, deviceId: record.deviceId },
+      },
+    });
+
+    return { success: true };
+  }
+
+  async reject(userId: string, approvalId: string) {
+    const { token, record } = await this.load(approvalId);
+    if (record.userId !== userId)
+      throw new NotFoundException('Approval request not found');
+
+    record.status = 'rejected';
+    await this.save(token, record);
+
+    await this.prisma.auditLog.create({
+      data: {
+        userId,
+        action: 'DEVICE_REJECTED',
+        ipAddress: record.ip,
+        userAgent: record.deviceInfo,
+        meta: { approvalId, deviceId: record.deviceId },
+      },
+    });
+
+    return { success: true };
   }
 }
