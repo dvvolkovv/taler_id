@@ -146,8 +146,8 @@ export class AppController {
     // Env-overridable so the DO/talerid build advertises its own track + APK URL;
     // defaults preserve aeza (prod/dev) behaviour when these vars are unset.
     const latest = {
-      version: env.APP_LATEST_VERSION || '1.1.23',
-      build: parseInt(env.APP_LATEST_BUILD || '224', 10),
+      version: env.APP_LATEST_VERSION || '1.1.24',
+      build: parseInt(env.APP_LATEST_BUILD || '225', 10),
     };
     const androidUrl =
       env.APP_UPDATE_URL_ANDROID ||

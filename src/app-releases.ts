@@ -11,6 +11,43 @@ export interface AppRelease {
 // Keep notes user-facing (no internal jargon, no commit hashes).
 export const APP_RELEASES: AppRelease[] = [
   {
+    version: '1.1.24',
+    build: 225,
+    date: '2026-08-04',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.24 — вход с нового устройства под вашим контролем, и снова ' +
+      'работающий вход через Taler ID на сторонних сайтах.\n\n' +
+      '🔐 Доверенные устройства. Теперь вход в аккаунт с незнакомого устройства ' +
+      'можно потребовать подтверждать: на доверенное устройство приходит ' +
+      'уведомление, и вы разрешаете или отклоняете вход одним касанием, а новое ' +
+      'устройство ждёт решения на отдельном экране. Список доверенных устройств ' +
+      'и сам переключатель — в настройках.\n\n' +
+      '🔗 Вход через Taler ID на стороннем сайте. Ссылку могла перехватить не та ' +
+      'сборка приложения — тестовая вместо основной, — и вход обрывался ошибкой. ' +
+      'Теперь каждая сборка отвечает только за свои адреса.\n\n' +
+      '🔑 Вход по коду из приложения-аутентификатора снова работает.\n\n' +
+      '📅 Календарь: удалённые события больше не возвращаются после обновления, ' +
+      'а нажатие на задачу открывает её карточку.\n\n' +
+      '⚠️ Если запрос всё же не прошёл, приложение показывает настоящую причину, ' +
+      'а не «Internal server error».',
+    notes_en:
+      'Release 1.1.24 — new-device sign-in under your control, and signing in with ' +
+      'Taler ID on partner sites working again.\n\n' +
+      '🔐 Trusted devices. A sign-in from an unfamiliar device can now require your ' +
+      'approval: a notification reaches a device you trust, you allow or reject it ' +
+      'with one tap, and the new device waits on a screen of its own. The list of ' +
+      'trusted devices and the toggle itself live in settings.\n\n' +
+      '🔗 Signing in with Taler ID on a partner site. The link could be picked up by ' +
+      'the wrong build of the app — the test one instead of the main one — and the ' +
+      'sign-in died with an error. Each build now answers only for its own addresses.\n\n' +
+      '🔑 Signing in with a code from your authenticator app works again.\n\n' +
+      '📅 Calendar: deleted events no longer come back after a refresh, and tapping a ' +
+      'task opens its detail.\n\n' +
+      '⚠️ When a request does fail, the app shows the real reason instead of ' +
+      '"Internal server error".',
+  },
+  {
     version: '1.1.23',
     build: 224,
     date: '2026-08-03',
