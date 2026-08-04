@@ -134,6 +134,7 @@ export class ProfileService {
         aiTwinVoiceId: dto.aiTwinVoiceId,
         assistantName: dto.assistantName,
         lastSeenPrivacy: dto.lastSeenPrivacy,
+        newDeviceApproval: dto.newDeviceApproval,
       },
       create: {
         userId,
@@ -152,6 +153,7 @@ export class ProfileService {
         aiTwinVoiceId: dto.aiTwinVoiceId,
         assistantName: dto.assistantName,
         lastSeenPrivacy: dto.lastSeenPrivacy,
+        newDeviceApproval: dto.newDeviceApproval,
       },
     });
   }

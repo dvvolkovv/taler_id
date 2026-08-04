@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ProfileService } from './profile.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { S3Service } from './s3.service';
+import { FileStorageService } from '../common/file-storage.service';
 import { NotFoundException, BadRequestException } from '@nestjs/common';
 
 const mockPrisma = {
@@ -66,6 +67,9 @@ describe('ProfileService', () => {
         ProfileService,
         { provide: PrismaService, useValue: mockPrisma },
         { provide: S3Service, useValue: mockS3 },
+        // ProfileService перешёл на FileStorageService; спека продолжала
+        // подставлять S3Service и потому не поднималась вовсе.
+        { provide: FileStorageService, useValue: mockS3 },
       ],
     }).compile();
     service = module.get<ProfileService>(ProfileService);

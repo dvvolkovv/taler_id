@@ -64,6 +64,11 @@ export class UpdateProfileDto {
   @IsOptional()
   aiTwinEnabled?: boolean;
 
+  /** Требовать подтверждение с доверенного устройства при входе с нового. */
+  @IsBoolean()
+  @IsOptional()
+  newDeviceApproval?: boolean;
+
   @IsInt()
   @Min(15)
   @Max(60)
