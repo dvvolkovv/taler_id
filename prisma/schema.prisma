@@ -29,6 +29,7 @@ model User {
   profile              Profile?
   profileSections      ProfileSection[]
   sessions             Session[]
+  trustedDevices       TrustedDevice[]
   tenantMembers        TenantMember[]
   totpSecret           TotpSecret?
   messages             Message[]
@@ -93,6 +94,7 @@ model Profile {
   ownerSpeakerId       String?
   ownerEmbedding       Float[]         @default([])
   assistantName        String?
+  newDeviceApproval    Boolean         @default(false)
   documents            Document[]
   user                 User            @relation(fields: [userId], references: [id])
 }
@@ -134,7 +136,28 @@ model Session {
   isRevoked  Boolean  @default(false)
   fcmToken   String?
   voipToken  String?
+  deviceId   String?
   user       User     @relation(fields: [userId], references: [id])
+}
+
+/// Устройство, с которого пользователь уже подтверждал вход. Ключ — непрозрачный
+/// deviceId, который клиент генерирует один раз и хранит в secure storage;
+/// сервер не пытается ничего из него вывести.
+model TrustedDevice {
+  id           String    @id @default(uuid())
+  userId       String
+  deviceId     String
+  deviceInfo   String?
+  label        String?
+  lastIp       String?
+  lastLocation String?
+  firstSeenAt  DateTime  @default(now())
+  lastSeenAt   DateTime  @default(now())
+  revokedAt    DateTime?
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, deviceId])
+  @@index([userId, revokedAt])
 }
 
 model TotpSecret {
