@@ -379,6 +379,66 @@ export class FcmService {
     }
   }
 
+  /**
+   * Кто-то ввёл верный пароль от аккаунта на устройстве, которого мы не знаем.
+   *
+   * В payload едет только `approvalId` — по нему нельзя войти, можно лишь
+   * одобрить, уже будучи аутентифицированным тем же пользователем. Секрет
+   * ожидания сюда попадать не должен: уведомление видно на заблокированном
+   * экране.
+   */
+  async sendDeviceApprovalRequest(
+    fcmToken: string,
+    data: {
+      approvalId: string;
+      deviceInfo: string;
+      ip: string;
+      location?: string | null;
+    },
+  ): Promise<void> {
+    if (!this.initialized || !fcmToken) return;
+    const where = data.location ? `${data.location}, ` : '';
+    const title = 'Вход в аккаунт';
+    const body = `Попытка входа: ${
+      data.deviceInfo || 'неизвестное устройство'
+    } — ${where}${data.ip}`;
+    try {
+      await admin.messaging().send({
+        token: fcmToken,
+        data: {
+          type: 'device_approval',
+          approvalId: data.approvalId,
+          deviceInfo: data.deviceInfo ?? '',
+          ip: data.ip ?? '',
+          location: data.location ?? '',
+        },
+        notification: { title, body },
+        android: {
+          priority: 'high',
+          notification: {
+            channelId: 'messages',
+            defaultSound: true,
+          },
+        },
+        apns: {
+          payload: {
+            aps: {
+              sound: 'default',
+              alert: { title, body },
+            },
+          },
+          headers: {
+            'apns-priority': '10',
+            'apns-push-type': 'alert',
+          },
+        },
+      });
+    } catch (e) {
+      this.logger.error('FCM sendDeviceApprovalRequest error:', e);
+      this.handleSendError(fcmToken, e).catch(() => {});
+    }
+  }
+
   async sendKeyUpdate(userId: string): Promise<void> {
     if (!this.initialized) return;
     try {
