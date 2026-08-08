@@ -1615,6 +1615,99 @@ export class MessengerService {
     };
   }
 
+  async listPinned(
+    conversationId: string,
+    userId: string,
+    limit = 50,
+    offset = 0,
+  ) {
+    await this.assertParticipant(conversationId, userId);
+    const take = Number.isFinite(limit)
+      ? Math.min(Math.max(Math.trunc(limit), 1), 100)
+      : 50;
+    const skip = Number.isFinite(offset) && offset > 0 ? Math.trunc(offset) : 0;
+    const where = {
+      conversationId,
+      pinnedAt: { not: null },
+      // deleteMessage не снимает pinnedAt — иначе удалённое сообщение
+      // осталось бы висеть в закреплённых.
+      deletedAt: null,
+      // hiddenFor — «удалить у себя»; такой пин не должен ни попадать в
+      // выдачу, ни считаться в total, иначе счётчик «N из M» врёт навсегда.
+      NOT: { hiddenFor: { some: { userId } } },
+    };
+    const rows = await this.prisma.message.findMany({
+      where,
+      include: {
+        sender: {
+          select: {
+            username: true,
+            profile: { select: { firstName: true, lastName: true } },
+          },
+        },
+      },
+      orderBy: { pinnedAt: 'desc' },
+      take,
+      skip,
+    });
+    const messages = rows.map((m: any) => {
+      const u = m.sender;
+      const firstLast = u
+        ? [u.profile?.firstName, u.profile?.lastName]
+            .filter(Boolean)
+            .join(' ')
+            .trim() || null
+        : null;
+      const { sender, ...rest } = m;
+      return { ...rest, senderName: firstLast ?? u?.username ?? null };
+    });
+    const total = await this.prisma.message.count({ where });
+    return { messages, total };
+  }
+
+  async unpinAll(conversationId: string, userId: string) {
+    const conv = await this._getConversationOrThrow(conversationId);
+    await this._assertCanPin(conv, userId);
+    const res = await this.prisma.message.updateMany({
+      where: { conversationId, pinnedAt: { not: null } },
+      data: { pinnedAt: null, pinnedById: null },
+    });
+    return { unpinned: res.count };
+  }
+
+  /** Спрятать плашку закреплённых лично для себя. Плашка вернётся,
+   *  когда появится пин с pinnedAt позже этой отметки.
+   *
+   *  upTo — pinnedAt верхнего пина, который клиент реально видел. Без него
+   *  берём максимальный pinnedAt беседы: сегодняшнее «сейчас» скрыло бы и
+   *  пин, прилетевший, пока запрос шёл до сервера. Тот же приём, что в
+   *  advanceReadHorizon. */
+  async dismissPins(conversationId: string, userId: string, upTo?: Date) {
+    await this.assertParticipant(conversationId, userId);
+    const now = new Date();
+    // Курсор от клиента не доверенный: битую дату игнорируем (упадёт в
+    // фолбэк), будущую подрезаем до «сейчас». Иначе разъехавшиеся часы на
+    // клиенте скрыли бы плашку навсегда — вместе с ещё не созданными пинами.
+    let pinsDismissedAt =
+      upTo && !Number.isNaN(upTo.getTime())
+        ? upTo > now
+          ? now
+          : upTo
+        : undefined;
+    if (!pinsDismissedAt) {
+      const newest = await this.prisma.message.aggregate({
+        where: { conversationId, pinnedAt: { not: null }, deletedAt: null },
+        _max: { pinnedAt: true },
+      });
+      pinsDismissedAt = newest._max.pinnedAt ?? now;
+    }
+    await this.prisma.conversationParticipant.update({
+      where: { conversationId_userId: { conversationId, userId } },
+      data: { pinsDismissedAt },
+    });
+    return { pinsDismissedAt };
+  }
+
   // ─── Polls ───
 
   async createPoll(
