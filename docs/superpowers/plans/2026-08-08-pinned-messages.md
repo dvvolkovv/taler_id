@@ -11,7 +11,7 @@
 **Репозитории (пути на машине Дмитрия):**
 - Бэкенд: `/Users/dmitry/taler-id` (ветка `feature/pinned-messages`, уже создана, в ней лежит спека)
 - Мобилка: `/Users/dmitry/Downloads/taler_id_mobile` (ветку `feature/pinned-messages` создать от `dev`)
-- Тесты: `/Users/dmitry/Downloads/taler_id_tests` (не git-репозиторий, коммитить не нужно)
+- Тесты: `/Users/dmitry/Downloads/taler_id_tests` — **git-репозиторий**, remote `git@github.com:dvvolkovv/taler_id_tests.git`, ветка `main`. (В CLAUDE.md в таблице репозиториев у него до сих пор стоит «—» в колонке GitHub — таблица устарела.) В рабочей копии лежат чужие незакоммиченные правки (`api_smoke_test.ts`, `mail_test.ts`), поэтому коммитить, если понадобится, только свои файлы поимённо.
 
 **Спека:** `docs/superpowers/specs/2026-08-08-pinned-messages-design.md`
 
@@ -1011,10 +1011,12 @@ async function main() {
   const convs2 = await http.get('/messenger/conversations', auth(t2));
   const conv2 = (convs2.data as any[]).find(c => c.id === channelId);
   check('6b. pinsDismissedAt выставлен', !!conv2?.pinsDismissedAt, conv2?.pinsDismissedAt);
-  // Без курсора сервис штампует ровно pinnedAt верхнего пина, поэтому здесь
-  // именно >=, а не >: плашка скрыта, когда пин НЕ новее отметки.
-  check('6c. dismissedAt не раньше верхнего пина (плашка скрыта)',
-    new Date(conv2.pinsDismissedAt) >= new Date(conv2.topPinned.pinnedAt),
+  // ⚠️ Именно строгое равенство. `>=` здесь бесполезно: ему удовлетворяет и
+  // правильное поведение (штамп = MAX(pinnedAt)), и регрессия обратно к
+  // `new Date()`, от которой ушли в Task 3. Проверка, которая не может
+  // упасть, хуже её отсутствия — она создаёт ложную уверенность.
+  check('6c. dismissedAt равен pinnedAt верхнего пина (сервер взял MAX, а не «сейчас»)',
+    new Date(conv2.pinsDismissedAt).getTime() === new Date(conv2.topPinned.pinnedAt).getTime(),
     { d: conv2?.pinsDismissedAt, p: conv2?.topPinned?.pinnedAt });
 
   // 7. новый пин возвращает плашку
