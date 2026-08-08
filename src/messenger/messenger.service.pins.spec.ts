@@ -171,8 +171,12 @@ describe('MessengerService pin/unpin', () => {
     const res = await service.unpinMessage('conv-1', 'msg-1', 'u-admin');
 
     expect(res.pinnedCount).toBe(0);
+    // pinnedAt: { not: null } is load-bearing: without it updateMany reports a
+    // row updated even when writing null over null, so wasPinned is always true
+    // and the controller broadcasts message_unpinned for a no-op. A live e2e run
+    // caught that; this assertion is what keeps it caught.
     expect(prisma.message.updateMany).toHaveBeenCalledWith({
-      where: { id: 'msg-1', conversationId: 'conv-1' },
+      where: { id: 'msg-1', conversationId: 'conv-1', pinnedAt: { not: null } },
       data: { pinnedAt: null, pinnedById: null },
     });
   });

@@ -1688,8 +1688,13 @@ export class MessengerService {
   ) {
     const conv = await this._getConversationOrThrow(conversationId);
     await this._assertCanPin(conv, userId);
+    // pinnedAt: { not: null } — иначе updateMany засчитывает строку как
+    // обновлённую и при записи null поверх null, и wasPinned всегда true даже
+    // на повторном откреплении. Контроллер по этому флагу решает, слать ли
+    // message_unpinned, так что без условия он рассылал бы пустые события.
+    // Поймано e2e-набором на DEV; юнит-тест не ловил — там updateMany замокан.
     const result = await this.prisma.message.updateMany({
-      where: { id: messageId, conversationId },
+      where: { id: messageId, conversationId, pinnedAt: { not: null } },
       data: { pinnedAt: null, pinnedById: null },
     });
     return {
