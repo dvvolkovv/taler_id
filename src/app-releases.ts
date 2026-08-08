@@ -11,6 +11,43 @@ export interface AppRelease {
 // Keep notes user-facing (no internal jargon, no commit hashes).
 export const APP_RELEASES: AppRelease[] = [
   {
+    version: '1.1.25',
+    build: 226,
+    date: '2026-08-08',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.25 — закреплённые сообщения.\n\n' +
+      '📌 Закрепление сообщений. Важное сообщение можно закрепить, и оно ' +
+      'останется на виду в шапке чата — в личной переписке, в группе и в канале. ' +
+      'Закрепить можно несколько: плашка показывает, сколько их, а по нажатию ' +
+      'листает и переносит к нужному сообщению.\n\n' +
+      '📋 Список закреплённых. Отдельный экран со всеми закреплёнными ' +
+      'сообщениями чата: оттуда можно перейти к любому, снять закрепление с ' +
+      'одного или убрать все сразу.\n\n' +
+      '🙈 Плашку можно свернуть. Если закреплённое вам сейчас не нужно, ' +
+      'нажмите крестик — плашка скроется только у вас и вернётся, когда ' +
+      'закрепят что-то новое.\n\n' +
+      '🎙 Голосом. Ассистента можно попросить закрепить или открепить ' +
+      'сообщение и рассказать, что закреплено в чате.\n\n' +
+      'В личной переписке закрепить может любой участник, в группах и каналах — ' +
+      'владелец и администраторы.',
+    notes_en:
+      'Release 1.1.25 — pinned messages.\n\n' +
+      '📌 Pin a message. Anything important can be pinned and stays visible at ' +
+      'the top of the chat — in direct messages, groups and channels. Pin ' +
+      'several: the bar shows how many there are, and tapping it cycles through ' +
+      'them and jumps to each message.\n\n' +
+      '📋 Pinned list. A separate screen with every pinned message in the chat: ' +
+      'jump to any of them, unpin one, or clear them all at once.\n\n' +
+      '🙈 Hide the bar. If you do not need the pinned message right now, tap the ' +
+      'cross — it hides for you only, and comes back when something new is ' +
+      'pinned.\n\n' +
+      '🎙 By voice. Ask the assistant to pin or unpin a message, or to tell you ' +
+      'what is pinned in a chat.\n\n' +
+      'In direct messages anyone can pin; in groups and channels the owner and ' +
+      'admins can.',
+  },
+  {
     version: '1.1.24',
     build: 225,
     date: '2026-08-04',
