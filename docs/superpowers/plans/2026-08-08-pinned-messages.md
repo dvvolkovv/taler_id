@@ -1572,6 +1572,8 @@ git commit -m "i18n: strings for pinned messages"
 - Modify: `lib/features/messenger/presentation/screens/chat_room_screen.dart`
 - Test: `test/features/messenger/pinned_banner_test.dart` (создать)
 
+> ⚠️ **Счётчик рисуем по загруженному списку, а не по `pinnedCount`.** `pinnedCount` пишут двое: ответ REST-вызова и собственное socket-эхо того же действия (бэкенд рассылает `server.to(room)`, то есть и инициатору тоже), причём порядок между двумя очередями событий не гарантирован — счётчик может кратковременно разъехаться. Поэтому плашка использует `pinnedCount` **только как триггер перезагрузки списка**, а показывает `pins.length`: тогда неверный счётчик стоит лишнего перезапроса, но никогда не даёт неверную картинку. (Нашло ревью Task 10.)
+
 - [ ] **Step 1: Написать падающий виджет-тест**
 
 Создать `test/features/messenger/pinned_banner_test.dart`:
