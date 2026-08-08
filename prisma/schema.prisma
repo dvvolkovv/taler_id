@@ -288,6 +288,7 @@ model ConversationParticipant {
   mutedUntil        DateTime?
   lastReadAt        DateTime?
   lastReadMessageId String?
+  pinsDismissedAt   DateTime?
   conversation      Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@unique([conversationId, userId])
@@ -322,12 +323,18 @@ model Message {
   threadParentId     String?
   topicId            String?
   metadata           Json?
+  pinnedAt           DateTime?
+  pinnedById         String?
   fileRecord         FileRecord?       @relation(fields: [fileRecordId], references: [id])
   conversation       Conversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sender             User              @relation(fields: [senderId], references: [id])
 
   @@unique([senderId, clientTempId])
   @@index([conversationId, sentAt])
+  // Реальный индекс в БД частичный (WHERE "pinnedAt" IS NOT NULL) — DSL @@index
+  // не умеет выражать WHERE, так что здесь описание неточное. Смотри миграцию
+  // 20260808000000_pinned_messages за фактическим определением.
+  @@index([conversationId, pinnedAt])
 }
 
 model FileRecord {
