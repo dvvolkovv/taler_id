@@ -750,8 +750,17 @@ git commit -m "feat(messenger): expose pinnedCount/topPinned in conversation pay
   }
 
   @Post('conversations/:id/pinned/dismiss')
-  async dismissPins(@Param('id') id: string, @CurrentUser() user: any) {
-    return this.service.dismissPins(id, user.sub);
+  async dismissPins(
+    @Param('id') id: string,
+    @Body() body: { upTo?: string },
+    @CurrentUser() user: any,
+  ) {
+    // upTo — pinnedAt верхнего пина, который клиент реально видел. Мусор молча
+    // игнорируем: сервис сам возьмёт максимальный pinnedAt беседы.
+    const parsed = body?.upTo ? new Date(body.upTo) : undefined;
+    const upTo =
+      parsed && !Number.isNaN(parsed.getTime()) ? parsed : undefined;
+    return this.service.dismissPins(id, user.sub, upTo);
   }
 ```
 
@@ -1002,8 +1011,10 @@ async function main() {
   const convs2 = await http.get('/messenger/conversations', auth(t2));
   const conv2 = (convs2.data as any[]).find(c => c.id === channelId);
   check('6b. pinsDismissedAt выставлен', !!conv2?.pinsDismissedAt, conv2?.pinsDismissedAt);
-  check('6c. dismissedAt позже верхнего пина (плашка скрыта)',
-    new Date(conv2.pinsDismissedAt) > new Date(conv2.topPinned.pinnedAt),
+  // Без курсора сервис штампует ровно pinnedAt верхнего пина, поэтому здесь
+  // именно >=, а не >: плашка скрыта, когда пин НЕ новее отметки.
+  check('6c. dismissedAt не раньше верхнего пина (плашка скрыта)',
+    new Date(conv2.pinsDismissedAt) >= new Date(conv2.topPinned.pinnedAt),
     { d: conv2?.pinsDismissedAt, p: conv2?.topPinned?.pinnedAt });
 
   // 7. новый пин возвращает плашку
@@ -1228,10 +1239,13 @@ git commit -m "feat(messenger): pin fields on message and conversation entities"
     );
   }
 
-  Future<Map<String, dynamic>> dismissPins(String conversationId) {
+  /// [upTo] — pinnedAt верхнего пина, который пользователь реально видел.
+  /// Без него бэкенд возьмёт максимальный pinnedAt беседы, и пин, прилетевший
+  /// пока запрос шёл, окажется скрыт молча.
+  Future<Map<String, dynamic>> dismissPins(String conversationId, {DateTime? upTo}) {
     return _http.post(
       '/messenger/conversations/$conversationId/pinned/dismiss',
-      data: {},
+      data: {if (upTo != null) 'upTo': upTo.toUtc().toIso8601String()},
       fromJson: (d) => Map<String, dynamic>.from(d as Map),
     );
   }
@@ -1248,7 +1262,7 @@ git commit -m "feat(messenger): pin fields on message and conversation entities"
   Future<Map<String, dynamic>> unpinMessage(String conversationId, String messageId);
   Future<List<MessageEntity>> getPinnedMessages(String conversationId);
   Future<Map<String, dynamic>> unpinAll(String conversationId);
-  Future<Map<String, dynamic>> dismissPins(String conversationId);
+  Future<Map<String, dynamic>> dismissPins(String conversationId, {DateTime? upTo});
   Stream<Map<String, dynamic>> get messagePinnedStream;
   Stream<Map<String, dynamic>> get messageUnpinnedStream;
   Stream<Map<String, dynamic>> get pinsClearedStream;
@@ -1274,8 +1288,8 @@ git commit -m "feat(messenger): pin fields on message and conversation entities"
       _remote.unpinAll(conversationId);
 
   @override
-  Future<Map<String, dynamic>> dismissPins(String conversationId) =>
-      _remote.dismissPins(conversationId);
+  Future<Map<String, dynamic>> dismissPins(String conversationId, {DateTime? upTo}) =>
+      _remote.dismissPins(conversationId, upTo: upTo);
 
   @override
   Stream<Map<String, dynamic>> get messagePinnedStream => _remote.messagePinnedStream;
@@ -1340,9 +1354,11 @@ class UnpinAllMessages extends MessengerEvent {
 
 class DismissPins extends MessengerEvent {
   final String conversationId;
-  const DismissPins(this.conversationId);
+  /// pinnedAt верхнего пина, который пользователь видел в плашке.
+  final DateTime? upTo;
+  const DismissPins(this.conversationId, {this.upTo});
   @override
-  List<Object?> get props => [conversationId];
+  List<Object?> get props => [conversationId, upTo];
 }
 
 /// Socket: message_pinned / message_unpinned / pins_cleared
@@ -1434,7 +1450,7 @@ class PinEventReceived extends MessengerEvent {
 
   Future<void> _onDismissPins(DismissPins e, Emitter<MessengerState> emit) async {
     try {
-      final res = await _repo.dismissPins(e.conversationId);
+      final res = await _repo.dismissPins(e.conversationId, upTo: e.upTo);
       final at = DateTime.tryParse(res['pinsDismissedAt']?.toString() ?? '');
       emit(state.copyWith(
         conversations: state.conversations
@@ -1834,8 +1850,13 @@ import 'pinned_messages_screen.dart';
                       _scrollToChronIndex(idx);
                     }
                   },
-                  onDismiss: () =>
-                      _messengerBloc.add(DismissPins(widget.conversationId)),
+                  // upTo — pinnedAt самого свежего пина, который пользователь
+                  // видел; без него бэкенд скроет и пин, прилетевший в момент
+                  // нажатия «×».
+                  onDismiss: () => _messengerBloc.add(DismissPins(
+                    widget.conversationId,
+                    upTo: _pins.first.pinnedAt,
+                  )),
                   onOpenList: () => Navigator.of(context).push(
                     MaterialPageRoute(
                       builder: (_) => PinnedMessagesScreen(
