@@ -2426,8 +2426,11 @@ ssh dvolkov@138.124.61.221 'cd ~/taler-id && DB=$(grep -m1 ^DATABASE_URL .env | 
 Затем залогиниться и забрать `accessToken`:
 
 ```bash
-curl -s https://id.taler.tirol/auth/login -H 'Content-Type: application/json' \
-  -d '{"email":"integration_test@taler-test.com","password":"IntegrationTest123!"}' | jq -r .accessToken
+# ⚠️ Именно /admin/auth/login, а не /auth/login: AdminGuard требует в токене
+# claim isAdmin, а обычный accessToken его не несёт. Возвращает {"token": ...},
+# живёт 8 часов.
+curl -s https://id.taler.tirol/admin/auth/login -H 'Content-Type: application/json' \
+  -d '{"email":"integration_test@taler-test.com","password":"IntegrationTest123!"}' | jq -r .token
 ```
 
 - [ ] **Step 2: Запостить объявление с закрепом**
