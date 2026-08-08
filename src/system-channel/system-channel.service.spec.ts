@@ -243,7 +243,8 @@ describe('SystemChannelService.postNews', () => {
       undefined, undefined, undefined,
       expect.objectContaining({ newsType: 'critical', minVersion: '1.2.0' }),
     );
-    expect(res).toEqual({ messageId: 'm1' });
+    // postNews теперь всегда возвращает pinned (false, если dto.pin не передан)
+    expect(res).toEqual({ messageId: 'm1', pinned: false });
   });
 
   it('formats RU+EN when text_en provided', async () => {
@@ -272,5 +273,142 @@ describe('SystemChannelService.postNews', () => {
     } as any;
     const svc = new SystemChannelService(prisma, { deliverNewMessage: jest.fn() } as any, messenger, makeRedis());
     await expect(svc.postNews({ type: 'news', text_ru: 'Test' })).rejects.toThrow(NotFoundException);
+  });
+});
+
+describe('SystemChannelService pin support', () => {
+  const buildService = () => {
+    const prisma: any = {
+      conversation: { findFirst: jest.fn().mockResolvedValue({ id: 'chan-1' }) },
+      user: { findUnique: jest.fn().mockResolvedValue({ id: 'sys-1' }) },
+      message: { findFirst: jest.fn() },
+    };
+    const messenger: any = {
+      createMessage: jest.fn().mockResolvedValue({ id: 'msg-1' }),
+      getMessageById: jest.fn().mockResolvedValue({ id: 'msg-1', content: 'x' }),
+      pinMessage: jest.fn().mockResolvedValue({ pinnedAt: new Date(), pinnedCount: 1, alreadyPinned: false }),
+      unpinMessage: jest.fn().mockResolvedValue({ pinnedCount: 0, wasPinned: true }),
+    };
+    // server.to() всегда возвращает один и тот же объект с emit — так можно
+    // проверять и выбор комнаты, и то, что реально ушло (см.
+    // messenger.controller.pins.spec.ts).
+    const emit = jest.fn();
+    const gateway: any = {
+      deliverNewMessage: jest.fn(),
+      server: { to: jest.fn().mockReturnValue({ emit }) },
+    };
+    const redis: any = { getClient: () => ({ set: jest.fn() }) };
+    return {
+      svc: new SystemChannelService(prisma, gateway, messenger, redis),
+      prisma,
+      messenger,
+      gateway,
+      emit,
+    };
+  };
+
+  it('pins the post it just created, silently', async () => {
+    const { svc, messenger } = buildService();
+
+    const res = await svc.postNews({ type: 'news', text_ru: 'Тест', pin: true });
+
+    expect(res).toMatchObject({ messageId: 'msg-1', pinned: true });
+    expect(messenger.pinMessage).toHaveBeenCalledWith('chan-1', 'msg-1', 'sys-1', { silent: true });
+  });
+
+  it('does not pin when the flag is absent', async () => {
+    const { svc, messenger } = buildService();
+
+    const res = await svc.postNews({ type: 'news', text_ru: 'Тест' });
+
+    expect(res).toMatchObject({ messageId: 'msg-1', pinned: false });
+    expect(messenger.pinMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not fail the post when pinning throws (best-effort pin)', async () => {
+    const { svc, messenger } = buildService();
+    messenger.pinMessage.mockRejectedValue(new Error('pin boom'));
+
+    // Объявление уже разослано подписчикам к этому моменту — падение здесь
+    // должно быть проглочено, а не превратиться в 500 (regression на пункт A).
+    await expect(
+      svc.postNews({ type: 'news', text_ru: 'Тест', pin: true }),
+    ).resolves.toEqual({ messageId: 'msg-1', pinned: false });
+  });
+
+  it('emits message_pinned to the channel room after post-and-pin', async () => {
+    const { svc, messenger, gateway, emit } = buildService();
+    const pinnedAt = new Date('2026-08-08T12:00:00.000Z');
+    messenger.pinMessage.mockResolvedValue({ pinnedAt, pinnedCount: 5, alreadyPinned: false });
+
+    await svc.postNews({ type: 'news', text_ru: 'Тест', pin: true });
+
+    expect(gateway.server.to).toHaveBeenCalledWith('chan-1');
+    expect(emit).toHaveBeenCalledWith('message_pinned', {
+      conversationId: 'chan-1',
+      messageId: 'msg-1',
+      pinnedById: 'sys-1',
+      pinnedAt,
+      pinnedCount: 5,
+    });
+  });
+
+  it('pins an existing post through pinPost', async () => {
+    const { svc, messenger } = buildService();
+
+    const res = await svc.pinPost('msg-9', true);
+
+    expect(messenger.pinMessage).toHaveBeenCalledWith('chan-1', 'msg-9', 'sys-1', { silent: true });
+    expect(messenger.unpinMessage).not.toHaveBeenCalled();
+    expect(res).toEqual({ pinned: true, pinnedCount: 1 });
+  });
+
+  it('pinPost does not emit when the post was already pinned', async () => {
+    const { svc, messenger, emit } = buildService();
+    messenger.pinMessage.mockResolvedValue({ pinnedAt: new Date(), pinnedCount: 1, alreadyPinned: true });
+
+    await svc.pinPost('msg-9', true);
+
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('unpins an existing post through pinPost', async () => {
+    const { svc, messenger } = buildService();
+
+    const res = await svc.pinPost('msg-9', false);
+
+    expect(messenger.unpinMessage).toHaveBeenCalledWith('chan-1', 'msg-9', 'sys-1');
+    expect(messenger.pinMessage).not.toHaveBeenCalled();
+    expect(res).toEqual({ pinned: false, pinnedCount: 0 });
+  });
+
+  it('pinPost emits message_unpinned when an existing pin is removed', async () => {
+    const { svc, gateway, emit } = buildService();
+
+    await svc.pinPost('msg-9', false);
+
+    expect(gateway.server.to).toHaveBeenCalledWith('chan-1');
+    expect(emit).toHaveBeenCalledWith('message_unpinned', {
+      conversationId: 'chan-1',
+      messageId: 'msg-9',
+      pinnedCount: 0,
+    });
+  });
+
+  it('pinPost unpin emits nothing when the post was not pinned', async () => {
+    const { svc, messenger, emit } = buildService();
+    messenger.unpinMessage.mockResolvedValue({ pinnedCount: 0, wasPinned: false });
+
+    await svc.pinPost('msg-9', false);
+
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('refuses to pin when the system channel is not seeded', async () => {
+    const { svc, prisma, messenger } = buildService();
+    prisma.conversation.findFirst.mockResolvedValue(null);
+
+    await expect(svc.pinPost('msg-9', true)).rejects.toThrow(NotFoundException);
+    expect(messenger.pinMessage).not.toHaveBeenCalled();
   });
 });

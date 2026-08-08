@@ -121,11 +121,27 @@ export class AdminController {
   @UseGuards(AdminGuard)
   @HttpCode(HttpStatus.OK)
   async postSystemNews(
-    @Body() body: { type: 'news' | 'critical'; text_ru: string; text_en?: string; minVersion?: string },
+    @Body() body: { type: 'news' | 'critical'; text_ru: string; text_en?: string; minVersion?: string; pin?: boolean },
   ) {
     if (!body?.text_ru || !['news', 'critical'].includes(body?.type)) {
       throw new BadRequestException('type (news|critical) and text_ru are required');
     }
     return this.systemChannel.postNews(body);
+  }
+
+  @Post('system-channel/pin')
+  @UseGuards(AdminGuard)
+  @HttpCode(HttpStatus.OK)
+  async pinSystemPost(@Body() body: { messageId: string }) {
+    if (!body?.messageId) throw new BadRequestException('messageId is required');
+    return this.systemChannel.pinPost(body.messageId, true);
+  }
+
+  @Post('system-channel/unpin')
+  @UseGuards(AdminGuard)
+  @HttpCode(HttpStatus.OK)
+  async unpinSystemPost(@Body() body: { messageId: string }) {
+    if (!body?.messageId) throw new BadRequestException('messageId is required');
+    return this.systemChannel.pinPost(body.messageId, false);
   }
 }
