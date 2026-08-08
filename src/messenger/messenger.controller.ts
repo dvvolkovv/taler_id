@@ -45,6 +45,7 @@ import { RedisService } from '../redis/redis.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { VideoTranscodeService } from '../common/video-transcode.service';
 import { FcmService } from '../common/fcm.service';
+import { parseUpToCursor } from './pin-cursor.util';
 import sharp = require('sharp');
 
 /**
@@ -1169,6 +1170,110 @@ export class MessengerController {
   @Delete('channels/:id/subscribe')
   async unsubscribe(@Param('id') id: string, @CurrentUser() user: any) {
     return this.service.unsubscribeFromChannel(id, user.sub);
+  }
+
+  // ─── Pinned messages ───
+
+  @Post('conversations/:id/messages/:msgId/pin')
+  async pinMessage(
+    @Param('id') id: string,
+    @Param('msgId') msgId: string,
+    @CurrentUser() user: any,
+  ) {
+    const res = await this.service.pinMessage(id, msgId, user.sub);
+    // Повторный пин и проигранная гонка ничего не меняют — не будим клиентов
+    // лишним событием (симметрично unpinMessage/unpinAll ниже).
+    if (!res.alreadyPinned) {
+      this.gateway.server.to(id).emit('message_pinned', {
+        conversationId: id,
+        messageId: msgId,
+        pinnedById: user.sub,
+        pinnedAt: res.pinnedAt,
+        pinnedCount: res.pinnedCount,
+      });
+    }
+    // Сервисное сообщение о закрепе доставляем обычным путём — оно же служит
+    // пушем. systemMessageId пуст при повторном пине, проигранной гонке и
+    // silent-режиме: доставлять нечего.
+    if (res.systemMessageId) {
+      try {
+        const full = await this.service.getMessageById(res.systemMessageId);
+        if (full) {
+          await this.gateway.deliverNewMessage(
+            {
+              ...full,
+              senderName: await this.service.getUserDisplayName(user.sub),
+              reactions: [],
+            },
+            user.sub,
+            id,
+          );
+        }
+      } catch (e) {
+        // Пин уже зафиксирован и событие разослано; доставка сервисного
+        // сообщения — best-effort, как в system-channel.service.ts. Падение
+        // фан-аута не должно превращать успешный закреп в 500 у клиента.
+        this.logger.warn(
+          `pin service-message delivery failed: ${(e as Error).message}`,
+        );
+      }
+    }
+    return res;
+  }
+
+  @Delete('conversations/:id/messages/:msgId/pin')
+  async unpinMessage(
+    @Param('id') id: string,
+    @Param('msgId') msgId: string,
+    @CurrentUser() user: any,
+  ) {
+    const res = await this.service.unpinMessage(id, msgId, user.sub);
+    // Ничего не изменилось — не будим клиентов лишним событием.
+    if (res.wasPinned) {
+      this.gateway.server.to(id).emit('message_unpinned', {
+        conversationId: id,
+        messageId: msgId,
+        pinnedCount: res.pinnedCount,
+      });
+    }
+    return res;
+  }
+
+  @Get('conversations/:id/pinned')
+  async listPinned(
+    @Param('id') id: string,
+    @Query('limit') limit: string | undefined,
+    @Query('offset') offset: string | undefined,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.listPinned(
+      id,
+      user.sub,
+      limit ? parseInt(limit, 10) : 50,
+      offset ? parseInt(offset, 10) : 0,
+    );
+  }
+
+  @Delete('conversations/:id/pinned')
+  async unpinAll(@Param('id') id: string, @CurrentUser() user: any) {
+    const res = await this.service.unpinAll(id, user.sub);
+    if (res.unpinned > 0) {
+      this.gateway.server.to(id).emit('pins_cleared', { conversationId: id });
+    }
+    return res;
+  }
+
+  @Post('conversations/:id/pinned/dismiss')
+  async dismissPins(
+    @Param('id') id: string,
+    @Body() body: { upTo?: string },
+    @CurrentUser() user: any,
+  ) {
+    return this.service.dismissPins(
+      id,
+      user.sub,
+      parseUpToCursor(body?.upTo),
+    );
   }
 
   // ─── Polls ───

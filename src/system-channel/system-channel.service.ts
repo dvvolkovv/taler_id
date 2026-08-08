@@ -188,22 +188,109 @@ export class SystemChannelService implements OnApplicationBootstrap {
     return { messageId: msg.id };
   }
 
+  /** Общий поиск системного канала + системного юзера, с throw. Используется
+   *  везде, кроме autopostLatestRelease — та должна тихо промолчать на
+   *  старте приложения, а не ронять bootstrap. */
+  private async getSystemChannelAndUser() {
+    const channel = await this.prisma.conversation.findFirst({
+      where: { isSystem: true },
+    });
+    const sysUser = await this.prisma.user.findUnique({
+      where: { email: SYSTEM_USER_EMAIL },
+    });
+    if (!channel || !sysUser) {
+      throw new NotFoundException('System channel is not seeded');
+    }
+    return { channel, sysUser };
+  }
+
   async postNews(dto: {
     type: 'news' | 'critical';
     text_ru: string;
     text_en?: string;
     minVersion?: string;
-  }): Promise<{ messageId: string }> {
-    const channel = await this.prisma.conversation.findFirst({ where: { isSystem: true } });
-    const sysUser = await this.prisma.user.findUnique({ where: { email: SYSTEM_USER_EMAIL } });
-    if (!channel || !sysUser) throw new NotFoundException('System channel is not seeded');
+    pin?: boolean;
+  }): Promise<{ messageId: string; pinned: boolean }> {
+    const { channel, sysUser } = await this.getSystemChannelAndUser();
     const content = dto.text_en
       ? `${dto.text_ru}\n\n— EN —\n\n${dto.text_en}`
       : dto.text_ru;
-    return this.post(channel.id, sysUser.id, content, {
+    const posted = await this.post(channel.id, sysUser.id, content, {
       newsType: dto.type,
       ...(dto.minVersion ? { minVersion: dto.minVersion } : {}),
     });
+
+    let pinned = false;
+    if (dto.pin) {
+      try {
+        // silent: обычный закреп рождает сервисное сообщение, а оно же служит
+        // пушем. Подписчики канала получили бы два уведомления подряд —
+        // объявление и «Taler ID закрепил сообщение».
+        const res = await this.messenger.pinMessage(
+          channel.id,
+          posted.messageId,
+          sysUser.id,
+          { silent: true },
+        );
+        pinned = true;
+        // Повторный пин/проигранная гонка ничего не меняют — не будим
+        // клиентов лишним событием (симметрично messenger.controller.ts).
+        if (!res.alreadyPinned) {
+          this.gateway.server.to(channel.id).emit('message_pinned', {
+            conversationId: channel.id,
+            messageId: posted.messageId,
+            pinnedById: sysUser.id,
+            pinnedAt: res.pinnedAt,
+            pinnedCount: res.pinnedCount,
+          });
+        }
+      } catch (e) {
+        // Пост уже создан и разослан. Уронить запрос здесь — значит спровоцировать
+        // повторный постинг и второе объявление на десятки тысяч подписчиков.
+        // Закреп добирается отдельно: POST /admin/system-channel/pin идемпотентен.
+        this.logger.warn(
+          `system-channel post ${posted.messageId} pinned failed: ${(e as Error).message}`,
+        );
+      }
+    }
+    return { messageId: posted.messageId, pinned };
+  }
+
+  /** Закрепить/открепить существующий пост системного канала. Живых
+   *  OWNER/ADMIN в этом канале нет — владелец системный юзер, поэтому
+   *  обычные эндпоинты сюда не дотягиваются. В отличие от postNews здесь
+   *  ничего необратимого ещё не произошло (объявление уже разослано раньше,
+   *  отдельным вызовом), поэтому ошибка пробрасывается как есть — глушить
+   *  её нечем оправдать. */
+  async pinPost(
+    messageId: string,
+    pin: boolean,
+  ): Promise<{ pinned: boolean; pinnedCount: number }> {
+    const { channel, sysUser } = await this.getSystemChannelAndUser();
+    if (pin) {
+      const res = await this.messenger.pinMessage(channel.id, messageId, sysUser.id, {
+        silent: true,
+      });
+      if (!res.alreadyPinned) {
+        this.gateway.server.to(channel.id).emit('message_pinned', {
+          conversationId: channel.id,
+          messageId,
+          pinnedById: sysUser.id,
+          pinnedAt: res.pinnedAt,
+          pinnedCount: res.pinnedCount,
+        });
+      }
+      return { pinned: true, pinnedCount: res.pinnedCount };
+    }
+    const res = await this.messenger.unpinMessage(channel.id, messageId, sysUser.id);
+    if (res.wasPinned) {
+      this.gateway.server.to(channel.id).emit('message_unpinned', {
+        conversationId: channel.id,
+        messageId,
+        pinnedCount: res.pinnedCount,
+      });
+    }
+    return { pinned: false, pinnedCount: res.pinnedCount };
   }
 
   async subscribeUser(userId: string): Promise<void> {

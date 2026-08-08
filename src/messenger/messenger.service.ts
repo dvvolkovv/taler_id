@@ -50,7 +50,17 @@ export class MessengerService {
           messages: { orderBy: { sentAt: 'desc' }, take: 1 },
         },
       });
-      if (existing) return this._formatConversation(existing, userAId);
+      if (existing) {
+        const pinnedMap = await this._loadPinnedMap([existing.id], userAId, tx);
+        return this._formatConversation(
+          existing,
+          userAId,
+          undefined,
+          undefined,
+          undefined,
+          pinnedMap,
+        );
+      }
       const conv = await tx.conversation.create({
         data: {
           type: 'DIRECT',
@@ -58,6 +68,7 @@ export class MessengerService {
         },
         include: { participants: true, messages: true },
       });
+      // Беседа только что создана — пинов быть не может.
       return this._formatConversation(conv, userAId);
     });
   }
@@ -89,6 +100,7 @@ export class MessengerService {
     });
     // System message: group created
     await this._createSystemMessage(conv.id, creatorId, 'group_created');
+    // Беседа только что создана — пинов быть не может.
     return this._formatConversation(conv, creatorId);
   }
 
@@ -380,6 +392,11 @@ export class MessengerService {
       participants: partsByConv[c.id] ?? [],
     }));
 
+    const pinnedMap = await this._loadPinnedMap(
+      conversations.map((c) => c.id),
+      userId,
+    );
+
     const allUserIds = [
       ...new Set([
         ...conversations.flatMap((c) => c.participants.map((p) => p.userId)),
@@ -387,6 +404,10 @@ export class MessengerService {
         // он НЕ участник, но его имя нужно для превью «Taler ID: …»)
         ...conversations
           .map((c) => c.messages?.[0]?.senderId)
+          .filter((id): id is string => !!id),
+        // Авторы пинов — тоже не всегда участники (тот же системный юзер).
+        ...Object.values(pinnedMap)
+          .map((p) => p.top?.senderId)
           .filter((id): id is string => !!id),
       ]),
     ];
@@ -450,9 +471,47 @@ export class MessengerService {
         userMap,
         activeCallMap,
         aliasMap,
+        pinnedMap,
       ),
       unreadCount: unreadMap[conv.id] ?? 0,
     }));
+  }
+
+  /** Пины перечисленных бесед одним запросом: {conversationId: {count, top}}.
+   *  Строки идут по pinnedAt desc (id — тай-брейкер), поэтому первая
+   *  встреченная для беседы и есть верхний пин. hiddenFor исключаем по той же
+   *  причине, что и в listPinned: скрытый у себя пин не должен ни считаться,
+   *  ни показываться в плашке. */
+  private async _loadPinnedMap(
+    conversationIds: string[],
+    userId: string,
+    client: { message: { findMany: Function } } = this.prisma as any,
+  ): Promise<Record<string, { count: number; top: any }>> {
+    if (conversationIds.length === 0) return {};
+    const rows = await client.message.findMany({
+      where: {
+        conversationId: { in: conversationIds },
+        pinnedAt: { not: null },
+        deletedAt: null,
+        NOT: { hiddenFor: { some: { userId } } },
+      },
+      orderBy: [{ pinnedAt: 'desc' }, { id: 'desc' }],
+      select: {
+        id: true,
+        conversationId: true,
+        content: true,
+        senderId: true,
+        sentAt: true,
+        pinnedAt: true,
+      },
+    });
+    const map: Record<string, { count: number; top: any }> = {};
+    for (const r of rows) {
+      const entry = (map[r.conversationId] ??= { count: 0, top: null });
+      entry.count++;
+      if (!entry.top) entry.top = r;
+    }
+    return map;
   }
 
   private _formatConversation(
@@ -461,6 +520,7 @@ export class MessengerService {
     userMap?: Record<string, any>,
     activeCallMap?: Record<string, string>,
     aliasMap?: Record<string, string>,
+    pinnedMap?: Record<string, { count: number; top: any }>,
   ) {
     const myParticipant = conv.participants.find(
       (p: any) => p.userId === currentUserId,
@@ -488,6 +548,17 @@ export class MessengerService {
       otherUser?.username ??
       null;
     const lastMsg = conv.messages?.[0] ?? null;
+
+    const pin = pinnedMap?.[conv.id];
+    const pinSender = pin?.top && userMap ? userMap[pin.top.senderId] : null;
+    const pinSenderName = pinSender
+      ? [pinSender.profile?.firstName, pinSender.profile?.lastName]
+          .filter(Boolean)
+          .join(' ')
+          .trim() ||
+        pinSender.username ||
+        null
+      : null;
 
     // Find sender name for last message (for group chats)
     let lastMessageSenderName: string | null = null;
@@ -536,6 +607,18 @@ export class MessengerService {
           ? (conv._count?.participants ?? conv.participants.length)
           : undefined,
       isSubscribed: conv.type === 'CHANNEL' ? !!myParticipant : undefined,
+      pinnedCount: pin?.count ?? 0,
+      topPinned: pin?.top
+        ? {
+            id: pin.top.id,
+            // Плашке хватает превью; системные посты бывают на несколько экранов.
+            content: (pin.top.content ?? '').slice(0, 200),
+            senderName: pinSenderName,
+            sentAt: pin.top.sentAt,
+            pinnedAt: pin.top.pinnedAt,
+          }
+        : null,
+      pinsDismissedAt: myParticipant?.pinsDismissedAt ?? null,
       // системный канал (Taler ID — Новости): клиенты не могут отписаться
       isSystem: conv.isSystem ? true : undefined,
     };
@@ -1206,6 +1289,29 @@ export class MessengerService {
     return conv;
   }
 
+  /** Кто может закреплять: в канале и группе — только OWNER/ADMIN,
+   *  в остальных типах бесед (DIRECT, SAVED, AI_*) — любой участник. */
+  private async _assertCanPin(
+    conv: { id: string; type: string },
+    userId: string,
+  ) {
+    const me = await this.assertParticipant(conv.id, userId);
+    if (
+      (conv.type === 'CHANNEL' || conv.type === 'GROUP') &&
+      me.role !== 'OWNER' &&
+      me.role !== 'ADMIN'
+    ) {
+      throw new ForbiddenException('Only admins can pin in this conversation');
+    }
+    return me;
+  }
+
+  private _pinnedCount(conversationId: string): Promise<number> {
+    return this.prisma.message.count({
+      where: { conversationId, pinnedAt: { not: null }, deletedAt: null },
+    });
+  }
+
   private async _createSystemMessage(
     conversationId: string,
     actorId: string,
@@ -1245,6 +1351,13 @@ export class MessengerService {
           actor: actorName,
           target: targetName,
           role: extra,
+        });
+        break;
+      case 'message_pinned':
+        content = JSON.stringify({
+          action,
+          actor: actorName,
+          preview: extra ?? '',
         });
         break;
       default:
@@ -1495,6 +1608,189 @@ export class MessengerService {
   async getMessageById(messageId: string) {
     return this.prisma.message.findUnique({ where: { id: messageId } });
   }
+
+  // ─── Pinned messages ───
+
+  /** Закрепить сообщение. opts.silent — не создавать сервисное сообщение
+   *  (используется админским постом с pin: true, чтобы не слать второй push). */
+  async pinMessage(
+    conversationId: string,
+    messageId: string,
+    userId: string,
+    opts: { silent?: boolean } = {},
+  ) {
+    const conv = await this._getConversationOrThrow(conversationId);
+    await this._assertCanPin(conv, userId);
+
+    const msg = await this.prisma.message.findUnique({
+      where: { id: messageId },
+    });
+    if (!msg || msg.conversationId !== conversationId || msg.deletedAt) {
+      throw new NotFoundException('Message not found');
+    }
+    if (msg.isSystem) {
+      throw new BadRequestException('System messages cannot be pinned');
+    }
+    if (msg.pinnedAt) {
+      return {
+        pinnedAt: msg.pinnedAt,
+        pinnedCount: await this._pinnedCount(conversationId),
+        alreadyPinned: true,
+        systemMessageId: null,
+      };
+    }
+
+    const pinnedAt = new Date();
+    const claimed = await this.prisma.message.updateMany({
+      where: { id: messageId, conversationId, pinnedAt: null },
+      data: { pinnedAt, pinnedById: userId },
+    });
+    if (claimed.count === 0) {
+      // Проиграли гонку: кто-то закрепил это же сообщение в тот же момент.
+      // Ведём себя как при повторном пине — второго сервисного сообщения
+      // (а значит и второго пуша) быть не должно.
+      const current = await this.prisma.message.findUnique({
+        where: { id: messageId },
+      });
+      return {
+        pinnedAt: current?.pinnedAt ?? null,
+        pinnedCount: await this._pinnedCount(conversationId),
+        alreadyPinned: true,
+        systemMessageId: null,
+      };
+    }
+
+    let systemMessageId: string | null = null;
+    if (!opts.silent) {
+      const preview = (msg.content ?? '').slice(0, 80);
+      const sys = await this._createSystemMessage(
+        conversationId,
+        userId,
+        'message_pinned',
+        undefined,
+        preview,
+      );
+      systemMessageId = sys.id;
+    }
+
+    return {
+      pinnedAt,
+      pinnedCount: await this._pinnedCount(conversationId),
+      alreadyPinned: false,
+      systemMessageId,
+    };
+  }
+
+  async unpinMessage(
+    conversationId: string,
+    messageId: string,
+    userId: string,
+  ) {
+    const conv = await this._getConversationOrThrow(conversationId);
+    await this._assertCanPin(conv, userId);
+    const result = await this.prisma.message.updateMany({
+      where: { id: messageId, conversationId },
+      data: { pinnedAt: null, pinnedById: null },
+    });
+    return {
+      pinnedCount: await this._pinnedCount(conversationId),
+      wasPinned: result.count > 0,
+    };
+  }
+
+  async listPinned(
+    conversationId: string,
+    userId: string,
+    limit = 50,
+    offset = 0,
+  ) {
+    await this.assertParticipant(conversationId, userId);
+    const take = Number.isFinite(limit)
+      ? Math.min(Math.max(Math.trunc(limit), 1), 100)
+      : 50;
+    const skip = Number.isFinite(offset) && offset > 0 ? Math.trunc(offset) : 0;
+    const where = {
+      conversationId,
+      pinnedAt: { not: null },
+      // deleteMessage не снимает pinnedAt — иначе удалённое сообщение
+      // осталось бы висеть в закреплённых.
+      deletedAt: null,
+      // hiddenFor — «удалить у себя»; такой пин не должен ни попадать в
+      // выдачу, ни считаться в total, иначе счётчик «N из M» врёт навсегда.
+      NOT: { hiddenFor: { some: { userId } } },
+    };
+    const rows = await this.prisma.message.findMany({
+      where,
+      include: {
+        sender: {
+          select: {
+            username: true,
+            profile: { select: { firstName: true, lastName: true } },
+          },
+        },
+      },
+      orderBy: [{ pinnedAt: 'desc' }, { id: 'desc' }],
+      take,
+      skip,
+    });
+    const messages = rows.map((m: any) => {
+      const u = m.sender;
+      const firstLast = u
+        ? [u.profile?.firstName, u.profile?.lastName]
+            .filter(Boolean)
+            .join(' ')
+            .trim() || null
+        : null;
+      const { sender, ...rest } = m;
+      return { ...rest, senderName: firstLast ?? u?.username ?? null };
+    });
+    const total = await this.prisma.message.count({ where });
+    return { messages, total };
+  }
+
+  async unpinAll(conversationId: string, userId: string) {
+    const conv = await this._getConversationOrThrow(conversationId);
+    await this._assertCanPin(conv, userId);
+    const res = await this.prisma.message.updateMany({
+      where: { conversationId, pinnedAt: { not: null } },
+      data: { pinnedAt: null, pinnedById: null },
+    });
+    return { unpinned: res.count };
+  }
+
+  /** Спрятать плашку закреплённых лично для себя. Плашка вернётся,
+   *  когда появится пин с pinnedAt позже этой отметки.
+   *
+   *  upTo — pinnedAt верхнего пина, который клиент реально видел. Без него
+   *  берём максимальный pinnedAt беседы: сегодняшнее «сейчас» скрыло бы и
+   *  пин, прилетевший, пока запрос шёл до сервера. Тот же приём, что в
+   *  advanceReadHorizon. */
+  async dismissPins(conversationId: string, userId: string, upTo?: Date) {
+    await this.assertParticipant(conversationId, userId);
+    const now = new Date();
+    // Курсор от клиента не доверенный: битую дату игнорируем (упадёт в
+    // фолбэк), будущую подрезаем до «сейчас». Иначе разъехавшиеся часы на
+    // клиенте скрыли бы плашку навсегда — вместе с ещё не созданными пинами.
+    let pinsDismissedAt =
+      upTo && !Number.isNaN(upTo.getTime())
+        ? upTo > now
+          ? now
+          : upTo
+        : undefined;
+    if (!pinsDismissedAt) {
+      const newest = await this.prisma.message.aggregate({
+        where: { conversationId, pinnedAt: { not: null }, deletedAt: null },
+        _max: { pinnedAt: true },
+      });
+      pinsDismissedAt = newest._max.pinnedAt ?? now;
+    }
+    await this.prisma.conversationParticipant.update({
+      where: { conversationId_userId: { conversationId, userId } },
+      data: { pinsDismissedAt },
+    });
+    return { pinsDismissedAt };
+  }
+
   // ─── Polls ───
 
   async createPoll(
