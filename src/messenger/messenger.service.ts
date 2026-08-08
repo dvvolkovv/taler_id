@@ -50,7 +50,17 @@ export class MessengerService {
           messages: { orderBy: { sentAt: 'desc' }, take: 1 },
         },
       });
-      if (existing) return this._formatConversation(existing, userAId);
+      if (existing) {
+        const pinnedMap = await this._loadPinnedMap([existing.id], userAId, tx);
+        return this._formatConversation(
+          existing,
+          userAId,
+          undefined,
+          undefined,
+          undefined,
+          pinnedMap,
+        );
+      }
       const conv = await tx.conversation.create({
         data: {
           type: 'DIRECT',
@@ -58,6 +68,7 @@ export class MessengerService {
         },
         include: { participants: true, messages: true },
       });
+      // Беседа только что создана — пинов быть не может.
       return this._formatConversation(conv, userAId);
     });
   }
@@ -89,6 +100,7 @@ export class MessengerService {
     });
     // System message: group created
     await this._createSystemMessage(conv.id, creatorId, 'group_created');
+    // Беседа только что создана — пинов быть не может.
     return this._formatConversation(conv, creatorId);
   }
 
@@ -380,6 +392,11 @@ export class MessengerService {
       participants: partsByConv[c.id] ?? [],
     }));
 
+    const pinnedMap = await this._loadPinnedMap(
+      conversations.map((c) => c.id),
+      userId,
+    );
+
     const allUserIds = [
       ...new Set([
         ...conversations.flatMap((c) => c.participants.map((p) => p.userId)),
@@ -387,6 +404,10 @@ export class MessengerService {
         // он НЕ участник, но его имя нужно для превью «Taler ID: …»)
         ...conversations
           .map((c) => c.messages?.[0]?.senderId)
+          .filter((id): id is string => !!id),
+        // Авторы пинов — тоже не всегда участники (тот же системный юзер).
+        ...Object.values(pinnedMap)
+          .map((p) => p.top?.senderId)
           .filter((id): id is string => !!id),
       ]),
     ];
@@ -450,9 +471,47 @@ export class MessengerService {
         userMap,
         activeCallMap,
         aliasMap,
+        pinnedMap,
       ),
       unreadCount: unreadMap[conv.id] ?? 0,
     }));
+  }
+
+  /** Пины перечисленных бесед одним запросом: {conversationId: {count, top}}.
+   *  Строки идут по pinnedAt desc (id — тай-брейкер), поэтому первая
+   *  встреченная для беседы и есть верхний пин. hiddenFor исключаем по той же
+   *  причине, что и в listPinned: скрытый у себя пин не должен ни считаться,
+   *  ни показываться в плашке. */
+  private async _loadPinnedMap(
+    conversationIds: string[],
+    userId: string,
+    client: { message: { findMany: Function } } = this.prisma as any,
+  ): Promise<Record<string, { count: number; top: any }>> {
+    if (conversationIds.length === 0) return {};
+    const rows = await client.message.findMany({
+      where: {
+        conversationId: { in: conversationIds },
+        pinnedAt: { not: null },
+        deletedAt: null,
+        NOT: { hiddenFor: { some: { userId } } },
+      },
+      orderBy: [{ pinnedAt: 'desc' }, { id: 'desc' }],
+      select: {
+        id: true,
+        conversationId: true,
+        content: true,
+        senderId: true,
+        sentAt: true,
+        pinnedAt: true,
+      },
+    });
+    const map: Record<string, { count: number; top: any }> = {};
+    for (const r of rows) {
+      const entry = (map[r.conversationId] ??= { count: 0, top: null });
+      entry.count++;
+      if (!entry.top) entry.top = r;
+    }
+    return map;
   }
 
   private _formatConversation(
@@ -461,6 +520,7 @@ export class MessengerService {
     userMap?: Record<string, any>,
     activeCallMap?: Record<string, string>,
     aliasMap?: Record<string, string>,
+    pinnedMap?: Record<string, { count: number; top: any }>,
   ) {
     const myParticipant = conv.participants.find(
       (p: any) => p.userId === currentUserId,
@@ -488,6 +548,17 @@ export class MessengerService {
       otherUser?.username ??
       null;
     const lastMsg = conv.messages?.[0] ?? null;
+
+    const pin = pinnedMap?.[conv.id];
+    const pinSender = pin?.top && userMap ? userMap[pin.top.senderId] : null;
+    const pinSenderName = pinSender
+      ? [pinSender.profile?.firstName, pinSender.profile?.lastName]
+          .filter(Boolean)
+          .join(' ')
+          .trim() ||
+        pinSender.username ||
+        null
+      : null;
 
     // Find sender name for last message (for group chats)
     let lastMessageSenderName: string | null = null;
@@ -536,6 +607,18 @@ export class MessengerService {
           ? (conv._count?.participants ?? conv.participants.length)
           : undefined,
       isSubscribed: conv.type === 'CHANNEL' ? !!myParticipant : undefined,
+      pinnedCount: pin?.count ?? 0,
+      topPinned: pin?.top
+        ? {
+            id: pin.top.id,
+            // Плашке хватает превью; системные посты бывают на несколько экранов.
+            content: (pin.top.content ?? '').slice(0, 200),
+            senderName: pinSenderName,
+            sentAt: pin.top.sentAt,
+            pinnedAt: pin.top.pinnedAt,
+          }
+        : null,
+      pinsDismissedAt: myParticipant?.pinsDismissedAt ?? null,
       // системный канал (Taler ID — Новости): клиенты не могут отписаться
       isSystem: conv.isSystem ? true : undefined,
     };
@@ -1646,7 +1729,7 @@ export class MessengerService {
           },
         },
       },
-      orderBy: { pinnedAt: 'desc' },
+      orderBy: [{ pinnedAt: 'desc' }, { id: 'desc' }],
       take,
       skip,
     });

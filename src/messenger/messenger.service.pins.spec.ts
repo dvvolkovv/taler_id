@@ -219,7 +219,7 @@ describe('MessengerService pin/unpin', () => {
     expect(res.messages[1].senderName).toBe('ann');
     expect(res.messages[0].sender).toBeUndefined();
     expect(prisma.message.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ orderBy: { pinnedAt: 'desc' } }),
+      expect.objectContaining({ orderBy: [{ pinnedAt: 'desc' }, { id: 'desc' }] }),
     );
   });
 
@@ -351,5 +351,188 @@ describe('MessengerService pin/unpin', () => {
 
     await expect(service.dismissPins('conv-1', 'stranger')).rejects.toThrow(ForbiddenException);
     expect(prisma.conversationParticipant.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('MessengerService conversation payload — pins', () => {
+  it('exposes pinnedCount, a truncated topPinned and pinsDismissedAt', () => {
+    const service = new MessengerService({} as any, {} as any);
+    const dismissedAt = new Date('2026-08-05T00:00:00Z');
+    const pinnedAt = new Date('2026-08-06T00:00:00Z');
+
+    const out = (service as any)._formatConversation(
+      {
+        id: 'conv-1',
+        type: 'CHANNEL',
+        participants: [{ userId: 'me', role: 'SUBSCRIBER', pinsDismissedAt: dismissedAt }],
+        messages: [],
+        _count: { participants: 100 },
+      },
+      'me',
+      { sys: { username: 'talerid', profile: { firstName: 'Taler ID', lastName: '' } } },
+      undefined,
+      undefined,
+      {
+        'conv-1': {
+          count: 2,
+          top: { id: 'm9', content: 'x'.repeat(500), senderId: 'sys', sentAt: pinnedAt, pinnedAt },
+        },
+      },
+    );
+
+    expect(out.pinnedCount).toBe(2);
+    expect(out.topPinned.id).toBe('m9');
+    expect(out.topPinned.content).toHaveLength(200);
+    expect(out.topPinned.senderName).toBe('Taler ID');
+    expect(out.topPinned.pinnedAt).toEqual(pinnedAt);
+    expect(out.pinsDismissedAt).toEqual(dismissedAt);
+  });
+
+  it('reports no pins when the conversation has none', () => {
+    const service = new MessengerService({} as any, {} as any);
+    const out = (service as any)._formatConversation(
+      { id: 'c', type: 'DIRECT', participants: [{ userId: 'me' }], messages: [] },
+      'me',
+    );
+    expect(out.pinnedCount).toBe(0);
+    expect(out.topPinned).toBeNull();
+    expect(out.pinsDismissedAt).toBeNull();
+  });
+
+  it('falls back to the username when the pin author has no profile name', () => {
+    const service = new MessengerService({} as any, {} as any);
+    const pinnedAt = new Date('2026-08-06T00:00:00Z');
+    const out = (service as any)._formatConversation(
+      { id: 'c', type: 'GROUP', participants: [{ userId: 'me' }], messages: [] },
+      'me',
+      { u1: { username: 'ann', profile: null } },
+      undefined,
+      undefined,
+      { c: { count: 1, top: { id: 'm1', content: 'hi', senderId: 'u1', sentAt: pinnedAt, pinnedAt } } },
+    );
+    expect(out.topPinned.senderName).toBe('ann');
+  });
+
+  it('excludes messages hidden for the caller from the pins query', async () => {
+    const prisma: any = {
+      // Как минимум одна беседа обязательна: _loadPinnedMap коротким замыканием
+      // возвращает {} без похода в БД, если список conversationId пуст, и тогда
+      // message.findMany вовсе не вызовется — нечего будет проверять ниже.
+      conversation: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: 'c1', type: 'DIRECT', _count: { participants: 2 }, messages: [] },
+        ]),
+      },
+      conversationParticipant: {
+        findMany: jest.fn().mockResolvedValue([{ conversationId: 'c1', userId: 'me' }]),
+      },
+      message: {
+        findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+      },
+      user: { findMany: jest.fn().mockResolvedValue([]) },
+      contactAlias: { findMany: jest.fn().mockResolvedValue([]) },
+      callLog: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const service = new MessengerService(prisma, {} as any);
+
+    await service.getConversations('me');
+
+    // Первый вызов message.findMany в getConversations — это выборка пинов.
+    const pinsCall = prisma.message.findMany.mock.calls.find(
+      (c: any[]) => c[0]?.where?.pinnedAt !== undefined,
+    );
+    expect(pinsCall).toBeDefined();
+    expect(pinsCall[0].where).toMatchObject({
+      pinnedAt: { not: null },
+      deletedAt: null,
+      NOT: { hiddenFor: { some: { userId: 'me' } } },
+    });
+    expect(pinsCall[0].orderBy).toEqual([{ pinnedAt: 'desc' }, { id: 'desc' }]);
+  });
+
+  it('folds multiple pin rows per conversation into a count and a first-seen top', async () => {
+    const t1 = new Date('2026-08-01T00:00:00Z');
+    const t2 = new Date('2026-08-02T00:00:00Z');
+    const t3 = new Date('2026-08-03T00:00:00Z');
+    const t4 = new Date('2026-08-04T00:00:00Z');
+    const prisma: any = {
+      conversation: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: 'c1', type: 'DIRECT', _count: { participants: 2 }, messages: [] },
+          { id: 'c2', type: 'GROUP', _count: { participants: 3 }, messages: [] },
+        ]),
+      },
+      conversationParticipant: {
+        findMany: jest.fn().mockResolvedValue([
+          { conversationId: 'c1', userId: 'me' },
+          { conversationId: 'c2', userId: 'me' },
+        ]),
+      },
+      message: {
+        // orderBy: [{pinnedAt:'desc'},{id:'desc'}] в реальном запросе гарантирует
+        // «новейший первым» внутри беседы — мок уже возвращает ряды в этом
+        // порядке, как если бы Prisma применила ту сортировку.
+        findMany: jest.fn().mockResolvedValue([
+          { id: 'p1', conversationId: 'c1', content: 'c1 newest', senderId: 'u1', sentAt: t4, pinnedAt: t4 },
+          { id: 'p2', conversationId: 'c1', content: 'c1 older', senderId: 'u1', sentAt: t3, pinnedAt: t3 },
+          { id: 'p3', conversationId: 'c2', content: 'c2 newest', senderId: 'u2', sentAt: t2, pinnedAt: t2 },
+          { id: 'p4', conversationId: 'c2', content: 'c2 older', senderId: 'u2', sentAt: t1, pinnedAt: t1 },
+        ]),
+        count: jest.fn().mockResolvedValue(0),
+      },
+      user: { findMany: jest.fn().mockResolvedValue([]) },
+      contactAlias: { findMany: jest.fn().mockResolvedValue([]) },
+      callLog: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const service = new MessengerService(prisma, {} as any);
+
+    const out = await service.getConversations('me');
+
+    const c1 = out.find((c: any) => c.id === 'c1');
+    const c2 = out.find((c: any) => c.id === 'c2');
+    expect(c1.pinnedCount).toBe(2);
+    expect(c1.topPinned.id).toBe('p1'); // первая встреченная строка, вторая (p2) не должна её перезаписать
+    expect(c2.pinnedCount).toBe(2);
+    expect(c2.topPinned.id).toBe('p3'); // аналогично: p4 не перезаписывает top
+  });
+
+  it('an existing DIRECT conversation carries its pins through getOrCreateDirectConversation', async () => {
+    const pinnedAt = new Date('2026-08-06T00:00:00Z');
+    const tx: any = {
+      $executeRaw: jest.fn().mockResolvedValue(undefined),
+      conversation: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'conv-dm',
+          type: 'DIRECT',
+          participants: [{ userId: 'u-a' }, { userId: 'u-b' }],
+          messages: [],
+        }),
+      },
+      message: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'p1',
+            conversationId: 'conv-dm',
+            content: 'pinned dm',
+            senderId: 'u-b',
+            sentAt: pinnedAt,
+            pinnedAt,
+          },
+        ]),
+      },
+    };
+    const prisma: any = {
+      $transaction: jest.fn((cb: any) => cb(tx)),
+    };
+    const service = new MessengerService(prisma, {} as any);
+
+    const out = await service.getOrCreateDirectConversation('u-a', 'u-b');
+
+    expect(out.pinnedCount).toBe(1);
+    expect(out.topPinned.id).toBe('p1');
+    // userMap на этой ветке намеренно не прокидывается (см. _loadPinnedMap
+    // call site) — имя автора пина клиент получит из отдельного listPinned.
+    expect(out.topPinned.senderName).toBeNull();
   });
 });
