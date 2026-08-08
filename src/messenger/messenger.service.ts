@@ -1206,6 +1206,29 @@ export class MessengerService {
     return conv;
   }
 
+  /** Кто может закреплять: в канале и группе — только OWNER/ADMIN,
+   *  в остальных типах бесед (DIRECT, SAVED, AI_*) — любой участник. */
+  private async _assertCanPin(
+    conv: { id: string; type: string },
+    userId: string,
+  ) {
+    const me = await this.assertParticipant(conv.id, userId);
+    if (
+      (conv.type === 'CHANNEL' || conv.type === 'GROUP') &&
+      me.role !== 'OWNER' &&
+      me.role !== 'ADMIN'
+    ) {
+      throw new ForbiddenException('Only admins can pin in this conversation');
+    }
+    return me;
+  }
+
+  private _pinnedCount(conversationId: string): Promise<number> {
+    return this.prisma.message.count({
+      where: { conversationId, pinnedAt: { not: null }, deletedAt: null },
+    });
+  }
+
   private async _createSystemMessage(
     conversationId: string,
     actorId: string,
@@ -1245,6 +1268,13 @@ export class MessengerService {
           actor: actorName,
           target: targetName,
           role: extra,
+        });
+        break;
+      case 'message_pinned':
+        content = JSON.stringify({
+          action,
+          actor: actorName,
+          preview: extra ?? '',
         });
         break;
       default:
@@ -1495,6 +1525,96 @@ export class MessengerService {
   async getMessageById(messageId: string) {
     return this.prisma.message.findUnique({ where: { id: messageId } });
   }
+
+  // ─── Pinned messages ───
+
+  /** Закрепить сообщение. opts.silent — не создавать сервисное сообщение
+   *  (используется админским постом с pin: true, чтобы не слать второй push). */
+  async pinMessage(
+    conversationId: string,
+    messageId: string,
+    userId: string,
+    opts: { silent?: boolean } = {},
+  ) {
+    const conv = await this._getConversationOrThrow(conversationId);
+    await this._assertCanPin(conv, userId);
+
+    const msg = await this.prisma.message.findUnique({
+      where: { id: messageId },
+    });
+    if (!msg || msg.conversationId !== conversationId || msg.deletedAt) {
+      throw new NotFoundException('Message not found');
+    }
+    if (msg.isSystem) {
+      throw new BadRequestException('System messages cannot be pinned');
+    }
+    if (msg.pinnedAt) {
+      return {
+        pinnedAt: msg.pinnedAt,
+        pinnedCount: await this._pinnedCount(conversationId),
+        alreadyPinned: true,
+        systemMessageId: null,
+      };
+    }
+
+    const pinnedAt = new Date();
+    const claimed = await this.prisma.message.updateMany({
+      where: { id: messageId, conversationId, pinnedAt: null },
+      data: { pinnedAt, pinnedById: userId },
+    });
+    if (claimed.count === 0) {
+      // Проиграли гонку: кто-то закрепил это же сообщение в тот же момент.
+      // Ведём себя как при повторном пине — второго сервисного сообщения
+      // (а значит и второго пуша) быть не должно.
+      const current = await this.prisma.message.findUnique({
+        where: { id: messageId },
+      });
+      return {
+        pinnedAt: current?.pinnedAt ?? null,
+        pinnedCount: await this._pinnedCount(conversationId),
+        alreadyPinned: true,
+        systemMessageId: null,
+      };
+    }
+
+    let systemMessageId: string | null = null;
+    if (!opts.silent) {
+      const preview = (msg.content ?? '').slice(0, 80);
+      const sys = await this._createSystemMessage(
+        conversationId,
+        userId,
+        'message_pinned',
+        undefined,
+        preview,
+      );
+      systemMessageId = sys.id;
+    }
+
+    return {
+      pinnedAt,
+      pinnedCount: await this._pinnedCount(conversationId),
+      alreadyPinned: false,
+      systemMessageId,
+    };
+  }
+
+  async unpinMessage(
+    conversationId: string,
+    messageId: string,
+    userId: string,
+  ) {
+    const conv = await this._getConversationOrThrow(conversationId);
+    await this._assertCanPin(conv, userId);
+    const result = await this.prisma.message.updateMany({
+      where: { id: messageId, conversationId },
+      data: { pinnedAt: null, pinnedById: null },
+    });
+    return {
+      pinnedCount: await this._pinnedCount(conversationId),
+      wasPinned: result.count > 0,
+    };
+  }
+
   // ─── Polls ───
 
   async createPoll(
