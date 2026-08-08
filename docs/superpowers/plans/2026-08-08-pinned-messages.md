@@ -1153,7 +1153,7 @@ Expected: `Succeeded after …` без ошибок; появились `pinned_
 - [ ] **Step 6: Проверить анализатор**
 
 Run: `cd /Users/dmitry/Downloads/taler_id_mobile && flutter analyze lib/features/messenger/domain`
-Expected: `No issues found!`
+Expected: **ни одного нового замечания, ссылающегося на твои файлы.** В репозитории ~341 замечание анализатора, существовавшее до этой работы (проверено на `dev` 2026-08-08) — «No issues found!» здесь недостижимо и требовать его нельзя. Сравнивай по именам своих файлов, а не по общему счётчику; чужой долг не трогай.
 
 - [ ] **Step 7: Commit**
 
@@ -1308,7 +1308,7 @@ git commit -m "feat(messenger): pin fields on message and conversation entities"
 - [ ] **Step 5: Проверить анализатор**
 
 Run: `cd /Users/dmitry/Downloads/taler_id_mobile && flutter analyze lib/features/messenger/data lib/features/messenger/domain`
-Expected: `No issues found!`
+Expected: **ни одного нового замечания, ссылающегося на твои файлы.** В репозитории ~341 замечание анализатора, существовавшее до этой работы (проверено на `dev` 2026-08-08) — «No issues found!» здесь недостижимо и требовать его нельзя. Сравнивай по именам своих файлов, а не по общему счётчику; чужой долг не трогай.
 
 - [ ] **Step 6: Commit**
 
@@ -1487,7 +1487,7 @@ class PinEventReceived extends MessengerEvent {
 - [ ] **Step 4: Проверить анализатор**
 
 Run: `cd /Users/dmitry/Downloads/taler_id_mobile && flutter analyze lib/features/messenger/presentation/bloc`
-Expected: `No issues found!`
+Expected: **ни одного нового замечания, ссылающегося на твои файлы.** В репозитории ~341 замечание анализатора, существовавшее до этой работы (проверено на `dev` 2026-08-08) — «No issues found!» здесь недостижимо и требовать его нельзя. Сравнивай по именам своих файлов, а не по общему счётчику; чужой долг не трогай.
 
 - [ ] **Step 5: Commit**
 
@@ -1889,7 +1889,7 @@ import 'pinned_messages_screen.dart';
 - [ ] **Step 7: Прогнать анализатор и тесты**
 
 Run: `cd /Users/dmitry/Downloads/taler_id_mobile && flutter analyze lib/features/messenger && flutter test test/features/messenger/pinned_banner_test.dart`
-Expected: `No issues found!` и PASS. (`pinned_messages_screen.dart` создаётся в Task 13 — если анализатор ругается на отсутствующий импорт, выполнить Task 13 и вернуться к этому шагу.)
+Expected: **ни одного нового замечания, ссылающегося на твои файлы.** В репозитории ~341 замечание анализатора, существовавшее до этой работы (проверено на `dev` 2026-08-08) — «No issues found!» здесь недостижимо и требовать его нельзя. Сравнивай по именам своих файлов, а не по общему счётчику; чужой долг не трогай. и PASS. (`pinned_messages_screen.dart` создаётся в Task 13 — если анализатор ругается на отсутствующий импорт, выполнить Task 13 и вернуться к этому шагу.)
 
 - [ ] **Step 8: Commit**
 
@@ -2060,7 +2060,7 @@ class _PinnedMessagesScreenState extends State<PinnedMessagesScreen> {
 - [ ] **Step 3: Анализатор**
 
 Run: `cd /Users/dmitry/Downloads/taler_id_mobile && flutter analyze lib/features/messenger`
-Expected: `No issues found!`
+Expected: **ни одного нового замечания, ссылающегося на твои файлы.** В репозитории ~341 замечание анализатора, существовавшее до этой работы (проверено на `dev` 2026-08-08) — «No issues found!» здесь недостижимо и требовать его нельзя. Сравнивай по именам своих файлов, а не по общему счётчику; чужой долг не трогай.
 
 - [ ] **Step 4: Commit**
 
@@ -2129,7 +2129,7 @@ Expected: строки с пунктами контекстного меню с�
 - [ ] **Step 4: Анализатор и юнит-тесты**
 
 Run: `cd /Users/dmitry/Downloads/taler_id_mobile && flutter analyze lib && flutter test`
-Expected: `No issues found!` и все тесты зелёные.
+Expected: **ни одного нового замечания, ссылающегося на твои файлы.** В репозитории ~341 замечание анализатора, существовавшее до этой работы (проверено на `dev` 2026-08-08) — «No issues found!» здесь недостижимо и требовать его нельзя. Сравнивай по именам своих файлов, а не по общему счётчику; чужой долг не трогай. и все тесты зелёные.
 
 - [ ] **Step 5: Commit**
 
@@ -2220,7 +2220,7 @@ git commit -m "feat(messenger): pin action in message menu + service row"
 - [ ] **Step 3: Анализатор**
 
 Run: `cd /Users/dmitry/Downloads/taler_id_mobile && flutter analyze lib/features/assistant`
-Expected: `No issues found!`
+Expected: **ни одного нового замечания, ссылающегося на твои файлы.** В репозитории ~341 замечание анализатора, существовавшее до этой работы (проверено на `dev` 2026-08-08) — «No issues found!» здесь недостижимо и требовать его нельзя. Сравнивай по именам своих файлов, а не по общему счётчику; чужой долг не трогай.
 
 - [ ] **Step 4: Commit**
 
