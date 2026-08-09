@@ -22,6 +22,7 @@ import { AiAnalystService } from '../ai-analyst/ai-analyst.service';
 import { InformerBotService } from '../informer-bot/informer-bot.service';
 import { AssistantChatService } from '../assistant/assistant-chat.service';
 import { FcmService } from '../common/fcm.service';
+import { systemMessagePushText } from './system-message-text.util';
 import { ApnsService } from '../common/apns.service';
 import * as jwt from 'jsonwebtoken';
 import * as fs from 'fs';
@@ -498,6 +499,11 @@ export class MessengerGateway
           if (fcmTokens.length) {
             const pushText = (() => {
               const c = (enrichedMsg?.content as string | null) ?? '';
+              // У служебных сообщений в content лежит JSON, который
+              // расшифровывает клиент при отрисовке ленты. В пуше
+              // расшифровывать некому — без этой ветки в шторку прилетало
+              // «{"action":"member_added",…}».
+              if (enrichedMsg?.isSystem) return systemMessagePushText(c);
               if (c.startsWith('[CONTACT]')) return '📇 Контакт';
               if (c.startsWith('[POLL]')) return '📊 Опрос';
               if (enrichedMsg?.fileUrl) {

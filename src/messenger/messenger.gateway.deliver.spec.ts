@@ -176,6 +176,31 @@ describe('MessengerGateway.deliverNewMessage', () => {
     );
   });
 
+  it('pushes readable text for a system message, never the raw JSON', async () => {
+    // System messages carry JSON in `content` for the client to render. The
+    // push has no renderer, so before this the shade showed `{"action":...}`.
+    await gateway.deliverNewMessage(
+      {
+        ...baseMsg,
+        isSystem: true,
+        content: JSON.stringify({
+          action: 'message_pinned',
+          actor: 'Alice',
+          preview: 'Встреча в 14:00',
+        }),
+      },
+      'sender',
+      'conv-1',
+    );
+
+    const bodies = mockFcm.sendNewMessage.mock.calls.map((c: any[]) => c[2]);
+    expect(bodies.length).toBeGreaterThan(0);
+    for (const body of bodies) {
+      expect(body.startsWith('{')).toBe(false);
+      expect(body).toBe('Alice закрепил сообщение: Встреча в 14:00');
+    }
+  });
+
   it('skips FCM when the conversation is muted for the recipient', async () => {
     (mockMessenger.isParticipantMuted as jest.Mock).mockResolvedValue(true);
     await gateway.deliverNewMessage(baseMsg, 'sender', 'conv-1');
