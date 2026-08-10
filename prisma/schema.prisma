@@ -1029,3 +1029,20 @@ model TaskOccurrence {
   @@unique([taskId, occurrenceDate])
   @@index([taskId])
 }
+
+/// Кэш превью ссылок. Ключ — нормализованный URL (без якоря): по нему же
+/// строится и запрос, и поиск в кэше.
+///
+/// [ok] = false запоминает неудачу, чтобы битую ссылку не дёргать на каждое
+/// открытие чата: в переписке одна и та же ссылка показывается многократно.
+model LinkPreview {
+  url         String   @id
+  title       String?
+  description String?
+  imageUrl    String?
+  siteName    String?
+  ok          Boolean  @default(true)
+  fetchedAt   DateTime @default(now())
+
+  @@index([fetchedAt])
+}

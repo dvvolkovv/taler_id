@@ -4,6 +4,7 @@ import { ConfigModule } from '@nestjs/config';
 import { MessengerController } from './messenger.controller';
 import { MessengerGateway } from './messenger.gateway';
 import { MessengerService } from './messenger.service';
+import { LinkPreviewService } from './link-preview.service';
 import { AiTwinService } from './ai-twin.service';
 import { AiAnalystService } from '../ai-analyst/ai-analyst.service';
 import { BillingModule } from '../billing/billing.module';
@@ -30,6 +31,7 @@ import { VideoTranscodeService } from '../common/video-transcode.service';
   controllers: [MessengerController],
   providers: [
     MessengerService,
+    LinkPreviewService,
     MessengerGateway,
     AiTwinService,
     AiAnalystService,

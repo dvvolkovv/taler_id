@@ -26,6 +26,7 @@ import { extname } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { createHash } from 'crypto';
 import { MessengerService, buildForwardedFrom } from './messenger.service';
+import { LinkPreviewService } from './link-preview.service';
 import { MessengerGateway } from './messenger.gateway';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -57,6 +58,9 @@ const MAX_UPLOAD_BYTES = Number(
   process.env.MESSENGER_MAX_UPLOAD_BYTES ?? 512 * 1024 * 1024,
 );
 
+/** Потолок запросов превью на пользователя в минуту. */
+const LINK_PREVIEW_RATE_PER_MIN = 60;
+
 @Controller('messenger')
 @UseGuards(JwtAuthGuard)
 export class MessengerController {
@@ -71,6 +75,7 @@ export class MessengerController {
     private readonly prisma: PrismaService,
     private readonly videoTranscode: VideoTranscodeService,
     private readonly fcmService: FcmService,
+    private readonly linkPreviews: LinkPreviewService,
   ) {}
 
   /**
@@ -1132,6 +1137,30 @@ export class MessengerController {
   @Delete('channels/:id')
   async deleteChannel(@Param('id') id: string, @CurrentUser() user: any) {
     return this.service.deleteChannel(id, user.sub);
+  }
+
+  /**
+   * Карточка ссылки для сообщения.
+   *
+   * Отдельным запросом от клиента, а не полем сообщения: так путь записи
+   * остаётся нетронутым, а ходить наружу приходится один раз на ссылку —
+   * дальше отвечает кэш.
+   *
+   * Частота ограничена: кэш спасает от повторов, но подобранными ссылками
+   * бэкенд можно было бы превратить в чужой сканер.
+   */
+  @Get('link-preview')
+  async linkPreview(@Query('url') url: string, @CurrentUser() user: any) {
+    const key = `linkprev:rate:${user.sub}`;
+    const hits = await this.redis.incr(key);
+    if (hits === 1) await this.redis.expire(key, 60);
+    if (hits > LINK_PREVIEW_RATE_PER_MIN) {
+      throw new BadRequestException('Too many link previews, slow down');
+    }
+    const preview = await this.linkPreviews.getPreview(url);
+    // Отсутствие карточки — нормальный ответ, а не ошибка: клиент просто
+    // ничего не рисует.
+    return preview ?? { url: null };
   }
 
   /**
