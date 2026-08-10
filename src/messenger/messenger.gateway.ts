@@ -497,9 +497,17 @@ export class MessengerGateway
       );
       if (!recipientInConv && !opts.silent) {
         const isCriticalNews = opts.systemPost === true && enrichedMsg?.metadata?.newsType === 'critical';
-        const muted = isCriticalNews
-          ? false // critical system-channel news bypasses mute (server-controlled path only)
-          : await this.service.isParticipantMuted(conversationId, p.userId);
+        // Личное обращение проходит сквозь «без звука», как в Telegram: чат
+        // приглушают, чтобы не читать поток, а не чтобы пропустить, когда
+        // позвали по имени. Список упоминаний собран сервером по участникам
+        // беседы, так что подсунуть себе исключение из мьюта нельзя.
+        const mentionsMe = Array.isArray(enrichedMsg?.mentionedUserIds)
+          ? enrichedMsg.mentionedUserIds.includes(p.userId)
+          : false;
+        const muted =
+          isCriticalNews || mentionsMe
+            ? false
+            : await this.service.isParticipantMuted(conversationId, p.userId);
         if (muted) {
           this.logger.log(`FCM skipped for ${p.userId}: conversation muted`);
         } else {

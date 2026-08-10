@@ -9,6 +9,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { FileStorageService } from '../common/file-storage.service';
 import { resolveUserIdOrUsername } from '../common/utils/user-id.util';
+import { extractMentionHandles, resolveMentions } from './mention.util';
 
 /** Потолок на пачку пересылки; совпадает с потолком выделения в клиенте. */
 const FORWARD_BATCH_LIMIT = 50;
@@ -502,6 +503,26 @@ export class MessengerService {
       }),
     );
 
+    // Непрочитанные упоминания — отдельным счётчиком: в шумной группе бейдж
+    // «есть непрочитанное» ничего не значит, а «тебя позвали» значит.
+    const mentionMap: Record<string, number> = {};
+    await Promise.all(
+      conversations.map(async (conv) => {
+        const mine = conv.participants.find((p) => p.userId === userId);
+        mentionMap[conv.id] = await this.prisma.message.count({
+          where: {
+            conversationId: conv.id,
+            senderId: { not: userId },
+            mentionedUserIds: { has: userId },
+            deletedAt: null,
+            ...(mine?.lastReadAt
+              ? { sentAt: { gt: mine.lastReadAt } }
+              : { isRead: false }),
+          },
+        });
+      }),
+    );
+
     // Fetch active calls for all conversations
     const activeCalls = await this.prisma.callLog.findMany({
       where: { conversationId: { in: convIds }, endedAt: null },
@@ -529,6 +550,7 @@ export class MessengerService {
         pinnedMap,
       ),
       unreadCount: unreadMap[conv.id] ?? 0,
+      mentionCount: mentionMap[conv.id] ?? 0,
     }));
   }
 
@@ -1008,9 +1030,18 @@ export class MessengerService {
       );
     }
 
+    // Упоминания разбирает сервер, а не клиент: иначе можно было бы «упомянуть»
+    // постороннего и пробить ему уведомление мимо отключённых. Запрос делается
+    // только если в тексте вообще есть похожее на @логин — обычная отправка
+    // лишнего похода в базу не получает.
+    const mentionedUserIds = isSystem
+      ? []
+      : await this._resolveMentions(conversationId, senderId, content);
+
     // Пустые поля не подмешиваем: обычная вставка должна выглядеть ровно так же,
     // как до появления ответов и пересылок.
     const relationData = {
+      ...(mentionedUserIds.length ? { mentionedUserIds } : {}),
       ...(relations?.replyToId ? { replyToId: relations.replyToId } : {}),
       ...(relations?.forwardedFromUserId
         ? { forwardedFromUserId: relations.forwardedFromUserId }
@@ -1100,6 +1131,32 @@ export class MessengerService {
         ...relationData,
       },
     });
+  }
+
+  /**
+   * Кого упомянули в сообщении.
+   *
+   * Кандидатов ищем сразу запросом, ограниченным участниками беседы и списком
+   * найденных логинов, — грузить всех участников нельзя: у системного канала их
+   * двенадцать с лишним тысяч.
+   */
+  private async _resolveMentions(
+    conversationId: string,
+    senderId: string,
+    content: string,
+  ): Promise<string[]> {
+    const handles = extractMentionHandles(content);
+    if (handles.length === 0) return [];
+    const rows: Array<{ userId: string; username: string | null }> =
+      await this.prisma.$queryRaw`
+        SELECT cp."userId" AS "userId", u.username AS username
+        FROM "ConversationParticipant" cp
+        JOIN "User" u ON u.id = cp."userId"
+        WHERE cp."conversationId" = ${conversationId}
+          AND u.username IS NOT NULL
+          AND LOWER(u.username) IN (${Prisma.join(handles)})
+      `;
+    return resolveMentions(content, rows, senderId);
   }
 
   /**

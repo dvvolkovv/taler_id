@@ -347,6 +347,10 @@ model Message {
   forwardedFromUserId    String?
   forwardedFromName      String?
   forwardedFromMessageId String?
+  // Кого упомянули в сообщении. Разбирает сервер по участникам беседы, а не
+  // клиент: иначе можно было бы «упомянуть» кого угодно и пробить ему пуш
+  // мимо отключённых уведомлений.
+  mentionedUserIds       String[]          @default([])
   fileRecord         FileRecord?       @relation(fields: [fileRecordId], references: [id])
   conversation       Conversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sender             User              @relation(fields: [senderId], references: [id])

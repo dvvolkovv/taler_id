@@ -207,6 +207,28 @@ describe('MessengerGateway.deliverNewMessage', () => {
     expect(mockFcm.sendNewMessage).not.toHaveBeenCalled();
   });
 
+  it('a mention pushes through a muted conversation', async () => {
+    // Чат приглушают, чтобы не читать поток, а не чтобы пропустить, когда
+    // позвали по имени — как в Telegram.
+    (mockMessenger.isParticipantMuted as jest.Mock).mockResolvedValue(true);
+    await gateway.deliverNewMessage(
+      { ...baseMsg, content: 'глянь @bob', mentionedUserIds: ['recipient'] },
+      'sender',
+      'conv-1',
+    );
+    expect(mockFcm.sendNewMessage).toHaveBeenCalled();
+  });
+
+  it('a mention of somebody ELSE does not break the mute for me', async () => {
+    (mockMessenger.isParticipantMuted as jest.Mock).mockResolvedValue(true);
+    await gateway.deliverNewMessage(
+      { ...baseMsg, content: 'глянь @carol', mentionedUserIds: ['someone-else'] },
+      'sender',
+      'conv-1',
+    );
+    expect(mockFcm.sendNewMessage).not.toHaveBeenCalled();
+  });
+
   it('skips FCM when opts.silent=true', async () => {
     await gateway.deliverNewMessage(baseMsg, 'sender', 'conv-1', {
       silent: true,
