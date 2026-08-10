@@ -5,6 +5,7 @@ import { MessengerController } from './messenger.controller';
 import { MessengerGateway } from './messenger.gateway';
 import { MessengerService } from './messenger.service';
 import { LinkPreviewService } from './link-preview.service';
+import { VoiceTranscribeService } from './voice-transcribe.service';
 import { AiTwinService } from './ai-twin.service';
 import { AiAnalystService } from '../ai-analyst/ai-analyst.service';
 import { BillingModule } from '../billing/billing.module';
@@ -32,6 +33,7 @@ import { VideoTranscodeService } from '../common/video-transcode.service';
   providers: [
     MessengerService,
     LinkPreviewService,
+    VoiceTranscribeService,
     MessengerGateway,
     AiTwinService,
     AiAnalystService,

@@ -23,6 +23,7 @@ import { InformerBotService } from '../informer-bot/informer-bot.service';
 import { AssistantChatService } from '../assistant/assistant-chat.service';
 import { FcmService } from '../common/fcm.service';
 import { systemMessagePushText } from './system-message-text.util';
+import { sanitizeVoiceMeta } from './voice-meta.util';
 import { ApnsService } from '../common/apns.service';
 import * as jwt from 'jsonwebtoken';
 import * as fs from 'fs';
@@ -142,6 +143,10 @@ export class MessengerGateway
       clientTempId?: string;
       origin?: string;
       replyToId?: string;
+      /// Дорожка и длительность голосового; всё остальное из metadata клиенту
+      /// писать нельзя — там живут служебные поля.
+      waveform?: number[];
+      durationMs?: number;
     },
   ) {
     try {
@@ -246,7 +251,10 @@ export class MessengerGateway
         fileData,
         payload.topicId,
         undefined,
-        undefined,
+        sanitizeVoiceMeta({
+          waveform: payload.waveform,
+          durationMs: payload.durationMs,
+        }) ?? undefined,
         payload.clientTempId,
         phantomSuspect,
         payload.replyToId ? { replyToId: payload.replyToId } : undefined,

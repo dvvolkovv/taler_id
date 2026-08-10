@@ -27,6 +27,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { createHash } from 'crypto';
 import { MessengerService, buildForwardedFrom } from './messenger.service';
 import { LinkPreviewService } from './link-preview.service';
+import { VoiceTranscribeService } from './voice-transcribe.service';
 import { MessengerGateway } from './messenger.gateway';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -76,6 +77,7 @@ export class MessengerController {
     private readonly videoTranscode: VideoTranscodeService,
     private readonly fcmService: FcmService,
     private readonly linkPreviews: LinkPreviewService,
+    private readonly voiceTranscribe: VoiceTranscribeService,
   ) {}
 
   /**
@@ -1137,6 +1139,29 @@ export class MessengerController {
   @Delete('channels/:id')
   async deleteChannel(@Param('id') id: string, @CurrentUser() user: any) {
     return this.service.deleteChannel(id, user.sub);
+  }
+
+  /**
+   * Расшифровка голосового сообщения.
+   *
+   * Дёргается вручную, а не при отправке: Whisper стоит денег, и платить за
+   * каждое голосовое, которое, может, и слушать не будут, незачем. Результат
+   * запоминается в сообщении, поэтому второй нажавший получит готовый текст
+   * бесплатно.
+   */
+  @Post('messages/:id/transcribe')
+  async transcribeVoice(@Param('id') id: string, @CurrentUser() user: any) {
+    const res = await this.voiceTranscribe.transcribeMessage(id, user.sub);
+    // Остальные участники должны увидеть расшифровку, не нажимая ту же кнопку.
+    if (!res.cached) {
+      const msg = await this.service.getMessageById(id);
+      if (msg) {
+        this.gateway.server
+          .to(msg.conversationId)
+          .emit('message_updated', { id, metadata: msg.metadata });
+      }
+    }
+    return res;
   }
 
   /**
