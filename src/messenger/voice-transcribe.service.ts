@@ -12,6 +12,7 @@ import { GatingService } from '../billing/services/gating.service';
 import { LedgerService } from '../billing/services/ledger.service';
 import { PricingService } from '../billing/services/pricing.service';
 import { FEATURE_KEYS } from '../billing/constants/feature-keys';
+import { storageKeyFromUrl } from './storage-key.util';
 
 /** Whisper принимает до 25 МБ; голосовое столько не весит, но проверим. */
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
@@ -51,6 +52,7 @@ export class VoiceTranscribeService {
         conversationId: true,
         fileType: true,
         s3Key: true,
+        fileUrl: true,
         fileSize: true,
         metadata: true,
         deletedAt: true,
@@ -74,7 +76,11 @@ export class VoiceTranscribeService {
       return { transcript: meta.transcript, cached: true };
     }
 
-    if (message.fileType !== 'audio' || !message.s3Key) {
+    // У голосовых, отправленных до этой правки, s3Key не сохранялся — клиент
+    // его просто не передавал. Ключ восстанавливается из ссылки на скачивание,
+    // иначе вся накопленная переписка осталась бы нерасшифровываемой.
+    const key = message.s3Key ?? storageKeyFromUrl(message.fileUrl);
+    if (message.fileType !== 'audio' || !key) {
       throw new BadRequestException('Message has no voice recording');
     }
     if ((message.fileSize ?? 0) > MAX_AUDIO_BYTES) {
@@ -106,7 +112,7 @@ export class VoiceTranscribeService {
     }
 
     try {
-      const audio = await this.readObject(message.s3Key);
+      const audio = await this.readObject(key);
       const transcript = await this.callWhisper(audio);
       await this.gating.endSession(session.id, 'completed');
 
