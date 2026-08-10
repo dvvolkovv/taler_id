@@ -10,6 +10,58 @@ import { PrismaService } from '../prisma/prisma.service';
 import { FileStorageService } from '../common/file-storage.service';
 import { resolveUserIdOrUsername } from '../common/utils/user-id.util';
 
+/** Потолок на пачку пересылки; совпадает с потолком выделения в клиенте. */
+const FORWARD_BATCH_LIMIT = 50;
+
+/** Сколько символов оригинала уезжает в превью цитаты. */
+const REPLY_PREVIEW_LIMIT = 200;
+
+/**
+ * Имя для показа: «Имя Фамилия», иначе username, иначе ничего.
+ * Ровно та же лесенка, что и в остальных местах сервиса.
+ */
+function displayNameOf(user: any): string | null {
+  if (!user) return null;
+  const firstLast =
+    [user.profile?.firstName, user.profile?.lastName]
+      .filter(Boolean)
+      .join(' ')
+      .trim() || null;
+  return firstLast ?? user.username ?? null;
+}
+
+/**
+ * Превью цитаты для клиента.
+ *
+ * Мягко удалённый оригинал возвращается с `isDeleted: true` и пустым телом:
+ * строка в базе осталась, но показывать её содержимое уже нельзя — клиент
+ * рисует «Сообщение удалено». Полный текст не отдаём никогда, только первые
+ * REPLY_PREVIEW_LIMIT символов: цитата — это подпись, а не копия.
+ */
+export function buildReplyPreview(replyTo: any): any | null {
+  if (!replyTo) return null;
+  const isDeleted = !!replyTo.deletedAt;
+  return {
+    id: replyTo.id,
+    senderId: replyTo.senderId ?? null,
+    senderName: displayNameOf(replyTo.sender),
+    content: isDeleted ? '' : (replyTo.content ?? '').slice(0, REPLY_PREVIEW_LIMIT),
+    fileType: isDeleted ? null : (replyTo.fileType ?? null),
+    fileName: isDeleted ? null : (replyTo.fileName ?? null),
+    isDeleted,
+  };
+}
+
+/** Атрибуция пересылки, либо null у обычного сообщения. */
+export function buildForwardedFrom(m: any): any | null {
+  if (!m?.forwardedFromUserId && !m?.forwardedFromName) return null;
+  return {
+    userId: m.forwardedFromUserId ?? null,
+    name: m.forwardedFromName ?? null,
+    messageId: m.forwardedFromMessageId ?? null,
+  };
+}
+
 @Injectable()
 export class MessengerService {
   private readonly logger = new Logger(MessengerService.name);
@@ -647,6 +699,22 @@ export class MessengerService {
           },
         },
         reactions: { select: { userId: true, emoji: true } },
+        replyTo: {
+          select: {
+            id: true,
+            senderId: true,
+            content: true,
+            fileType: true,
+            fileName: true,
+            deletedAt: true,
+            sender: {
+              select: {
+                username: true,
+                profile: { select: { firstName: true, lastName: true } },
+              },
+            },
+          },
+        },
       },
       orderBy: { sentAt: 'desc' },
       take: limit + 1,
@@ -655,16 +723,15 @@ export class MessengerService {
     const hasMore = messages.length > limit;
     const sliced = hasMore ? messages.slice(0, limit) : messages;
     const enriched = sliced.map((m: any) => {
-      const u = m.sender;
-      const firstLast = u
-        ? [u.profile?.firstName, u.profile?.lastName]
-            .filter(Boolean)
-            .join(' ')
-            .trim() || null
-        : null;
-      const senderName = firstLast ?? u?.username ?? null;
-      const { sender, reactions, ...rest } = m;
-      return { ...rest, senderName, reactions: reactions ?? [] };
+      const senderName = displayNameOf(m.sender);
+      const { sender, reactions, replyTo, ...rest } = m;
+      return {
+        ...rest,
+        senderName,
+        reactions: reactions ?? [],
+        replyTo: buildReplyPreview(replyTo),
+        forwardedFrom: buildForwardedFrom(m),
+      };
     });
     return {
       messages: enriched,
@@ -741,6 +808,10 @@ export class MessengerService {
         m."threadParentId",
         m."topicId",
         m.metadata,
+        m."replyToId",
+        m."forwardedFromUserId",
+        m."forwardedFromName",
+        m."forwardedFromMessageId",
         u.username AS "senderUsername",
         p."firstName" AS "senderFirstName",
         p."lastName" AS "senderLastName",
@@ -750,7 +821,27 @@ export class MessengerService {
             FROM "MessageReaction" r WHERE r."messageId" = m.id
           ),
           '[]'::json
-        ) AS reactions
+        ) AS reactions,
+        -- Превью цитаты собирается здесь же: иначе синхронизация отдавала бы
+        -- ответы без оригинала, а getMessages — с ним, и расхождение всплыло бы
+        -- только на втором устройстве.
+        (
+          SELECT json_build_object(
+            'id', rm.id,
+            'senderId', rm."senderId",
+            'senderFirstName', rp."firstName",
+            'senderLastName', rp."lastName",
+            'senderUsername', ru.username,
+            'content', rm.content,
+            'fileType', rm."fileType",
+            'fileName', rm."fileName",
+            'deletedAt', rm."deletedAt"
+          )
+          FROM "Message" rm
+          LEFT JOIN "User" ru ON ru.id = rm."senderId"
+          LEFT JOIN "Profile" rp ON rp."userId" = ru.id
+          WHERE rm.id = m."replyToId"
+        ) AS "replyToRaw"
       FROM "Message" m
       JOIN "ConversationParticipant" cp
         ON cp."conversationId" = m."conversationId" AND cp."userId" = ${userId}
@@ -778,9 +869,31 @@ export class MessengerService {
         senderUsername,
         senderFirstName,
         senderLastName,
+        replyToRaw,
         ...rest
       } = r;
-      return { ...rest, senderName, reactions: r.reactions ?? [] };
+      return {
+        ...rest,
+        senderName,
+        reactions: r.reactions ?? [],
+        // json_build_object отдаёт плоскую строку — приводим к той же форме
+        // вложенного sender, которую ждёт общий сборщик превью.
+        replyTo: buildReplyPreview(
+          replyToRaw
+            ? {
+                ...replyToRaw,
+                sender: {
+                  username: replyToRaw.senderUsername,
+                  profile: {
+                    firstName: replyToRaw.senderFirstName,
+                    lastName: replyToRaw.senderLastName,
+                  },
+                },
+              }
+            : null,
+        ),
+        forwardedFrom: buildForwardedFrom(r),
+      };
     });
 
     const last = sliced[sliced.length - 1];
@@ -862,12 +975,44 @@ export class MessengerService {
     metadata?: Record<string, any>,
     clientTempId?: string,
     phantomSuspect?: boolean,
+    relations?: {
+      replyToId?: string | null;
+      forwardedFromUserId?: string | null;
+      forwardedFromName?: string | null;
+      forwardedFromMessageId?: string | null;
+    },
   ) {
     // Every write path — socket, REST, MCP, informer bot, system channel —
     // funnels through here, so this is the single place that has to prove the
     // sender belongs to the conversation. Without it any authenticated user
     // could post into an arbitrary conversation by guessing its id.
     await this.assertParticipant(conversationId, senderId);
+
+    // Ответ проверяем здесь же и по той же причине: цитата тащит за собой кусок
+    // чужого сообщения, поэтому право на неё доказывается на единственном входе,
+    // а не в каждом вызывающем.
+    if (relations?.replyToId) {
+      await this._assertReplyTarget(
+        relations.replyToId,
+        conversationId,
+        topicId,
+      );
+    }
+
+    // Пустые поля не подмешиваем: обычная вставка должна выглядеть ровно так же,
+    // как до появления ответов и пересылок.
+    const relationData = {
+      ...(relations?.replyToId ? { replyToId: relations.replyToId } : {}),
+      ...(relations?.forwardedFromUserId
+        ? { forwardedFromUserId: relations.forwardedFromUserId }
+        : {}),
+      ...(relations?.forwardedFromName
+        ? { forwardedFromName: relations.forwardedFromName }
+        : {}),
+      ...(relations?.forwardedFromMessageId
+        ? { forwardedFromMessageId: relations.forwardedFromMessageId }
+        : {}),
+    };
 
     // Phantom-resend content dedup (incidents 2026-07-10 and 2026-07-17):
     // stale pre-1.0.98 client outboxes re-fire old messages on every socket
@@ -880,9 +1025,12 @@ export class MessengerService {
     // socket connect — outbox drains fire immediately, humans don't), so a
     // deliberate identical repeat typed later is never swallowed.
     // Callers must NOT broadcast rows returned with `deduped: true`.
+    // Пересылка дедупу не подлежит: переслать один и тот же текст второй раз —
+    // осознанное действие пользователя, а не фантомный ресенд выпавшего клиента.
     if (
       !isSystem &&
       !fileData &&
+      !relations?.forwardedFromMessageId &&
       content.length >= 20 &&
       (!clientTempId || phantomSuspect)
     ) {
@@ -918,6 +1066,7 @@ export class MessengerService {
             ...(topicId ? { topicId } : {}),
             ...(isSystem ? { isSystem } : {}),
             ...(metadata ? { metadata } : {}),
+            ...relationData,
           },
         });
       } catch (e: any) {
@@ -939,8 +1088,173 @@ export class MessengerService {
         ...(topicId ? { topicId } : {}),
         ...(isSystem ? { isSystem } : {}),
         ...(metadata ? { metadata } : {}),
+        ...relationData,
       },
     });
+  }
+
+  /**
+   * Превью цитаты для только что созданной строки: `createMessage` возвращает
+   * голую запись без связей, а в `new_message` цитата должна уехать сразу —
+   * иначе получатель увидит ответ без того, на что отвечают, до перезагрузки
+   * истории.
+   */
+  async loadReplyPreview(replyToId: string | null | undefined) {
+    if (!replyToId) return null;
+    const original = await this.prisma.message.findUnique({
+      where: { id: replyToId },
+      select: {
+        id: true,
+        senderId: true,
+        content: true,
+        fileType: true,
+        fileName: true,
+        deletedAt: true,
+        sender: {
+          select: {
+            username: true,
+            profile: { select: { firstName: true, lastName: true } },
+          },
+        },
+      },
+    });
+    return buildReplyPreview(original);
+  }
+
+  /**
+   * Ответ можно поставить только на живое сообщение той же беседы и того же
+   * топика. Кросс-беседный ответ — это утечка: цитата переносит фрагмент чужой
+   * переписки туда, где у автора цитаты доступа нет. Кросс-топиковый —
+   * рассинхрон рендера: оригинал не виден на экране, где показан ответ.
+   *
+   * Плохой `replyToId` — ошибка, а не молчаливое обнуление: иначе клиент считает,
+   * что отправил ответ, а получатели видят обычное сообщение.
+   */
+  private async _assertReplyTarget(
+    replyToId: string,
+    conversationId: string,
+    topicId?: string,
+  ) {
+    const original = await this.prisma.message.findUnique({
+      where: { id: replyToId },
+      select: {
+        id: true,
+        conversationId: true,
+        topicId: true,
+        deletedAt: true,
+      },
+    });
+    if (!original || original.deletedAt) {
+      throw new BadRequestException('Reply target not found');
+    }
+    if (original.conversationId !== conversationId) {
+      throw new BadRequestException(
+        'Reply target belongs to another conversation',
+      );
+    }
+    if ((original.topicId ?? null) !== (topicId ?? null)) {
+      throw new BadRequestException('Reply target belongs to another topic');
+    }
+  }
+
+  /**
+   * Пересылка.
+   *
+   * Тело копируется из хранимого оригинала, а не приходит от клиента: иначе
+   * можно приписать произвольный текст чужому имени. По той же причине здесь
+   * проверяется участие пересылающего в *исходной* беседе — без этого любой
+   * аутентифицированный пользователь вытащил бы сообщение, зная только его id.
+   */
+  async forwardMessages(
+    targetConversationId: string,
+    userId: string,
+    messageIds: string[],
+  ) {
+    if (!Array.isArray(messageIds) || messageIds.length === 0) {
+      throw new BadRequestException('No messages to forward');
+    }
+    if (messageIds.length > FORWARD_BATCH_LIMIT) {
+      throw new BadRequestException(
+        `Cannot forward more than ${FORWARD_BATCH_LIMIT} messages at once`,
+      );
+    }
+    await this.assertParticipant(targetConversationId, userId);
+
+    const sources = await this.prisma.message.findMany({
+      where: { id: { in: messageIds }, deletedAt: null },
+      include: {
+        sender: {
+          select: {
+            username: true,
+            profile: { select: { firstName: true, lastName: true } },
+          },
+        },
+      },
+    });
+    if (sources.length === 0) {
+      throw new BadRequestException('Nothing to forward');
+    }
+
+    const sourceConvIds = [
+      ...new Set(sources.map((m: any) => m.conversationId)),
+    ];
+    const memberships = await this.prisma.conversationParticipant.findMany({
+      where: { userId, conversationId: { in: sourceConvIds } },
+      select: { conversationId: true },
+    });
+    const allowed = new Set(
+      memberships.map((m: any) => m.conversationId),
+    );
+    if (sourceConvIds.some((id) => !allowed.has(id))) {
+      throw new ForbiddenException('Not a participant of the source conversation');
+    }
+
+    // Порядок восстанавливаем по запрошенному списку: findMany возвращает строки
+    // в своём порядке, а пачка должна лечь в чат так, как её выделили.
+    const byId = new Map(sources.map((m: any) => [m.id, m]));
+    const created: any[] = [];
+    for (const id of messageIds) {
+      const src = byId.get(id);
+      if (!src) continue;
+      created.push(
+        await this.createMessage(
+          targetConversationId,
+          userId,
+          src.content,
+          src.fileUrl
+            ? {
+                fileUrl: src.fileUrl,
+                fileName: src.fileName ?? undefined,
+                fileSize: src.fileSize ?? undefined,
+                fileType: src.fileType ?? undefined,
+                s3Key: src.s3Key ?? undefined,
+                thumbnailSmallUrl: src.thumbnailSmallUrl ?? undefined,
+                thumbnailMediumUrl: src.thumbnailMediumUrl ?? undefined,
+                thumbnailLargeUrl: src.thumbnailLargeUrl ?? undefined,
+              }
+            : undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          // Цепочка не растёт: пересылка пересылки сохраняет исходного автора,
+          // а не того, через кого сообщение прошло по дороге.
+          src.forwardedFromUserId
+            ? {
+                forwardedFromUserId: src.forwardedFromUserId,
+                forwardedFromName: src.forwardedFromName,
+                forwardedFromMessageId: src.forwardedFromMessageId,
+              }
+            : {
+                forwardedFromUserId: src.senderId,
+                forwardedFromName: displayNameOf(src.sender),
+                forwardedFromMessageId: src.id,
+              },
+        ),
+      );
+    }
+    return created;
   }
 
   async assertParticipant(conversationId: string, userId: string) {

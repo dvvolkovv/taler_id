@@ -16,7 +16,7 @@ import {
 } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { ConfigService } from '@nestjs/config';
-import { MessengerService } from './messenger.service';
+import { MessengerService, buildForwardedFrom } from './messenger.service';
 import { AiTwinService } from './ai-twin.service';
 import { AiAnalystService } from '../ai-analyst/ai-analyst.service';
 import { InformerBotService } from '../informer-bot/informer-bot.service';
@@ -141,6 +141,7 @@ export class MessengerGateway
       topicId?: string;
       clientTempId?: string;
       origin?: string;
+      replyToId?: string;
     },
   ) {
     try {
@@ -248,6 +249,7 @@ export class MessengerGateway
         undefined,
         payload.clientTempId,
         phantomSuspect,
+        payload.replyToId ? { replyToId: payload.replyToId } : undefined,
       );
       if ((msg as any).deduped) {
         // Phantom resend of an already-stored message: ack the sender so its
@@ -268,7 +270,13 @@ export class MessengerGateway
       const senderName = await this.service.getUserDisplayName(
         client.data.userId,
       );
-      const enrichedMsg = { ...msg, senderName, reactions: [] };
+      const enrichedMsg = {
+        ...msg,
+        senderName,
+        reactions: [],
+        replyTo: await this.service.loadReplyPreview((msg as any).replyToId),
+        forwardedFrom: buildForwardedFrom(msg),
+      };
       // Update dedup key with real messageId so future duplicate retries can
       // receive the server-side id (useful for clients that lost the original
       // new_message broadcast).

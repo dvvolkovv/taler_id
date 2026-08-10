@@ -25,7 +25,7 @@ import { memoryStorage } from 'multer';
 import { extname } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { createHash } from 'crypto';
-import { MessengerService } from './messenger.service';
+import { MessengerService, buildForwardedFrom } from './messenger.service';
 import { MessengerGateway } from './messenger.gateway';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -1132,6 +1132,45 @@ export class MessengerController {
   @Delete('channels/:id')
   async deleteChannel(@Param('id') id: string, @CurrentUser() user: any) {
     return this.service.deleteChannel(id, user.sub);
+  }
+
+  /**
+   * Пересылка одного или нескольких сообщений в беседу.
+   *
+   * REST, а не сокетное событие: тело копируется сервером из оригинала (клиент
+   * не может приписать чужому имени произвольный текст), а массив id разом
+   * закрывает пересылку из мультивыбора.
+   *
+   * Доставка — полный путь, как у обычной отправки: broadcast в комнату плюс
+   * пофамильный fan-out с пушами. Иначе получатель, у которого чат закрыт,
+   * узнал бы о пересылке только при следующем открытии.
+   */
+  @Post('conversations/:id/forward')
+  async forwardMessages(
+    @Param('id') id: string,
+    @Body('messageIds') messageIds: string[],
+    @CurrentUser() user: any,
+  ) {
+    const created = await this.service.forwardMessages(
+      id,
+      user.sub,
+      messageIds,
+    );
+    const senderName = await this.service.getUserDisplayName(user.sub);
+    for (const msg of created) {
+      const enriched = {
+        ...msg,
+        senderName,
+        reactions: [],
+        replyTo: null,
+        forwardedFrom: buildForwardedFrom(msg),
+      };
+      this.gateway.broadcastNewMessage(enriched, id);
+      await this.gateway.fanOutToParticipants(enriched, user.sub, id, {
+        senderName,
+      });
+    }
+    return { forwarded: created.length, messages: created };
   }
 
   @Post('channels/:id/post')

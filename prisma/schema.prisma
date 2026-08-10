@@ -325,6 +325,16 @@ model Message {
   metadata           Json?
   pinnedAt           DateTime?
   pinnedById         String?
+  // Ответ на сообщение. SetNull, а не Cascade: жёсткое удаление оригинала не
+  // должно уносить с собой все ответы на него.
+  replyToId          String?
+  replyTo            Message?          @relation("MessageReplies", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies            Message[]         @relation("MessageReplies")
+  // Пересылка. Имя — снимок на момент пересылки: отправитель оригинала может
+  // переименоваться или удалиться, а атрибуция должна остаться прежней.
+  forwardedFromUserId    String?
+  forwardedFromName      String?
+  forwardedFromMessageId String?
   fileRecord         FileRecord?       @relation(fields: [fileRecordId], references: [id])
   conversation       Conversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sender             User              @relation(fields: [senderId], references: [id])
@@ -335,6 +345,9 @@ model Message {
   // не умеет выражать WHERE, так что здесь описание неточное. Смотри миграцию
   // 20260808000000_pinned_messages за фактическим определением.
   @@index([conversationId, pinnedAt])
+  // Тоже частичный в БД (WHERE "replyToId" IS NOT NULL) — см. миграцию
+  // 20260810000000_reply_and_forward.
+  @@index([replyToId])
 }
 
 model FileRecord {
