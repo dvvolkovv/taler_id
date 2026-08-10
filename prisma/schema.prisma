@@ -289,10 +289,22 @@ model ConversationParticipant {
   lastReadAt        DateTime?
   lastReadMessageId String?
   pinsDismissedAt   DateTime?
+  // Состояние списка чатов, привязанное к участнику, а не к устройству: до
+  // этого черновики, архив и закрепление жили в локальном Hive и на втором
+  // устройстве человека просто не существовали.
+  draft             String?
+  draftAt           DateTime?
+  // Отметки времени, а не флаги: дают порядок закреплённых и ответ на вопрос
+  // «когда» бесплатно.
+  archivedAt        DateTime?
+  chatPinnedAt      DateTime?
   conversation      Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@unique([conversationId, userId])
   @@index([userId])
+  // Тоже частичный в БД (WHERE "chatPinnedAt" IS NOT NULL) — см. миграцию
+  // 20260810120000_conversation_list_state.
+  @@index([userId, chatPinnedAt])
 }
 
 model Message {

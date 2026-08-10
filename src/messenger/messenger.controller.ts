@@ -1135,6 +1135,67 @@ export class MessengerController {
   }
 
   /**
+   * Персональное состояние беседы в списке чатов: черновик, архив, закрепление.
+   *
+   * Каждая правка эхом уходит в личную комнату пользователя (`user:<id>`), а не
+   * в комнату беседы: это его состояние, собеседникам знать о нём нечего. Эхо
+   * нужно, чтобы второе устройство подхватило изменение сразу — ради этого всё
+   * и переносилось с локального хранилища на сервер.
+   */
+  private emitListState(userId: string, conversationId: string, patch: any) {
+    this.gateway.server.to(`user:${userId}`).emit('conversation_state', {
+      conversationId,
+      draft: patch.draft ?? null,
+      draftAt: patch.draftAt ?? null,
+      archivedAt: patch.archivedAt ?? null,
+      chatPinnedAt: patch.chatPinnedAt ?? null,
+    });
+  }
+
+  @Put('conversations/:id/draft')
+  async setDraft(
+    @Param('id') id: string,
+    @Body('text') text: string,
+    @CurrentUser() user: any,
+  ) {
+    const row = await this.service.setDraft(id, user.sub, text ?? '');
+    this.emitListState(user.sub, id, row);
+    return { draft: row.draft, draftAt: row.draftAt };
+  }
+
+  @Post('conversations/:id/archive')
+  async archiveConversation(@Param('id') id: string, @CurrentUser() user: any) {
+    const row = await this.service.setArchived(id, user.sub, true);
+    this.emitListState(user.sub, id, row);
+    return { archivedAt: row.archivedAt };
+  }
+
+  @Delete('conversations/:id/archive')
+  async unarchiveConversation(@Param('id') id: string, @CurrentUser() user: any) {
+    const row = await this.service.setArchived(id, user.sub, false);
+    this.emitListState(user.sub, id, row);
+    return { archivedAt: null };
+  }
+
+  /**
+   * Закрепление беседы в списке. Путь намеренно не `/pinned` — тот занят
+   * закреплёнными сообщениями внутри беседы, и спутать их слишком легко.
+   */
+  @Post('conversations/:id/chat-pin')
+  async pinConversation(@Param('id') id: string, @CurrentUser() user: any) {
+    const row = await this.service.setChatPinned(id, user.sub, true);
+    this.emitListState(user.sub, id, row);
+    return { chatPinnedAt: row.chatPinnedAt };
+  }
+
+  @Delete('conversations/:id/chat-pin')
+  async unpinConversation(@Param('id') id: string, @CurrentUser() user: any) {
+    const row = await this.service.setChatPinned(id, user.sub, false);
+    this.emitListState(user.sub, id, row);
+    return { chatPinnedAt: null };
+  }
+
+  /**
    * Пересылка одного или нескольких сообщений в беседу.
    *
    * REST, а не сокетное событие: тело копируется сервером из оригинала (клиент

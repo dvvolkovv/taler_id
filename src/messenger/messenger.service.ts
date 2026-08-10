@@ -16,6 +16,9 @@ const FORWARD_BATCH_LIMIT = 50;
 /** Сколько символов оригинала уезжает в превью цитаты. */
 const REPLY_PREVIEW_LIMIT = 200;
 
+/** Потолок черновика; с запасом больше любого разумного сообщения. */
+const DRAFT_MAX_LENGTH = 20000;
+
 /**
  * Имя для показа: «Имя Фамилия», иначе username, иначе ничего.
  * Ровно та же лесенка, что и в остальных местах сервиса.
@@ -671,6 +674,12 @@ export class MessengerService {
           }
         : null,
       pinsDismissedAt: myParticipant?.pinsDismissedAt ?? null,
+      // Состояние списка чатов — персональное, поэтому берётся из своей строки
+      // участия, а не из беседы.
+      draft: myParticipant?.draft ?? null,
+      draftAt: myParticipant?.draftAt ?? null,
+      archivedAt: myParticipant?.archivedAt ?? null,
+      chatPinnedAt: myParticipant?.chatPinnedAt ?? null,
       // системный канал (Taler ID — Новости): клиенты не могут отписаться
       isSystem: conv.isSystem ? true : undefined,
     };
@@ -1090,6 +1099,52 @@ export class MessengerService {
         ...(metadata ? { metadata } : {}),
         ...relationData,
       },
+    });
+  }
+
+  /**
+   * Черновик беседы.
+   *
+   * Хранится на строке участия, а не на беседе: текст персональный. Пустой (и
+   * состоящий из одних пробелов) текст стирает черновик — иначе «стёр всё,
+   * остался пробел» оставлял бы чат с вечной пометкой «черновик».
+   */
+  async setDraft(conversationId: string, userId: string, text: string) {
+    const trimmed = (text ?? '').trim();
+    if (trimmed.length > DRAFT_MAX_LENGTH) {
+      throw new BadRequestException(
+        `Draft cannot exceed ${DRAFT_MAX_LENGTH} characters`,
+      );
+    }
+    await this.assertParticipant(conversationId, userId);
+    return this.prisma.conversationParticipant.update({
+      where: { conversationId_userId: { conversationId, userId } },
+      data: trimmed
+        ? { draft: trimmed, draftAt: new Date() }
+        : { draft: null, draftAt: null },
+    });
+  }
+
+  /** Архив беседы — тоже персональный: у собеседника чат остаётся на месте. */
+  async setArchived(conversationId: string, userId: string, archived: boolean) {
+    await this.assertParticipant(conversationId, userId);
+    return this.prisma.conversationParticipant.update({
+      where: { conversationId_userId: { conversationId, userId } },
+      data: { archivedAt: archived ? new Date() : null },
+    });
+  }
+
+  /**
+   * Закрепление беседы в списке чатов.
+   *
+   * Не путать с закреплением сообщения внутри беседы: имена похожи, сущности
+   * разные. Отметка времени, а не флаг, — она же задаёт порядок закреплённых.
+   */
+  async setChatPinned(conversationId: string, userId: string, pinned: boolean) {
+    await this.assertParticipant(conversationId, userId);
+    return this.prisma.conversationParticipant.update({
+      where: { conversationId_userId: { conversationId, userId } },
+      data: { chatPinnedAt: pinned ? new Date() : null },
     });
   }
 
