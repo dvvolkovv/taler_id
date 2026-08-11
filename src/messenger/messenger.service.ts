@@ -1982,6 +1982,7 @@ export class MessengerService {
       subscribersCount: conv._count.participants,
       isSubscribed: !!me,
       myRole: me ? me.role : null,
+      publicUsername: conv.publicUsername ?? null,
     };
   }
 
