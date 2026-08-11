@@ -8,6 +8,7 @@ import { LinkPreviewService } from './link-preview.service';
 import { VoiceTranscribeService } from './voice-transcribe.service';
 import { InviteService } from './invite.service';
 import { ReadReceiptsService } from './read-receipts.service';
+import { ScheduledMessageService } from './scheduled-message.service';
 import { AiTwinService } from './ai-twin.service';
 import { AiAnalystService } from '../ai-analyst/ai-analyst.service';
 import { BillingModule } from '../billing/billing.module';
@@ -38,6 +39,7 @@ import { VideoTranscodeService } from '../common/video-transcode.service';
     VoiceTranscribeService,
     InviteService,
     ReadReceiptsService,
+    ScheduledMessageService,
     MessengerGateway,
     AiTwinService,
     AiAnalystService,

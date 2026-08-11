@@ -1077,3 +1077,34 @@ model LinkPreview {
 
   @@index([fetchedAt])
 }
+
+/// Отложенное сообщение.
+///
+/// Отдельная таблица, а не поле у Message: неотправленное сообщение не должно
+/// попадать в историю беседы. Лежи оно в Message с флагом, любой забытый фильтр
+/// показал бы его собеседнику раньше времени.
+model ScheduledMessage {
+  id             String    @id @default(uuid())
+  conversationId String
+  senderId       String
+  content        String
+  sendAt         DateTime
+  /// Файловые поля копируются в настоящее сообщение при отправке.
+  fileUrl        String?
+  fileName       String?
+  fileSize       Int?
+  fileType       String?
+  s3Key          String?
+  topicId        String?
+  replyToId      String?
+  silent         Boolean   @default(false)
+  createdAt      DateTime  @default(now())
+  /// Проставляется после успешной отправки; строка остаётся как след.
+  sentAt         DateTime?
+  cancelledAt    DateTime?
+  /// Последняя ошибка отправки — чтобы не гадать, почему не ушло.
+  lastError      String?
+
+  @@index([sendAt, sentAt])
+  @@index([senderId])
+}

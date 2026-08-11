@@ -30,6 +30,7 @@ import { LinkPreviewService } from './link-preview.service';
 import { VoiceTranscribeService } from './voice-transcribe.service';
 import { InviteService } from './invite.service';
 import { ReadReceiptsService } from './read-receipts.service';
+import { ScheduledMessageService } from './scheduled-message.service';
 import { MessengerGateway } from './messenger.gateway';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -82,6 +83,7 @@ export class MessengerController {
     private readonly voiceTranscribe: VoiceTranscribeService,
     private readonly invites: InviteService,
     private readonly readReceipts: ReadReceiptsService,
+    private readonly scheduled: ScheduledMessageService,
   ) {}
 
   /**
@@ -1161,6 +1163,28 @@ export class MessengerController {
   @Delete('channels/:id')
   async deleteChannel(@Param('id') id: string, @CurrentUser() user: any) {
     return this.service.deleteChannel(id, user.sub);
+  }
+
+  // ─── Отложенная отправка ───
+
+  @Post('conversations/:id/scheduled')
+  scheduleMessage(
+    @Param('id') id: string,
+    @Body() body: any,
+    @CurrentUser() user: any,
+  ) {
+    return this.scheduled.schedule(id, user.sub, body);
+  }
+
+  /** Свои отложенные в беседе; чужие не показываем даже участникам. */
+  @Get('conversations/:id/scheduled')
+  listScheduled(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.scheduled.listForConversation(id, user.sub);
+  }
+
+  @Delete('scheduled/:id')
+  cancelScheduled(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.scheduled.cancel(id, user.sub);
   }
 
   // ─── Приглашения и публичные имена ───
