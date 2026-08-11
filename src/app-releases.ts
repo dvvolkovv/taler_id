@@ -11,6 +11,66 @@ export interface AppRelease {
 // Keep notes user-facing (no internal jargon, no commit hashes).
 export const APP_RELEASES: AppRelease[] = [
   {
+    version: '1.1.26',
+    build: 227,
+    date: '2026-08-11',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.26 — переписка стала удобнее.\n\n' +
+      '↩️ Настоящие ответы. Ответ больше не вклеивается в текст: цитата стоит ' +
+      'отдельной строкой, по ней можно перейти к исходному сообщению, а если его ' +
+      'удалили — так и написано.\n\n' +
+      '📤 Пересылка с подписью. У пересланного видно, от кого оно пришло. ' +
+      'Пересылать можно сразу несколько.\n\n' +
+      '✅ Выделение нескольких. Долгий тап — «Выделить», дальше отмечайте ' +
+      'сообщения и удаляйте, пересылайте или копируйте их пачкой.\n\n' +
+      '🆕 Линия непрочитанных. Чат открывается на первом непрочитанном ' +
+      'сообщении, а не в самом низу.\n\n' +
+      '💬 Черновики и порядок чатов — на всех устройствах. Недописанное ' +
+      'сообщение, архив и закреплённые чаты теперь одинаковы на телефоне и ' +
+      'компьютере.\n\n' +
+      '@ Упоминания. Наберите @ — появятся подсказки участников. Если упомянули ' +
+      'вас, рядом с чатом загорится значок, и уведомление придёт даже когда чат ' +
+      'приглушён.\n\n' +
+      '🔗 Превью ссылок. Под сообщением со ссылкой появляется карточка с ' +
+      'заголовком и картинкой.\n\n' +
+      '🎤 Голосовые. Дорожка теперь повторяет громкость записи, а под сообщением ' +
+      'есть «Расшифровать» — голосовое можно прочитать текстом.\n\n' +
+      '🎟 Приглашения в группы и каналы. Ссылку можно создать, отправить и ' +
+      'отозвать; у канала может быть короткое публичное имя.\n\n' +
+      '👁 Просмотры. У постов канала видно, сколько человек их прочитало.\n\n' +
+      '✍️ Форматирование и спойлеры. **жирный**, __курсив__, ~~зачёркнутый~~, ' +
+      '`код` и ||скрытый текст||, который открывается по нажатию.\n\n' +
+      '⏰ Отправка позже и без звука. Долгий тап по кнопке отправки — выбрать ' +
+      'время или отправить так, чтобы не разбудить уведомлением.',
+    notes_en:
+      'Release 1.1.26 — a friendlier chat.\n\n' +
+      '↩️ Real replies. A reply is no longer glued into the text: the quote sits ' +
+      'on its own line, tapping it jumps to the original, and if the original was ' +
+      'deleted it says so.\n\n' +
+      '📤 Forwarding with attribution. Forwarded messages show who wrote them, ' +
+      'and you can forward several at once.\n\n' +
+      '✅ Multi-select. Long-press, choose Select, then delete, forward or copy ' +
+      'messages in bulk.\n\n' +
+      '🆕 Unread divider. A chat opens at the first unread message instead of the ' +
+      'very bottom.\n\n' +
+      '💬 Drafts and chat order everywhere. Unfinished messages, the archive and ' +
+      'pinned chats are now the same on your phone and computer.\n\n' +
+      '@ Mentions. Type @ to get suggestions. If someone mentions you, the chat ' +
+      'gets a badge and the notification arrives even when the chat is muted.\n\n' +
+      '🔗 Link previews. A card with the title and image appears under a message ' +
+      'with a link.\n\n' +
+      '🎤 Voice messages. The waveform now follows the actual recording, and ' +
+      'Transcribe turns a voice message into text.\n\n' +
+      '🎟 Invite links. Create, share and revoke links to groups and channels; a ' +
+      'channel can have a short public handle.\n\n' +
+      '👁 Views. Channel posts show how many people have read them.\n\n' +
+      '✍️ Formatting and spoilers. **bold**, __italic__, ~~strikethrough~~, ' +
+      '`code` and ||hidden text|| that reveals on tap.\n\n' +
+      '⏰ Send later and silently. Long-press the send button to pick a time or ' +
+      'send without a notification sound.',
+  },
+  {
     version: '1.1.25',
     build: 226,
     date: '2026-08-08',
