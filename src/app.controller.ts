@@ -145,9 +145,18 @@ export class AppController {
     const env = process.env;
     // Env-overridable so the DO/talerid build advertises its own track + APK URL;
     // defaults preserve aeza (prod/dev) behaviour when these vars are unset.
-    const latest = {
+    // Android и iOS объявляются РАЗДЕЛЬНО. Раньше версия была одна на обе
+    // платформы, и выкладка APK автоматически объявляла ту же версию для iOS —
+    // а сборка в TestFlight к тому моменту ещё не залита, и людям прилетал
+    // баннер на то, чего нет. Каждая платформа объявляется только после того,
+    // как её артефакт реально на месте.
+    const latestAndroid = {
       version: env.APP_LATEST_VERSION || '1.1.26',
       build: parseInt(env.APP_LATEST_BUILD || '227', 10),
+    };
+    const latestIos = {
+      version: env.APP_LATEST_IOS_VERSION || '1.1.25',
+      build: parseInt(env.APP_LATEST_IOS_BUILD || '226', 10),
     };
     const androidUrl =
       env.APP_UPDATE_URL_ANDROID ||
@@ -158,8 +167,8 @@ export class AppController {
       env.APP_UPDATE_URL_IOS ||
       'https://apps.apple.com/app/taler-id/id6741208498';
     return {
-      ios: { ...latest, required: false },
-      android: { ...latest, required: false },
+      ios: { ...latestIos, required: false },
+      android: { ...latestAndroid, required: false },
       updateUrl: { ios: iosUrl, android: androidUrl },
       releases: APP_RELEASES,
     };
