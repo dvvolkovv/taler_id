@@ -273,9 +273,36 @@ model Conversation {
   autoDeleteDays Int?
   topicsEnabled  Boolean                   @default(false)
   isSystem       Boolean                   @default(false)
+  /// Публичное имя группы или канала: по нему беседа открывается ссылкой без
+  /// приглашения. Уникально в том же пространстве, что и логины людей, —
+  /// проверяется в коде, потому что таблицы разные.
+  publicUsername String?                   @unique
   participants   ConversationParticipant[]
   messages       Message[]
   topics         Topic[]
+  invites        ConversationInvite[]
+}
+
+/// Ссылка-приглашение в группу или канал.
+///
+/// Отдельная сущность, а не поле беседы: ссылок может быть несколько (разным
+/// людям — разные), каждую можно отозвать по отдельности и посмотреть, сколько
+/// по ней пришло.
+model ConversationInvite {
+  id             String       @id @default(uuid())
+  conversationId String
+  code           String       @unique
+  createdById    String
+  createdAt      DateTime     @default(now())
+  /// null — бессрочная.
+  expiresAt      DateTime?
+  /// null — без ограничения по числу вступивших.
+  maxUses        Int?
+  uses           Int          @default(0)
+  revokedAt      DateTime?
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
 }
 
 model ConversationParticipant {

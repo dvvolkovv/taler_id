@@ -28,6 +28,7 @@ import { createHash } from 'crypto';
 import { MessengerService, buildForwardedFrom } from './messenger.service';
 import { LinkPreviewService } from './link-preview.service';
 import { VoiceTranscribeService } from './voice-transcribe.service';
+import { InviteService } from './invite.service';
 import { MessengerGateway } from './messenger.gateway';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -78,6 +79,7 @@ export class MessengerController {
     private readonly fcmService: FcmService,
     private readonly linkPreviews: LinkPreviewService,
     private readonly voiceTranscribe: VoiceTranscribeService,
+    private readonly invites: InviteService,
   ) {}
 
   /**
@@ -1139,6 +1141,61 @@ export class MessengerController {
   @Delete('channels/:id')
   async deleteChannel(@Param('id') id: string, @CurrentUser() user: any) {
     return this.service.deleteChannel(id, user.sub);
+  }
+
+  // ─── Приглашения и публичные имена ───
+
+  @Post('conversations/:id/invites')
+  createInvite(
+    @Param('id') id: string,
+    @Body('expiresInHours') expiresInHours: number | undefined,
+    @Body('maxUses') maxUses: number | undefined,
+    @CurrentUser() user: any,
+  ) {
+    return this.invites.createInvite(id, user.sub, {
+      expiresInHours: expiresInHours ?? null,
+      maxUses: maxUses ?? null,
+    });
+  }
+
+  @Get('conversations/:id/invites')
+  listInvites(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.invites.listInvites(id, user.sub);
+  }
+
+  @Delete('invites/:code')
+  revokeInvite(@Param('code') code: string, @CurrentUser() user: any) {
+    return this.invites.revokeInvite(code, user.sub);
+  }
+
+  /** Что показать до вступления. Нерабочая ссылка — состояние, а не ошибка. */
+  @Get('invites/:code')
+  previewInvite(@Param('code') code: string, @CurrentUser() user: any) {
+    return this.invites.previewInvite(code, user.sub);
+  }
+
+  @Post('invites/:code/join')
+  joinByInvite(@Param('code') code: string, @CurrentUser() user: any) {
+    return this.invites.joinByInvite(code, user.sub);
+  }
+
+  @Put('conversations/:id/public-username')
+  setPublicUsername(
+    @Param('id') id: string,
+    @Body('username') username: string | null,
+    @CurrentUser() user: any,
+  ) {
+    return this.invites.setPublicUsername(id, user.sub, username ?? null);
+  }
+
+  @Get('public/:username')
+  resolvePublic(@Param('username') username: string, @CurrentUser() user: any) {
+    return this.invites.resolvePublicUsername(username, user.sub);
+  }
+
+  @Post('public/:username/join')
+  joinPublic(@Param('username') username: string, @CurrentUser() user: any) {
+    return this.invites.joinByPublicUsername(username, user.sub);
   }
 
   /**
