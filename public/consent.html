@@ -1,261 +1,901 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Taler ID — Authorization</title>
-  <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
-      background: radial-gradient(ellipse at 50% 30%, rgba(22,163,74,0.06) 0%, transparent 60%), #0F0F1A;
-      color: #E2E8F0; min-height: 100vh;
-      display: flex; align-items: center; justify-content: center;
-      padding: 20px;
-    }
-    .card {
-      background: #252538; border: 1px solid rgba(51,65,85,0.3); border-radius: 20px;
-      padding: 40px; width: 100%; max-width: 400px;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.2), 0 0 0 1px rgba(34,197,94,0.05);
-    }
-    h2 {
-      background: linear-gradient(135deg, #4ade80, #22d3ee);
-      -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
-      margin-bottom: 8px; text-align: center; font-size: 1.4rem;
-    }
-    .subtitle { text-align: center; color: #94A3B8; font-size: 0.875rem; margin-bottom: 24px; }
-    .client-info {
-      display: flex; align-items: center; gap: 12px;
-      background: #1E1E2E; border-radius: 14px; padding: 16px; margin-bottom: 20px;
-      border: 1px solid rgba(51,65,85,0.3);
-    }
-    .client-logo {
-      width: 48px; height: 48px; border-radius: 12px;
-      background: linear-gradient(135deg, rgba(34,197,94,0.3), rgba(34,197,94,0.1));
-      display: flex; align-items: center; justify-content: center; font-size: 1.4rem; color: #22C55E;
-    }
-    .client-name { font-weight: 600; font-size: 1rem; }
-    .client-desc { color: #94A3B8; font-size: 0.8rem; }
-    .scopes { margin-bottom: 24px; }
-    .scopes h3 { font-size: 0.8rem; color: #94A3B8; margin-bottom: 10px; font-weight: 600; letter-spacing: 0.3px; }
-    .scope-item {
-      display: flex; align-items: center; gap: 12px;
-      padding: 12px 14px; background: #1E1E2E; border-radius: 12px; margin-bottom: 6px;
-      border: 1px solid rgba(51,65,85,0.2);
-    }
-    .scope-icon { color: #4ade80; font-size: 1rem; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: rgba(34,197,94,0.1); border-radius: 8px; }
-    .scope-name { font-weight: 500; font-size: 0.9rem; }
-    .scope-desc { color: #94A3B8; font-size: 0.75rem; }
-    .actions { display: flex; gap: 10px; margin-top: 24px; }
-    .btn {
-      flex: 1; padding: 14px; border: none; border-radius: 14px; font-weight: 600;
-      font-size: 0.95rem; cursor: pointer; transition: all 0.2s;
-    }
-    .btn-deny { background: #1E1E2E; color: #f87171; border: 1px solid rgba(248,113,113,0.2); }
-    .btn-deny:hover { background: rgba(248,113,113,0.08); }
-    .btn-allow { background: linear-gradient(135deg, #22c55e, #16a34a); color: #fff; box-shadow: 0 4px 12px rgba(34,197,94,0.25); }
-    .btn-allow:hover { opacity: 0.9; box-shadow: 0 6px 20px rgba(34,197,94,0.35); }
-    .form-group { margin-bottom: 16px; }
-    .form-group label { display: block; font-size: 0.8rem; color: #94A3B8; margin-bottom: 6px; font-weight: 500; }
-    .form-group input {
-      width: 100%; padding: 12px 16px; background: #1E1E2E; border: 1px solid rgba(51,65,85,0.3);
-      border-radius: 14px; color: #E2E8F0; font-size: 0.95rem; outline: none;
-      transition: border-color 0.2s, box-shadow 0.2s;
-    }
-    .form-group input:focus { border-color: #22C55E; box-shadow: 0 0 0 3px rgba(34,197,94,0.1); }
-    .form-group input::placeholder { color: #94A3B8; opacity: 0.5; }
-    .error { color: #f87171; font-size: 0.8rem; text-align: center; margin-top: 10px; }
-    .loading { text-align: center; color: #94A3B8; padding: 40px 0; }
-    .hidden { display: none; }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0F0F1A">
+<meta name="robots" content="noindex, nofollow">
+<title>Taler ID</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%2322C55E'/><text x='50%25' y='50%25' dominant-baseline='central' text-anchor='middle' fill='%23000' font-size='18' font-weight='700' font-family='sans-serif'>T</text></svg>">
+<style>
+/* Шрифты только системные. Страница входа — критический путь, а @import с
+   fonts.googleapis.com блокирует отрисовку до ответа; у части пользователей
+   (СНГ) он не отвечает вовсе, и человек смотрит на пустой экран вместо формы.
+   Характер держится на вёрстке: микро-капс, гравировка, моноширинные
+   идентификаторы прав. */
+:root {
+  --primary: #22C55E;
+  --primary-dark: #16A34A;
+  --secondary: #0891B2;
+  --bg: #0F0F1A;
+  --card: #191926;
+  --inset: #12121C;
+  --text: #E2E8F0;
+  --muted: #94A3B8;
+  --faint: #64748B;
+  --danger: #F87171;
+  --hair: rgba(148, 163, 184, 0.14);
+  --hair-strong: rgba(148, 163, 184, 0.22);
+  --sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  --ease: cubic-bezier(.2, .7, .3, 1);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  min-height: 100dvh;
+  font-family: var(--sans);
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: max(20px, env(safe-area-inset-top)) 20px max(20px, env(safe-area-inset-bottom));
+  position: relative;
+  overflow-x: hidden;
+}
+
+/* Атмосфера: два разнесённых свечения и едва различимая гравировка —
+   так фон перестаёт быть плоской заливкой, но ничего не перетягивает. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: -20%;
+  background:
+    radial-gradient(38% 30% at 22% 12%, rgba(34, 197, 94, 0.10), transparent 70%),
+    radial-gradient(34% 28% at 82% 88%, rgba(8, 145, 178, 0.10), transparent 70%);
+  pointer-events: none;
+}
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: repeating-linear-gradient(115deg, rgba(148,163,184,.035) 0 1px, transparent 1px 7px);
+  mask-image: radial-gradient(120% 90% at 50% 30%, #000 20%, transparent 78%);
+  -webkit-mask-image: radial-gradient(120% 90% at 50% 30%, #000 20%, transparent 78%);
+  pointer-events: none;
+}
+
+/* ── Карточка-удостоверение ───────────────────────────────────────── */
+.cred {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 420px;
+  background: linear-gradient(180deg, #1C1C2B, var(--card));
+  border: 1px solid var(--hair);
+  border-radius: 22px;
+  box-shadow:
+    0 1px 0 rgba(255,255,255,.05) inset,
+    0 24px 60px -20px rgba(0,0,0,.75),
+    0 0 0 1px rgba(34,197,94,.05);
+  overflow: hidden;
+  animation: card-in .5s var(--ease) both;
+}
+@keyframes card-in {
+  from { opacity: 0; transform: translateY(10px) scale(.985); }
+}
+
+/* Гравировка по полю карточки — концентрические дуги, как на документах. */
+.cred::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-radial-gradient(circle at 50% -40%, rgba(148,163,184,.06) 0 1px, transparent 1px 12px);
+  opacity: .5;
+  pointer-events: none;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 22px 16px;
+  border-bottom: 1px solid var(--hair);
+  position: relative;
+}
+
+.mark { width: 26px; height: 26px; flex: none; border-radius: 8px; }
+
+.wordmark {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.lang {
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--hair);
+  border-radius: 999px;
+}
+.lang button {
+  border: 0;
+  background: none;
+  color: var(--faint);
+  font: 600 10px/1 var(--sans);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  padding: 6px 9px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color .15s, background .15s;
+}
+.lang button[aria-pressed='true'] { color: #06110B; background: var(--primary); }
+.lang button:hover:not([aria-pressed='true']) { color: var(--text); }
+
+.body { padding: 24px 22px 22px; position: relative; }
+
+.eyebrow {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: 10px;
+}
+
+h1 {
+  font-size: 21px;
+  font-weight: 650;
+  letter-spacing: -.02em;
+  line-height: 1.25;
+}
+
+.lede { margin-top: 8px; font-size: 13.5px; line-height: 1.5; color: var(--muted); }
+
+/* ── Кто просит доступ ────────────────────────────────────────────── */
+.client {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  margin-top: 18px;
+  padding: 14px;
+  background: var(--inset);
+  border: 1px solid var(--hair);
+  border-radius: 15px;
+}
+.client-badge {
+  width: 44px; height: 44px; flex: none;
+  border-radius: 12px;
+  display: grid; place-items: center;
+  background: linear-gradient(140deg, rgba(34,197,94,.28), rgba(8,145,178,.18));
+  border: 1px solid rgba(34,197,94,.22);
+  color: var(--primary);
+  font-size: 19px; font-weight: 700;
+  overflow: hidden;
+}
+.client-badge img { width: 100%; height: 100%; object-fit: cover; }
+.client-name { font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+.client-role { margin-top: 2px; font-size: 12px; color: var(--muted); }
+
+/* ── Перфорация: рубеж между «кто» и «что именно» ─────────────────── */
+.perf {
+  position: relative;
+  margin: 20px -22px 18px;
+  border-top: 1px dashed var(--hair-strong);
+}
+.perf::before, .perf::after {
+  content: '';
+  position: absolute;
+  top: -9px;
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  background: var(--bg);
+  border: 1px solid var(--hair);
+}
+.perf::before { left: -9px; }
+.perf::after { right: -9px; }
+
+/* ── Права ────────────────────────────────────────────────────────── */
+.scopes { display: flex; flex-direction: column; gap: 7px; }
+
+.scope {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 13px;
+  background: var(--inset);
+  border: 1px solid var(--hair);
+  border-radius: 13px;
+  animation: row-in .42s var(--ease) both;
+  animation-delay: calc(var(--i, 0) * 55ms + 60ms);
+}
+@keyframes row-in {
+  from { opacity: 0; transform: translateY(7px); }
+}
+.scope-icon {
+  width: 30px; height: 30px; flex: none;
+  display: grid; place-items: center;
+  border-radius: 9px;
+  background: rgba(34,197,94,.10);
+  color: var(--primary);
+}
+.scope-icon svg { width: 16px; height: 16px; }
+.scope-name { font-size: 13.5px; font-weight: 550; line-height: 1.35; }
+.scope-desc { margin-top: 2px; font-size: 12px; line-height: 1.45; color: var(--muted); }
+.scope-id {
+  display: inline-block;
+  margin-top: 5px;
+  font: 400 10.5px/1.4 var(--mono);
+  letter-spacing: .02em;
+  color: var(--faint);
+  overflow-wrap: anywhere;
+}
+
+/* ── Форма ────────────────────────────────────────────────────────── */
+.field { margin-top: 14px; }
+.field label {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: 7px;
+}
+.control { position: relative; display: flex; }
+.field input {
+  width: 100%;
+  padding: 13px 15px;
+  background: var(--inset);
+  border: 1px solid var(--hair);
+  border-radius: 13px;
+  color: var(--text);
+  font: 400 15px/1.2 var(--sans);
+  outline: none;
+  transition: border-color .18s, box-shadow .18s, background .18s;
+}
+.field input:hover { border-color: var(--hair-strong); }
+.field input:focus {
+  border-color: var(--primary);
+  background: #131320;
+  box-shadow: 0 0 0 3px rgba(34,197,94,.14);
+}
+.field input::placeholder { color: var(--faint); }
+.field input[type='password'] { padding-right: 46px; letter-spacing: .08em; }
+
+.peek {
+  position: absolute;
+  right: 5px; top: 50%;
+  transform: translateY(-50%);
+  width: 38px; height: 38px;
+  display: grid; place-items: center;
+  border: 0; background: none;
+  color: var(--faint);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: color .15s, background .15s;
+}
+.peek:hover { color: var(--text); background: rgba(148,163,184,.08); }
+.peek svg { width: 17px; height: 17px; }
+
+/* ── Действия ─────────────────────────────────────────────────────── */
+.actions { display: flex; gap: 9px; margin-top: 20px; }
+
+.btn {
+  flex: 1;
+  min-height: 46px;
+  padding: 13px 16px;
+  border: 1px solid transparent;
+  border-radius: 13px;
+  font: 600 14.5px/1 var(--sans);
+  cursor: pointer;
+  transition: transform .12s var(--ease), background .18s, border-color .18s, box-shadow .18s, opacity .18s;
+}
+.btn:active { transform: translateY(1px); }
+.btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.btn[disabled] { opacity: .55; cursor: default; transform: none; }
+
+.btn-ghost { background: var(--inset); border-color: var(--hair); color: var(--muted); }
+.btn-ghost:hover:not([disabled]) { color: var(--danger); border-color: rgba(248,113,113,.32); background: rgba(248,113,113,.07); }
+
+.btn-primary {
+  background: linear-gradient(140deg, var(--primary), var(--primary-dark));
+  color: #04140A;
+  box-shadow: 0 1px 0 rgba(255,255,255,.22) inset, 0 6px 18px -6px rgba(34,197,94,.55);
+}
+.btn-primary:hover:not([disabled]) { filter: brightness(1.06); box-shadow: 0 1px 0 rgba(255,255,255,.22) inset, 0 10px 26px -8px rgba(34,197,94,.7); }
+
+/* Точки вместо подписи, пока идёт запрос: ширина кнопки не скачет. */
+.btn[aria-busy='true'] { color: transparent; position: relative; }
+.btn[aria-busy='true']::after {
+  content: '';
+  position: absolute; inset: 0;
+  margin: auto;
+  width: 16px; height: 16px;
+  border: 2px solid rgba(4,20,10,.35);
+  border-top-color: #04140A;
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
+.btn-ghost[aria-busy='true']::after { border-color: rgba(148,163,184,.3); border-top-color: var(--muted); }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Сообщения и состояния ────────────────────────────────────────── */
+.alert {
+  display: none;
+  gap: 9px;
+  margin-top: 14px;
+  padding: 11px 13px;
+  background: rgba(248,113,113,.08);
+  border: 1px solid rgba(248,113,113,.24);
+  border-radius: 12px;
+  color: var(--danger);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.alert:not(:empty) { display: flex; }
+.alert svg { width: 15px; height: 15px; flex: none; margin-top: 1px; }
+
+.notice { text-align: center; padding: 14px 0 4px; }
+.notice-icon {
+  width: 46px; height: 46px;
+  margin: 0 auto 14px;
+  display: grid; place-items: center;
+  border-radius: 14px;
+  background: rgba(148,163,184,.08);
+  border: 1px solid var(--hair);
+  color: var(--muted);
+}
+.notice-icon svg { width: 22px; height: 22px; }
+.notice p { font-size: 13.5px; line-height: 1.55; color: var(--muted); }
+
+/* Скелет: пустая карточка без объяснения читается как поломка. */
+.skeleton { display: flex; flex-direction: column; gap: 9px; padding: 6px 0; }
+.sk {
+  height: 13px;
+  border-radius: 7px;
+  background: linear-gradient(90deg, rgba(148,163,184,.07), rgba(148,163,184,.14), rgba(148,163,184,.07));
+  background-size: 220% 100%;
+  animation: sweep 1.3s var(--ease) infinite;
+}
+.sk.tall { height: 58px; border-radius: 13px; }
+.sk.w60 { width: 60%; }
+.sk.w40 { width: 40%; }
+@keyframes sweep { to { background-position: -220% 0; } }
+
+.foot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 13px;
+  border-top: 1px solid var(--hair);
+  background: rgba(0,0,0,.16);
+  font: 500 10.5px/1 var(--mono);
+  letter-spacing: .04em;
+  color: var(--faint);
+}
+.foot svg { width: 12px; height: 12px; }
+
+[hidden] { display: none !important; }
+
+@media (max-width: 380px) {
+  .body { padding: 20px 17px 18px; }
+  .head { padding: 16px 17px 14px; }
+  .perf { margin-left: -17px; margin-right: -17px; }
+  h1 { font-size: 19px; }
+  .actions { flex-direction: column-reverse; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+</style>
 </head>
 <body>
-  <div class="card">
-    <div id="loading" class="loading">Loading...</div>
-
-    <!-- LOGIN SCREEN -->
-    <div id="login-screen" class="hidden">
-      <h2>Taler ID</h2>
-      <p class="subtitle">Sign in to continue</p>
-      <div class="form-group">
-        <label>Email</label>
-        <input type="email" id="login-email" placeholder="you@example.com" />
-      </div>
-      <div class="form-group">
-        <label>Password</label>
-        <input type="password" id="login-password" placeholder="&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;" />
-      </div>
-      <div id="login-error" class="error"></div>
-      <div class="actions">
-        <button class="btn btn-deny" onclick="abort()">Cancel</button>
-        <button class="btn btn-allow" onclick="doLogin()">Sign In</button>
-      </div>
+<main class="cred">
+  <header class="head">
+    <svg class="mark" viewBox="0 0 32 32" aria-hidden="true">
+      <defs>
+        <linearGradient id="m" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#22C55E"/>
+          <stop offset="1" stop-color="#0891B2"/>
+        </linearGradient>
+      </defs>
+      <rect width="32" height="32" rx="9" fill="url(#m)"/>
+      <path d="M9 11h14M16 11v11" stroke="#06130C" stroke-width="3" stroke-linecap="round"/>
+    </svg>
+    <span class="wordmark">Taler ID</span>
+    <div class="lang" id="lang" role="group" aria-label="Язык / Language">
+      <button type="button" data-lang="ru" aria-pressed="true">ru</button>
+      <button type="button" data-lang="en" aria-pressed="false">en</button>
     </div>
+  </header>
 
-    <!-- CONSENT SCREEN -->
-    <div id="consent-screen" class="hidden">
-      <h2>Taler ID</h2>
-      <p class="subtitle">Authorize application access</p>
-      <div class="client-info">
-        <div class="client-logo" id="client-logo">W</div>
+  <div class="body">
+    <!-- Загрузка -->
+    <section id="view-loading">
+      <div class="skeleton" aria-hidden="true">
+        <div class="sk w40"></div>
+        <div class="sk w60"></div>
+        <div class="sk tall" style="margin-top:8px"></div>
+        <div class="sk tall"></div>
+      </div>
+      <span class="sr" id="loading-label" role="status" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)"></span>
+    </section>
+
+    <!-- Вход -->
+    <section id="view-login" hidden>
+      <p class="eyebrow" data-i18n="loginEyebrow"></p>
+      <h1 data-i18n="loginTitle"></h1>
+      <p class="lede" data-i18n="loginLede"></p>
+
+      <form id="login-form" novalidate>
+        <div class="field">
+          <label for="identifier" data-i18n="identifierLabel"></label>
+          <div class="control">
+            <input id="identifier" name="username" type="text" autocomplete="username"
+                   autocapitalize="none" autocorrect="off" spellcheck="false" required>
+          </div>
+        </div>
+        <div class="field">
+          <label for="password" data-i18n="passwordLabel"></label>
+          <div class="control">
+            <input id="password" name="password" type="password" autocomplete="current-password" required>
+            <button type="button" class="peek" id="peek" aria-pressed="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="alert" id="login-error" role="alert"></div>
+
+        <div class="actions">
+          <button type="button" class="btn btn-ghost" id="login-cancel" data-i18n="cancel"></button>
+          <button type="submit" class="btn btn-primary" id="login-submit" data-i18n="signIn"></button>
+        </div>
+      </form>
+    </section>
+
+    <!-- Согласие -->
+    <section id="view-consent" hidden>
+      <p class="eyebrow" data-i18n="consentEyebrow"></p>
+      <h1 data-i18n="consentTitle"></h1>
+
+      <div class="client">
+        <div class="client-badge" id="client-badge">•</div>
         <div>
-          <div class="client-name" id="client-name">Application</div>
-          <div class="client-desc">wants access to your account</div>
+          <div class="client-name" id="client-name"></div>
+          <div class="client-role" data-i18n="clientRole"></div>
         </div>
       </div>
-      <div class="scopes">
-        <h3>Permissions requested:</h3>
-        <div id="scope-list"></div>
-      </div>
-      <div id="consent-error" class="error"></div>
+
+      <div class="perf"></div>
+
+      <p class="eyebrow" data-i18n="grantsLabel"></p>
+      <div class="scopes" id="scope-list"></div>
+
+      <div class="alert" id="consent-error" role="alert"></div>
+
       <div class="actions">
-        <button class="btn btn-deny" onclick="abort()">Deny</button>
-        <button class="btn btn-allow" onclick="doConsent()">Allow</button>
+        <button type="button" class="btn btn-ghost" id="consent-deny" data-i18n="deny"></button>
+        <button type="button" class="btn btn-primary" id="consent-allow" data-i18n="allow"></button>
       </div>
-    </div>
+    </section>
+
+    <!-- Тупик: запрос устарел или не загрузился -->
+    <section id="view-notice" hidden>
+      <div class="notice">
+        <div class="notice-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="9"/><path d="M12 7.5v5l3 2"/>
+          </svg>
+        </div>
+        <h1 id="notice-title"></h1>
+        <p id="notice-text" style="margin-top:8px"></p>
+      </div>
+    </section>
   </div>
 
-  <script>
-    const uid = window.location.pathname.split('/').pop();
-    let interactionData = null;
+  <footer class="foot">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+      <rect x="4" y="10.5" width="16" height="10" rx="2.5"/><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"/>
+    </svg>
+    <span id="host"></span>
+  </footer>
+</main>
 
-    const SCOPE_LABELS = {
-      openid: { icon: '🔑', name: 'OpenID', desc: 'Verify your identity' },
-      profile: { icon: '👤', name: 'Profile', desc: 'Name, date of birth' },
-      email: { icon: '📧', name: 'Email', desc: 'Email address' },
-      phone: { icon: '📱', name: 'Phone', desc: 'Phone number' },
-      kyc: { icon: '✅', name: 'KYC Status', desc: 'Identity verification status' },
-      wallet: { icon: '💼', name: 'Wallet', desc: 'Wallet address' },
-      offline_access: { icon: '🔄', name: 'Offline Access', desc: 'Stay connected' },
-    };
+<script>
+(function () {
+  'use strict';
 
-    // The server answers errors as JSON too, so `res.json()` succeeds on a 400
-    // and only the status tells them apart. Without this check the page hid the
-    // loader, matched neither branch, and left an empty card with no
-    // explanation — which is what an expired interaction used to look like.
-    async function loadInteraction() {
-      const loading = document.getElementById('loading');
-      try {
-        const res = await fetch(`/oauth/interaction/${uid}`, {
-          credentials: 'include',
-          headers: { Accept: 'application/json' },
-        });
-        const data = await res.json().catch(() => ({}));
+  var uid = window.location.pathname.split('/').pop();
 
-        if (!res.ok) {
-          loading.textContent = res.status === 400
-            ? 'This authorization request has expired. Please start again from the application you came from.'
-            : (data.message || 'Could not load authorization details');
-          return;
-        }
+  // ── Языки ───────────────────────────────────────────────────────────
+  // Провайдер говорит на двух языках, а страница до сих пор была только
+  // английской — при том что <html lang> объявлял русский.
+  var T = {
+    ru: {
+      loginEyebrow: 'Вход в аккаунт',
+      loginTitle: 'Войдите, чтобы продолжить',
+      loginLede: 'Приложение ждёт подтверждения вашей личности.',
+      identifierLabel: 'Почта или телефон',
+      passwordLabel: 'Пароль',
+      cancel: 'Отмена',
+      signIn: 'Войти',
+      consentEyebrow: 'Запрос доступа',
+      consentTitle: 'Разрешить доступ к аккаунту?',
+      clientRole: 'запрашивает доступ к вашему аккаунту',
+      grantsLabel: 'Что получит приложение',
+      deny: 'Отклонить',
+      allow: 'Разрешить',
+      expiredTitle: 'Запрос устарел',
+      expired: 'Начните вход заново в приложении, из которого вы пришли.',
+      loadFailedTitle: 'Не удалось загрузить запрос',
+      loadFailed: 'Проверьте соединение и попробуйте ещё раз.',
+      unsupportedTitle: 'Неизвестный шаг',
+      unsupported: 'Этот шаг авторизации страница показать не умеет.',
+      loginFailed: 'Не удалось войти. Проверьте почту и пароль.',
+      badCredentials: 'Неверная почта, телефон или пароль.',
+      missingFields: 'Заполните оба поля.',
+      locked: 'Слишком много неудачных попыток. Вход временно закрыт — попробуйте позже.',
+      consentFailed: 'Не удалось завершить авторизацию.',
+      network: 'Сеть недоступна. Проверьте соединение.',
+      loading: 'Загружаем запрос авторизации',
+      showPassword: 'Показать пароль',
+      hidePassword: 'Скрыть пароль',
+    },
+    en: {
+      loginEyebrow: 'Account sign-in',
+      loginTitle: 'Sign in to continue',
+      loginLede: 'The application is waiting for you to confirm your identity.',
+      identifierLabel: 'Email or phone',
+      passwordLabel: 'Password',
+      cancel: 'Cancel',
+      signIn: 'Sign in',
+      consentEyebrow: 'Access request',
+      consentTitle: 'Grant access to your account?',
+      clientRole: 'is requesting access to your account',
+      grantsLabel: 'What the application gets',
+      deny: 'Deny',
+      allow: 'Allow',
+      expiredTitle: 'Request expired',
+      expired: 'Start over from the application you came from.',
+      loadFailedTitle: 'Could not load the request',
+      loadFailed: 'Check your connection and try again.',
+      unsupportedTitle: 'Unknown step',
+      unsupported: 'This page cannot display this authorization step.',
+      loginFailed: 'Sign-in failed. Check your email and password.',
+      badCredentials: 'Wrong email, phone or password.',
+      missingFields: 'Fill in both fields.',
+      locked: 'Too many failed attempts. Sign-in is temporarily blocked — try again later.',
+      consentFailed: 'Could not complete authorization.',
+      network: 'Network unavailable. Check your connection.',
+      loading: 'Loading the authorization request',
+      showPassword: 'Show password',
+      hidePassword: 'Hide password',
+    },
+  };
 
-        interactionData = data;
-        loading.classList.add('hidden');
+  var lang = (navigator.language || 'ru').toLowerCase().indexOf('ru') === 0 ? 'ru' : 'en';
+  var t = function (key) { return T[lang][key]; };
 
-        if (data.interaction === 'login') {
-          document.getElementById('login-screen').classList.remove('hidden');
-        } else if (data.interaction === 'consent') {
-          showConsent(data);
-        } else {
-          loading.classList.remove('hidden');
-          loading.textContent = 'Unsupported authorization step';
-        }
-      } catch (e) {
-        loading.textContent = 'Error loading authorization details';
-      }
-    }
-
-    function showConsent(data) {
-      document.getElementById('consent-screen').classList.remove('hidden');
-      if (data.client?.name) {
-        document.getElementById('client-name').textContent = data.client.name;
-        document.getElementById('client-logo').textContent = data.client.name[0].toUpperCase();
-      }
-      const list = document.getElementById('scope-list');
-      list.innerHTML = '';
-      (data.scopes || []).forEach(s => {
-        const info = SCOPE_LABELS[s] || { icon: '📋', name: s, desc: '' };
-        list.innerHTML += `
-          <div class="scope-item">
-            <span class="scope-icon">${info.icon}</span>
-            <div>
-              <div class="scope-name">${info.name}</div>
-              <div class="scope-desc">${info.desc}</div>
-            </div>
-          </div>`;
-      });
-    }
-
-    async function doLogin() {
-      const email = document.getElementById('login-email').value.trim();
-      const password = document.getElementById('login-password').value;
-      document.getElementById('login-error').textContent = '';
-
-      try {
-        const res = await fetch(`/oauth/interaction/${uid}/login`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ email, password }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok) {
-          navigate(data.redirectTo);
-        } else {
-          document.getElementById('login-error').textContent = data.message || 'Login failed';
-        }
-      } catch (e) {
-        document.getElementById('login-error').textContent = 'Network error';
-      }
-    }
-
-    // Asking for JSON gets the continue-URL back instead of a 303. Letting
-    // `fetch` follow the redirect chain itself does not work: it ends at the
-    // client's own callback, and that cross-origin hop is blocked by our CSP
-    // `connect-src`, so "Allow" appeared to do nothing at all.
-    async function doConsent() {
-      const err = document.getElementById('consent-error');
-      err.textContent = '';
-      try {
-        const res = await fetch(`/oauth/interaction/${uid}/consent`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({}),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok) {
-          navigate(data.redirectTo);
-        } else {
-          err.textContent = data.message === 'invalid_request'
-            ? 'This authorization request has expired. Please start again from the application you came from.'
-            : (data.message || 'Could not complete authorization');
-        }
-      } catch (e) {
-        err.textContent = 'Network error';
-      }
-    }
-
-    // A top-level navigation, deliberately: it is the only way out of this page
-    // that CSP does not restrict, and the destination is usually another origin.
-    function navigate(url) {
-      if (url) window.location.href = url;
-      else window.location.reload();
-    }
-
-    async function abort() {
-      window.location.href = `/oauth/interaction/${uid}/abort`;
-    }
-
-    // Handle Enter key in login form
-    document.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && !document.getElementById('login-screen').classList.contains('hidden')) {
-        doLogin();
-      }
+  function applyLang() {
+    document.documentElement.lang = lang;
+    document.querySelectorAll('[data-i18n]').forEach(function (el) {
+      el.textContent = t(el.getAttribute('data-i18n'));
     });
+    document.querySelectorAll('#lang button').forEach(function (b) {
+      b.setAttribute('aria-pressed', String(b.dataset.lang === lang));
+    });
+    $('loading-label').textContent = t('loading');
+    syncPeekLabel();
+    // Перерисовываем уже показанное: язык могли переключить на любом шаге.
+    if (state.notice) showNotice(state.notice.title, state.notice.text);
+    if (state.data && state.data.interaction === 'consent') renderConsent(state.data);
+  }
 
-    loadInteraction();
-  </script>
+  // ── Значки прав ─────────────────────────────────────────────────────
+  var svg = function (d) {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+      'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + '</svg>';
+  };
+  var ICONS = {
+    key: svg('<circle cx="8" cy="12" r="4"/><path d="M12 12h9M18 12v3.5M15.5 12v2.5"/>'),
+    user: svg('<circle cx="12" cy="8" r="3.5"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/>'),
+    mail: svg('<rect x="3" y="5.5" width="18" height="13" rx="2.5"/><path d="m4 8 8 5 8-5"/>'),
+    phone: svg('<rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/><path d="M10.5 18.5h3"/>'),
+    shield: svg('<path d="M12 3l7 3v5.5c0 4.5-3 8-7 9.5-4-1.5-7-5-7-9.5V6l7-3Z"/><path d="m9 12 2 2 4-4"/>'),
+    wallet: svg('<rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18M16.5 14.5h1.5"/>'),
+    refresh: svg('<path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 4v4h-4"/>'),
+    calendar: svg('<rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/>'),
+    note: svg('<path d="M6 3.5h9l4.5 4.5v12a1.5 1.5 0 0 1-1.5 1.5H6a1.5 1.5 0 0 1-1.5-1.5v-15A1.5 1.5 0 0 1 6 3.5Z"/><path d="M14.5 3.5V9h5M8 13h8M8 17h5"/>'),
+    chat: svg('<path d="M20.5 12c0 4-3.8 7-8.5 7-1 0-2-.1-2.9-.4L4 20.5l1.4-3.6C4.2 15.6 3.5 13.9 3.5 12c0-4 3.8-7 8.5-7s8.5 3 8.5 7Z"/>'),
+    send: svg('<path d="m4 12 16-7-6.5 16-2.5-6.5L4 12Z"/>'),
+    doc: svg('<rect x="4.5" y="3.5" width="15" height="17" rx="2"/><path d="M8 8.5h8M8 12.5h8M8 16.5h5"/>'),
+  };
+
+  // Известные права описываем сами; для MCP-прав описания приходят с
+  // сервера сразу на двух языках — раньше страница их просто выбрасывала
+  // и показывала голое `mcp:mail.send` без единого пояснения.
+  var SCOPES = {
+    openid:          { icon: 'key',      ru: ['Подтверждение личности', 'Идентификатор вашего аккаунта'],           en: ['Identity', 'Your account identifier'] },
+    profile:         { icon: 'user',     ru: ['Профиль', 'Имя, дата рождения'],                                    en: ['Profile', 'Name, date of birth'] },
+    email:           { icon: 'mail',     ru: ['Почта', 'Адрес электронной почты'],                                  en: ['Email', 'Email address'] },
+    phone:           { icon: 'phone',    ru: ['Телефон', 'Номер телефона'],                                         en: ['Phone', 'Phone number'] },
+    kyc:             { icon: 'shield',   ru: ['Статус проверки', 'Пройдена ли проверка личности'],                  en: ['Verification status', 'Whether your identity is verified'] },
+    wallet:          { icon: 'wallet',   ru: ['Кошелёк', 'Адрес кошелька'],                                         en: ['Wallet', 'Wallet address'] },
+    offline_access:  { icon: 'refresh',  ru: ['Постоянный доступ', 'Работа без повторного входа'],                  en: ['Offline access', 'Stay connected without signing in again'] },
+  };
+  // У MCP-прав сервер присылает описание, но не название. Без своего
+  // заголовка в списке оказывались обрубки идентификатора — «messages.read»
+  // латиницей над русским описанием.
+  var MCP = {
+    'mcp:calendar':      { icon: 'calendar', ru: 'Календарь',            en: 'Calendar' },
+    'mcp:notes':         { icon: 'note',     ru: 'Заметки',              en: 'Notes' },
+    'mcp:messages.read': { icon: 'chat',     ru: 'Сообщения: чтение',    en: 'Messages: read' },
+    'mcp:messages.send': { icon: 'send',     ru: 'Сообщения: отправка',  en: 'Messages: send' },
+    'mcp:mail.read':     { icon: 'mail',     ru: 'Почта: чтение',        en: 'Mail: read' },
+    'mcp:mail.send':     { icon: 'send',     ru: 'Почта: отправка',      en: 'Mail: send' },
+  };
+
+  // ── Мелочи ──────────────────────────────────────────────────────────
+  var $ = function (id) { return document.getElementById(id); };
+  var state = { data: null, notice: null, busy: false };
+
+  function show(view) {
+    ['loading', 'login', 'consent', 'notice'].forEach(function (v) {
+      $('view-' + v).hidden = v !== view;
+    });
+  }
+
+  function showNotice(titleKey, textKey) {
+    state.notice = { title: titleKey, text: textKey };
+    $('notice-title').textContent = t(titleKey);
+    $('notice-text').textContent = t(textKey);
+    show('notice');
+  }
+
+  var WARN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" ' +
+    'stroke-linecap="round" aria-hidden="true"><path d="M12 4 2.8 20h18.4L12 4Z"/><path d="M12 10v4M12 17.2v.1"/></svg>';
+
+  function setAlert(el, message) {
+    el.textContent = '';
+    if (!message) return;
+    el.insertAdjacentHTML('beforeend', WARN);
+    var span = document.createElement('span');
+    span.textContent = message;
+    el.appendChild(span);
+  }
+
+  function busy(btn, on) {
+    state.busy = on;
+    btn.setAttribute('aria-busy', String(on));
+    document.querySelectorAll('.btn').forEach(function (b) { b.disabled = on; });
+  }
+
+  // Сообщения бэкенда — служебные и только английские; показывать их
+  // как есть посреди русского интерфейса нельзя, но и терять смысл
+  // («аккаунт заперт» ≠ «неверный пароль») тоже. Переводим известные,
+  // незнакомое показываем как пришло — это лучше, чем общая отговорка.
+  var SERVER_ERRORS = {
+    'Invalid credentials': 'badCredentials',
+    'Email/phone and password are required': 'missingFields',
+    'Account locked due to too many failed attempts': 'locked',
+  };
+
+  // Ответ сервера — всегда JSON, в том числе на ошибке, поэтому по факту
+  // разбора отличить их нельзя: смотреть надо на статус. Пока этого не
+  // делали, устаревший запрос выглядел как пустая карточка без объяснений.
+  function readError(status, data, fallbackKey) {
+    if (status === 400 || data.message === 'invalid_request') return t('expired');
+    var known = SERVER_ERRORS[data.message];
+    if (known) return t(known);
+    return data.message || t(fallbackKey);
+  }
+
+  // ── Загрузка запроса ────────────────────────────────────────────────
+  async function load() {
+    try {
+      var res = await fetch('/oauth/interaction/' + uid, {
+        credentials: 'include',
+        headers: { Accept: 'application/json' },
+      });
+      var data = await res.json().catch(function () { return {}; });
+
+      if (!res.ok) {
+        return res.status === 400
+          ? showNotice('expiredTitle', 'expired')
+          : showNotice('loadFailedTitle', 'loadFailed');
+      }
+
+      state.data = data;
+      if (data.interaction === 'login') {
+        show('login');
+        $('identifier').focus({ preventScroll: true });
+      } else if (data.interaction === 'consent') {
+        renderConsent(data);
+        show('consent');
+      } else {
+        showNotice('unsupportedTitle', 'unsupported');
+      }
+    } catch (e) {
+      showNotice('loadFailedTitle', 'loadFailed');
+    }
+  }
+
+  function renderConsent(data) {
+    var client = data.client || {};
+    var name = client.name || 'Application';
+    $('client-name').textContent = name;
+
+    // Логотип клиента сервер отдаёт с самого начала, а страница рисовала
+    // одну лишь первую букву.
+    var badge = $('client-badge');
+    badge.textContent = name.trim().charAt(0).toUpperCase() || '•';
+    if (client.logoUri) {
+      var img = new Image();
+      img.alt = '';
+      img.onload = function () { badge.textContent = ''; badge.appendChild(img); };
+      img.src = client.logoUri;
+    }
+
+    var list = $('scope-list');
+    list.textContent = '';
+    (data.scopes || []).forEach(function (scope, i) {
+      var known = SCOPES[scope];
+      var mcp = MCP[scope];
+      var served = (data.scopeDescriptions || {})[scope];
+      var title = known ? known[lang][0] : (mcp ? mcp[lang] : scope);
+      var desc = known
+        ? known[lang][1]
+        : (served ? (served[lang] || served.en) : '');
+
+      var row = document.createElement('div');
+      row.className = 'scope';
+      row.style.setProperty('--i', i);
+
+      var icon = document.createElement('div');
+      icon.className = 'scope-icon';
+      icon.innerHTML = ICONS[known ? known.icon : (mcp ? mcp.icon : 'doc')];
+
+      var text = document.createElement('div');
+      var nameEl = document.createElement('div');
+      nameEl.className = 'scope-name';
+      nameEl.textContent = title;
+      text.appendChild(nameEl);
+
+      if (desc) {
+        var descEl = document.createElement('div');
+        descEl.className = 'scope-desc';
+        descEl.textContent = desc;
+        text.appendChild(descEl);
+      }
+      // Техническое имя права остаётся видимым: на него ссылается
+      // документация, и по нему человек может понять, что именно ему дают.
+      var idEl = document.createElement('code');
+      idEl.className = 'scope-id';
+      idEl.textContent = scope;
+      text.appendChild(idEl);
+
+      row.appendChild(icon);
+      row.appendChild(text);
+      list.appendChild(row);
+    });
+  }
+
+  // ── Действия ────────────────────────────────────────────────────────
+  async function doLogin(e) {
+    if (e) e.preventDefault();
+    if (state.busy) return;
+    var btn = $('login-submit');
+    var err = $('login-error');
+    setAlert(err, '');
+
+    var identifier = $('identifier').value.trim();
+    var password = $('password').value;
+    if (!identifier || !password) {
+      setAlert(err, t('loginFailed'));
+      return;
+    }
+
+    busy(btn, true);
+    try {
+      var res = await fetch('/oauth/interaction/' + uid + '/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ email: identifier, password: password }),
+      });
+      var data = await res.json().catch(function () { return {}; });
+      if (res.ok) return navigate(data.redirectTo);
+      setAlert(err, readError(res.status, data, 'loginFailed'));
+    } catch (e2) {
+      setAlert(err, t('network'));
+    }
+    busy(btn, false);
+  }
+
+  // Просим JSON, чтобы получить адрес продолжения вместо 303. Отдать
+  // цепочку редиректов самому fetch нельзя: она заканчивается на callback-е
+  // клиента, а этот кросс-доменный переход режет наш же CSP connect-src —
+  // и «Разрешить» выглядела кнопкой, которая ничего не делает.
+  async function doConsent() {
+    if (state.busy) return;
+    var btn = $('consent-allow');
+    var err = $('consent-error');
+    setAlert(err, '');
+    busy(btn, true);
+    try {
+      var res = await fetch('/oauth/interaction/' + uid + '/consent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({}),
+      });
+      var data = await res.json().catch(function () { return {}; });
+      if (res.ok) return navigate(data.redirectTo);
+      setAlert(err, readError(res.status, data, 'consentFailed'));
+    } catch (e) {
+      setAlert(err, t('network'));
+    }
+    busy(btn, false);
+  }
+
+  // Переход верхнего уровня — единственный выход с этой страницы, который
+  // не ограничен CSP: адрес почти всегда чужого происхождения.
+  function navigate(url) {
+    if (url) window.location.href = url;
+    else window.location.reload();
+  }
+
+  function abort() {
+    window.location.href = '/oauth/interaction/' + uid + '/abort';
+  }
+
+  // ── Показать пароль ─────────────────────────────────────────────────
+  function syncPeekLabel() {
+    var shown = $('password').type === 'text';
+    $('peek').setAttribute('aria-label', t(shown ? 'hidePassword' : 'showPassword'));
+    $('peek').setAttribute('aria-pressed', String(shown));
+  }
+
+  $('peek').addEventListener('click', function () {
+    var input = $('password');
+    input.type = input.type === 'password' ? 'text' : 'password';
+    syncPeekLabel();
+    input.focus({ preventScroll: true });
+  });
+
+  $('login-form').addEventListener('submit', doLogin);
+  $('login-cancel').addEventListener('click', abort);
+  $('consent-allow').addEventListener('click', doConsent);
+  $('consent-deny').addEventListener('click', abort);
+
+  $('lang').addEventListener('click', function (e) {
+    var btn = e.target.closest('button[data-lang]');
+    if (!btn || btn.dataset.lang === lang) return;
+    lang = btn.dataset.lang;
+    applyLang();
+  });
+
+  $('host').textContent = window.location.host;
+  applyLang();
+  show('loading');
+  load();
+})();
+</script>
 </body>
 </html>
