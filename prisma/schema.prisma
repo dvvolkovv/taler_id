@@ -332,6 +332,10 @@ model ConversationParticipant {
   // Тоже частичный в БД (WHERE "chatPinnedAt" IS NOT NULL) — см. миграцию
   // 20260810120000_conversation_list_state.
   @@index([userId, chatPinnedAt])
+  // Под подсчёт «сколько человек дочитало до этого сообщения»: и просмотры
+  // постов канала, и «кто прочитал» в группе — это один и тот же вопрос к
+  // курсорам чтения, отдельной таблицы для них не нужно.
+  @@index([conversationId, lastReadAt])
 }
 
 model Message {

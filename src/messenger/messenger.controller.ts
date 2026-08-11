@@ -29,6 +29,7 @@ import { MessengerService, buildForwardedFrom } from './messenger.service';
 import { LinkPreviewService } from './link-preview.service';
 import { VoiceTranscribeService } from './voice-transcribe.service';
 import { InviteService } from './invite.service';
+import { ReadReceiptsService } from './read-receipts.service';
 import { MessengerGateway } from './messenger.gateway';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -80,6 +81,7 @@ export class MessengerController {
     private readonly linkPreviews: LinkPreviewService,
     private readonly voiceTranscribe: VoiceTranscribeService,
     private readonly invites: InviteService,
+    private readonly readReceipts: ReadReceiptsService,
   ) {}
 
   /**
@@ -169,20 +171,38 @@ export class MessengerController {
   }
 
   @Get('conversations/:id/messages')
-  messages(
+  async messages(
     @Param('id') id: string,
     @Query('cursor') cursor: string,
     @Query('limit') limit: string,
     @Query('topicId') topicId: string,
     @CurrentUser() user: any,
   ) {
-    return this.service.getMessages(
+    const page = await this.service.getMessages(
       id,
       user.sub,
       cursor,
       limit ? +limit : 30,
       topicId,
     );
+    // Просмотры считаем только в каналах: там это метрика поста, а в личной
+    // переписке и группе то же число называется галочками и уже показано.
+    const type = await this.service.getConversationType(id);
+    if (type !== 'CHANNEL') return page;
+    const counts = await this.readReceipts.viewCountsFor(
+      id,
+      page.messages.map((m: any) => ({ id: m.id, sentAt: m.sentAt, senderId: m.senderId })),
+    );
+    return {
+      ...page,
+      messages: page.messages.map((m: any) => ({ ...m, viewCount: counts[m.id] ?? 0 })),
+    };
+  }
+
+  /** Кто дочитал до этого сообщения. */
+  @Get('messages/:id/readers')
+  readers(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.readReceipts.readersOf(id, user.sub);
   }
 
   @Get('conversations/:id/media')
