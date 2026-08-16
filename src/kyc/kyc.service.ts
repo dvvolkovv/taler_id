@@ -9,6 +9,7 @@ import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import * as crypto from 'crypto';
+import { verifyWebhookSignature } from './webhook-signature.util';
 import { EmailService } from '../email/email.service';
 
 export interface StartKycResponse {
@@ -113,7 +114,11 @@ export class KycService {
     };
   }
 
-  async handleWebhook(body: Buffer, signature: string) {
+  async handleWebhook(
+    body: Buffer,
+    signature: string,
+    algorithmHeader?: string,
+  ) {
     // This endpoint is public and unauthenticated, so the signature is the only
     // thing standing between a stranger and "this applicant is verified".
     const webhookSecret = process.env.SUMSUB_WEBHOOK_SECRET || '';
@@ -127,21 +132,10 @@ export class KycService {
       throw new BadRequestException('Webhook signature verification unavailable');
     }
 
-    const expectedSignature = crypto
-      .createHmac('sha256', webhookSecret)
-      .update(body)
-      .digest('hex');
-
-    if (!this.signaturesMatch(signature, expectedSignature)) {
-      // Deliberately terse: the previous message logged `expected`, a valid
-      // HMAC for a body the sender fully controls, plus the secret's length.
-      // That made a public endpoint into a signing oracle for anyone who can
-      // read backend logs — and pm2/journalctl output here is shipped to a
-      // Telegram group and to automated diagnostics, so that audience is far
-      // wider than the set of people holding the secret.
-      this.logger.warn(
-        `KYC webhook signature mismatch (body_len=${body.length})`,
-      );
+    if (!verifyWebhookSignature(body, signature, algorithmHeader, webhookSecret)) {
+      // Намеренно кратко: подробности превращали публичную ручку в оракул для
+      // подбора подписи.
+      this.logger.warn('KYC webhook rejected: signature mismatch');
       throw new BadRequestException('Invalid webhook signature');
     }
 

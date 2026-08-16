@@ -54,6 +54,7 @@ export class KycController {
     const signature = (req.headers['x-payload-digest'] ||
       req.headers['x-app-access-sig']) as string;
     const body = req.rawBody || Buffer.from(JSON.stringify(req.body));
-    return this.kycService.handleWebhook(body, signature);
+    const alg = req.headers['x-payload-digest-alg'] as string | undefined;
+    return this.kycService.handleWebhook(body, signature, alg);
   }
 }

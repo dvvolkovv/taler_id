@@ -43,7 +43,18 @@ async function bootstrap() {
   });
 
   // Increase body size limit for large meeting transcripts (default ~100KB is too small)
-  app.use(json({ limit: '10mb' }));
+  // `verify` возвращает сырое тело, которое иначе теряется: свой json-парсер
+  // перебивает захват, включённый через rawBody: true, и подпись вебхука
+  // приходилось считать по пересобранному JSON — то есть не по тем байтам,
+  // которые подписывал отправитель.
+  app.use(
+    json({
+      limit: '10mb',
+      verify: (req: any, _res, buf: Buffer) => {
+        req.rawBody = buf;
+      },
+    }),
+  );
 
   // Socket.IO across multiple app nodes (DO load balancer): relay room joins
   // and emits through Redis pub/sub so `new_message` reaches a recipient whose
