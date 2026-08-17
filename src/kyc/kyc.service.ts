@@ -136,6 +136,7 @@ export class KycService {
       // Намеренно кратко: подробности превращали публичную ручку в оракул для
       // подбора подписи.
       this.logger.warn('KYC webhook rejected: signature mismatch');
+      this.logSignatureDiagnostics(body, signature);
       throw new BadRequestException('Invalid webhook signature');
     }
 
@@ -191,6 +192,26 @@ export class KycService {
     }
 
     return { received: true };
+  }
+
+  /**
+   * Разбор расхождения подписи. Ответ на один вопрос: у нас не тот секрет или
+   * они подписывают не то, что прислали?
+   *
+   * Включается только `KYC_WEBHOOK_DEBUG=true` и только на время разбора:
+   * ожидаемый дайджест в логе — это готовая подпись для конкретного тела, то
+   * есть подсказка любому, кто до логов дотянется.
+   */
+  private logSignatureDiagnostics(body: Buffer, signature: string) {
+    if (process.env.KYC_WEBHOOK_DEBUG !== 'true') return;
+    const secret = process.env.SUMSUB_WEBHOOK_SECRET || '';
+    const digest = (alg: string) =>
+      crypto.createHmac(alg, secret).update(body).digest('hex');
+    this.logger.warn(
+      `KYC webhook diag: получено=${signature} ожидалось sha1=${digest('sha1')} ` +
+        `sha256=${digest('sha256')} len=${body.length}\n` +
+        `тело: ${body.toString('utf8').slice(0, 800)}`,
+    );
   }
 
   /**
