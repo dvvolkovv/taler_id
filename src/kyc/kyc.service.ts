@@ -139,8 +139,18 @@ export class KycService {
       throw new BadRequestException('Invalid webhook signature');
     }
 
-    const payload = JSON.parse(body.toString());
-    const { applicantId, type, reviewResult } = payload;
+    // С этого места отвечаем 200 на всё, что прошло подпись. У welid любой
+    // не-2xx означает три повтора, а потом DLQ и ручной разбор — жаловаться на
+    // тело, которое повтор не исправит, значит потерять событие.
+    let payload: any;
+    try {
+      payload = JSON.parse(body.toString());
+    } catch {
+      this.logger.warn('KYC webhook: подписанное тело не разобралось как JSON');
+      return { received: true };
+    }
+
+    const { applicantId, type, reviewResult } = payload || {};
 
     if (!applicantId) return { received: true };
 
@@ -149,14 +159,30 @@ export class KycService {
     });
     if (!kyc) return { received: true };
 
-    if (type === 'applicantReviewed') {
-      if (reviewResult?.reviewAnswer === 'GREEN') {
+    const answer = reviewResult?.reviewAnswer;
+
+    // applicantOnMonitoringUpdate — то же решение, но принятое уже после
+    // одобрения: санкционное совпадение, истёкший документ. Без этой ветки
+    // попавший в списки остаётся VERIFIED навсегда.
+    if (type === 'applicantReviewed' || type === 'applicantOnMonitoringUpdate') {
+      if (answer === 'GREEN') {
         await this.markVerified(kyc.id, kyc.userId);
-      } else if (reviewResult?.reviewAnswer === 'RED') {
+      } else if (answer === 'RED') {
         const reason =
           reviewResult?.rejectLabels?.join(', ') || 'Verification failed';
-        await this.markRejected(kyc.id, kyc.userId, reason);
+        await this.markRejected(
+          kyc.id,
+          kyc.userId,
+          reason,
+          type === 'applicantOnMonitoringUpdate',
+        );
+      } else if (answer === 'YELLOW') {
+        await this.markOnHold(kyc.id);
       }
+    } else if (type === 'applicantOnHold') {
+      // Решение отозвано на ручную проверку. Раньше событие проваливалось мимо
+      // всех веток, и заявка продолжала показываться в прежнем статусе.
+      await this.markOnHold(kyc.id);
     } else if (type === 'applicantPending') {
       await this.prisma.kycRecord.update({
         where: { id: kyc.id },
@@ -165,6 +191,18 @@ export class KycService {
     }
 
     return { received: true };
+  }
+
+  /**
+   * YELLOW у welid — «нужен человек»: не одобрено и не отказано. Отдельного
+   * статуса под это в схеме нет, ближайший честный — PENDING: заявка снова в
+   * работе, доступ по ней не выдан.
+   */
+  private async markOnHold(kycId: string) {
+    await this.prisma.kycRecord.update({
+      where: { id: kycId },
+      data: { status: 'PENDING', rejectionReason: null },
+    });
   }
 
   /**
@@ -245,12 +283,38 @@ export class KycService {
       });
   }
 
-  private async markRejected(kycId: string, userId: string, reason: string) {
+  private async markRejected(
+    kycId: string,
+    userId: string,
+    reason: string,
+    /**
+     * Обычный отказ не отменяет уже выданное подтверждение: так опросник и
+     * запоздавший колбэк не могут откатить свежее GREEN. Мониторинг — другое
+     * дело: он приходит **после** одобрения и именно для того, чтобы его снять.
+     */
+    revokeVerified = false,
+  ) {
     const res = await this.prisma.kycRecord.updateMany({
-      where: { id: kycId, status: { notIn: ['REJECTED', 'VERIFIED'] } },
-      data: { status: 'REJECTED', rejectionReason: reason },
+      where: {
+        id: kycId,
+        status: { notIn: revokeVerified ? ['REJECTED'] : ['REJECTED', 'VERIFIED'] },
+      },
+      data: {
+        status: 'REJECTED',
+        rejectionReason: reason,
+        ...(revokeVerified ? { verifiedAt: null } : {}),
+      },
     });
     if (res.count === 0) return;
+
+    if (revokeVerified) {
+      // Отметка в блокчейне выдавалась при подтверждении и здесь не снимается —
+      // отзыв аттестации отдельная задача, но молча забывать об этом нельзя.
+      this.logger.warn(
+        `KYC ${kycId}: подтверждение отозвано мониторингом (${reason}); ` +
+          'аттестация в блокчейне осталась выданной',
+      );
+    }
 
     this.prisma.user
       .findUnique({ where: { id: userId } })
