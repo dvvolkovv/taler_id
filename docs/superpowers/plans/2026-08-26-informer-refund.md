@@ -855,7 +855,7 @@ export function formatNewOperatorWalletAlert(
 }
 ```
 
-- [ ] **Step 4: Прогнать тесты, убедиться что проходят**
+- [ ] **Step 5: Прогнать тесты, убедиться что проходят**
 
 Run: `npx jest src/informer-bot/informer.formatters.spec.ts`
 Expected: PASS, включая 8 новых тестов и все существующие.
@@ -1156,7 +1156,7 @@ Expected: FAIL — `client.refundOperatorWallet is not a function`.
   }
 ```
 
-- [ ] **Step 4: Прогнать тесты, убедиться что проходят**
+- [ ] **Step 5: Прогнать тесты, убедиться что проходят**
 
 Run: `npx jest src/informer-bot/informer.client.spec.ts`
 Expected: PASS, включая 8 новых тестов.
@@ -1630,7 +1630,7 @@ export function formatRefundInFlight(walletId: number): string {
 }
 ```
 
-- [ ] **Step 4: Прогнать тесты, убедиться что проходят**
+- [ ] **Step 5: Прогнать тесты, убедиться что проходят**
 
 Run: `npx jest src/informer-bot/informer.refund.formatters.spec.ts`
 Expected: PASS, 16 тестов.
@@ -2036,7 +2036,7 @@ export function advanceRefundFlow(
 }
 ```
 
-- [ ] **Step 4: Прогнать тесты, убедиться что проходят**
+- [ ] **Step 5: Прогнать тесты, убедиться что проходят**
 
 Run: `npx jest src/informer-bot/informer.refund-flow.spec.ts`
 Expected: PASS, 17 тестов.
@@ -2203,7 +2203,7 @@ import {
   }
 ```
 
-- [ ] **Step 4: Прогнать тесты, убедиться что проходят**
+- [ ] **Step 5: Прогнать тесты, убедиться что проходят**
 
 Run: `npx jest src/informer-bot/informer-bot.service.spec.ts`
 Expected: PASS. Тест «кнопка возврата перетирает pending» пока **падает** — возврата ещё нет. Временно пометить его `it.skip` с комментарием `// снимается в Task 9`, остальные должны быть зелёные.
@@ -2223,8 +2223,1950 @@ git commit -m "refactor(informer): retry на едином pending-состоя�
 ## Task 9: Подключение мастера возврата к сервису
 
 **Files:**
-- Modify: `src/informer-bot/informer-bot.service.ts`
+- Create: `src/informer-bot/informer.refund.service.ts`
+- Modify: `src/informer-bot/informer-bot.service.ts` (только диспетчеризация)
+- Modify: `src/informer-bot/informer-bot.module.ts` (регистрация провайдера)
 - Test: `src/informer-bot/informer-bot.service.spec.ts`
+
+> **Три поправки по итогам ревью Task 8 — прочитать до начала.**
+>
+> **1. Оркестрация возврата — отдельный инжектируемый класс, а не методы сервиса.** `informer-bot.service.ts` уже 697 строк и держит три слабо связанные обязанности (диспетчинг чата, настройки refill-алёртов, агрегация фиатных балансов). Добавить сюда ещё ~190 строк мастера — значит получить класс под 900 строк. Поэтому `startWizard` / `runStep` / обработка ошибок возврата живут в новом `InformerRefundService`, а `InformerBotService` остаётся диспетчером: он решает, кому отдать сообщение, и публикует то, что вернули.
+>
+> Граница простая: **`InformerRefundService` не публикует сообщения сам, а возвращает их списком.** Публикация остаётся у диспетчера, который уже умеет это делать через `publishBotMessage`. Так оркестратор тестируется без моков gateway и messenger.
+>
+> **2. Состояние грузится ОДИН раз за сообщение.** В черновике плана диспетчер звал `this.pending.load(userId)`, а затем проваливался в `parseActionWithPendingState`, которая грузила состояние заново — два обращения к Redis на каждое сообщение из 6 цифр. Поэтому `parseActionWithPendingState` меняет сигнатуру: принимает уже загруженное состояние параметром вместо того, чтобы читать его самой. Это заодно приводит её к тому же стилю, что и `advanceRefundFlow`, — состояние приходит снаружи, функция его не добывает.
+>
+> **3. Хелперы тестов поднять на уровень файла.** `makeMocks` / `makeService` объявлены внутри `describe('...retry wallet, flow B')`. Новый блок «мастер возврата в сервисе» написан в предположении, что они доступны — в буквальном виде он упадёт с `ReferenceError`. Поднять общий фабричный хелпер на уровень файла (prisma/messenger/gateway/redis/pending), а каждому `describe` оставить доопределение своих `client`/`rates` поверх него.
+>
+> **4. `RedisService` в `InformerBotService`.** После Task 8 сервис не обращается к `this.redis` ни разу — зависимость выглядит забытым хвостом миграции. В этой задаче она либо переезжает в `InformerRefundService` (блокировка по кошельку нужна именно там), либо остаётся с комментарием, зачем. Предпочтительно первое: убери `RedisService` из `InformerBotService`, если после правок он там действительно не нужен.
+
+- [ ] **Step 1: Написать падающий тест**
+
+Снять `it.skip` с теста «кнопка возврата перетирает pending» из Task 8 и дописать в конец `src/informer-bot/informer-bot.service.spec.ts`:
+
+```ts
+describe('мастер возврата в сервисе', () => {
+  const ITEM = {
+    wallet_id: 1611,
+    created_at: '2026-08-24T17:02:11Z',
+    withdraw_address: '0xcust',
+    withdraw_network: 'TRON',
+    withdraw_token: 'usdt',
+    withdraw_amount: '50',
+  };
+
+  function mocksWithWallet() {
+    const m = makeMocks();
+    m.client.getOperatorRequiredList = jest.fn(async () => ({
+      items: [ITEM],
+      total: 1,
+      page: 1,
+      per_page: 50,
+    }));
+    (m.client as any).refundOperatorWallet = jest.fn(async () => ({
+      wallet_id: 1611,
+      status: 'ok',
+    }));
+    (m.redis as any).setNxEx = jest.fn(async (k: string) => {
+      if (m.redis.store.has(k)) return false;
+      m.redis.store.set(k, '1');
+      return true;
+    });
+    return m;
+  }
+
+  async function walkToTotp(svc: any, m: any) {
+    await svc.handleUserMessage('u1', 'c1', '💸 Вернуть #1611');
+    await svc.handleUserMessage('u1', 'c1', '👤 Вернуть плательщику #1611');
+    await svc.handleUserMessage('u1', 'c1', '✅ Подтвердить возврат #1611');
+  }
+
+  it('проходит мастер целиком и зовёт API', async () => {
+    const m = mocksWithWallet();
+    const svc = makeService(m);
+
+    await walkToTotp(svc, m);
+    await svc.handleUserMessage('u1', 'c1', '123456');
+
+    expect((m.client as any).refundOperatorWallet).toHaveBeenCalledWith(
+      1611,
+      { refundToPayer: true },
+      '123456',
+      false,
+    );
+    expect(m.published.join('')).toContain('Возврат выполнен');
+  });
+
+  it('ветка с адресом отправляет refundAddress', async () => {
+    const m = mocksWithWallet();
+    const svc = makeService(m);
+
+    await svc.handleUserMessage('u1', 'c1', '💸 Вернуть #1611');
+    await svc.handleUserMessage('u1', 'c1', '📮 Указать адрес #1611');
+    await svc.handleUserMessage('u1', 'c1', '0xB1c4Ae4F0f8f');
+    await svc.handleUserMessage('u1', 'c1', '✅ Подтвердить возврат #1611');
+    await svc.handleUserMessage('u1', 'c1', '123456');
+
+    expect((m.client as any).refundOperatorWallet).toHaveBeenCalledWith(
+      1611,
+      { refundAddress: '0xB1c4Ae4F0f8f' },
+      '123456',
+      false,
+    );
+  });
+
+  it('502 second payout переводит в gate и НЕ повторяет сам', async () => {
+    const m = mocksWithWallet();
+    (m.client as any).refundOperatorWallet = jest.fn(async () => {
+      throw new InformerUnavailableError(
+        502,
+        JSON.stringify({ message: 'refund would be a second payout' }),
+      );
+    });
+    const svc = makeService(m);
+
+    await walkToTotp(svc, m);
+    await svc.handleUserMessage('u1', 'c1', '123456');
+
+    expect((m.client as any).refundOperatorWallet).toHaveBeenCalledTimes(1);
+    const state = JSON.parse(m.redis.store.get('informer:pending_op:u1')!);
+    expect(state.step).toBe('gate');
+    expect(m.published.join('')).toContain('Сверил, выплаты не было');
+  });
+
+  it('снятие гейта отправляет withdrawal_verified_absent=true', async () => {
+    const m = mocksWithWallet();
+    let call = 0;
+    (m.client as any).refundOperatorWallet = jest.fn(async () => {
+      if (++call === 1) {
+        throw new InformerUnavailableError(
+          502,
+          JSON.stringify({ message: 'refund would be a second payout' }),
+        );
+      }
+      return { wallet_id: 1611, status: 'ok' };
+    });
+    const svc = makeService(m);
+
+    await walkToTotp(svc, m);
+    await svc.handleUserMessage('u1', 'c1', '123456');
+    await svc.handleUserMessage('u1', 'c1', '✅ Сверил, выплаты не было #1611');
+    await svc.handleUserMessage('u1', 'c1', '654321');
+
+    expect((m.client as any).refundOperatorWallet).toHaveBeenLastCalledWith(
+      1611,
+      { refundToPayer: true },
+      '654321',
+      true,
+    );
+  });
+
+  it('403 пересоздаёт totp-шаг возврата, а не сбрасывает мастер', async () => {
+    const m = mocksWithWallet();
+    (m.client as any).refundOperatorWallet = jest.fn(async () => {
+      throw new InformerTotpError('bad code');
+    });
+    const svc = makeService(m);
+
+    await walkToTotp(svc, m);
+    await svc.handleUserMessage('u1', 'c1', '123456');
+
+    const state = JSON.parse(m.redis.store.get('informer:pending_op:u1')!);
+    expect(state).toMatchObject({ step: 'totp', verifiedAbsent: false });
+    expect(m.published.join('')).toContain('Код не принят');
+  });
+
+  it('таймаут не предлагает повтор', async () => {
+    const m = mocksWithWallet();
+    (m.client as any).refundOperatorWallet = jest.fn(async () => {
+      throw new InformerTimeoutError();
+    });
+    const svc = makeService(m);
+
+    await walkToTotp(svc, m);
+    await svc.handleUserMessage('u1', 'c1', '123456');
+
+    const out = m.published.join('');
+    expect(out).toContain('могла');
+    expect(out).not.toContain('[ACTION:💸 Вернуть #1611]');
+  });
+
+  it('блокировка по кошельку отклоняет параллельный возврат', async () => {
+    const m = mocksWithWallet();
+    m.redis.store.set('informer:refund_inflight:1611', '1');
+    const svc = makeService(m);
+
+    await walkToTotp(svc, m);
+    await svc.handleUserMessage('u1', 'c1', '123456');
+
+    expect((m.client as any).refundOperatorWallet).not.toHaveBeenCalled();
+    expect(m.published.join('')).toContain('уже идёт возврат');
+  });
+
+  it('блокировка снимается после успеха', async () => {
+    const m = mocksWithWallet();
+    const svc = makeService(m);
+
+    await walkToTotp(svc, m);
+    await svc.handleUserMessage('u1', 'c1', '123456');
+
+    expect(m.redis.store.has('informer:refund_inflight:1611')).toBe(false);
+  });
+
+  it('блокировка снимается после ошибки', async () => {
+    const m = mocksWithWallet();
+    (m.client as any).refundOperatorWallet = jest.fn(async () => {
+      throw new InformerTimeoutError();
+    });
+    const svc = makeService(m);
+
+    await walkToTotp(svc, m);
+    await svc.handleUserMessage('u1', 'c1', '123456');
+
+    expect(m.redis.store.has('informer:refund_inflight:1611')).toBe(false);
+  });
+
+  it('отмена очищает состояние без вызова API', async () => {
+    const m = mocksWithWallet();
+    const svc = makeService(m);
+
+    await svc.handleUserMessage('u1', 'c1', '💸 Вернуть #1611');
+    await svc.handleUserMessage('u1', 'c1', '❌ Отмена возврата');
+
+    expect(m.redis.store.has('informer:pending_op:u1')).toBe(false);
+    expect((m.client as any).refundOperatorWallet).not.toHaveBeenCalled();
+  });
+
+  it('метка навигационной кнопки на шаге адреса не становится адресом', async () => {
+    const m = mocksWithWallet();
+    const svc = makeService(m);
+
+    await svc.handleUserMessage('u1', 'c1', '💸 Вернуть #1611');
+    await svc.handleUserMessage('u1', 'c1', '📮 Указать адрес #1611');
+    // Оператор по инерции жмёт навигацию из более раннего сообщения.
+    await svc.handleUserMessage('u1', 'c1', '📋 Кошельки оператора');
+
+    // Мастер сброшен, «адрес» не принят, показан список кошельков.
+    expect(m.redis.store.has('informer:pending_op:u1')).toBe(false);
+    expect((m.client as any).refundOperatorWallet).not.toHaveBeenCalled();
+    expect(m.published.join('')).toContain('Кошельки, требующие оператора');
+  });
+
+  it('двойное нажатие кнопки возврата не дёргает список дважды', async () => {
+    const m = mocksWithWallet();
+    const svc = makeService(m);
+
+    await svc.handleUserMessage('u1', 'c1', '💸 Вернуть #1611');
+    await svc.handleUserMessage('u1', 'c1', '💸 Вернуть #1611');
+
+    expect(m.client.getOperatorRequiredList).toHaveBeenCalledTimes(1);
+  });
+
+  it('кнопка возврата по неизвестному кошельку объясняет, а не падает', async () => {
+    const m = mocksWithWallet();
+    const svc = makeService(m);
+
+    await svc.handleUserMessage('u1', 'c1', '💸 Вернуть #9999');
+
+    expect(m.published.join('')).toContain('9999');
+    expect(m.redis.store.has('informer:pending_op:u1')).toBe(false);
+  });
+});
+```
+
+Добавить в шапку файла импорты ошибок, если их там нет:
+
+```ts
+import {
+  InformerTotpError,
+  InformerTimeoutError,
+  InformerUnavailableError,
+} from './informer.types';
+```
+
+- [ ] **Step 2: Прогнать тесты, убедиться что падают**
+
+Run: `npx jest src/informer-bot/informer-bot.service.spec.ts -t 'мастер возврата в сервисе'`
+Expected: FAIL — бот отвечает подсказкой «понимаю только кнопки», состояние не создаётся.
+
+- [ ] **Step 3: Создать `informer.refund.service.ts`**
+
+Оркестратор мастера. Держит вызов API, блокировку по кошельку и разбор ошибок; **сообщения возвращает, а не публикует**.
+
+```ts
+import { Injectable, Logger } from '@nestjs/common';
+import { RedisService } from '../redis/redis.service';
+import { InformerClient } from './informer.client';
+import { PendingOp, PendingStateStore, PENDING_OP_TTL_SEC } from './informer.pending-state';
+import { advanceRefundFlow } from './informer.refund-flow';
+import { classifyRefundFailure } from './informer.refund-errors';
+import {
+  formatRefundFailure,
+  formatRefundGate,
+  formatRefundInFlight,
+  formatRefundMethodChoice,
+  formatRefundResult,
+  formatRefundTimeout,
+  formatRefundTotpRejected,
+} from './informer.refund.formatters';
+import {
+  InformerTotpError,
+  InformerTimeoutError,
+  InformerUnavailableError,
+  RefundTarget,
+  WalletCtx,
+  upstreamMessageFrom,
+} from './informer.types';
+
+// Refund holds an on-chain send open for up to 45s. The lock outlives that
+// with margin so a process death between request and release cannot wedge a
+// wallet permanently.
+const REFUND_LOCK_TTL_SEC = 120;
+const refundLockKey = (walletId: number) =>
+  `informer:refund_inflight:${walletId}`;
+
+/**
+ * Orchestrates the refund wizard: wallet lookup, the pure state machine,
+ * the API call, the wallet-level lock and error handling.
+ *
+ * Returns messages instead of publishing them — publishing stays with the
+ * dispatcher that already owns it, which keeps this class testable without
+ * gateway or messenger mocks.
+ */
+@Injectable()
+export class InformerRefundService {
+  private readonly logger = new Logger(InformerRefundService.name);
+
+  constructor(
+    private readonly client: InformerClient,
+    private readonly pending: PendingStateStore,
+    private readonly redis: RedisService,
+  ) {}
+
+  /**
+   * Entry point of the wizard. Wallet facts are captured now and carried
+   * through every step, so the confirmation card describes the actual money
+   * instead of a bare id.
+   */
+  async startWizard(userId: string, walletId: number): Promise<string[]> {
+    let ctx: WalletCtx | null = null;
+    const list = await this.client.getOperatorRequiredList(1, 50);
+    const item = list.items.find((i) => i.wallet_id === walletId);
+    if (item) {
+      ctx = {
+        network: item.withdraw_network,
+        token: item.withdraw_token,
+        amount: item.withdraw_amount,
+        address: item.withdraw_address,
+      };
+    }
+
+    if (!ctx) {
+      return [
+        `⚠️ Кошелька **#${walletId}** нет в текущем списке — возможно, его уже ` +
+          'обработали. Обнови список и попробуй снова.\n\n[ACTION:📋 Кошельки оператора]',
+      ];
+    }
+
+    await this.pending.save(userId, {
+      kind: 'refund',
+      step: 'method',
+      walletId,
+      ctx,
+    });
+    return [formatRefundMethodChoice(walletId, ctx)];
+  }
+
+  async runStep(
+    userId: string,
+    state: PendingOp & { kind: 'refund' },
+    content: string,
+  ): Promise<string[]> {
+    const result = advanceRefundFlow(state, content);
+
+    if (result.next) {
+      await this.pending.save(userId, result.next);
+    } else {
+      await this.pending.clear(userId);
+    }
+    const messages = [...result.messages];
+    if (!result.call) return messages;
+
+    const { walletId, ctx, target, totpCode, verifiedAbsent } = result.call;
+
+    // One refund in flight per wallet. Pending state is per-operator, but
+    // several operators hold informerAccess, and the platform's own guard is
+    // a check-before-act, not a uniqueness guarantee.
+    const locked = await this.redis.setNxEx(
+      refundLockKey(walletId),
+      REFUND_LOCK_TTL_SEC,
+      userId,
+    );
+    if (!locked) {
+      messages.push(formatRefundInFlight(walletId));
+      return messages;
+    }
+
+    try {
+      const refund = await this.client.refundOperatorWallet(
+        walletId,
+        target,
+        totpCode,
+        verifiedAbsent,
+      );
+      messages.push(formatRefundResult(refund, target));
+    } catch (e) {
+      messages.push(
+        ...(await this.handleError(
+          userId,
+          { walletId, ctx, target, verifiedAbsent },
+          e,
+        )),
+      );
+    } finally {
+      await this.redis.del(refundLockKey(walletId));
+    }
+    return messages;
+  }
+
+  /**
+   * Refund errors are handled separately from every other informer action:
+   * a refund is irreversible, so nothing here ever retries on its own, and
+   * a timeout is explicitly NOT reported as "nothing was sent".
+   */
+  private async handleError(
+    userId: string,
+    op: {
+      walletId: number;
+      ctx: WalletCtx;
+      target: RefundTarget;
+      verifiedAbsent: boolean;
+    },
+    e: unknown,
+  ): Promise<string[]> {
+    if (e instanceof InformerTotpError) {
+      // Re-arm the same step so a fresh code can be submitted without
+      // walking the wizard again. verifiedAbsent is preserved: the operator
+      // already made that assertion and shouldn't repeat it.
+      await this.pending.save(userId, {
+        kind: 'refund',
+        step: 'totp',
+        walletId: op.walletId,
+        ctx: op.ctx,
+        target: op.target,
+        verifiedAbsent: op.verifiedAbsent,
+      });
+      return [formatRefundTotpRejected(op.walletId, PENDING_OP_TTL_SEC)];
+    }
+
+    if (e instanceof InformerTimeoutError) {
+      return [formatRefundTimeout(op.walletId)];
+    }
+
+    if (e instanceof InformerUnavailableError) {
+      const failure = classifyRefundFailure(
+        upstreamMessageFrom(e.upstreamBody, 500),
+      );
+      if (failure.kind === 'second_payout') {
+        await this.pending.save(userId, {
+          kind: 'refund',
+          step: 'gate',
+          walletId: op.walletId,
+          ctx: op.ctx,
+          target: op.target,
+          upstreamMessage: failure.message,
+        });
+        return [formatRefundGate(op.walletId, op.ctx, failure.message)];
+      }
+      return [formatRefundFailure(op.walletId, failure)];
+    }
+
+    this.logger.error(
+      `refund failed for #${op.walletId}: ${(e as Error)?.message || e}`,
+    );
+    throw e; // unknown error — let the dispatcher render its generic message
+  }
+}
+```
+
+Зарегистрировать `InformerRefundService` в `providers` в `informer-bot.module.ts`, рядом с `PendingStateStore`.
+
+- [ ] **Step 4: Подключить диспетчеризацию в `informer-bot.service.ts`**
+
+1. Импорты:
+
+```ts
+import { parseRefundEntry } from './informer.refund-flow';
+import { InformerRefundService } from './informer.refund.service';
+```
+
+2. Добавить `InformerRefundService` параметром конструктора. Если после правок `RedisService` в этом классе больше не используется — убрать его из конструктора (блокировка переехала в оркестратор). Проверить grep-ом по файлу, прежде чем убирать.
+
+3. В `handleUserMessage`, после блока `try { await this.assertAccess(userId) } catch { … return; }` и **до** `const parsed = await this.parseActionWithPendingState(...)`:
+
+```ts
+    // Anti-flood keyed by wallet, mirroring the retry button: a double-tap
+    // must not fire two list fetches, but refunds on two different wallets
+    // in quick succession stay allowed.
+    const refundEntry = parseRefundEntry(content);
+    if (refundEntry != null) {
+      const flKey = `${userId}:REFUND_ENTRY:${refundEntry}`;
+      if (Date.now() - (this.lastAction.get(flKey) ?? 0) < ANTI_FLOOD_MS) {
+        this.logger.warn(`anti-flood throttle for ${flKey}`);
+        return;
+      }
+      this.lastAction.set(flKey, Date.now());
+      try {
+        for (const m of await this.refund.startWizard(userId, refundEntry)) {
+          await this.publishBotMessage(userId, conversationId, m);
+        }
+      } catch (e) {
+        await this.publishBotMessage(userId, conversationId, this.errorToMessage(e));
+      }
+      return;
+    }
+
+    // Loaded ONCE per message and passed down — both the refund dispatcher
+    // and the retry parser need it, and reading Redis twice for the same
+    // message would be pure waste.
+    const pending = await this.pending.load(userId);
+
+    if (pending?.kind === 'refund') {
+      // A navigation label tapped from an older message (e.g. «📋 Кошельки
+      // оператора») arrives as plain text like any other input. On the
+      // `address` step the wizard would take it for a refund address, burn
+      // the TOTP step and confuse the operator. The wizard cannot guard
+      // against this itself without knowing every button the bot renders —
+      // so a known static label always wins over wizard input, and clearing
+      // the pending state is the honest reading of "the operator navigated
+      // away".
+      if (this.parseAction(content) === null) {
+        try {
+          for (const m of await this.refund.runStep(userId, pending, content)) {
+            await this.publishBotMessage(userId, conversationId, m);
+          }
+        } catch (e) {
+          await this.publishBotMessage(userId, conversationId, this.errorToMessage(e));
+        }
+        return;
+      }
+      await this.pending.clear(userId);
+    }
+```
+
+4. Изменить сигнатуру `parseActionWithPendingState` — состояние приходит параметром, метод его больше не грузит:
+
+```ts
+  /**
+   * A bare 6-digit message is promoted to SUBMIT_TOTP only when the pending
+   * operation is a retry — a refund TOTP must never start a retry instead.
+   * State is passed in rather than loaded here: the caller already read it
+   * once for this message.
+   */
+  parseActionWithPendingState(
+    pending: PendingOp | null,
+    content: string,
+  ): ParsedAction | null {
+    const trimmed = content.trim();
+    if (/^\d{6}$/.test(trimmed) && pending?.kind === 'retry') {
+      return {
+        code: 'SUBMIT_TOTP',
+        walletId: pending.walletId,
+        totpCode: trimmed,
+      };
+    }
+    return this.parseAction(content);
+  }
+```
+
+и поправить место вызова: `const parsed = this.parseActionWithPendingState(pending, content);` (уже без `await`).
+
+⚠️ Существующие тесты зовут `parseActionWithPendingState(userId, content)` — их надо обновить под новую сигнатуру. Проверь grep-ом.
+
+- [ ] **Step 5: Прогнать тесты, убедиться что проходят**
+
+Run: `npx jest src/informer-bot/informer.formatters.spec.ts`
+Expected: PASS, включая 8 новых тестов и все существующие.
+
+Run: `npx jest src/informer-bot`
+Expected: PASS. Если упал `informer.watcher.spec.ts` из-за изменённого алёрта — проверить, ассертит ли он полное совпадение строки; поправить ожидание в тесте вотчера на `toContain`, поведение при отсутствии причины не изменилось.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/informer-bot/informer.formatters.ts src/informer-bot/informer.formatters.spec.ts src/informer-bot/informer.watcher.spec.ts
+git commit -m "feat(informer): причина отказа в карточке кошелька и сводка в шапке"
+```
+
+---
+
+## Task 5: Клиент — метод возврата
+
+**Files:**
+- Modify: `src/informer-bot/informer.client.ts:85-143`
+- Test: `src/informer-bot/informer.client.spec.ts`
+
+- [ ] **Step 1: Написать падающий тест**
+
+Дописать в конец `src/informer-bot/informer.client.spec.ts`:
+
+```ts
+describe('InformerClient.refundOperatorWallet', () => {
+  let originalFetch: typeof global.fetch;
+  beforeEach(() => {
+    originalFetch = global.fetch;
+  });
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  function makeClient() {
+    return new InformerClient({
+      baseUrl: 'https://example.test',
+      key: 'k',
+      secret: 's',
+    });
+  }
+
+  function captureBody(): { body: () => any; url: () => string } {
+    let captured: any;
+    let capturedUrl = '';
+    global.fetch = (async (url: any, init: any) => {
+      capturedUrl = String(url);
+      captured = JSON.parse(init.body);
+      return {
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            resultCode: 'ERCD0000',
+            data: { wallet_id: 1611, status: 'ok' },
+          }),
+      };
+    }) as any;
+    return { body: () => captured, url: () => capturedUrl };
+  }
+
+  it('шлёт refund_address и НЕ шлёт refund_to_payer', async () => {
+    const cap = captureBody();
+    await makeClient().refundOperatorWallet(
+      1611,
+      { refundAddress: '0xB1c4' },
+      '123456',
+    );
+    expect(cap.body()).toEqual({
+      wallet_id: 1611,
+      refund_address: '0xB1c4',
+      totp_code: '123456',
+    });
+    expect(cap.body()).not.toHaveProperty('refund_to_payer');
+  });
+
+  it('шлёт refund_to_payer и НЕ шлёт refund_address', async () => {
+    const cap = captureBody();
+    await makeClient().refundOperatorWallet(
+      1611,
+      { refundToPayer: true },
+      '123456',
+    );
+    expect(cap.body()).toEqual({
+      wallet_id: 1611,
+      refund_to_payer: true,
+      totp_code: '123456',
+    });
+    expect(cap.body()).not.toHaveProperty('refund_address');
+  });
+
+  it('не кладёт withdrawal_verified_absent когда флаг false', async () => {
+    const cap = captureBody();
+    await makeClient().refundOperatorWallet(
+      1611,
+      { refundAddress: '0xB1c4' },
+      '123456',
+      false,
+    );
+    expect(cap.body()).not.toHaveProperty('withdrawal_verified_absent');
+  });
+
+  it('кладёт withdrawal_verified_absent только когда флаг true', async () => {
+    const cap = captureBody();
+    await makeClient().refundOperatorWallet(
+      1611,
+      { refundAddress: '0xB1c4' },
+      '123456',
+      true,
+    );
+    expect(cap.body().withdrawal_verified_absent).toBe(true);
+  });
+
+  it('бьёт в правильный путь', async () => {
+    const cap = captureBody();
+    await makeClient().refundOperatorWallet(
+      1611,
+      { refundToPayer: true },
+      '123456',
+    );
+    expect(cap.url()).toBe(
+      'https://example.test/informer/v1/operator-required-wallets/1611/refund',
+    );
+  });
+
+  it('подписывает ровно те байты, что уходят в теле', async () => {
+    let sentBody = '';
+    let sentSig = '';
+    let sentTs = '';
+    global.fetch = (async (_url: any, init: any) => {
+      sentBody = init.body;
+      sentSig = init.headers['X-Informer-Signature'];
+      sentTs = init.headers['X-Informer-Timestamp'];
+      return {
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            resultCode: 'ERCD0000',
+            data: { wallet_id: 1611, status: 'ok' },
+          }),
+      };
+    }) as any;
+
+    const client = makeClient();
+    await client.refundOperatorWallet(1611, { refundToPayer: true }, '123456');
+
+    const expected = client.buildSignature(
+      'POST',
+      '/informer/v1/operator-required-wallets/1611/refund',
+      sentTs,
+      sentBody,
+    );
+    expect(sentSig).toBe(expected);
+  });
+
+  it('возвращает data из конверта', async () => {
+    captureBody();
+    const r = await makeClient().refundOperatorWallet(
+      1611,
+      { refundToPayer: true },
+      '123456',
+    );
+    expect(r).toEqual({ wallet_id: 1611, status: 'ok' });
+  });
+
+  it('использует таймаут 45 секунд, а не общие 25', async () => {
+    const client = makeClient();
+    const spy = jest.spyOn(global, 'setTimeout');
+    captureBody();
+
+    await client.refundOperatorWallet(1611, { refundToPayer: true }, '123456');
+
+    const delays = spy.mock.calls.map((c) => c[1]);
+    expect(delays).toContain(45000);
+    spy.mockRestore();
+  });
+});
+```
+
+- [ ] **Step 2: Прогнать тест, убедиться что падает**
+
+Run: `npx jest src/informer-bot/informer.client.spec.ts -t 'refundOperatorWallet'`
+Expected: FAIL — `client.refundOperatorWallet is not a function`.
+
+- [ ] **Step 3: Реализовать**
+
+В `src/informer-bot/informer.client.ts`:
+
+1. Добавить импорты `OperatorWalletRefundResult` и `RefundTarget` в существующий блок импорта из `./informer.types`.
+
+2. Заменить сигнатуры `signedRequest` / `signedPost` (строки 85–143) на:
+
+```ts
+  private async signedRequest<T>(
+    method: 'GET' | 'POST',
+    path: string,
+    body: string,
+    timeoutMsOverride?: number,
+  ): Promise<T> {
+    const url = new URL(path, this.cfg.baseUrl);
+    const requestUri = url.pathname + url.search;
+    const headers = this.buildAuthHeaders(method, requestUri, body);
+    if (method === 'POST') headers['Content-Type'] = 'application/json';
+
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(),
+      timeoutMsOverride ?? this.cfg.timeoutMs ?? 25000,
+    );
+
+    let resp: Response;
+    try {
+      resp = await fetch(url.toString(), {
+        method,
+        headers,
+        body: method === 'POST' ? body : undefined,
+        signal: controller.signal,
+      });
+    } catch (e: any) {
+      if (e?.name === 'AbortError') throw new InformerTimeoutError();
+      throw new InformerUnavailableError(0, String(e?.message ?? e));
+    } finally {
+      clearTimeout(timer);
+    }
+
+    const text = await resp.text();
+    if (resp.status === 200) {
+      let json: unknown;
+      try {
+        json = JSON.parse(text);
+      } catch {
+        throw new InformerUnavailableError(
+          200,
+          `non-json: ${text.slice(0, 200)}`,
+        );
+      }
+      const envelope = assertEnvelope<T>(json);
+      return envelope.data;
+    }
+    throw this.mapStatusToError(resp.status, text);
+  }
+
+  private signedGet<T>(path: string): Promise<T> {
+    return this.signedRequest<T>('GET', path, '');
+  }
+
+  private signedPost<T>(
+    path: string,
+    payload: unknown,
+    timeoutMsOverride?: number,
+  ): Promise<T> {
+    // Serialize once and pass the exact bytes to both sha256 (in signing
+    // string) and fetch body. Any whitespace / key-order drift between the
+    // two would yield 401 (signature mismatch).
+    const body = JSON.stringify(payload);
+    return this.signedRequest<T>('POST', path, body, timeoutMsOverride);
+  }
+```
+
+3. Добавить в конец класса, после `retryOperatorWallet`:
+
+```ts
+  /**
+   * Refund is a synchronous on-chain send with a 30s budget on the platform
+   * side. A client that times out earlier cannot tell whether the money
+   * left — so we wait longer than the platform does, and never retry
+   * automatically.
+   */
+  private static readonly REFUND_TIMEOUT_MS = 45000;
+
+  refundOperatorWallet(
+    walletId: number,
+    target: RefundTarget,
+    totpCode: string,
+    verifiedAbsent = false,
+  ): Promise<OperatorWalletRefundResult> {
+    // Exactly one of refund_address / refund_to_payer. Sending both is a
+    // guaranteed 400 ("mutually exclusive: send exactly one").
+    const targetField =
+      'refundAddress' in target
+        ? { refund_address: target.refundAddress }
+        : { refund_to_payer: true as const };
+
+    return this.signedPost<OperatorWalletRefundResult>(
+      `/informer/v1/operator-required-wallets/${walletId}/refund`,
+      {
+        wallet_id: walletId,
+        ...targetField,
+        totp_code: totpCode,
+        // Only ever sent when true — the guide asks not to send it by
+        // default, and its presence is logged upstream as a deliberate
+        // operator decision.
+        ...(verifiedAbsent ? { withdrawal_verified_absent: true } : {}),
+      },
+      InformerClient.REFUND_TIMEOUT_MS,
+    );
+  }
+```
+
+- [ ] **Step 5: Прогнать тесты, убедиться что проходят**
+
+Run: `npx jest src/informer-bot/informer.client.spec.ts`
+Expected: PASS, включая 8 новых тестов.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/informer-bot/informer.client.ts src/informer-bot/informer.client.spec.ts
+git commit -m "feat(informer): метод возврата средств с таймаутом 45с"
+```
+
+---
+
+## Task 6: Форматтеры мастера возврата
+
+**Files:**
+- Create: `src/informer-bot/informer.refund.formatters.ts`
+- Test: `src/informer-bot/informer.refund.formatters.spec.ts`
+- Modify: `src/informer-bot/informer.formatters.ts` (только экспорт `OPERATOR_BUTTONS`, если он ещё не экспортирован)
+
+> **Почему отдельный файл, а не дописать в существующий.** `informer.formatters.ts` уже ~570 строк, и эта задача добавляет ~15 функций. Ревью качества Task 4 указало на это как на последний дешёвый момент разделить. Форматтеры мастера возврата — самостоятельный кластер с одной темой, поэтому они уезжают в свой файл, а `informer.formatters.ts` остаётся как есть, без move-рефакторинга работающего кода.
+>
+> Из существующего файла понадобится `OPERATOR_BUTTONS` — он уже экспортирован (`export const OPERATOR_BUTTONS`), просто импортируй. Хелпер `formatTimestamp` там приватный; в формате мастера время не печатается, так что он не нужен — если вдруг понадобится, экспортируй его отдельным решением, а не по умолчанию.
+
+- [ ] **Step 1: Написать падающий тест**
+
+Создать `src/informer-bot/informer.refund.formatters.spec.ts` со следующим содержимым (импорты в нём уже указаны — файл самодостаточный):
+
+```ts
+import {
+  formatRefundMethodChoice,
+  formatRefundAddressPrompt,
+  formatRefundConfirm,
+  formatRefundAwaitingTotp,
+  formatRefundCancelled,
+  formatRefundResult,
+  formatRefundGate,
+  formatRefundFailure,
+  formatRefundTimeout,
+  formatRefundInFlight,
+} from './informer.refund.formatters';
+import { classifyRefundFailure } from './informer.refund-errors';
+
+describe('мастер возврата — карточки', () => {
+  const CTX = {
+    network: 'BSC',
+    token: 'usdt',
+    amount: '50',
+    address: '0xcust',
+  };
+  const TRON_CTX = { ...CTX, network: 'TRON' };
+
+  it('на BSC предлагает только адрес и объясняет почему', () => {
+    const md = formatRefundMethodChoice(1611, CTX);
+    expect(md).toContain('[ACTION:📮 Указать адрес #1611]');
+    expect(md).not.toContain('плательщику #1611]');
+    expect(md).toContain('плательщик не определяется');
+  });
+
+  it('на TRON предлагает оба способа', () => {
+    const md = formatRefundMethodChoice(1611, TRON_CTX);
+    expect(md).toContain('[ACTION:📮 Указать адрес #1611]');
+    expect(md).toContain('[ACTION:👤 Вернуть плательщику #1611]');
+  });
+
+  it('на незнакомой сети предлагает оба — fail-open', () => {
+    const md = formatRefundMethodChoice(1611, { ...CTX, network: 'SOLANA' });
+    expect(md).toContain('[ACTION:👤 Вернуть плательщику #1611]');
+  });
+
+  it('в каждой карточке мастера есть отмена', () => {
+    expect(formatRefundMethodChoice(1611, CTX)).toContain('[ACTION:❌ Отмена возврата]');
+    expect(formatRefundAddressPrompt(1611, CTX)).toContain('[ACTION:❌ Отмена возврата]');
+    expect(formatRefundAwaitingTotp(1611, 60)).toContain('[ACTION:❌ Отмена возврата]');
+  });
+
+  it('подтверждение адреса показывает сумму, сеть и адрес назначения', () => {
+    const md = formatRefundConfirm(1611, CTX, { refundAddress: '0xB1c4' });
+    expect(md).toContain('50');
+    expect(md).toContain('BSC');
+    expect(md).toContain('0xB1c4');
+    expect(md).toContain('необратим');
+    expect(md).toContain('[ACTION:✅ Подтвердить возврат #1611]');
+  });
+
+  it('подтверждение возврата плательщику предупреждает про биржу и невидимый адрес', () => {
+    const md = formatRefundConfirm(1611, TRON_CTX, { refundToPayer: true });
+    expect(md).toContain('биржи');
+    expect(md).toContain('показать');
+    expect(md).toContain('необратим');
+  });
+
+  it('успешный возврат плательщику честно говорит, что адрес неизвестен', () => {
+    const md = formatRefundResult({ wallet_id: 1611, status: 'ok' }, {
+      refundToPayer: true,
+    });
+    expect(md).toContain('#1611');
+    expect(md).toContain('адрес получателя платформа не сообщает');
+  });
+
+  it('успешный возврат на адрес показывает адрес', () => {
+    const md = formatRefundResult({ wallet_id: 1611, status: 'ok' }, {
+      refundAddress: '0xB1c4',
+    });
+    expect(md).toContain('0xB1c4');
+  });
+
+  it('карточка гейта перечисляет проверки и не содержит слова «повторить»', () => {
+    const md = formatRefundGate(1611, CTX, 'refund would be a second payout');
+    expect(md).toContain('[ACTION:✅ Сверил, выплаты не было #1611]');
+    expect(md.toLowerCase()).not.toContain('повторить');
+    expect(md).toContain('0xcust');
+    expect(md).toContain('BSC');
+    expect(md).toContain('логируется');
+  });
+
+  it('нехватка средств на hot даёт кнопку повтора и ведёт к балансам', () => {
+    const f = classifyRefundFailure('hot wallet holds 3 but the refund needs 50');
+    const md = formatRefundFailure(1611, f);
+    expect(md).toContain('[ACTION:💸 Вернуть #1611]');
+    expect(md).toContain('[ACTION:💰 Балансы mini-acquiring]');
+  });
+
+  it('«уже существует» не даёт кнопки повтора и объясняет, что первая попытка прошла', () => {
+    const f = classifyRefundFailure('refund operation already exists for this wallet');
+    const md = formatRefundFailure(1611, f);
+    expect(md).not.toContain('[ACTION:💸 Вернуть');
+    expect(md).toContain('первая попытка');
+  });
+
+  it('отсутствие hot-wallet пути — тупик без повтора', () => {
+    const f = classifyRefundFailure('has no hot wallet payout path; refund manually');
+    const md = formatRefundFailure(1611, f);
+    expect(md).not.toContain('[ACTION:💸 Вернуть');
+  });
+
+  it('недоступный узел даёт повтор', () => {
+    const f = classifyRefundFailure('refusing to send blind; retry once the node responds');
+    const md = formatRefundFailure(1611, f);
+    expect(md).toContain('[ACTION:💸 Вернуть #1611]');
+  });
+
+  it('незнакомый текст помечается транспортом, но печатается целиком', () => {
+    const f = classifyRefundFailure('<html>502 Bad Gateway</html>');
+    const md = formatRefundFailure(1611, f);
+    expect(md).toContain('502 Bad Gateway');
+    expect(md).toContain('транспорт');
+    expect(md).not.toContain('[ACTION:💸 Вернуть');
+  });
+
+  it('таймаут прямо говорит, что деньги могли уйти, и не даёт повтора', () => {
+    const md = formatRefundTimeout(1611);
+    expect(md).toContain('могла');
+    expect(md).not.toContain('[ACTION:💸 Вернуть');
+  });
+
+  it('параллельный возврат по тому же кошельку отклоняется', () => {
+    expect(formatRefundInFlight(1611)).toContain('#1611');
+  });
+});
+```
+
+- [ ] **Step 2: Прогнать тест, убедиться что падает**
+
+Run: `npx jest src/informer-bot/informer.refund.formatters.spec.ts`
+Expected: FAIL — `Cannot find module './informer.refund.formatters'`.
+
+- [ ] **Step 3: Реализовать**
+
+Создать `src/informer-bot/informer.refund.formatters.ts`. Шапка файла:
+
+```ts
+import {
+  OperatorWalletRefundResult,
+  RefundTarget,
+  WalletCtx,
+} from './informer.types';
+import { RefundFailure } from './informer.refund-errors';
+import { OPERATOR_BUTTONS } from './informer.formatters';
+```
+
+Далее — тело файла:
+
+```ts
+// ── Мастер возврата ──────────────────────────────────────────
+
+export const REFUND_CANCEL_BUTTON = '[ACTION:❌ Отмена возврата]';
+
+/**
+ * Payer detection reads the transaction history, which the platform keeps
+ * only for Tron and Taler. On the other six an empty refund_address is a
+ * guaranteed 400.
+ *
+ * Networks are matched fail-open: an unrecognised network gets the payer
+ * button, so a network the platform adds later works without a release on
+ * our side. The cost of being wrong is one 400 with a readable message.
+ */
+const NETWORKS_WITHOUT_PAYER_DETECTION = new Set([
+  'ethereum',
+  'eth',
+  'bsc',
+  'binance-smart-chain',
+  'bitcoin',
+  'btc',
+  'litecoin',
+  'ltc',
+  'dash',
+  'polkadot',
+  'dot',
+]);
+
+export function supportsPayerDetection(network: string): boolean {
+  return !NETWORKS_WITHOUT_PAYER_DETECTION.has(
+    (network ?? '').trim().toLowerCase(),
+  );
+}
+
+function walletLine(walletId: number, ctx: WalletCtx): string {
+  return `**#${walletId}** · ${ctx.amount} ${ctx.token} · ${ctx.network}`;
+}
+
+export function formatRefundMethodChoice(
+  walletId: number,
+  ctx: WalletCtx,
+): string {
+  const lines = [
+    `💸 **Возврат средств** ${walletLine(walletId, ctx)}`,
+    '',
+    `Адрес вывода: \`${ctx.address}\``,
+    '',
+    'Куда вернуть?',
+    '',
+    `[ACTION:📮 Указать адрес #${walletId}]`,
+  ];
+  if (supportsPayerDetection(ctx.network)) {
+    lines.push(`[ACTION:👤 Вернуть плательщику #${walletId}]`);
+  } else {
+    lines.push(
+      '',
+      `_В сети ${ctx.network} плательщик не определяется — нужен явный адрес._`,
+    );
+  }
+  lines.push(REFUND_CANCEL_BUTTON);
+  return lines.join('\n');
+}
+
+export function formatRefundAddressPrompt(
+  walletId: number,
+  ctx: WalletCtx,
+): string {
+  return [
+    `📮 **Адрес возврата для ${walletLine(walletId, ctx)}**`,
+    '',
+    'Пришли адрес одним сообщением. Проверю только то, что он непустой — ' +
+      'формат сверит платформа.',
+    '',
+    REFUND_CANCEL_BUTTON,
+  ].join('\n');
+}
+
+export function formatRefundAddressEmpty(walletId: number): string {
+  return [
+    '⚠️ Пустой адрес не подойдёт.',
+    '',
+    'Строка из одних пробелов на стороне платформы считается пустой, ' +
+      'а пустой адрес без явного флага — это отказ, а не отправка ' +
+      'плательщику. Пришли адрес ещё раз.',
+    '',
+    REFUND_CANCEL_BUTTON,
+  ].join('\n');
+}
+
+export function formatRefundConfirm(
+  walletId: number,
+  ctx: WalletCtx,
+  target: RefundTarget,
+): string {
+  const head = [
+    `⚠️ **Подтверди возврат** ${walletLine(walletId, ctx)}`,
+    '',
+  ];
+  const body =
+    'refundAddress' in target
+      ? [`Получатель: \`${target.refundAddress}\``, '']
+      : [
+          'Получатель: **адрес плательщика, который выберет платформа**.',
+          '',
+          'Что это значит:',
+          '• показать адрес заранее невозможно — preview у платформы нет;',
+          `• на Tron определяется подписант транзакции, а не отправитель токенов — ` +
+            'им может оказаться кошелёк биржи, который клиенту не принадлежит;',
+          '• после успеха платформа не сообщит, куда ушли деньги.',
+          '',
+        ];
+  return [
+    ...head,
+    ...body,
+    'Перевод **необратим**.',
+    '',
+    `[ACTION:✅ Подтвердить возврат #${walletId}]`,
+    REFUND_CANCEL_BUTTON,
+  ].join('\n');
+}
+
+export function formatRefundAwaitingTotp(
+  walletId: number,
+  ttlSeconds: number,
+): string {
+  return [
+    `🔐 **Подтверди возврат кошелька #${walletId}**`,
+    '',
+    `Введи 6-значный код из аутентификатора в течение ${ttlSeconds} секунд.`,
+    '',
+    REFUND_CANCEL_BUTTON,
+  ].join('\n');
+}
+
+export function formatRefundTotpRejected(
+  walletId: number,
+  ttlSeconds: number,
+): string {
+  return [
+    `⚠️ **Код не принят** для возврата кошелька **#${walletId}**.`,
+    '',
+    'Часы расходятся или код истёк. Возьми свежий код и пришли в течение ' +
+      `${ttlSeconds} секунд.`,
+    '',
+    REFUND_CANCEL_BUTTON,
+  ].join('\n');
+}
+
+export function formatRefundCancelled(): string {
+  return [
+    '[B:blue]❌ Возврат отменён.[/B]',
+    'Ничего не отправлено. Начни заново кнопкой «💸 Вернуть» в списке кошельков.',
+    '',
+    OPERATOR_BUTTONS,
+  ].join('\n');
+}
+
+export function formatRefundResult(
+  result: OperatorWalletRefundResult,
+  target: RefundTarget,
+): string {
+  const where =
+    'refundAddress' in target
+      ? `Получатель: \`${target.refundAddress}\``
+      : 'Возврат ушёл плательщику, но **адрес получателя платформа не сообщает** — ' +
+        'ни адреса, ни хэша транзакции в ответе нет. Если он нужен в вашей ' +
+        'записи, восстанавливать придётся вручную по цепочке.';
+  return [
+    `[B:green]✅ Возврат выполнен[/B] для кошелька **#${result.wallet_id}**`,
+    '',
+    `Статус: \`${result.status}\``,
+    where,
+    '',
+    OPERATOR_BUTTONS,
+  ].join('\n');
+}
+
+/**
+ * The double-payout gate. The wallet has a withdrawal record carrying a tx
+ * hash or order id, meaning the client was already paid. Clearing the gate
+ * is a deliberate, logged assertion by a human — the button is worded as a
+ * claim, never as "retry", and the flag is never set automatically.
+ */
+export function formatRefundGate(
+  walletId: number,
+  ctx: WalletCtx,
+  upstreamMessage: string,
+): string {
+  return [
+    `⛔ **Возврат #${walletId} заблокирован**`,
+    '',
+    `\`${upstreamMessage}\``,
+    '',
+    'У кошелька есть запись о выплате клиенту с идентификатором. ' +
+      'Возврат сейчас заплатит ему **дважды**.',
+    '',
+    'Прежде чем снимать гейт, проверь:',
+    `• в обозревателе ${ctx.network} нет исходящей транзакции на \`${ctx.address}\` ` +
+      `на ${ctx.amount} ${ctx.token};`,
+    '• в бэкофисе нет успешного order id по этой выплате.',
+    '',
+    'Нажимая кнопку, ты утверждаешь, что сверил цепочку и выплаты не было. ' +
+      'Попытка снять гейт **логируется** платформой отдельным событием ещё ' +
+      'до обращения к бэкенду — она останется в журнале, даже если возврат ' +
+      'затем упадёт.',
+    '',
+    `[ACTION:✅ Сверил, выплаты не было #${walletId}]`,
+    REFUND_CANCEL_BUTTON,
+  ].join('\n');
+}
+
+const FAILURE_HEADLINE: Record<RefundFailure['kind'], string> = {
+  second_payout: '⛔ Возврат заблокирован гейтом двойной выплаты',
+  insufficient_hot: '⚠️ На hot-кошельке не хватает средств',
+  no_payout_path: '⛔ В этой сети нет исходящего hot-wallet',
+  node_unavailable: '⚠️ Узел сети не отвечает',
+  already_exists: '⛔ Возврат по этому кошельку уже существует',
+  generic_business: '⚠️ Платформа отказала без деталей',
+  transport: '⚠️ Похоже на транспортный сбой, а не на отказ платформы',
+};
+
+const FAILURE_ADVICE: Record<RefundFailure['kind'], string> = {
+  second_payout: 'Сверь цепочку и сними гейт осознанно.',
+  insufficient_hot:
+    'Ничего не отправлено. Пополни hot-кошелёк этой сети и повтори.',
+  no_payout_path: 'Обрабатывать вне сервиса — вручную.',
+  node_unavailable: 'Ничего не отправлено. Повтор допустим, когда узел ответит.',
+  already_exists:
+    'Читай это как «первая попытка прошла», а не как новую ошибку. ' +
+    'Сверь вручную, повторять не надо.',
+  generic_business: 'Причина не указана. Повторять вслепую не стоит.',
+  transport:
+    'Так выглядят ответы промежуточного прокси и обрезанные тела. ' +
+    'Отправлено или нет — неизвестно, поэтому повтора не предлагаю.',
+};
+
+export function formatRefundFailure(
+  walletId: number,
+  failure: RefundFailure,
+): string {
+  const lines = [
+    `${FAILURE_HEADLINE[failure.kind]} — кошелёк **#${walletId}**`,
+    '',
+  ];
+  if (failure.message) {
+    lines.push(`\`${failure.message}\``, '');
+  }
+  lines.push(FAILURE_ADVICE[failure.kind], '');
+  if (failure.retryable) {
+    lines.push(`[ACTION:💸 Вернуть #${walletId}]`);
+  }
+  if (failure.kind === 'insufficient_hot') {
+    lines.push('[ACTION:💰 Балансы mini-acquiring]');
+  }
+  lines.push('[ACTION:📋 Кошельки оператора]');
+  return lines.join('\n');
+}
+
+/**
+ * Timeout is never a proof that nothing was sent: refund is a synchronous
+ * on-chain send and our client waits longer than the platform's own budget,
+ * but a network hiccup on our side still leaves the outcome unknown.
+ */
+export function formatRefundTimeout(walletId: number): string {
+  return [
+    `⚠️ **Ответ по возврату #${walletId} не пришёл вовремя**`,
+    '',
+    'Это **не** значит, что ничего не отправлено — транзакция **могла** уже ' +
+      'уйти в сеть.',
+    '',
+    'Не повторяй вслепую. Сверь цепочку; если решишь повторить вручную и ' +
+      'получишь «refund operation already exists» — значит первая попытка прошла.',
+    '',
+    '[ACTION:📋 Кошельки оператора]',
+  ].join('\n');
+}
+
+export function formatRefundInFlight(walletId: number): string {
+  return [
+    `⚠️ По кошельку **#${walletId}** уже идёт возврат.`,
+    '',
+    'Параллельные возвраты по одному кошельку запрещены: защита на стороне ' +
+      'платформы — проверка перед действием, а не гарантия уникальности. ' +
+      'Дождись результата первой попытки.',
+    '',
+    '[ACTION:📋 Кошельки оператора]',
+  ].join('\n');
+}
+```
+
+- [ ] **Step 5: Прогнать тесты, убедиться что проходят**
+
+Run: `npx jest src/informer-bot/informer.refund.formatters.spec.ts`
+Expected: PASS, 16 тестов.
+
+Run: `npx jest src/informer-bot`
+Expected: PASS, весь модуль.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/informer-bot/informer.refund.formatters.ts src/informer-bot/informer.refund.formatters.spec.ts
+git commit -m "feat(informer): карточки мастера возврата и разбор отказов"
+```
+
+---
+
+## Task 7: Автомат мастера
+
+**Files:**
+- Create: `src/informer-bot/informer.refund-flow.ts`
+- Test: `src/informer-bot/informer.refund-flow.spec.ts`
+
+Автомат чистый: не ходит ни в Redis, ни в HTTP. На вход — текущее состояние и текст сообщения, на выход — следующее состояние (или `null` = очистить), сообщения для публикации и признак «пора звать API».
+
+> ⚠️ **Контракт сопоставления меток — читать до написания матчеров.** Клиент возвращает метку кнопки как обычный текст, **без** обрамления `[ACTION:...]`, а номер кошелька стоит в конце без терминатора. Отсюда два правила:
+>
+> 1. **Номер нельзя искать вхождением подстроки:** `"#1611".includes("#161")` истинно, то есть кошельки #161 и #1611 стали бы неотличимы — это перевод денег не по тому кошельку. Номер берётся только жадным regex с захватом всех цифр (`(\d+)`), как в `parseRefundEntry` ниже, либо с явной проверкой границы. Шаги внутри мастера номер из метки вообще не читают — он берётся из pending-состояния, и это сознательно.
+> 2. **Слово «вернуть» делит две разные команды:** `💸 Вернуть #N` запускает мастер, `👤 Вернуть плательщику #N` выбирает получателя внутри него. Различать только по полной фразе. Поэтому `parseRefundEntry` ниже явно отсеивает метки со словом «плательщик» — это не перестраховка, без неё нажатие внутри мастера сбрасывало бы его в начало.
+
+- [ ] **Step 1: Написать падающий тест**
+
+Создать `src/informer-bot/informer.refund-flow.spec.ts`:
+
+```ts
+import { advanceRefundFlow, parseRefundEntry } from './informer.refund-flow';
+import { PendingOp } from './informer.pending-state';
+
+const CTX = {
+  network: 'BSC',
+  token: 'usdt',
+  amount: '50',
+  address: '0xcust',
+};
+const TRON_CTX = { ...CTX, network: 'TRON' };
+
+describe('parseRefundEntry — вход в мастер', () => {
+  it('распознаёт кнопку возврата с id', () => {
+    expect(parseRefundEntry('💸 Вернуть #1611')).toBe(1611);
+  });
+
+  it('распознаёт без эмодзи и решётки', () => {
+    expect(parseRefundEntry('вернуть 1611')).toBe(1611);
+  });
+
+  it('не путает с кнопкой повтора', () => {
+    expect(parseRefundEntry('🔁 Повторить #1611')).toBeNull();
+  });
+
+  it('не срабатывает на отмене возврата', () => {
+    expect(parseRefundEntry('❌ Отмена возврата')).toBeNull();
+  });
+
+  it('не срабатывает без числа', () => {
+    expect(parseRefundEntry('вернуть')).toBeNull();
+  });
+
+  it('не перезапускает мастер с шага «вернуть плательщику»', () => {
+    // Иначе нажатие внутри мастера сбросило бы его в начало и потеряло
+    // накопленное состояние.
+    expect(parseRefundEntry('👤 Вернуть плательщику #1611')).toBeNull();
+  });
+});
+
+describe('advanceRefundFlow — переходы', () => {
+  const method: PendingOp = {
+    kind: 'refund',
+    step: 'method',
+    walletId: 1611,
+    ctx: CTX,
+  };
+
+  it('method + «указать адрес» → address', () => {
+    const r = advanceRefundFlow(method, '📮 Указать адрес #1611');
+    expect(r.next).toMatchObject({ step: 'address', walletId: 1611 });
+    expect(r.call).toBeUndefined();
+  });
+
+  it('method + «плательщику» → confirm с toPayer', () => {
+    const r = advanceRefundFlow(
+      { ...method, ctx: TRON_CTX },
+      '👤 Вернуть плательщику #1611',
+    );
+    expect(r.next).toMatchObject({
+      step: 'confirm',
+      target: { refundToPayer: true },
+    });
+  });
+
+  it('method + «плательщику» на сети без определения → остаётся, объясняет', () => {
+    const r = advanceRefundFlow(method, '👤 Вернуть плательщику #1611');
+    expect(r.next).toMatchObject({ step: 'method' });
+    expect(r.messages.join('')).toContain('не определяется');
+  });
+
+  it('address + непустой текст → confirm с адресом', () => {
+    const r = advanceRefundFlow(
+      { ...method, step: 'address' },
+      '  0xB1c4Ae4F0f8f  ',
+    );
+    expect(r.next).toMatchObject({
+      step: 'confirm',
+      target: { refundAddress: '0xB1c4Ae4F0f8f' },
+    });
+  });
+
+  it('address + пробелы → остаётся на address', () => {
+    const r = advanceRefundFlow({ ...method, step: 'address' }, '     ');
+    expect(r.next).toMatchObject({ step: 'address' });
+    expect(r.messages.join('')).toContain('Пустой адрес');
+  });
+
+  it('confirm + подтверждение → totp с verifiedAbsent=false', () => {
+    const confirm: PendingOp = {
+      kind: 'refund',
+      step: 'confirm',
+      walletId: 1611,
+      ctx: CTX,
+      target: { refundAddress: '0xB1c4' },
+    };
+    const r = advanceRefundFlow(confirm, '✅ Подтвердить возврат #1611');
+    expect(r.next).toMatchObject({ step: 'totp', verifiedAbsent: false });
+  });
+
+  it('totp + 6 цифр → сигнал звать API, состояние очищается', () => {
+    const totp: PendingOp = {
+      kind: 'refund',
+      step: 'totp',
+      walletId: 1611,
+      ctx: CTX,
+      target: { refundToPayer: true },
+      verifiedAbsent: false,
+    };
+    const r = advanceRefundFlow(totp, '123456');
+    expect(r.call).toEqual({
+      walletId: 1611,
+      target: { refundToPayer: true },
+      totpCode: '123456',
+      verifiedAbsent: false,
+      ctx: CTX,
+    });
+    expect(r.next).toBeNull();
+  });
+
+  it('totp + не 6 цифр → остаётся, просит код', () => {
+    const totp: PendingOp = {
+      kind: 'refund',
+      step: 'totp',
+      walletId: 1611,
+      ctx: CTX,
+      target: { refundToPayer: true },
+      verifiedAbsent: false,
+    };
+    const r = advanceRefundFlow(totp, 'ага сейчас');
+    expect(r.call).toBeUndefined();
+    expect(r.next).toMatchObject({ step: 'totp' });
+  });
+
+  it('gate + «сверил» → totp с verifiedAbsent=true', () => {
+    const gate: PendingOp = {
+      kind: 'refund',
+      step: 'gate',
+      walletId: 1611,
+      ctx: CTX,
+      target: { refundAddress: '0xB1c4' },
+      upstreamMessage: 'refund would be a second payout',
+    };
+    const r = advanceRefundFlow(gate, '✅ Сверил, выплаты не было #1611');
+    expect(r.next).toMatchObject({ step: 'totp', verifiedAbsent: true });
+  });
+
+  it('gate + 6 цифр НЕ запускает возврат в обход подтверждения', () => {
+    const gate: PendingOp = {
+      kind: 'refund',
+      step: 'gate',
+      walletId: 1611,
+      ctx: CTX,
+      target: { refundAddress: '0xB1c4' },
+      upstreamMessage: 'refund would be a second payout',
+    };
+    const r = advanceRefundFlow(gate, '123456');
+    expect(r.call).toBeUndefined();
+    expect(r.next).toMatchObject({ step: 'gate' });
+  });
+
+  it('отмена из любого состояния очищает', () => {
+    for (const step of ['method', 'address', 'confirm', 'totp', 'gate'] as const) {
+      const state = {
+        kind: 'refund',
+        step,
+        walletId: 1611,
+        ctx: CTX,
+        target: { refundAddress: '0xB1c4' },
+        verifiedAbsent: false,
+        upstreamMessage: 'x',
+      } as PendingOp;
+      const r = advanceRefundFlow(state, '❌ Отмена возврата');
+      expect(r.next).toBeNull();
+      expect(r.call).toBeUndefined();
+      expect(r.messages.join('')).toContain('отменён');
+    }
+  });
+});
+```
+
+- [ ] **Step 2: Прогнать тест, убедиться что падает**
+
+Run: `npx jest src/informer-bot/informer.refund-flow.spec.ts`
+Expected: FAIL — `Cannot find module './informer.refund-flow'`.
+
+- [ ] **Step 3: Реализовать автомат**
+
+Создать `src/informer-bot/informer.refund-flow.ts`:
+
+```ts
+import { PendingOp, PENDING_OP_TTL_SEC } from './informer.pending-state';
+import { RefundTarget, WalletCtx } from './informer.types';
+import {
+  formatRefundAddressEmpty,
+  formatRefundAddressPrompt,
+  formatRefundAwaitingTotp,
+  formatRefundCancelled,
+  formatRefundConfirm,
+  formatRefundGate,
+  formatRefundMethodChoice,
+  supportsPayerDetection,
+} from './informer.refund.formatters';
+
+/** What the service should do after the transition. */
+export interface RefundCall {
+  walletId: number;
+  ctx: WalletCtx;
+  target: RefundTarget;
+  totpCode: string;
+  verifiedAbsent: boolean;
+}
+
+export interface FlowResult {
+  /** Next pending state, or null to clear it. */
+  next: PendingOp | null;
+  /** Messages to publish, in order. */
+  messages: string[];
+  /** Present only when the terminal API call should fire now. */
+  call?: RefundCall;
+}
+
+const TOTP_RE = /^\d{6}$/;
+
+/**
+ * Matches the refund entry button: "💸 Вернуть #1611" or a bare
+ * "вернуть 1611". Returns null for anything else — importantly for
+ * "❌ Отмена возврата", which contains "возврат" but must not re-enter the
+ * wizard, and for the retry button, which shares the card.
+ */
+export function parseRefundEntry(content: string): number | null {
+  const lower = content.trim().toLowerCase();
+  if (lower.includes('отмена')) return null;
+  const m = lower.match(/верн[уи]ть\s*#?(\d+)/);
+  if (!m) return null;
+  // "вернуть плательщику #1611" is an in-wizard step, not an entry point.
+  if (lower.includes('плательщик')) return null;
+  return parseInt(m[1], 10);
+}
+
+function isCancel(content: string): boolean {
+  const lower = content.toLowerCase();
+  return lower.includes('отмена возврата') || lower.includes('отмена ретрая');
+}
+
+/**
+ * Pure transition. Never touches Redis or the network — the service does
+ * both, using `next` and `call`. Keeping it pure is what makes the whole
+ * table testable without mocks.
+ */
+export function advanceRefundFlow(
+  state: PendingOp & { kind: 'refund' },
+  content: string,
+): FlowResult {
+  const text = content.trim();
+  const lower = text.toLowerCase();
+
+  if (isCancel(text)) {
+    return { next: null, messages: [formatRefundCancelled()] };
+  }
+
+  switch (state.step) {
+    case 'method': {
+      if (lower.includes('указать адрес')) {
+        const next: PendingOp = { ...state, step: 'address' };
+        return {
+          next,
+          messages: [formatRefundAddressPrompt(state.walletId, state.ctx)],
+        };
+      }
+      if (lower.includes('плательщик')) {
+        if (!supportsPayerDetection(state.ctx.network)) {
+          return {
+            next: state,
+            messages: [
+              `⚠️ В сети ${state.ctx.network} плательщик не определяется — ` +
+                'платформа ответит 400. Нужен явный адрес.',
+              formatRefundMethodChoice(state.walletId, state.ctx),
+            ],
+          };
+        }
+        const target: RefundTarget = { refundToPayer: true };
+        return {
+          next: { ...state, step: 'confirm', target },
+          messages: [formatRefundConfirm(state.walletId, state.ctx, target)],
+        };
+      }
+      return {
+        next: state,
+        messages: [formatRefundMethodChoice(state.walletId, state.ctx)],
+      };
+    }
+
+    case 'address': {
+      // The platform trims the address and treats an all-whitespace string
+      // as empty — sending it would mean an implicit refund_to_payer, which
+      // must never happen without the operator saying so.
+      if (text === '') {
+        return {
+          next: state,
+          messages: [formatRefundAddressEmpty(state.walletId)],
+        };
+      }
+      const target: RefundTarget = { refundAddress: text };
+      return {
+        next: { ...state, step: 'confirm', target },
+        messages: [formatRefundConfirm(state.walletId, state.ctx, target)],
+      };
+    }
+
+    case 'confirm': {
+      if (lower.includes('подтвердить возврат')) {
+        return {
+          next: { ...state, step: 'totp', verifiedAbsent: false },
+          messages: [
+            formatRefundAwaitingTotp(state.walletId, PENDING_OP_TTL_SEC),
+          ],
+        };
+      }
+      return {
+        next: state,
+        messages: [
+          formatRefundConfirm(state.walletId, state.ctx, state.target),
+        ],
+      };
+    }
+
+    case 'totp': {
+      if (!TOTP_RE.test(text)) {
+        return {
+          next: state,
+          messages: [
+            formatRefundAwaitingTotp(state.walletId, PENDING_OP_TTL_SEC),
+          ],
+        };
+      }
+      return {
+        next: null,
+        messages: [],
+        call: {
+          walletId: state.walletId,
+          ctx: state.ctx,
+          target: state.target,
+          totpCode: text,
+          verifiedAbsent: state.verifiedAbsent,
+        },
+      };
+    }
+
+    case 'gate': {
+      // A bare TOTP must NOT fire the refund here: clearing the double-payout
+      // gate is a separate, explicit assertion by the operator, and skipping
+      // it would pay the client twice.
+      if (lower.includes('сверил')) {
+        return {
+          next: { ...state, step: 'totp', verifiedAbsent: true },
+          messages: [
+            formatRefundAwaitingTotp(state.walletId, PENDING_OP_TTL_SEC),
+          ],
+        };
+      }
+      return {
+        next: state,
+        messages: [
+          formatRefundGate(state.walletId, state.ctx, state.upstreamMessage),
+        ],
+      };
+    }
+  }
+}
+```
+
+- [ ] **Step 5: Прогнать тесты, убедиться что проходят**
+
+Run: `npx jest src/informer-bot/informer.refund-flow.spec.ts`
+Expected: PASS, 17 тестов.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/informer-bot/informer.refund-flow.ts src/informer-bot/informer.refund-flow.spec.ts
+git commit -m "feat(informer): автомат мастера возврата"
+```
+
+---
+
+## Task 8: Миграция retry на единое состояние
+
+**Files:**
+- Modify: `src/informer-bot/informer-bot.service.ts:71-75,170-230,300-328`
+- Test: `src/informer-bot/informer-bot.service.spec.ts`
+
+Отдельная задача, чтобы регрессия по retry (если будет) вылезла до того, как сверху ляжет возврат.
+
+- [ ] **Step 1: Обновить существующие тесты retry на новый ключ**
+
+В `src/informer-bot/informer-bot.service.spec.ts` заменить **все** вхождения строки `informer:pending_totp:u1` на `informer:pending_op:u1` (строки 476, 477, 502, 503, 520, 583 и любые другие).
+
+Затем дописать в конец файла:
+
+```ts
+describe('retry на едином pending-состоянии', () => {
+  it('кладёт состояние с kind=retry', async () => {
+    const m = makeMocks();
+    const svc = makeService(m);
+
+    await svc.handleUserMessage('u1', 'c1', '🔁 Повторить #1611');
+
+    const raw = m.redis.store.get('informer:pending_op:u1');
+    expect(JSON.parse(raw!)).toEqual({
+      kind: 'retry',
+      step: 'totp',
+      walletId: 1611,
+    });
+  });
+
+  it('кнопка возврата перетирает pending от retry — последняя кнопка выигрывает', async () => {
+    const m = makeMocks();
+    m.client.getOperatorRequiredList = jest.fn(async () => ({
+      items: [
+        {
+          wallet_id: 1620,
+          created_at: '2026-08-24T17:02:11Z',
+          withdraw_address: '0xcust',
+          withdraw_network: 'TRON',
+          withdraw_token: 'usdt',
+          withdraw_amount: '50',
+        },
+      ],
+      total: 1,
+      page: 1,
+      per_page: 50,
+    }));
+    const svc = makeService(m);
+
+    await svc.handleUserMessage('u1', 'c1', '🔁 Повторить #1611');
+    await svc.handleUserMessage('u1', 'c1', '💸 Вернуть #1620');
+
+    const state = JSON.parse(m.redis.store.get('informer:pending_op:u1')!);
+    expect(state.kind).toBe('refund');
+    expect(state.walletId).toBe(1620);
+  });
+
+  it('6 цифр при retry-состоянии зовут retry, а не возврат', async () => {
+    const m = makeMocks();
+    const svc = makeService(m);
+
+    await svc.handleUserMessage('u1', 'c1', '🔁 Повторить #1611');
+    await svc.handleUserMessage('u1', 'c1', '123456');
+
+    expect(m.client.retryOperatorWallet).toHaveBeenCalledWith(1611, '123456');
+  });
+});
+```
+
+- [ ] **Step 2: Прогнать тесты, убедиться что падают**
+
+Run: `npx jest src/informer-bot/informer-bot.service.spec.ts`
+Expected: FAIL — сервис пишет в `informer:pending_totp:u1`, тесты ждут `informer:pending_op:u1`.
+
+- [ ] **Step 3: Перевести сервис на `PendingStateStore`**
+
+В `src/informer-bot/informer-bot.service.ts`:
+
+1. Заменить строки 71–75 (константы `PENDING_TOTP_TTL_SEC` и `pendingTotpKey`) на импорт:
+
+```ts
+import {
+  PendingOp,
+  PendingStateStore,
+  PENDING_OP_TTL_SEC,
+} from './informer.pending-state';
+```
+
+(импорт положить к остальным импортам вверху файла, константы `PENDING_TOTP_TTL_SEC` / `pendingTotpKey` удалить целиком).
+
+2. Добавить `PendingStateStore` **седьмым параметром конструктора**, обычным внедрением — класс зарегистрирован провайдером в `informer-bot.module.ts` (правка Task 3), поэтому создавать его руками через `new` не нужно и не следует: в этом модуле всё остальное тоже приходит из DI.
+
+```ts
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly client: InformerClient,
+    private readonly messenger: MessengerService,
+    @Inject(forwardRef(() => MessengerGateway))
+    private readonly gateway: MessengerGateway,
+    private readonly rates: InformerRatesService,
+    private readonly redis: RedisService,
+    private readonly pending: PendingStateStore,
+  ) {}
+```
+
+⚠️ **Конструктор сменил арность — существующие тесты сломаются.** В `informer-bot.service.spec.ts` сервис создаётся позиционно в двух местах: хелпер `makeService` (~строка 424) и класс `TestableService` (~строка 26). В обоих добавить седьмым аргументом `new PendingStateStore(<тот же redis-стаб> as any)`, импорт `PendingStateStore` из `./informer.pending-state` дописать в шапку spec-файла. Без этого `this.pending` окажется `undefined`, и падения пойдут не там, где причина.
+
+3. В ветке `case 'RETRY_OPERATOR_WALLET'` заменить вызов `this.redis.setEx(pendingTotpKey(userId), …)` на:
+
+```ts
+          await this.pending.save(userId, {
+            kind: 'retry',
+            step: 'totp',
+            walletId,
+          });
+          md = formatRetryAwaitingTotp(walletId, PENDING_OP_TTL_SEC);
+```
+
+4. В ветке `case 'SUBMIT_TOTP'` заменить `await this.redis.del(pendingTotpKey(userId));` на `await this.pending.clear(userId);`, а re-arm внутри `catch (e instanceof InformerTotpError)` — на:
+
+```ts
+              await this.pending.save(userId, {
+                kind: 'retry',
+                step: 'totp',
+                walletId,
+              });
+              md = formatRetryTotpRejected(walletId, PENDING_OP_TTL_SEC);
+```
+
+5. В ветке `case 'CANCEL_TOTP'` заменить `await this.redis.del(pendingTotpKey(userId));` на `await this.pending.clear(userId);`.
+
+6. Заменить `parseActionWithPendingState` (строки 306–328) на:
+
+```ts
+  async parseActionWithPendingState(
+    userId: string,
+    content: string,
+  ): Promise<ParsedAction | null> {
+    const trimmed = content.trim();
+    if (/^\d{6}$/.test(trimmed)) {
+      const state = await this.pending.load(userId);
+      if (state?.kind === 'retry') {
+        return {
+          code: 'SUBMIT_TOTP',
+          walletId: state.walletId,
+          totpCode: trimmed,
+        };
+      }
+    }
+    return this.parseAction(content);
+  }
+```
+
+- [ ] **Step 5: Прогнать тесты, убедиться что проходят**
+
+Run: `npx jest src/informer-bot/informer-bot.service.spec.ts`
+Expected: PASS. Тест «кнопка возврата перетирает pending» пока **падает** — возврата ещё нет. Временно пометить его `it.skip` с комментарием `// снимается в Task 9`, остальные должны быть зелёные.
+
+Run: `npx tsc --noEmit -p tsconfig.json`
+Expected: ровно 47 ошибок, все в `.spec.ts` файлах — это зафиксированная базовая линия репозитория на 2026-08-26, не наша регрессия. **Ноль** ошибок в `src/informer-bot/` и ноль в продакшн-коде. Проверка: `npx tsc --noEmit -p tsconfig.json 2>&1 | grep 'error TS' | grep -vc '\.spec\.ts'` должно дать `0`, и `... | grep -c 'informer-bot'` тоже `0`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/informer-bot/informer.refund.service.ts src/informer-bot/informer-bot.service.ts src/informer-bot/informer-bot.module.ts src/informer-bot/informer-bot.service.spec.ts
+git commit -m "refactor(informer): retry на едином pending-состоянии"
+```
+
+---
+
+## Task 9: Подключение мастера возврата к сервису
+
+**Files:**
+- Create: `src/informer-bot/informer.refund.service.ts`
+- Modify: `src/informer-bot/informer-bot.service.ts` (только диспетчеризация)
+- Modify: `src/informer-bot/informer-bot.module.ts` (регистрация провайдера)
+- Test: `src/informer-bot/informer-bot.service.spec.ts`
+
+> **Три поправки по итогам ревью Task 8 — прочитать до начала.**
+>
+> **1. Оркестрация возврата — отдельный инжектируемый класс, а не методы сервиса.** `informer-bot.service.ts` уже 697 строк и держит три слабо связанные обязанности (диспетчинг чата, настройки refill-алёртов, агрегация фиатных балансов). Добавить сюда ещё ~190 строк мастера — значит получить класс под 900 строк. Поэтому `startWizard` / `runStep` / обработка ошибок возврата живут в новом `InformerRefundService`, а `InformerBotService` остаётся диспетчером: он решает, кому отдать сообщение, и публикует то, что вернули.
+>
+> Граница простая: **`InformerRefundService` не публикует сообщения сам, а возвращает их списком.** Публикация остаётся у диспетчера, который уже умеет это делать через `publishBotMessage`. Так оркестратор тестируется без моков gateway и messenger.
+>
+> **2. Состояние грузится ОДИН раз за сообщение.** В черновике плана диспетчер звал `this.pending.load(userId)`, а затем проваливался в `parseActionWithPendingState`, которая грузила состояние заново — два обращения к Redis на каждое сообщение из 6 цифр. Поэтому `parseActionWithPendingState` меняет сигнатуру: принимает уже загруженное состояние параметром вместо того, чтобы читать его самой. Это заодно приводит её к тому же стилю, что и `advanceRefundFlow`, — состояние приходит снаружи, функция его не добывает.
+>
+> **3. Хелперы тестов поднять на уровень файла.** `makeMocks` / `makeService` объявлены внутри `describe('...retry wallet, flow B')`. Новый блок «мастер возврата в сервисе» написан в предположении, что они доступны — в буквальном виде он упадёт с `ReferenceError`. Поднять общий фабричный хелпер на уровень файла (prisma/messenger/gateway/redis/pending), а каждому `describe` оставить доопределение своих `client`/`rates` поверх него.
+>
+> **4. `RedisService` в `InformerBotService`.** После Task 8 сервис не обращается к `this.redis` ни разу — зависимость выглядит забытым хвостом миграции. В этой задаче она либо переезжает в `InformerRefundService` (блокировка по кошельку нужна именно там), либо остаётся с комментарием, зачем. Предпочтительно первое: убери `RedisService` из `InformerBotService`, если после правок он там действительно не нужен.
 
 - [ ] **Step 1: Написать падающий тест**
 
@@ -2752,7 +4694,7 @@ const refundLockKey = (walletId: number) =>
 
 5. Убедиться, что `RefundTarget` и `upstreamMessageFrom` импортированы из `./informer.types` (`upstreamMessageFrom` там уже есть, `RefundTarget` добавить).
 
-- [ ] **Step 4: Прогнать тесты, убедиться что проходят**
+- [ ] **Step 5: Прогнать тесты, убедиться что проходят**
 
 Run: `npx jest src/informer-bot/informer-bot.service.spec.ts`
 Expected: PASS, включая 12 новых тестов и снятый со skip тест из Task 8.
@@ -2763,10 +4705,10 @@ Expected: PASS, все наборы.
 Run: `npx tsc --noEmit -p tsconfig.json`
 Expected: ровно 47 ошибок, все в `.spec.ts` файлах — это зафиксированная базовая линия репозитория на 2026-08-26, не наша регрессия. **Ноль** ошибок в `src/informer-bot/` и ноль в продакшн-коде. Проверка: `npx tsc --noEmit -p tsconfig.json 2>&1 | grep 'error TS' | grep -vc '\.spec\.ts'` должно дать `0`, и `... | grep -c 'informer-bot'` тоже `0`.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/informer-bot/informer-bot.service.ts src/informer-bot/informer-bot.service.spec.ts
+git add src/informer-bot/informer.refund.service.ts src/informer-bot/informer-bot.service.ts src/informer-bot/informer-bot.module.ts src/informer-bot/informer-bot.service.spec.ts
 git commit -m "feat(informer): мастер возврата средств в чат-боте"
 ```
 
