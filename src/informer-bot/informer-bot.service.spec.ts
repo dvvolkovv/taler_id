@@ -4,6 +4,8 @@ import {
   InformerTotpError,
   InformerTimeoutError,
   InformerUnavailableError,
+  InformerBadRequestError,
+  InformerAuthError,
 } from './informer.types';
 import { PendingStateStore } from './informer.pending-state';
 import { InformerRefundService } from './informer.refund.service';
@@ -802,6 +804,46 @@ describe('мастер возврата в сервисе', () => {
     expect(m.published.join('')).toContain('Код не принят');
   });
 
+  it('403 после снятого гейта сохраняет verifiedAbsent=true, а не сбрасывает его', async () => {
+    const m = mocksWithWallet();
+    let call = 0;
+    (m.client as any).refundOperatorWallet = jest.fn(async () => {
+      if (++call === 1) {
+        // First attempt: blocked by the double-payout gate.
+        throw new InformerUnavailableError(
+          502,
+          JSON.stringify({ message: 'refund would be a second payout' }),
+        );
+      }
+      // Second attempt, after the operator clears the gate: TOTP rejected.
+      throw new InformerTotpError('bad code');
+    });
+    const svc = makeService(m);
+
+    await walkToTotp(svc, m);
+    await svc.handleUserMessage('u1', 'c1', '123456'); // -> gate
+    await svc.handleUserMessage('u1', 'c1', '✅ Сверил, выплаты не было #1611'); // -> totp, verifiedAbsent=true
+    await svc.handleUserMessage('u1', 'c1', '654321'); // -> 403
+
+    const state = JSON.parse(m.redis.store.get('informer:pending_op:u1')!);
+    expect(state).toMatchObject({ step: 'totp', verifiedAbsent: true });
+
+    // The next valid code must still carry the assertion through — the
+    // operator must not be forced to clear the gate a second time.
+    (m.client as any).refundOperatorWallet = jest.fn(async () => ({
+      wallet_id: 1611,
+      status: 'ok',
+    }));
+    await svc.handleUserMessage('u1', 'c1', '000111');
+
+    expect((m.client as any).refundOperatorWallet).toHaveBeenCalledWith(
+      1611,
+      { refundToPayer: true },
+      '000111',
+      true,
+    );
+  });
+
   it('таймаут не предлагает повтор', async () => {
     const m = mocksWithWallet();
     (m.client as any).refundOperatorWallet = jest.fn(async () => {
@@ -815,6 +857,74 @@ describe('мастер возврата в сервисе', () => {
     const out = m.published.join('');
     expect(out).toContain('могла');
     expect(out).not.toContain('[ACTION:💸 Вернуть #1611]');
+  });
+
+  it('неизвестное исключение во время отправки не зовёт повтор и не рендерит generic-сообщение', async () => {
+    const m = mocksWithWallet();
+    (m.client as any).refundOperatorWallet = jest.fn(async () => {
+      throw new Error('socket hang up');
+    });
+    const svc = makeService(m);
+
+    await walkToTotp(svc, m);
+    await svc.handleUserMessage('u1', 'c1', '123456');
+
+    // Fired exactly once — nothing here retries automatically.
+    expect((m.client as any).refundOperatorWallet).toHaveBeenCalledTimes(1);
+
+    const out = m.published.join('');
+    // Must read like the timeout card (outcome unknown, don't retry blind),
+    // NOT like the generic "Что-то пошло не так. Попробуй ещё раз." with a
+    // retry button — that text is fine for actions where nothing was sent,
+    // but here the request to refundOperatorWallet was already in flight.
+    expect(out).toContain('могла');
+    expect(out).toContain('socket hang up');
+    expect(out).not.toContain('Что-то пошло не так');
+    expect(out).not.toContain('[ACTION:💸 Вернуть #1611]');
+    expect(out).not.toContain('[ACTION:🔄 Повторить');
+
+    // Lock released and pending cleared, same as every other terminal path.
+    expect(m.redis.store.has('informer:refund_inflight:1611')).toBe(false);
+  });
+
+  it('400 отклонённый до отправки не выглядит как «могло уйти»', async () => {
+    const m = mocksWithWallet();
+    (m.client as any).refundOperatorWallet = jest.fn(async () => {
+      throw new InformerBadRequestError(
+        JSON.stringify({ message: 'refund_address is not a valid address' }),
+      );
+    });
+    const svc = makeService(m);
+
+    await walkToTotp(svc, m);
+    await svc.handleUserMessage('u1', 'c1', '123456');
+
+    expect((m.client as any).refundOperatorWallet).toHaveBeenCalledTimes(1);
+
+    const out = m.published.join('');
+    expect(out).toContain('ничего не ушло');
+    expect(out).not.toContain('могла');
+    expect(out).not.toContain('[ACTION:💸 Вернуть #1611]');
+    expect(out).not.toContain('[ACTION:🔄 Повторить');
+  });
+
+  it('401 отклонённый до отправки не выглядит как «могло уйти»', async () => {
+    const m = mocksWithWallet();
+    (m.client as any).refundOperatorWallet = jest.fn(async () => {
+      throw new InformerAuthError('signature mismatch');
+    });
+    const svc = makeService(m);
+
+    await walkToTotp(svc, m);
+    await svc.handleUserMessage('u1', 'c1', '123456');
+
+    expect((m.client as any).refundOperatorWallet).toHaveBeenCalledTimes(1);
+
+    const out = m.published.join('');
+    expect(out).toContain('ничего не ушло');
+    expect(out).not.toContain('могла');
+    expect(out).not.toContain('[ACTION:💸 Вернуть #1611]');
+    expect(out).not.toContain('[ACTION:🔄 Повторить');
   });
 
   it('блокировка по кошельку отклоняет параллельный возврат', async () => {

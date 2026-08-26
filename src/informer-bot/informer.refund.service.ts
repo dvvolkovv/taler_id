@@ -13,11 +13,19 @@ import {
   formatRefundGate,
   formatRefundInFlight,
   formatRefundMethodChoice,
+  formatRefundRejectedBeforeSend,
   formatRefundResult,
   formatRefundTimeout,
   formatRefundTotpRejected,
+  formatRefundUnknownError,
 } from './informer.refund.formatters';
 import {
+  InformerAuthError,
+  InformerBadRequestError,
+  InformerError,
+  InformerNonceStoreError,
+  InformerNotConfiguredError,
+  InformerOperatorInterventionError,
   InformerTotpError,
   InformerTimeoutError,
   InformerUnavailableError,
@@ -138,9 +146,44 @@ export class InformerRefundService {
   }
 
   /**
+   * Human headline for each pre-send rejection shape. Kept apart from the
+   * upstream detail (rendered separately by the caller) so the headline
+   * always names the actual cause instead of a generic "rejected".
+   */
+  private rejectedBeforeSendHeadline(e: InformerError): string {
+    if (e instanceof InformerAuthError) {
+      return 'Платформа отвергла нашу подпись запроса — сообщи администратору';
+    }
+    if (e instanceof InformerBadRequestError) {
+      return 'Платформа не приняла запрос на возврат';
+    }
+    if (e instanceof InformerNotConfiguredError) {
+      return 'Возврат на этом стенде не настроен, либо кошелёк не найден';
+    }
+    if (e instanceof InformerOperatorInterventionError) {
+      return 'Требуется вмешательство оператора';
+    }
+    // InformerNonceStoreError — transient infra issue on the platform's
+    // side, still caught before any send.
+    return 'Платформа временно не смогла обработать подписанный запрос';
+  }
+
+  /** `upstreamStatus=… upstreamBody=…`, or '' when the error carries none —
+   * mirrors the logging shape `InformerBotService`'s outer catch uses for
+   * every other action, so refund failures show up in pm2 logs with the
+   * same detail a balance lookup would. */
+  private upstreamDetail(status?: number, body?: string): string {
+    return status != null
+      ? ` upstreamStatus=${status} upstreamBody=${(body ?? '').slice(0, 300)}`
+      : '';
+  }
+
+  /**
    * Refund errors are handled separately from every other informer action:
    * a refund is irreversible, so nothing here ever retries on its own, and
-   * a timeout is explicitly NOT reported as "nothing was sent".
+   * neither a timeout nor an unrecognised exception is ever reported as
+   * "nothing was sent" — both fire while the send to the admin-API was
+   * already in flight.
    */
   private async handleError(
     userId: string,
@@ -156,6 +199,9 @@ export class InformerRefundService {
       // Re-arm the same step so a fresh code can be submitted without
       // walking the wizard again. verifiedAbsent is preserved: the operator
       // already made that assertion and shouldn't repeat it.
+      this.logger.warn(
+        `refund #${op.walletId} totp rejected:${this.upstreamDetail(e.upstreamStatus, e.upstreamBody)}`,
+      );
       await this.pending.save(userId, {
         kind: 'refund',
         step: 'totp',
@@ -168,6 +214,12 @@ export class InformerRefundService {
     }
 
     if (e instanceof InformerTimeoutError) {
+      // Nothing to log beyond the wallet — a timeout carries no upstream
+      // body — but this stays `error`, not `warn`: the outcome is unknown
+      // and someone may need to dig into it later.
+      this.logger.error(
+        `refund #${op.walletId} timed out — outcome unknown, no retry offered`,
+      );
       return [formatRefundTimeout(op.walletId)];
     }
 
@@ -176,6 +228,9 @@ export class InformerRefundService {
         upstreamMessageFrom(e.upstreamBody, 500),
       );
       if (failure.kind === 'second_payout') {
+        this.logger.warn(
+          `refund #${op.walletId} blocked by second-payout gate:${this.upstreamDetail(e.upstreamStatus, e.upstreamBody)}`,
+        );
         await this.pending.save(userId, {
           kind: 'refund',
           step: 'gate',
@@ -186,12 +241,50 @@ export class InformerRefundService {
         });
         return [formatRefundGate(op.walletId, op.ctx, failure.message)];
       }
+      this.logger.warn(
+        `refund #${op.walletId} rejected (${failure.kind}):${this.upstreamDetail(e.upstreamStatus, e.upstreamBody)}`,
+      );
       return [formatRefundFailure(op.walletId, failure)];
     }
 
+    // The admin-API rejected the request outright, before any send happened
+    // — request validation, our own signing, a misconfigured stand, an
+    // unknown wallet, a nonce-store hiccup, or a case that needs a human
+    // (422, which already carries an actionable upstream message). Unlike
+    // everything below, the outcome here is NOT in doubt: nothing left.
+    // Must be checked BEFORE the final unknown-exception branch, or these
+    // typed, pre-send rejections would be told to the operator as "the
+    // transaction might have gone out" — a false alarm on an irreversible
+    // operation.
+    if (
+      e instanceof InformerBadRequestError ||
+      e instanceof InformerAuthError ||
+      e instanceof InformerNotConfiguredError ||
+      e instanceof InformerOperatorInterventionError ||
+      e instanceof InformerNonceStoreError
+    ) {
+      this.logger.warn(
+        `refund #${op.walletId} rejected before send (${e.name}):${this.upstreamDetail(e.upstreamStatus, e.upstreamBody)}`,
+      );
+      return [
+        formatRefundRejectedBeforeSend(
+          op.walletId,
+          this.rejectedBeforeSendHeadline(e),
+          upstreamMessageFrom(e.upstreamBody, 300),
+        ),
+      ];
+    }
+
+    // Unknown exception thrown WHILE the request to refundOperatorWallet was
+    // in flight — never treated like startWizard's errors (which fail
+    // before anything is sent) and never bubbled to the dispatcher's
+    // generic errorToMessage(), which offers a retry button. That retry
+    // would risk paying the client twice, exactly what the gate and the
+    // `retryable` flags elsewhere in this flow exist to prevent.
+    const detail = e instanceof Error ? e.message : String(e);
     this.logger.error(
-      `refund failed for #${op.walletId}: ${(e as Error)?.message || (e as any)}`,
+      `refund #${op.walletId} failed with an unrecognised error mid-send: ${detail}`,
     );
-    throw e; // unknown error — let the dispatcher render its generic message
+    return [formatRefundUnknownError(op.walletId, detail)];
   }
 }

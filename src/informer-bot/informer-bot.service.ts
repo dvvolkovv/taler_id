@@ -90,6 +90,24 @@ export class InformerBotService {
     private readonly refund: InformerRefundService,
   ) {}
 
+  /**
+   * Shared logging shape for every catch in this class: `upstreamStatus`/
+   * `upstreamBody` alongside the message, when the error carries them. Used
+   * by the outer switch's catch AND by the refund dispatch catches — before
+   * this, refund failures other than the truly unrecognised one left no
+   * trace in pm2 logs, unlike every other informer action.
+   */
+  private logActionError(label: string, e: unknown): void {
+    const ue = e as { upstreamStatus?: number; upstreamBody?: string };
+    const upstream =
+      ue?.upstreamStatus != null
+        ? ` upstreamStatus=${ue.upstreamStatus} upstreamBody=${(ue.upstreamBody ?? '').slice(0, 300)}`
+        : '';
+    this.logger.error(
+      `informer action ${label} failed: ${(e as Error)?.message || (e as any)}${upstream}`,
+    );
+  }
+
   private async assertAccess(userId: string): Promise<void> {
     const profile = await this.prisma.profile.findUnique({ where: { userId } });
     if (!profile?.informerAccess) {
@@ -152,6 +170,10 @@ export class InformerBotService {
           await this.publishBotMessage(userId, conversationId, m);
         }
       } catch (e) {
+        // Nothing was sent yet — startWizard only calls
+        // getOperatorRequiredList, never the refund endpoint — so the
+        // generic error message (with its retry hint) is safe here.
+        this.logActionError('REFUND_ENTRY', e);
         await this.publishBotMessage(
           userId,
           conversationId,
@@ -181,6 +203,12 @@ export class InformerBotService {
             await this.publishBotMessage(userId, conversationId, m);
           }
         } catch (e) {
+          // runStep itself no longer throws for refund-API failures —
+          // InformerRefundService.handleError renders those as messages.
+          // Whatever lands here is something else (e.g. Redis), so the
+          // generic error message stands, but it still needs to reach the
+          // logs like every other action's failure does.
+          this.logActionError('REFUND_STEP', e);
           await this.publishBotMessage(
             userId,
             conversationId,

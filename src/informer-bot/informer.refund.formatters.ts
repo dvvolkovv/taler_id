@@ -306,14 +306,19 @@ export function formatRefundFailure(
 }
 
 /**
- * Timeout is never a proof that nothing was sent: refund is a synchronous
- * on-chain send and our client waits longer than the platform's own budget,
- * but a network hiccup on our side still leaves the outcome unknown.
+ * Shared body for the two "this attempt's outcome is genuinely unknown"
+ * cards — timeout and an unrecognised mid-send exception. Both mean the
+ * same thing (the send to the admin-API was already in flight, don't
+ * retry blind) and differ only in headline and whether there's a captured
+ * error detail to show.
  */
-export function formatRefundTimeout(walletId: number): string {
-  return [
-    `⚠️ **Ответ по возврату #${walletId} не пришёл вовремя**`,
-    '',
+function formatRefundUncertainOutcome(
+  headline: string,
+  detail?: string,
+): string {
+  const lines = [headline, ''];
+  if (detail) lines.push(`\`${detail}\``, '');
+  lines.push(
     'Это **не** значит, что ничего не отправлено — транзакция **могла** уже ' +
       'уйти в сеть.',
     '',
@@ -321,7 +326,68 @@ export function formatRefundTimeout(walletId: number): string {
       'получишь «refund operation already exists» — значит первая попытка прошла.',
     '',
     BACK_TO_WALLETS_BUTTON,
-  ].join('\n');
+  );
+  return lines.join('\n');
+}
+
+/**
+ * Timeout is never a proof that nothing was sent: refund is a synchronous
+ * on-chain send and our client waits longer than the platform's own budget,
+ * but a network hiccup on our side still leaves the outcome unknown.
+ */
+export function formatRefundTimeout(walletId: number): string {
+  return formatRefundUncertainOutcome(
+    `⚠️ **Ответ по возврату #${walletId} не пришёл вовремя**`,
+  );
+}
+
+/**
+ * A thrown error mid-send that isn't one of the recognised admin-API shapes
+ * (TOTP reject, timeout, classified 502, or a pre-send rejection like 400/
+ * 401/404/422/nonce-503) — a raw network exception, a malformed response, a
+ * bug. By the time this fires the call to refundOperatorWallet was already
+ * in flight, so — exactly like a timeout — the outcome is unknown. Must
+ * never be rendered by the generic errorToMessage() path: that one offers a
+ * retry hint, and retrying here risks paying the client twice. The raw
+ * detail is shown so the operator (and pm2 logs) can see the actual cause,
+ * not just "something broke".
+ */
+export function formatRefundUnknownError(
+  walletId: number,
+  detail: string,
+): string {
+  return formatRefundUncertainOutcome(
+    `⚠️ **Связь с платформой оборвалась во время отправки возврата #${walletId}**`,
+    detail,
+  );
+}
+
+/**
+ * The platform rejected the refund request outright, before anything was
+ * sent — request validation (400), our own request signing (401), a
+ * misconfigured stand or an unknown wallet (404/503), a nonce-store hiccup
+ * on their side (503), or a case that needs a human before it can proceed
+ * (422). Unlike a timeout or an unrecognised exception, the outcome here is
+ * NOT in doubt — nothing left — so this deliberately does not reuse the
+ * "могла уйти" paragraph from `formatRefundUncertainOutcome`: saying that
+ * here would send the operator chasing a transaction that never existed.
+ * No repeat-refund button: whatever caused the rejection needs fixing
+ * first, and a one-tap retry would just reproduce it.
+ */
+export function formatRefundRejectedBeforeSend(
+  walletId: number,
+  headline: string,
+  detail: string,
+): string {
+  const lines = [`⚠️ **${headline}** — возврат #${walletId}`, ''];
+  if (detail) lines.push(`\`${detail}\``, '');
+  lines.push(
+    'Платформа отклонила запрос **до отправки** — ничего не ушло. ' +
+      'Устрани причину, прежде чем пробовать снова.',
+    '',
+    BACK_TO_WALLETS_BUTTON,
+  );
+  return lines.join('\n');
 }
 
 export function formatRefundInFlight(walletId: number): string {
