@@ -264,3 +264,189 @@ describe('upstreamMessageFrom', () => {
     expect(upstreamMessageFrom(undefined)).toBe('');
   });
 });
+
+describe('InformerClient.refundOperatorWallet', () => {
+  let originalFetch: typeof global.fetch;
+  beforeEach(() => {
+    originalFetch = global.fetch;
+  });
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  function makeClient() {
+    return new InformerClient({
+      baseUrl: 'https://example.test',
+      key: 'k',
+      secret: 's',
+    });
+  }
+
+  function captureBody(): { body: () => any; url: () => string } {
+    let captured: any;
+    let capturedUrl = '';
+    global.fetch = (async (url: any, init: any) => {
+      capturedUrl = String(url);
+      captured = JSON.parse(init.body);
+      return {
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            resultCode: 'ERCD0000',
+            data: { wallet_id: 1611, status: 'ok' },
+          }),
+      };
+    }) as any;
+    return { body: () => captured, url: () => capturedUrl };
+  }
+
+  it('шлёт refund_address и НЕ шлёт refund_to_payer', async () => {
+    const cap = captureBody();
+    await makeClient().refundOperatorWallet(
+      1611,
+      { refundAddress: '0xB1c4' },
+      '123456',
+    );
+    expect(cap.body()).toEqual({
+      wallet_id: 1611,
+      refund_address: '0xB1c4',
+      totp_code: '123456',
+    });
+    expect(cap.body()).not.toHaveProperty('refund_to_payer');
+  });
+
+  it('шлёт refund_to_payer и НЕ шлёт refund_address', async () => {
+    const cap = captureBody();
+    await makeClient().refundOperatorWallet(
+      1611,
+      { refundToPayer: true },
+      '123456',
+    );
+    expect(cap.body()).toEqual({
+      wallet_id: 1611,
+      refund_to_payer: true,
+      totp_code: '123456',
+    });
+    expect(cap.body()).not.toHaveProperty('refund_address');
+  });
+
+  it('не кладёт withdrawal_verified_absent когда флаг false', async () => {
+    const cap = captureBody();
+    await makeClient().refundOperatorWallet(
+      1611,
+      { refundAddress: '0xB1c4' },
+      '123456',
+      false,
+    );
+    expect(cap.body()).not.toHaveProperty('withdrawal_verified_absent');
+  });
+
+  it('кладёт withdrawal_verified_absent только когда флаг true', async () => {
+    const cap = captureBody();
+    await makeClient().refundOperatorWallet(
+      1611,
+      { refundAddress: '0xB1c4' },
+      '123456',
+      true,
+    );
+    expect(cap.body().withdrawal_verified_absent).toBe(true);
+  });
+
+  it('бьёт в правильный путь', async () => {
+    const cap = captureBody();
+    await makeClient().refundOperatorWallet(
+      1611,
+      { refundToPayer: true },
+      '123456',
+    );
+    expect(cap.url()).toBe(
+      'https://example.test/informer/v1/operator-required-wallets/1611/refund',
+    );
+  });
+
+  it('подписывает независимо от client.buildSignature: тело литералом + HMAC руками, плюс остальные заголовки', async () => {
+    let sentBody = '';
+    let sentHeaders: Record<string, string> = {};
+    global.fetch = (async (_url: any, init: any) => {
+      sentBody = init.body;
+      sentHeaders = init.headers;
+      return {
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            resultCode: 'ERCD0000',
+            data: { wallet_id: 1611, status: 'ok' },
+          }),
+      };
+    }) as any;
+
+    const client = makeClient();
+    await client.refundOperatorWallet(1611, { refundToPayer: true }, '123456');
+
+    // Тело зафиксировано литералом — заодно закрепляет точный порядок
+    // ключей, от которого зависит sha256(body) и, значит, подпись.
+    expect(sentBody).toBe(
+      '{"wallet_id":1611,"refund_to_payer":true,"totp_code":"123456"}',
+    );
+
+    expect(sentHeaders['X-Informer-Key']).toBe('k');
+    expect(sentHeaders['X-Informer-Timestamp']).toMatch(/^\d+$/);
+    expect(sentHeaders['X-Informer-Nonce']).toMatch(/^[a-f0-9]+$/);
+
+    // Ожидаемую подпись считаем НЕ через client.buildSignature (иначе тест
+    // сверяет реализацию саму с собой), а напрямую через crypto — вручную
+    // воспроизводя METHOD\nURI\nTIMESTAMP\nHEX_SHA256_BODY, как это делает
+    // buildSignature в informer.client.ts.
+    const bodyHash = createHash('sha256').update(sentBody).digest('hex');
+    const signingString = [
+      'POST',
+      '/informer/v1/operator-required-wallets/1611/refund',
+      sentHeaders['X-Informer-Timestamp'],
+      bodyHash,
+    ].join('\n');
+    const expectedSig = createHmac('sha256', 's')
+      .update(signingString)
+      .digest('hex');
+
+    expect(sentHeaders['X-Informer-Signature']).toBe(expectedSig);
+  });
+
+  it('возвращает data из конверта', async () => {
+    captureBody();
+    const r = await makeClient().refundOperatorWallet(
+      1611,
+      { refundToPayer: true },
+      '123456',
+    );
+    expect(r).toEqual({ wallet_id: 1611, status: 'ok' });
+  });
+
+  it('использует таймаут 45 секунд, а не общие 25', async () => {
+    const client = makeClient();
+    const spy = jest.spyOn(global, 'setTimeout');
+    captureBody();
+
+    await client.refundOperatorWallet(1611, { refundToPayer: true }, '123456');
+
+    const delays = spy.mock.calls.map((c) => c[1]);
+    expect(delays).toContain(45000);
+    spy.mockRestore();
+  });
+
+  it('обычный GET остаётся на таймауте 25 секунд, override возврата его не задевает', async () => {
+    const client = makeClient();
+    const spy = jest.spyOn(global, 'setTimeout');
+    global.fetch = (async () => ({
+      status: 200,
+      text: async () =>
+        JSON.stringify({ resultCode: 'ERCD0000', data: { count: 0 } }),
+    })) as any;
+
+    await client.getOperatorRequiredCount();
+
+    const delays = spy.mock.calls.map((c) => c[1]);
+    expect(delays).toContain(25000);
+    expect(delays).not.toContain(45000);
+    spy.mockRestore();
+  });
+});

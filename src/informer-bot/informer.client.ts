@@ -5,6 +5,8 @@ import {
   OperatorRequiredCount,
   OperatorRequiredList,
   OperatorWalletRetryResult,
+  OperatorWalletRefundResult,
+  RefundTarget,
   MiniAcquiringBalances,
   GatewaySystemWalletBalances,
   InformerAuthError,
@@ -86,6 +88,7 @@ export class InformerClient {
     method: 'GET' | 'POST',
     path: string,
     body: string,
+    timeoutMsOverride?: number,
   ): Promise<T> {
     const url = new URL(path, this.cfg.baseUrl);
     const requestUri = url.pathname + url.search;
@@ -95,7 +98,7 @@ export class InformerClient {
     const controller = new AbortController();
     const timer = setTimeout(
       () => controller.abort(),
-      this.cfg.timeoutMs ?? 25000,
+      timeoutMsOverride ?? this.cfg.timeoutMs ?? 25000,
     );
 
     let resp: Response;
@@ -134,12 +137,16 @@ export class InformerClient {
     return this.signedRequest<T>('GET', path, '');
   }
 
-  private signedPost<T>(path: string, payload: unknown): Promise<T> {
+  private signedPost<T>(
+    path: string,
+    payload: unknown,
+    timeoutMsOverride?: number,
+  ): Promise<T> {
     // Serialize once and pass the exact bytes to both sha256 (in signing
     // string) and fetch body. Any whitespace / key-order drift between the
     // two would yield 401 (signature mismatch).
     const body = JSON.stringify(payload);
-    return this.signedRequest<T>('POST', path, body);
+    return this.signedRequest<T>('POST', path, body, timeoutMsOverride);
   }
 
   getOperatorRequiredCount(): Promise<OperatorRequiredCount> {
@@ -180,6 +187,42 @@ export class InformerClient {
     return this.signedPost<OperatorWalletRetryResult>(
       `/informer/v1/operator-required-wallets/${walletId}/retry`,
       { totp_code: totpCode },
+    );
+  }
+
+  /**
+   * Refund is a synchronous on-chain send with a 30s budget on the platform
+   * side. A client that times out earlier cannot tell whether the money
+   * left — so we wait longer than the platform does, and never retry
+   * automatically.
+   */
+  private static readonly REFUND_TIMEOUT_MS = 45000;
+
+  refundOperatorWallet(
+    walletId: number,
+    target: RefundTarget,
+    totpCode: string,
+    verifiedAbsent = false,
+  ): Promise<OperatorWalletRefundResult> {
+    // Exactly one of refund_address / refund_to_payer. Sending both is a
+    // guaranteed 400 ("mutually exclusive: send exactly one").
+    const targetField =
+      'refundAddress' in target
+        ? { refund_address: target.refundAddress }
+        : { refund_to_payer: true as const };
+
+    return this.signedPost<OperatorWalletRefundResult>(
+      `/informer/v1/operator-required-wallets/${walletId}/refund`,
+      {
+        wallet_id: walletId,
+        ...targetField,
+        totp_code: totpCode,
+        // Only ever sent when true — the guide asks not to send it by
+        // default, and its presence is logged upstream as a deliberate
+        // operator decision.
+        ...(verifiedAbsent ? { withdrawal_verified_absent: true } : {}),
+      },
+      InformerClient.REFUND_TIMEOUT_MS,
     );
   }
 }
