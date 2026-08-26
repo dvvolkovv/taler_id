@@ -9,6 +9,7 @@ import { InformerClient } from './informer.client';
 import { InformerRatesService } from './informer.rates';
 import { InformerWatcher } from './informer.watcher';
 import { PendingStateStore } from './informer.pending-state';
+import { InformerRefundService } from './informer.refund.service';
 
 @Global()
 @Module({})
@@ -61,6 +62,7 @@ export class InformerBotModule {
         InformerWatcher,
         InformerRatesService,
         PendingStateStore,
+        InformerRefundService,
       ],
       exports: [InformerBotService],
     };

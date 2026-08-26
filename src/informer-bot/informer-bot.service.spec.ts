@@ -1,11 +1,16 @@
 import BigNumber from 'bignumber.js';
 import { InformerBotService } from './informer-bot.service';
-import { InformerTotpError } from './informer.types';
+import {
+  InformerTotpError,
+  InformerTimeoutError,
+  InformerUnavailableError,
+} from './informer.types';
 import { PendingStateStore } from './informer.pending-state';
+import { InformerRefundService } from './informer.refund.service';
 
 // In-memory Redis stub — only the methods the service actually calls
-// (get/setEx/del) are surfaced. Each test gets its own instance so state
-// doesn't leak across cases.
+// (get/setEx/setNxEx/del) are surfaced. Each test gets its own instance so
+// state doesn't leak across cases.
 function makeRedisStub() {
   const store = new Map<string, string>();
   return {
@@ -16,6 +21,11 @@ function makeRedisStub() {
     }),
     setEx: jest.fn(async (k: string, _ttl: number, v: string) => {
       store.set(k, v);
+    }),
+    setNxEx: jest.fn(async (k: string, _ttl: number, v: string) => {
+      if (store.has(k)) return false;
+      store.set(k, v);
+      return true;
     }),
     del: jest.fn(async (k: string) => {
       store.delete(k);
@@ -33,8 +43,8 @@ class TestableService extends InformerBotService {
       null as any,
       null as any,
       null as any,
-      redis as any,
       new PendingStateStore(redis as any),
+      null as any,
     );
   }
   public _nextMorningInBerlin(now?: Date): Date {
@@ -198,8 +208,8 @@ describe('InformerBotService.handleUserMessage (refill actions)', () => {
       m.messenger as any,
       m.gateway as any,
       null as any,
-      redis as any,
       new PendingStateStore(redis as any),
+      null as any,
     );
     // capture published content for assertions
     (svc as any).publishBotMessage = jest.fn(
@@ -357,8 +367,8 @@ describe('InformerBotService.handleUserMessage (fiat actions)', () => {
       m.messenger as any,
       m.gateway as any,
       m.rates as any,
-      redis as any,
       new PendingStateStore(redis as any),
+      null as any,
     );
     (svc as any).publishBotMessage = jest.fn(
       async (_uid: string, _cid: string, content: string) => {
@@ -393,60 +403,71 @@ describe('InformerBotService.handleUserMessage (fiat actions)', () => {
   });
 });
 
+// Shared factory for handleUserMessage-level tests that need the full
+// client/redis/pending/refund stack — the retry dispatch below and the
+// refund wizard tests further down both build on it. Each describe block
+// is free to override `client`/`rates` on top of what this returns.
+function makeMocks() {
+  const published: string[] = [];
+  const prisma = {
+    profile: {
+      findUnique: jest.fn(async () => ({ informerAccess: true })),
+    },
+  };
+  const client: {
+    retryOperatorWallet: jest.Mock;
+    getOperatorRequiredList: jest.Mock;
+    refundOperatorWallet?: jest.Mock;
+  } = {
+    retryOperatorWallet: jest.fn(async (id: number, _code: string) => ({
+      wallet_id: id,
+      status: 'ok',
+    })),
+    getOperatorRequiredList: jest.fn(async () => ({
+      items: [],
+      total: 0,
+      page: 1,
+      per_page: 50,
+    })),
+  };
+  const messenger = {
+    createMessage: jest.fn(async () => ({
+      id: 'm1',
+      content: '',
+      senderId: 'bot',
+      conversationId: 'c1',
+    })),
+  };
+  const gateway = { server: { to: () => ({ emit: jest.fn() }) } };
+  const redis = makeRedisStub();
+  const pending = new PendingStateStore(redis as any);
+  return { prisma, client, messenger, gateway, redis, pending, published };
+}
+
+function makeService(m: ReturnType<typeof makeMocks>) {
+  const refund = new InformerRefundService(
+    m.client as any,
+    m.pending,
+    m.redis as any,
+  );
+  const svc = new InformerBotService(
+    m.prisma as any,
+    m.client as any,
+    m.messenger as any,
+    m.gateway as any,
+    null as any,
+    m.pending,
+    refund,
+  );
+  (svc as any).publishBotMessage = jest.fn(
+    async (_u: string, _c: string, content: string) => {
+      m.published.push(content);
+    },
+  );
+  return svc;
+}
+
 describe('InformerBotService.handleUserMessage (retry wallet, flow B)', () => {
-  function makeMocks() {
-    const published: string[] = [];
-    const prisma = {
-      profile: {
-        findUnique: jest.fn(async () => ({ informerAccess: true })),
-      },
-    };
-    const client: {
-      retryOperatorWallet: jest.Mock;
-      getOperatorRequiredList: jest.Mock;
-    } = {
-      retryOperatorWallet: jest.fn(async (id: number, _code: string) => ({
-        wallet_id: id,
-        status: 'ok',
-      })),
-      getOperatorRequiredList: jest.fn(async () => ({
-        items: [],
-        total: 0,
-        page: 1,
-        per_page: 50,
-      })),
-    };
-    const messenger = {
-      createMessage: jest.fn(async () => ({
-        id: 'm1',
-        content: '',
-        senderId: 'bot',
-        conversationId: 'c1',
-      })),
-    };
-    const gateway = { server: { to: () => ({ emit: jest.fn() }) } };
-    const redis = makeRedisStub();
-    return { prisma, client, messenger, gateway, redis, published };
-  }
-
-  function makeService(m: ReturnType<typeof makeMocks>) {
-    const svc = new InformerBotService(
-      m.prisma as any,
-      m.client as any,
-      m.messenger as any,
-      m.gateway as any,
-      null as any,
-      m.redis as any,
-      new PendingStateStore(m.redis as any),
-    );
-    (svc as any).publishBotMessage = jest.fn(
-      async (_u: string, _c: string, content: string) => {
-        m.published.push(content);
-      },
-    );
-    return svc;
-  }
-
   it('stage 1: retry button stores pending state and prompts for code', async () => {
     const m = makeMocks();
     const svc = makeService(m);
@@ -611,8 +632,7 @@ describe('InformerBotService.handleUserMessage (retry wallet, flow B)', () => {
       });
     });
 
-    // снимается в Task 9 — возврата ещё нет, RETURN_WALLET action не парсится.
-    it.skip('кнопка возврата перетирает pending от retry — последняя кнопка выигрывает', async () => {
+    it('кнопка возврата перетирает pending от retry — последняя кнопка выигрывает', async () => {
       const m = makeMocks();
       m.client.getOperatorRequiredList = jest.fn(async () => ({
         items: [
@@ -648,5 +668,233 @@ describe('InformerBotService.handleUserMessage (retry wallet, flow B)', () => {
 
       expect(m.client.retryOperatorWallet).toHaveBeenCalledWith(1611, '123456');
     });
+  });
+});
+
+describe('мастер возврата в сервисе', () => {
+  const ITEM = {
+    wallet_id: 1611,
+    created_at: '2026-08-24T17:02:11Z',
+    withdraw_address: '0xcust',
+    withdraw_network: 'TRON',
+    withdraw_token: 'usdt',
+    withdraw_amount: '50',
+  };
+
+  function mocksWithWallet() {
+    const m = makeMocks();
+    m.client.getOperatorRequiredList = jest.fn(async () => ({
+      items: [ITEM],
+      total: 1,
+      page: 1,
+      per_page: 50,
+    }));
+    (m.client as any).refundOperatorWallet = jest.fn(async () => ({
+      wallet_id: 1611,
+      status: 'ok',
+    }));
+    (m.redis as any).setNxEx = jest.fn(async (k: string) => {
+      if (m.redis.store.has(k)) return false;
+      m.redis.store.set(k, '1');
+      return true;
+    });
+    return m;
+  }
+
+  async function walkToTotp(svc: any, m: any) {
+    await svc.handleUserMessage('u1', 'c1', '💸 Вернуть #1611');
+    await svc.handleUserMessage('u1', 'c1', '👤 Вернуть плательщику #1611');
+    await svc.handleUserMessage('u1', 'c1', '✅ Подтвердить возврат #1611');
+  }
+
+  it('проходит мастер целиком и зовёт API', async () => {
+    const m = mocksWithWallet();
+    const svc = makeService(m);
+
+    await walkToTotp(svc, m);
+    await svc.handleUserMessage('u1', 'c1', '123456');
+
+    expect((m.client as any).refundOperatorWallet).toHaveBeenCalledWith(
+      1611,
+      { refundToPayer: true },
+      '123456',
+      false,
+    );
+    expect(m.published.join('')).toContain('Возврат выполнен');
+  });
+
+  it('ветка с адресом отправляет refundAddress', async () => {
+    const m = mocksWithWallet();
+    const svc = makeService(m);
+
+    await svc.handleUserMessage('u1', 'c1', '💸 Вернуть #1611');
+    await svc.handleUserMessage('u1', 'c1', '📮 Указать адрес #1611');
+    await svc.handleUserMessage('u1', 'c1', '0xB1c4Ae4F0f8f');
+    await svc.handleUserMessage('u1', 'c1', '✅ Подтвердить возврат #1611');
+    await svc.handleUserMessage('u1', 'c1', '123456');
+
+    expect((m.client as any).refundOperatorWallet).toHaveBeenCalledWith(
+      1611,
+      { refundAddress: '0xB1c4Ae4F0f8f' },
+      '123456',
+      false,
+    );
+  });
+
+  it('502 second payout переводит в gate и НЕ повторяет сам', async () => {
+    const m = mocksWithWallet();
+    (m.client as any).refundOperatorWallet = jest.fn(async () => {
+      throw new InformerUnavailableError(
+        502,
+        JSON.stringify({ message: 'refund would be a second payout' }),
+      );
+    });
+    const svc = makeService(m);
+
+    await walkToTotp(svc, m);
+    await svc.handleUserMessage('u1', 'c1', '123456');
+
+    expect((m.client as any).refundOperatorWallet).toHaveBeenCalledTimes(1);
+    const state = JSON.parse(m.redis.store.get('informer:pending_op:u1')!);
+    expect(state.step).toBe('gate');
+    expect(m.published.join('')).toContain('Сверил, выплаты не было');
+  });
+
+  it('снятие гейта отправляет withdrawal_verified_absent=true', async () => {
+    const m = mocksWithWallet();
+    let call = 0;
+    (m.client as any).refundOperatorWallet = jest.fn(async () => {
+      if (++call === 1) {
+        throw new InformerUnavailableError(
+          502,
+          JSON.stringify({ message: 'refund would be a second payout' }),
+        );
+      }
+      return { wallet_id: 1611, status: 'ok' };
+    });
+    const svc = makeService(m);
+
+    await walkToTotp(svc, m);
+    await svc.handleUserMessage('u1', 'c1', '123456');
+    await svc.handleUserMessage('u1', 'c1', '✅ Сверил, выплаты не было #1611');
+    await svc.handleUserMessage('u1', 'c1', '654321');
+
+    expect((m.client as any).refundOperatorWallet).toHaveBeenLastCalledWith(
+      1611,
+      { refundToPayer: true },
+      '654321',
+      true,
+    );
+  });
+
+  it('403 пересоздаёт totp-шаг возврата, а не сбрасывает мастер', async () => {
+    const m = mocksWithWallet();
+    (m.client as any).refundOperatorWallet = jest.fn(async () => {
+      throw new InformerTotpError('bad code');
+    });
+    const svc = makeService(m);
+
+    await walkToTotp(svc, m);
+    await svc.handleUserMessage('u1', 'c1', '123456');
+
+    const state = JSON.parse(m.redis.store.get('informer:pending_op:u1')!);
+    expect(state).toMatchObject({ step: 'totp', verifiedAbsent: false });
+    expect(m.published.join('')).toContain('Код не принят');
+  });
+
+  it('таймаут не предлагает повтор', async () => {
+    const m = mocksWithWallet();
+    (m.client as any).refundOperatorWallet = jest.fn(async () => {
+      throw new InformerTimeoutError();
+    });
+    const svc = makeService(m);
+
+    await walkToTotp(svc, m);
+    await svc.handleUserMessage('u1', 'c1', '123456');
+
+    const out = m.published.join('');
+    expect(out).toContain('могла');
+    expect(out).not.toContain('[ACTION:💸 Вернуть #1611]');
+  });
+
+  it('блокировка по кошельку отклоняет параллельный возврат', async () => {
+    const m = mocksWithWallet();
+    m.redis.store.set('informer:refund_inflight:1611', '1');
+    const svc = makeService(m);
+
+    await walkToTotp(svc, m);
+    await svc.handleUserMessage('u1', 'c1', '123456');
+
+    expect((m.client as any).refundOperatorWallet).not.toHaveBeenCalled();
+    expect(m.published.join('')).toContain('уже идёт возврат');
+  });
+
+  it('блокировка снимается после успеха', async () => {
+    const m = mocksWithWallet();
+    const svc = makeService(m);
+
+    await walkToTotp(svc, m);
+    await svc.handleUserMessage('u1', 'c1', '123456');
+
+    expect(m.redis.store.has('informer:refund_inflight:1611')).toBe(false);
+  });
+
+  it('блокировка снимается после ошибки', async () => {
+    const m = mocksWithWallet();
+    (m.client as any).refundOperatorWallet = jest.fn(async () => {
+      throw new InformerTimeoutError();
+    });
+    const svc = makeService(m);
+
+    await walkToTotp(svc, m);
+    await svc.handleUserMessage('u1', 'c1', '123456');
+
+    expect(m.redis.store.has('informer:refund_inflight:1611')).toBe(false);
+  });
+
+  it('отмена очищает состояние без вызова API', async () => {
+    const m = mocksWithWallet();
+    const svc = makeService(m);
+
+    await svc.handleUserMessage('u1', 'c1', '💸 Вернуть #1611');
+    await svc.handleUserMessage('u1', 'c1', '❌ Отмена возврата');
+
+    expect(m.redis.store.has('informer:pending_op:u1')).toBe(false);
+    expect((m.client as any).refundOperatorWallet).not.toHaveBeenCalled();
+  });
+
+  it('метка навигационной кнопки на шаге адреса не становится адресом', async () => {
+    const m = mocksWithWallet();
+    const svc = makeService(m);
+
+    await svc.handleUserMessage('u1', 'c1', '💸 Вернуть #1611');
+    await svc.handleUserMessage('u1', 'c1', '📮 Указать адрес #1611');
+    // Оператор по инерции жмёт навигацию из более раннего сообщения.
+    await svc.handleUserMessage('u1', 'c1', '📋 Кошельки оператора');
+
+    // Мастер сброшен, «адрес» не принят, показан список кошельков.
+    expect(m.redis.store.has('informer:pending_op:u1')).toBe(false);
+    expect((m.client as any).refundOperatorWallet).not.toHaveBeenCalled();
+    expect(m.published.join('')).toContain('Кошельки, требующие оператора');
+  });
+
+  it('двойное нажатие кнопки возврата не дёргает список дважды', async () => {
+    const m = mocksWithWallet();
+    const svc = makeService(m);
+
+    await svc.handleUserMessage('u1', 'c1', '💸 Вернуть #1611');
+    await svc.handleUserMessage('u1', 'c1', '💸 Вернуть #1611');
+
+    expect(m.client.getOperatorRequiredList).toHaveBeenCalledTimes(1);
+  });
+
+  it('кнопка возврата по неизвестному кошельку объясняет, а не падает', async () => {
+    const m = mocksWithWallet();
+    const svc = makeService(m);
+
+    await svc.handleUserMessage('u1', 'c1', '💸 Вернуть #9999');
+
+    expect(m.published.join('')).toContain('9999');
+    expect(m.redis.store.has('informer:pending_op:u1')).toBe(false);
   });
 });

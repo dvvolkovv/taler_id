@@ -1,11 +1,12 @@
 import { Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
 import BigNumber from 'bignumber.js';
 import { PrismaService } from '../prisma/prisma.service';
-import { RedisService } from '../redis/redis.service';
 import { MessengerService } from '../messenger/messenger.service';
 import { MessengerGateway } from '../messenger/messenger.gateway';
 import { InformerClient } from './informer.client';
 import { InformerRatesService } from './informer.rates';
+import { InformerRefundService } from './informer.refund.service';
+import { parseRefundEntry } from './informer.refund-flow';
 import {
   formatOperatorWalletsList,
   formatMiniAcquiringBalances,
@@ -39,6 +40,7 @@ import {
   GatewaySystemWalletBalances,
 } from './informer.types';
 import {
+  PendingOp,
   PendingStateStore,
   PENDING_OP_TTL_SEC,
 } from './informer.pending-state';
@@ -84,8 +86,8 @@ export class InformerBotService {
     @Inject(forwardRef(() => MessengerGateway))
     private readonly gateway: MessengerGateway,
     private readonly rates: InformerRatesService,
-    private readonly redis: RedisService,
     private readonly pending: PendingStateStore,
+    private readonly refund: InformerRefundService,
   ) {}
 
   private async assertAccess(userId: string): Promise<void> {
@@ -130,10 +132,70 @@ export class InformerBotService {
       return;
     }
 
+    // The refund wizard owns the conversation while it's pending: its steps
+    // consume free text (address, TOTP) that the generic action parser would
+    // otherwise misread. Entry button is checked first so a new refund can
+    // always start, even mid-wizard.
+    const refundEntry = parseRefundEntry(content);
+    if (refundEntry != null) {
+      // Anti-flood keyed by wallet, mirroring the retry button: a double-tap
+      // must not fire two list fetches, but refunds on two different
+      // wallets in quick succession stay allowed.
+      const flKey = `${userId}:REFUND_ENTRY:${refundEntry}`;
+      if (Date.now() - (this.lastAction.get(flKey) ?? 0) < ANTI_FLOOD_MS) {
+        this.logger.warn(`anti-flood throttle for ${flKey}`);
+        return;
+      }
+      this.lastAction.set(flKey, Date.now());
+      try {
+        for (const m of await this.refund.startWizard(userId, refundEntry)) {
+          await this.publishBotMessage(userId, conversationId, m);
+        }
+      } catch (e) {
+        await this.publishBotMessage(
+          userId,
+          conversationId,
+          this.errorToMessage(e),
+        );
+      }
+      return;
+    }
+
+    // Loaded ONCE per message and passed down — both the refund dispatcher
+    // and the retry parser need it, and reading Redis twice for the same
+    // message would be pure waste.
+    const pending = await this.pending.load(userId);
+
+    if (pending?.kind === 'refund') {
+      // A navigation label tapped from an older message (e.g. «📋 Кошельки
+      // оператора») arrives as plain text like any other input. On the
+      // `address` step the wizard would take it for a refund address, burn
+      // the TOTP step and confuse the operator. The wizard cannot guard
+      // against this itself without knowing every button the bot renders —
+      // so a known static label always wins over wizard input, and clearing
+      // the pending state is the honest reading of "the operator navigated
+      // away".
+      if (this.parseAction(content) === null) {
+        try {
+          for (const m of await this.refund.runStep(userId, pending, content)) {
+            await this.publishBotMessage(userId, conversationId, m);
+          }
+        } catch (e) {
+          await this.publishBotMessage(
+            userId,
+            conversationId,
+            this.errorToMessage(e),
+          );
+        }
+        return;
+      }
+      await this.pending.clear(userId);
+    }
+
     // Detect a bare 6-digit message as TOTP submission ONLY when there's an
     // active pending state for this user — otherwise it falls through to the
     // normal action parser (and likely gets the "buttons only" hint).
-    const parsed = await this.parseActionWithPendingState(userId, content);
+    const parsed = this.parseActionWithPendingState(pending, content);
     if (!parsed) {
       await this.publishBotMessage(userId, conversationId, formatButtonsOnlyHint());
       return;
@@ -298,25 +360,21 @@ export class InformerBotService {
 
   /**
    * Parser variant aware of pending-op state. A bare 6-digit message is
-   * promoted to SUBMIT_TOTP only when there's an active pending entry for
-   * the retry flow — otherwise a stray "123456" from chat doesn't get
-   * interpreted as a code, and a TOTP typed mid-refund doesn't get routed
-   * into retry.
+   * promoted to SUBMIT_TOTP only when the pending operation is a retry — a
+   * refund TOTP must never start a retry instead. State is passed in rather
+   * than loaded here: the caller already read it once for this message.
    */
-  async parseActionWithPendingState(
-    userId: string,
+  parseActionWithPendingState(
+    pending: PendingOp | null,
     content: string,
-  ): Promise<ParsedAction | null> {
+  ): ParsedAction | null {
     const trimmed = content.trim();
-    if (/^\d{6}$/.test(trimmed)) {
-      const state = await this.pending.load(userId);
-      if (state?.kind === 'retry') {
-        return {
-          code: 'SUBMIT_TOTP',
-          walletId: state.walletId,
-          totpCode: trimmed,
-        };
-      }
+    if (/^\d{6}$/.test(trimmed) && pending?.kind === 'retry') {
+      return {
+        code: 'SUBMIT_TOTP',
+        walletId: pending.walletId,
+        totpCode: trimmed,
+      };
     }
     return this.parseAction(content);
   }
