@@ -2121,11 +2121,9 @@ import {
 
 (импорт положить к остальным импортам вверху файла, константы `PENDING_TOTP_TTL_SEC` / `pendingTotpKey` удалить целиком).
 
-2. В конструкторе после присваивания зависимостей создать хранилище. Заменить закрывающую скобку конструктора (строка 90) так, чтобы тело появилось:
+2. Добавить `PendingStateStore` **седьмым параметром конструктора**, обычным внедрением — класс зарегистрирован провайдером в `informer-bot.module.ts` (правка Task 3), поэтому создавать его руками через `new` не нужно и не следует: в этом модуле всё остальное тоже приходит из DI.
 
 ```ts
-  private readonly pending: PendingStateStore;
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly client: InformerClient,
@@ -2134,10 +2132,11 @@ import {
     private readonly gateway: MessengerGateway,
     private readonly rates: InformerRatesService,
     private readonly redis: RedisService,
-  ) {
-    this.pending = new PendingStateStore(this.redis);
-  }
+    private readonly pending: PendingStateStore,
+  ) {}
 ```
+
+⚠️ **Конструктор сменил арность — существующие тесты сломаются.** В `informer-bot.service.spec.ts` сервис создаётся позиционно в двух местах: хелпер `makeService` (~строка 424) и класс `TestableService` (~строка 26). В обоих добавить седьмым аргументом `new PendingStateStore(<тот же redis-стаб> as any)`, импорт `PendingStateStore` из `./informer.pending-state` дописать в шапку spec-файла. Без этого `this.pending` окажется `undefined`, и падения пойдут не там, где причина.
 
 3. В ветке `case 'RETRY_OPERATOR_WALLET'` заменить вызов `this.redis.setEx(pendingTotpKey(userId), …)` на:
 
