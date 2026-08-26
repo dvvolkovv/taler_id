@@ -1,6 +1,7 @@
 import BigNumber from 'bignumber.js';
 import { InformerBotService } from './informer-bot.service';
 import { InformerTotpError } from './informer.types';
+import { PendingStateStore } from './informer.pending-state';
 
 // In-memory Redis stub — only the methods the service actually calls
 // (get/setEx/del) are surfaced. Each test gets its own instance so state
@@ -25,13 +26,15 @@ function makeRedisStub() {
 // We exercise the helper via a tiny subclass that exposes it.
 class TestableService extends InformerBotService {
   constructor() {
+    const redis = makeRedisStub();
     super(
       null as any,
       null as any,
       null as any,
       null as any,
       null as any,
-      makeRedisStub() as any,
+      redis as any,
+      new PendingStateStore(redis as any),
     );
   }
   public _nextMorningInBerlin(now?: Date): Date {
@@ -188,13 +191,15 @@ describe('InformerBotService.handleUserMessage (refill actions)', () => {
   }
 
   function makeService(m: ReturnType<typeof makeMocks>) {
+    const redis = makeRedisStub();
     const svc = new InformerBotService(
       m.prisma as any,
       null as any,
       m.messenger as any,
       m.gateway as any,
       null as any,
-      makeRedisStub() as any,
+      redis as any,
+      new PendingStateStore(redis as any),
     );
     // capture published content for assertions
     (svc as any).publishBotMessage = jest.fn(
@@ -345,13 +350,15 @@ describe('InformerBotService.handleUserMessage (fiat actions)', () => {
   }
 
   function makeService(m: ReturnType<typeof makeMocks>) {
+    const redis = makeRedisStub();
     const svc = new InformerBotService(
       m.prisma as any,
       m.client as any,
       m.messenger as any,
       m.gateway as any,
       m.rates as any,
-      makeRedisStub() as any,
+      redis as any,
+      new PendingStateStore(redis as any),
     );
     (svc as any).publishBotMessage = jest.fn(
       async (_uid: string, _cid: string, content: string) => {
@@ -430,6 +437,7 @@ describe('InformerBotService.handleUserMessage (retry wallet, flow B)', () => {
       m.gateway as any,
       null as any,
       m.redis as any,
+      new PendingStateStore(m.redis as any),
     );
     (svc as any).publishBotMessage = jest.fn(
       async (_u: string, _c: string, content: string) => {
@@ -450,7 +458,7 @@ describe('InformerBotService.handleUserMessage (retry wallet, flow B)', () => {
     // Pending state stored with TTL.
     expect(m.redis.setEx).toHaveBeenCalledTimes(1);
     const [key, ttl, value] = m.redis.setEx.mock.calls[0];
-    expect(key).toBe('informer:pending_totp:u1');
+    expect(key).toBe('informer:pending_op:u1');
     expect(ttl).toBe(60);
     expect(JSON.parse(value)).toMatchObject({ walletId: 613 });
 
@@ -473,8 +481,8 @@ describe('InformerBotService.handleUserMessage (retry wallet, flow B)', () => {
     expect(totpCode).toBe('123456');
 
     // State cleared so the same code can't be replayed.
-    expect(m.redis.del).toHaveBeenCalledWith('informer:pending_totp:u1');
-    expect(m.redis.store.has('informer:pending_totp:u1')).toBe(false);
+    expect(m.redis.del).toHaveBeenCalledWith('informer:pending_op:u1');
+    expect(m.redis.store.has('informer:pending_op:u1')).toBe(false);
 
     expect(m.published[0]).toContain('Повтор запущен');
     expect(m.published[0]).toContain('#613');
@@ -499,8 +507,8 @@ describe('InformerBotService.handleUserMessage (retry wallet, flow B)', () => {
     await svc.handleUserMessage('u1', 'c1', '❌ Отмена ретрая');
 
     expect(m.client.retryOperatorWallet).not.toHaveBeenCalled();
-    expect(m.redis.del).toHaveBeenCalledWith('informer:pending_totp:u1');
-    expect(m.redis.store.has('informer:pending_totp:u1')).toBe(false);
+    expect(m.redis.del).toHaveBeenCalledWith('informer:pending_op:u1');
+    expect(m.redis.store.has('informer:pending_op:u1')).toBe(false);
     expect(m.published[0]).toContain('отменён');
   });
 
@@ -517,7 +525,7 @@ describe('InformerBotService.handleUserMessage (retry wallet, flow B)', () => {
     await svc.handleUserMessage('u1', 'c1', 'случайный текст');
 
     expect(m.client.retryOperatorWallet).not.toHaveBeenCalled();
-    expect(m.redis.store.has('informer:pending_totp:u1')).toBe(true);
+    expect(m.redis.store.has('informer:pending_op:u1')).toBe(true);
   });
 
   it('OPERATOR_WALLETS publishes one message per wallet (plus header/trailer) so each retry button sits under its wallet', async () => {
@@ -578,13 +586,67 @@ describe('InformerBotService.handleUserMessage (retry wallet, flow B)', () => {
     // navigating back to the list.
     expect(m.redis.setEx).toHaveBeenCalledTimes(1);
     const [key, _ttl, value] = m.redis.setEx.mock.calls[0];
-    expect(key).toBe('informer:pending_totp:u1');
+    expect(key).toBe('informer:pending_op:u1');
     expect(JSON.parse(value)).toMatchObject({ walletId: 613 });
-    expect(m.redis.store.has('informer:pending_totp:u1')).toBe(true);
+    expect(m.redis.store.has('informer:pending_op:u1')).toBe(true);
     // User-facing message points at the same wallet and asks for a fresh
     // code. It MUST NOT include the legacy bogus retry button.
     expect(m.published[0]).toContain('#613');
     expect(m.published[0]).toContain('Код не принят');
     expect(m.published[0]).not.toContain('🔄 Повторить SUBMIT_TOTP');
+  });
+
+  describe('retry на едином pending-состоянии', () => {
+    it('кладёт состояние с kind=retry', async () => {
+      const m = makeMocks();
+      const svc = makeService(m);
+
+      await svc.handleUserMessage('u1', 'c1', '🔁 Повторить #1611');
+
+      const raw = m.redis.store.get('informer:pending_op:u1');
+      expect(JSON.parse(raw!)).toEqual({
+        kind: 'retry',
+        step: 'totp',
+        walletId: 1611,
+      });
+    });
+
+    // снимается в Task 9 — возврата ещё нет, RETURN_WALLET action не парсится.
+    it.skip('кнопка возврата перетирает pending от retry — последняя кнопка выигрывает', async () => {
+      const m = makeMocks();
+      m.client.getOperatorRequiredList = jest.fn(async () => ({
+        items: [
+          {
+            wallet_id: 1620,
+            created_at: '2026-08-24T17:02:11Z',
+            withdraw_address: '0xcust',
+            withdraw_network: 'TRON',
+            withdraw_token: 'usdt',
+            withdraw_amount: '50',
+          },
+        ],
+        total: 1,
+        page: 1,
+        per_page: 50,
+      }));
+      const svc = makeService(m);
+
+      await svc.handleUserMessage('u1', 'c1', '🔁 Повторить #1611');
+      await svc.handleUserMessage('u1', 'c1', '💸 Вернуть #1620');
+
+      const state = JSON.parse(m.redis.store.get('informer:pending_op:u1')!);
+      expect(state.kind).toBe('refund');
+      expect(state.walletId).toBe(1620);
+    });
+
+    it('6 цифр при retry-состоянии зовут retry, а не возврат', async () => {
+      const m = makeMocks();
+      const svc = makeService(m);
+
+      await svc.handleUserMessage('u1', 'c1', '🔁 Повторить #1611');
+      await svc.handleUserMessage('u1', 'c1', '123456');
+
+      expect(m.client.retryOperatorWallet).toHaveBeenCalledWith(1611, '123456');
+    });
   });
 });

@@ -38,6 +38,10 @@ import {
   MiniAcquiringBalances,
   GatewaySystemWalletBalances,
 } from './informer.types';
+import {
+  PendingStateStore,
+  PENDING_OP_TTL_SEC,
+} from './informer.pending-state';
 
 const ANTI_FLOOD_MS = 3000;
 
@@ -68,12 +72,6 @@ interface ParsedAction {
   totpCode?: string;
 }
 
-// TTL of the pending-TOTP window. TOTP codes from authenticator apps live
-// ~30s (+/-1 step). 60s gives the operator one safe attempt: button →
-// open app → read → type → send.
-const PENDING_TOTP_TTL_SEC = 60;
-const pendingTotpKey = (userId: string) => `informer:pending_totp:${userId}`;
-
 @Injectable()
 export class InformerBotService {
   private readonly logger = new Logger(InformerBotService.name);
@@ -87,6 +85,7 @@ export class InformerBotService {
     private readonly gateway: MessengerGateway,
     private readonly rates: InformerRatesService,
     private readonly redis: RedisService,
+    private readonly pending: PendingStateStore,
   ) {}
 
   private async assertAccess(userId: string): Promise<void> {
@@ -178,12 +177,12 @@ export class InformerBotService {
           // state lives in Redis with TTL so an orphaned prompt expires on
           // its own. A new retry button overwrites any earlier pending
           // state — last button wins.
-          await this.redis.setEx(
-            pendingTotpKey(userId),
-            PENDING_TOTP_TTL_SEC,
-            JSON.stringify({ walletId, createdAt: Date.now() }),
-          );
-          md = formatRetryAwaitingTotp(walletId, PENDING_TOTP_TTL_SEC);
+          await this.pending.save(userId, {
+            kind: 'retry',
+            step: 'totp',
+            walletId,
+          });
+          md = formatRetryAwaitingTotp(walletId, PENDING_OP_TTL_SEC);
           break;
         }
         case 'SUBMIT_TOTP': {
@@ -195,7 +194,7 @@ export class InformerBotService {
             md = formatClientError('Неполный TOTP-запрос.');
             break;
           }
-          await this.redis.del(pendingTotpKey(userId));
+          await this.pending.clear(userId);
           try {
             const result = await this.client.retryOperatorWallet(
               walletId,
@@ -206,12 +205,12 @@ export class InformerBotService {
             if (e instanceof InformerTotpError) {
               // Re-arm pending for the same wallet so the operator can
               // submit a fresh code without going back to the wallet list.
-              await this.redis.setEx(
-                pendingTotpKey(userId),
-                PENDING_TOTP_TTL_SEC,
-                JSON.stringify({ walletId, createdAt: Date.now() }),
-              );
-              md = formatRetryTotpRejected(walletId, PENDING_TOTP_TTL_SEC);
+              await this.pending.save(userId, {
+                kind: 'retry',
+                step: 'totp',
+                walletId,
+              });
+              md = formatRetryTotpRejected(walletId, PENDING_OP_TTL_SEC);
               break;
             }
             throw e; // generic admin-API errors bubble to outer catch
@@ -219,7 +218,7 @@ export class InformerBotService {
           break;
         }
         case 'CANCEL_TOTP': {
-          await this.redis.del(pendingTotpKey(userId));
+          await this.pending.clear(userId);
           md = formatRetryCancelled();
           break;
         }
@@ -298,10 +297,11 @@ export class InformerBotService {
   }
 
   /**
-   * Parser variant aware of pending-TOTP state. A bare 6-digit message is
-   * promoted to SUBMIT_TOTP only when there's an active pending entry in
-   * Redis — otherwise a stray "123456" from chat doesn't get interpreted
-   * as a code.
+   * Parser variant aware of pending-op state. A bare 6-digit message is
+   * promoted to SUBMIT_TOTP only when there's an active pending entry for
+   * the retry flow — otherwise a stray "123456" from chat doesn't get
+   * interpreted as a code, and a TOTP typed mid-refund doesn't get routed
+   * into retry.
    */
   async parseActionWithPendingState(
     userId: string,
@@ -309,19 +309,13 @@ export class InformerBotService {
   ): Promise<ParsedAction | null> {
     const trimmed = content.trim();
     if (/^\d{6}$/.test(trimmed)) {
-      const raw = await this.redis.get(pendingTotpKey(userId));
-      if (raw) {
-        try {
-          const state = JSON.parse(raw) as { walletId: number };
-          return {
-            code: 'SUBMIT_TOTP',
-            walletId: state.walletId,
-            totpCode: trimmed,
-          };
-        } catch {
-          // Corrupt state — fall through to regular parser so the operator
-          // gets the buttons-only hint instead of a silent swallow.
-        }
+      const state = await this.pending.load(userId);
+      if (state?.kind === 'retry') {
+        return {
+          code: 'SUBMIT_TOTP',
+          walletId: state.walletId,
+          totpCode: trimmed,
+        };
       }
     }
     return this.parseAction(content);
