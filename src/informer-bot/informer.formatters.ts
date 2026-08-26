@@ -45,14 +45,88 @@ export const FIAT_FOOTER_BUTTONS =
   '[ACTION:💰 Балансы mini-acquiring]\n' +
   '[ACTION:🏦 Системные кошельки gateway]';
 
-function formatRow(item: OperatorRequiredItem): string {
-  const at = item.created_at.replace('T', ' ').replace('Z', ' UTC');
-  return [
-    `**${item.withdraw_network} / ${item.withdraw_token}**`,
-    `\`${item.withdraw_address}\``,
-    `${item.withdraw_amount}`,
-    at,
-  ].join(' · ');
+/** ISO-8601 → человекочитаемое «2026-08-24 17:03:40 UTC». */
+function formatTimestamp(iso: string): string {
+  return iso.replace('T', ' ').replace('Z', ' UTC');
+}
+
+const REASON_INDENT = '   ';
+
+/**
+ * Renders the last recorded failure. Returns an empty array when all three
+ * fields are absent — they disappear both when nothing ever failed AND when
+ * the platform's journal is down, so absence must render as nothing at all,
+ * never as "no problems here". This is the one case this function does NOT
+ * change based on which subset of fields is present.
+ *
+ * When ANY field is present, the block always opens with the ⚠️ marker so a
+ * reader can tell "this is a failure note" at a glance, even from a partial
+ * record:
+ *   - event present            → ⚠️ `event`, then text (indented, if any),
+ *                                 then time (indented, if any)
+ *   - no event, but text       → ⚠️ text, then time (indented, if any)
+ *   - only time                → ⚠️ Отказ зафиксирован: <time> — the honest
+ *                                 version of "something failed, we just don't
+ *                                 know what", better than a bare date or
+ *                                 silence
+ */
+function reasonLines(item: OperatorRequiredItem): string[] {
+  const text = stringifyLastError(item.last_error);
+  const at = item.last_error_at ? formatTimestamp(item.last_error_at) : '';
+
+  if (item.last_error_event) {
+    const lines = [`⚠️ \`${item.last_error_event}\``];
+    if (text) lines.push(`${REASON_INDENT}${text}`);
+    if (at) lines.push(`${REASON_INDENT}${at}`);
+    return lines;
+  }
+  if (text) {
+    const lines = [`⚠️ ${text}`];
+    if (at) lines.push(`${REASON_INDENT}${at}`);
+    return lines;
+  }
+  if (at) {
+    return [`⚠️ Отказ зафиксирован: ${at}`];
+  }
+  return [];
+}
+
+/**
+ * `last_error` is prose for most events, but gate rejections send their
+ * details-payload instead, e.g. {"reason":"withdrawal_intent_exists"}.
+ * Render either as text — the guide is explicit that clients should not
+ * parse it. Must never fall back to `String(obj)` — that yields the
+ * useless `[object Object]`, which is exactly what an absent-reason screen
+ * must not show.
+ */
+function stringifyLastError(
+  err: string | Record<string, unknown> | undefined,
+): string {
+  if (err == null) return '';
+  if (typeof err === 'string') return err.trim();
+  try {
+    return JSON.stringify(err);
+  } catch {
+    // Unreachable under the current contract — `last_error` comes from
+    // JSON.parse of an HTTP response, which never yields circular refs or
+    // BigInt, so JSON.stringify can't throw here. Kept as a cheap guard.
+    return '(нечитаемый payload)';
+  }
+}
+
+/**
+ * Groups wallets by `last_error_event` so ten wallets sharing one event read
+ * as one incident instead of ten problems. Sorted by count descending.
+ */
+function reasonSummaryLines(items: OperatorRequiredItem[]): string[] {
+  const counts = new Map<string, number>();
+  for (const i of items) {
+    if (!i.last_error_event) continue;
+    counts.set(i.last_error_event, (counts.get(i.last_error_event) ?? 0) + 1);
+  }
+  if (counts.size === 0) return [];
+  const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  return ['', 'Причины:', ...sorted.map(([ev, n]) => `• ${n}× \`${ev}\``)];
 }
 
 /**
@@ -82,10 +156,11 @@ export function formatOperatorWalletsList(
     '📋 **Кошельки, требующие оператора**',
     '',
     `Всего: **${data.total}** (стр. ${data.page}, по ${data.per_page})`,
+    ...reasonSummaryLines(data.items),
   ].join('\n');
 
   const cards = data.items.map((i) => {
-    const at = i.created_at.replace('T', ' ').replace('Z', ' UTC');
+    const at = formatTimestamp(i.created_at);
     const idLine =
       i.wallet_id != null
         ? `🪪 **#${i.wallet_id}** · ${i.withdraw_network} / ${i.withdraw_token}`
@@ -95,9 +170,14 @@ export function formatOperatorWalletsList(
       `Адрес: \`${i.withdraw_address}\``,
       `Сумма: \`${i.withdraw_amount}\``,
       `Создан: ${at}`,
+      ...reasonLines(i),
     ];
     if (i.wallet_id != null) {
-      lines.push('', `[ACTION:🔁 Повторить #${i.wallet_id}]`);
+      lines.push(
+        '',
+        `[ACTION:🔁 Повторить #${i.wallet_id}]`,
+        `[ACTION:💸 Вернуть #${i.wallet_id}]`,
+      );
     }
     return lines.join('\n');
   });
@@ -236,7 +316,8 @@ export function formatGatewayWallets(
 export function formatNewOperatorWalletAlert(
   item: OperatorRequiredItem,
 ): string {
-  const at = item.created_at.replace('T', ' ').replace('Z', ' UTC');
+  const at = formatTimestamp(item.created_at);
+  const reason = reasonLines(item);
   return [
     '🚨 **Новый кошелёк ждёт оператора**',
     '',
@@ -245,6 +326,7 @@ export function formatNewOperatorWalletAlert(
     `Адрес: \`${item.withdraw_address}\``,
     `Сумма: \`${item.withdraw_amount}\``,
     `Создан: ${at}`,
+    ...(reason.length > 0 ? ['', ...reason] : []),
     '',
     '[ACTION:📋 Все ожидающие]',
     '[ACTION:🏦 Балансы gateway]',

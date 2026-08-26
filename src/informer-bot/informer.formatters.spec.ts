@@ -158,6 +158,48 @@ describe('formatNewOperatorWalletAlert', () => {
     expect(md).toContain('[ACTION:📋 Все ожидающие]');
     expect(md).toContain('[ACTION:🏦 Балансы gateway]');
   });
+
+  it('с полями причины показывает событие, текст и время', () => {
+    const md = formatNewOperatorWalletAlert({
+      created_at: '2026-06-02T12:49:51Z',
+      withdraw_address: 'TGkEaodwbZWd8Sg7wGoRQU5tHYwhTWM9ZG',
+      withdraw_network: 'tron',
+      withdraw_token: 'usdt',
+      withdraw_amount: '1.258494593554098000',
+      last_error_event: 'withdrawal_to_address_failed',
+      last_error: 'insufficient balance: have 1, need 5',
+      last_error_at: '2026-06-02T12:50:10Z',
+    });
+    expect(md).toContain('⚠️ `withdrawal_to_address_failed`');
+    expect(md).toContain('insufficient balance: have 1, need 5');
+    expect(md).toContain('2026-06-02 12:50:10 UTC');
+  });
+
+  it('без полей причины не содержит ⚠️ и совпадает по составу строк с прежним поведением', () => {
+    const item = {
+      created_at: '2026-06-02T12:49:51Z',
+      withdraw_address: 'TGkEaodwbZWd8Sg7wGoRQU5tHYwhTWM9ZG',
+      withdraw_network: 'tron',
+      withdraw_token: 'usdt',
+      withdraw_amount: '1.258494593554098000',
+    };
+    const md = formatNewOperatorWalletAlert(item);
+    expect(md).not.toContain('⚠️');
+    expect(md).toBe(
+      [
+        '🚨 **Новый кошелёк ждёт оператора**',
+        '',
+        `Сеть: \`${item.withdraw_network}\``,
+        `Токен: \`${item.withdraw_token}\``,
+        `Адрес: \`${item.withdraw_address}\``,
+        `Сумма: \`${item.withdraw_amount}\``,
+        `Создан: 2026-06-02 12:49:51 UTC`,
+        '',
+        '[ACTION:📋 Все ожидающие]',
+        '[ACTION:🏦 Балансы gateway]',
+      ].join('\n'),
+    );
+  });
 });
 
 import { formatRefillDigest } from './informer.formatters';
@@ -519,5 +561,236 @@ describe('OPERATOR_BUTTONS main menu (5 actions)', () => {
     expect(md).toContain('[ACTION:🏦 Системные кошельки gateway]');
     expect(md).toContain('[ACTION:💶 Балансы в евро]');
     expect(md).toContain('[ACTION:⚙️ Настройки алёртов]');
+  });
+});
+
+describe('formatOperatorWalletsList — причина отказа', () => {
+  const base = {
+    wallet_id: 1611,
+    created_at: '2026-08-24T17:02:11Z',
+    withdraw_address: '0xcust',
+    withdraw_network: 'BSC',
+    withdraw_token: 'usdt',
+    withdraw_amount: '50',
+  };
+
+  it('рисует событие, текст и время в карточке', () => {
+    const msgs = formatOperatorWalletsList({
+      items: [
+        {
+          ...base,
+          last_error_event: 'withdrawal_to_address_failed',
+          last_error: 'insufficient balance: have 1, need 5',
+          last_error_at: '2026-08-24T17:03:40Z',
+        },
+      ],
+      total: 1,
+      page: 1,
+      per_page: 50,
+    });
+    const card = msgs[1];
+    expect(card).toContain('withdrawal_to_address_failed');
+    expect(card).toContain('insufficient balance: have 1, need 5');
+    expect(card).toContain('2026-08-24 17:03:40 UTC');
+  });
+
+  it('приводит объектный last_error к тексту, а не падает', () => {
+    const msgs = formatOperatorWalletsList({
+      items: [
+        {
+          ...base,
+          last_error_event: 'gate_rejected',
+          last_error: { reason: 'withdrawal_intent_exists' },
+          last_error_at: '2026-08-24T17:03:40Z',
+        },
+      ],
+      total: 1,
+      page: 1,
+      per_page: 50,
+    });
+    expect(msgs[1]).toContain('withdrawal_intent_exists');
+  });
+
+  it('без полей причины не рисует ни блока, ни признака проблемы', () => {
+    const msgs = formatOperatorWalletsList({
+      items: [base],
+      total: 1,
+      page: 1,
+      per_page: 50,
+    });
+    const card = msgs[1];
+    expect(card).not.toContain('⚠️');
+    expect(card).not.toContain('Причина');
+    // Отсутствие причины НЕ означает «с кошельком всё в порядке».
+    expect(card).not.toContain('ошибок нет');
+  });
+
+  it('рисует событие даже когда текста ошибки нет', () => {
+    const msgs = formatOperatorWalletsList({
+      items: [{ ...base, last_error_event: 'aml_refund_failed' }],
+      total: 1,
+      page: 1,
+      per_page: 50,
+    });
+    expect(msgs[1]).toContain('aml_refund_failed');
+  });
+
+  it('складывает сводку по событиям в шапку', () => {
+    const msgs = formatOperatorWalletsList({
+      items: [
+        {
+          ...base,
+          wallet_id: 1,
+          last_error_event: 'withdrawal_to_address_failed',
+        },
+        {
+          ...base,
+          wallet_id: 2,
+          last_error_event: 'withdrawal_to_address_failed',
+        },
+        {
+          ...base,
+          wallet_id: 3,
+          last_error_event: 'withdrawal_to_address_failed',
+        },
+        { ...base, wallet_id: 4, last_error_event: 'aml_refund_failed' },
+      ],
+      total: 4,
+      page: 1,
+      per_page: 50,
+    });
+    const header = msgs[0];
+    expect(header).toContain('3× `withdrawal_to_address_failed`');
+    expect(header).toContain('1× `aml_refund_failed`');
+  });
+
+  it('не рисует сводку, когда причин нет ни у одного кошелька', () => {
+    const msgs = formatOperatorWalletsList({
+      items: [base, { ...base, wallet_id: 1612 }],
+      total: 2,
+      page: 1,
+      per_page: 50,
+    });
+    expect(msgs[0]).not.toContain('Причины:');
+  });
+
+  it('добавляет кнопку возврата рядом с кнопкой повтора', () => {
+    const msgs = formatOperatorWalletsList({
+      items: [base],
+      total: 1,
+      page: 1,
+      per_page: 50,
+    });
+    expect(msgs[1]).toContain('[ACTION:🔁 Повторить #1611]');
+    expect(msgs[1]).toContain('[ACTION:💸 Вернуть #1611]');
+  });
+
+  it('без wallet_id не рисует ни повтор, ни возврат', () => {
+    const noId = {
+      created_at: base.created_at,
+      withdraw_address: base.withdraw_address,
+      withdraw_network: base.withdraw_network,
+      withdraw_token: base.withdraw_token,
+      withdraw_amount: base.withdraw_amount,
+    };
+    const msgs = formatOperatorWalletsList({
+      items: [noId],
+      total: 1,
+      page: 1,
+      per_page: 50,
+    });
+    expect(msgs[1]).not.toContain('Повторить');
+    expect(msgs[1]).not.toContain('Вернуть');
+  });
+
+  it('только время без события и текста — честная строка «Отказ зафиксирован»', () => {
+    const msgs = formatOperatorWalletsList({
+      items: [{ ...base, last_error_at: '2026-08-24T17:03:40Z' }],
+      total: 1,
+      page: 1,
+      per_page: 50,
+    });
+    const card = msgs[1];
+    expect(card).toContain('⚠️ Отказ зафиксирован: 2026-08-24 17:03:40 UTC');
+    // Не голая дата без маркера и не выдумываем событие/текст.
+    expect(card).not.toMatch(/\n {3}2026-08-24 17:03:40 UTC/);
+  });
+
+  it('только текст без события — маркер ⚠️ стоит прямо перед текстом', () => {
+    const msgs = formatOperatorWalletsList({
+      items: [{ ...base, last_error: 'insufficient balance: have 1, need 5' }],
+      total: 1,
+      page: 1,
+      per_page: 50,
+    });
+    const card = msgs[1];
+    expect(card).toContain('⚠️ insufficient balance: have 1, need 5');
+  });
+
+  it('текст и время без события — время идёт отдельной строкой с отступом', () => {
+    const msgs = formatOperatorWalletsList({
+      items: [
+        {
+          ...base,
+          last_error: 'insufficient balance: have 1, need 5',
+          last_error_at: '2026-08-24T17:03:40Z',
+        },
+      ],
+      total: 1,
+      page: 1,
+      per_page: 50,
+    });
+    const card = msgs[1];
+    expect(card).toContain(
+      '⚠️ insufficient balance: have 1, need 5\n   2026-08-24 17:03:40 UTC',
+    );
+  });
+
+  it('stringifyLastError: null не рендерит текстовую строку', () => {
+    const msgs = formatOperatorWalletsList({
+      items: [
+        {
+          ...base,
+          last_error: null as unknown as string,
+          last_error_event: 'x',
+        },
+      ],
+      total: 1,
+      page: 1,
+      per_page: 50,
+    });
+    // Событие есть — блок рисуется, но без второй (текстовой) строки.
+    expect(msgs[1]).toContain('⚠️ `x`');
+  });
+
+  it('stringifyLastError: пустая строка не рендерит текстовую строку', () => {
+    const msgs = formatOperatorWalletsList({
+      items: [{ ...base, last_error: '   ', last_error_event: 'x' }],
+      total: 1,
+      page: 1,
+      per_page: 50,
+    });
+    const card = msgs[1];
+    expect(card).toContain('⚠️ `x`');
+    expect(card).not.toMatch(/⚠️ `x`\n {3}\S/);
+  });
+
+  it('stringifyLastError: вложенный объект сериализуется целиком, не [object Object]', () => {
+    const msgs = formatOperatorWalletsList({
+      items: [
+        {
+          ...base,
+          last_error_event: 'gate_rejected',
+          last_error: { reason: 'nested', details: { code: 42 } },
+        },
+      ],
+      total: 1,
+      page: 1,
+      per_page: 50,
+    });
+    const card = msgs[1];
+    expect(card).not.toContain('[object Object]');
+    expect(card).toContain('nested');
+    expect(card).toContain('42');
   });
 });
