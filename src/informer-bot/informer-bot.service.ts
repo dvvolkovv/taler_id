@@ -7,6 +7,7 @@ import { InformerClient } from './informer.client';
 import { InformerRatesService } from './informer.rates';
 import { InformerRefundService } from './informer.refund.service';
 import { parseRefundEntry } from './informer.refund-flow';
+import { formatRefundCancelled } from './informer.refund.formatters';
 import {
   formatOperatorWalletsList,
   formatMiniAcquiringBalances,
@@ -197,7 +198,31 @@ export class InformerBotService {
       // so a known static label always wins over wizard input, and clearing
       // the pending state is the honest reading of "the operator navigated
       // away".
-      if (this.parseAction(content) === null) {
+      const knownAction = this.parseAction(content);
+      if (knownAction === null) {
+        // Anti-flood keyed by wallet AND the exact message, same convention
+        // as every other action in this file (entry button, retry) applied
+        // to a step machine where a wallet-only or step-only key would be
+        // wrong either way: the wizard's own legitimate progression fires
+        // runStep for the same wallet several times within any 3s window
+        // (method -> confirm -> totp), and re-arming the SAME step after a
+        // rejected code (403 keeps step='totp' so a fresh code can be
+        // retyped) means the step alone doesn't distinguish "the operator
+        // moved on" from "the operator retried". Keying on the message
+        // content is what actually matches "duplicate": a second identical
+        // tap/redelivery on the step the operator is CURRENTLY on is
+        // caught, while a different code or a different button on that
+        // same step is not. The atomic lock in InformerRefundService still
+        // stops a second send either way, but without this the operator
+        // sees a duplicated card and pm2 logs get duplicated warn lines for
+        // what is one event, not two — exactly where a money-incident
+        // post-mortem most needs the log to be trustworthy.
+        const flKey = `${userId}:REFUND_STEP:${pending.walletId}:${content.trim()}`;
+        if (Date.now() - (this.lastAction.get(flKey) ?? 0) < ANTI_FLOOD_MS) {
+          this.logger.warn(`anti-flood throttle for ${flKey}`);
+          return;
+        }
+        this.lastAction.set(flKey, Date.now());
         try {
           for (const m of await this.refund.runStep(userId, pending, content)) {
             await this.publishBotMessage(userId, conversationId, m);
@@ -218,6 +243,21 @@ export class InformerBotService {
         return;
       }
       await this.pending.clear(userId);
+      if (knownAction.code === 'CANCEL_TOTP') {
+        // The label that matched here is retry's own cancel button
+        // ("❌ Отмена ретрая" / "отмена ввода кода"), stale from an earlier
+        // message. The state it just cleared belongs to the refund
+        // wizard, not to a retry — falling through to the switch below
+        // would render formatRetryCancelled()'s "Ретрай отменён", telling
+        // the operator the wrong operation was cancelled. Safe either way
+        // (pending is already gone), but confusing.
+        await this.publishBotMessage(
+          userId,
+          conversationId,
+          formatRefundCancelled(),
+        );
+        return;
+      }
     }
 
     // Detect a bare 6-digit message as TOTP submission ONLY when there's an

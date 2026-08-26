@@ -1007,4 +1007,55 @@ describe('мастер возврата в сервисе', () => {
     expect(m.published.join('')).toContain('9999');
     expect(m.redis.store.has('informer:pending_op:u1')).toBe(false);
   });
+
+  it('анти-флуд: два одинаковых сообщения подряд на шаге confirm дают ровно один вызов runStep', async () => {
+    const m = mocksWithWallet();
+    const svc = makeService(m);
+
+    await svc.handleUserMessage('u1', 'c1', '💸 Вернуть #1611');
+    await svc.handleUserMessage('u1', 'c1', '👤 Вернуть плательщику #1611');
+
+    const runStepSpy = jest.spyOn((svc as any).refund, 'runStep');
+
+    // Same message, back to back — a double-tap or a client redelivery,
+    // not a legitimate second step.
+    await svc.handleUserMessage('u1', 'c1', '✅ Подтвердить возврат #1611');
+    await svc.handleUserMessage('u1', 'c1', '✅ Подтвердить возврат #1611');
+
+    expect(runStepSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('анти-флуд не блокирует легитимное продвижение мастера по шагам', async () => {
+    // Regression guard for the naive "key by wallet only" version of the
+    // anti-flood check: method -> confirm -> totp fires runStep three times
+    // for the same wallet well within the anti-flood window, and none of
+    // those calls are duplicates of each other.
+    const m = mocksWithWallet();
+    const svc = makeService(m);
+
+    await walkToTotp(svc, m);
+    await svc.handleUserMessage('u1', 'c1', '123456');
+
+    expect((m.client as any).refundOperatorWallet).toHaveBeenCalledWith(
+      1611,
+      { refundToPayer: true },
+      '123456',
+      false,
+    );
+  });
+
+  it('отмена ретрая, нажатая в середине мастера возврата, показывает текст возврата, а не ретрая', async () => {
+    const m = mocksWithWallet();
+    const svc = makeService(m);
+
+    await svc.handleUserMessage('u1', 'c1', '💸 Вернуть #1611');
+    // A stale retry-cancel button from an earlier message in the same chat.
+    await svc.handleUserMessage('u1', 'c1', '❌ Отмена ретрая');
+
+    expect(m.redis.store.has('informer:pending_op:u1')).toBe(false);
+    expect((m.client as any).refundOperatorWallet).not.toHaveBeenCalled();
+    const out = m.published.join('');
+    expect(out).toContain('Возврат отменён');
+    expect(out).not.toContain('Ретрай отменён');
+  });
 });
