@@ -70,4 +70,15 @@ describe('classifyRefundFailure', () => {
         .kind,
     ).toBe('already_exists');
   });
+
+  it('терпит пробелы по краям у "refund failed" — это всё ещё обёртка платформы', () => {
+    // Единственное правило с точным сравнением, а не подстроковым.
+    // Пробелы по краям приходят от платформы, а не от прокси, поэтому
+    // уводить такое сообщение в transport было бы враньём оператору:
+    // платформа ответила по делу, просто без деталей.
+    const r = classifyRefundFailure('  refund failed  ');
+    expect(r.kind).toBe('generic_business');
+    // Текст сохраняется дословно, включая пробелы.
+    expect(r.message).toBe('  refund failed  ');
+  });
 });
