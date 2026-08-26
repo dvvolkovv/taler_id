@@ -112,7 +112,7 @@ export interface WalletCtx {
 - [ ] **Step 2: Проверить компиляцию**
 
 Run: `cd /Users/dmitry/Downloads/taler_id && npx tsc --noEmit -p tsconfig.json`
-Expected: без ошибок. Если появилась `Duplicate identifier 'OperatorWalletRetryResult'` — удалён не тот блок, оставить ровно одно объявление.
+Expected: ровно 47 ошибок, все в `.spec.ts` файлах — это зафиксированная базовая линия репозитория на 2026-08-26, не наша регрессия. **Ноль** ошибок в `src/informer-bot/` и ноль в продакшн-коде. Проверка: `npx tsc --noEmit -p tsconfig.json 2>&1 | grep 'error TS' | grep -vc '\.spec\.ts'` должно дать `0`, и `... | grep -c 'informer-bot'` тоже `0`. Если появилась `Duplicate identifier 'OperatorWalletRetryResult'` — удалён не тот блок, оставить ровно одно объявление.
 
 - [ ] **Step 3: Прогнать существующие тесты**
 
@@ -2191,7 +2191,7 @@ Run: `npx jest src/informer-bot/informer-bot.service.spec.ts`
 Expected: PASS. Тест «кнопка возврата перетирает pending» пока **падает** — возврата ещё нет. Временно пометить его `it.skip` с комментарием `// снимается в Task 9`, остальные должны быть зелёные.
 
 Run: `npx tsc --noEmit -p tsconfig.json`
-Expected: без ошибок.
+Expected: ровно 47 ошибок, все в `.spec.ts` файлах — это зафиксированная базовая линия репозитория на 2026-08-26, не наша регрессия. **Ноль** ошибок в `src/informer-bot/` и ноль в продакшн-коде. Проверка: `npx tsc --noEmit -p tsconfig.json 2>&1 | grep 'error TS' | grep -vc '\.spec\.ts'` должно дать `0`, и `... | grep -c 'informer-bot'` тоже `0`.
 
 - [ ] **Step 5: Commit**
 
@@ -2716,7 +2716,7 @@ Run: `npx jest src/informer-bot`
 Expected: PASS, все наборы.
 
 Run: `npx tsc --noEmit -p tsconfig.json`
-Expected: без ошибок.
+Expected: ровно 47 ошибок, все в `.spec.ts` файлах — это зафиксированная базовая линия репозитория на 2026-08-26, не наша регрессия. **Ноль** ошибок в `src/informer-bot/` и ноль в продакшн-коде. Проверка: `npx tsc --noEmit -p tsconfig.json 2>&1 | grep 'error TS' | grep -vc '\.spec\.ts'` должно дать `0`, и `... | grep -c 'informer-bot'` тоже `0`.
 
 - [ ] **Step 5: Commit**
 
@@ -2739,7 +2739,9 @@ Expected: PASS. Если падают наборы вне `src/informer-bot/` �
 - [ ] **Step 2: Собрать проект**
 
 Run: `npm run build`
-Expected: сборка без ошибок.
+Expected: сборка без ошибок (`nest build` исключает `.spec.ts`, поэтому базовые 47 ошибок тайпчекера её не касаются).
+
+Если посыпались ошибки вида `Property 'scheduledMessage' does not exist on type 'PrismaClient'` — устарел сгенерированный Prisma-клиент после `git pull`. Лечится `npx prisma generate` (только генерация, к БД не ходит).
 
 - [ ] **Step 3: Проверить, что мобилка не затронута**
 
