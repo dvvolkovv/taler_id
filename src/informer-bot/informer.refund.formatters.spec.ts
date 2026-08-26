@@ -26,6 +26,7 @@ describe('мастер возврата — карточки', () => {
     address: '0xcust',
   };
   const TRON_CTX = { ...CTX, network: 'TRON' };
+  const TALER_CTX = { ...CTX, network: 'TALER' };
 
   it('на BSC предлагает только адрес и объясняет почему', () => {
     const md = formatRefundMethodChoice(1611, CTX);
@@ -34,15 +35,23 @@ describe('мастер возврата — карточки', () => {
     expect(md).toContain('плательщик не определяется');
   });
 
-  it('на TRON предлагает оба способа', () => {
+  it('на TRON предлагает только адрес — Tron больше не поддерживается', () => {
     const md = formatRefundMethodChoice(1611, TRON_CTX);
+    expect(md).toContain('[ACTION:📮 Указать адрес #1611]');
+    expect(md).not.toContain('плательщику #1611]');
+    expect(md).toContain('плательщик не определяется');
+  });
+
+  it('на Taler предлагает оба способа', () => {
+    const md = formatRefundMethodChoice(1611, TALER_CTX);
     expect(md).toContain('[ACTION:📮 Указать адрес #1611]');
     expect(md).toContain('[ACTION:👤 Вернуть плательщику #1611]');
   });
 
-  it('на незнакомой сети предлагает оба — fail-open', () => {
+  it('на незнакомой сети предлагает только адрес — fail-closed', () => {
     const md = formatRefundMethodChoice(1611, { ...CTX, network: 'SOLANA' });
-    expect(md).toContain('[ACTION:👤 Вернуть плательщику #1611]');
+    expect(md).not.toContain('плательщику #1611]');
+    expect(md).toContain('плательщик не определяется');
   });
 
   it('в каждой карточке мастера есть отмена', () => {
@@ -66,12 +75,13 @@ describe('мастер возврата — карточки', () => {
     expect(md).toContain('[ACTION:✅ Подтвердить возврат #1611]');
   });
 
-  it('подтверждение возврата плательщику предупреждает про биржу и невидимый адрес', () => {
-    const md = formatRefundConfirm(1611, TRON_CTX, { refundToPayer: true });
-    expect(md).toContain('биржи');
+  it('подтверждение возврата плательщику (Taler) предупреждает про невидимый адрес, без Tron', () => {
+    const md = formatRefundConfirm(1611, TALER_CTX, { refundToPayer: true });
+    expect(md).not.toContain('биржи');
+    expect(md).not.toContain('Tron');
     expect(md).toContain('показать');
     expect(md).toContain('необратим');
-    // Четвёртое последствие: после успеха платформа не сообщает адрес.
+    // Третье последствие: после успеха платформа не сообщает адрес.
     expect(md).toContain('не сообщит, куда ушли деньги');
   });
 
@@ -165,9 +175,12 @@ describe('мастер возврата — карточки', () => {
 
   describe('supportsPayerDetection — регистр не влияет на результат', () => {
     it.each([
-      ['tron', true],
-      ['Tron', true],
-      ['TRON', true],
+      ['taler', true],
+      ['Taler', true],
+      ['TALER', true],
+      ['tron', false],
+      ['Tron', false],
+      ['TRON', false],
       ['bsc', false],
       ['Bsc', false],
       ['BSC', false],
@@ -176,7 +189,11 @@ describe('мастер возврата — карточки', () => {
     });
   });
 
-  describe('supportsPayerDetection — алиасы одной и той же сети совпадают', () => {
+  describe('supportsPayerDetection — только Taler в белом списке, всё остальное — fail-closed', () => {
+    it('пробелы по краям обрезаются перед сравнением', () => {
+      expect(supportsPayerDetection('  taler  ')).toBe(true);
+    });
+
     it('eth и ethereum оба не поддерживают определение плательщика', () => {
       expect(supportsPayerDetection('eth')).toBe(false);
       expect(supportsPayerDetection('ethereum')).toBe(false);
@@ -185,6 +202,33 @@ describe('мастер возврата — карточки', () => {
     it('btc и bitcoin оба не поддерживают определение плательщика', () => {
       expect(supportsPayerDetection('btc')).toBe(false);
       expect(supportsPayerDetection('bitcoin')).toBe(false);
+    });
+
+    it('bsc и binance-smart-chain оба не поддерживают определение плательщика', () => {
+      expect(supportsPayerDetection('bsc')).toBe(false);
+      expect(supportsPayerDetection('binance-smart-chain')).toBe(false);
+    });
+
+    it('ltc и litecoin оба не поддерживают определение плательщика', () => {
+      expect(supportsPayerDetection('ltc')).toBe(false);
+      expect(supportsPayerDetection('litecoin')).toBe(false);
+    });
+
+    it('dot и polkadot оба не поддерживают определение плательщика', () => {
+      expect(supportsPayerDetection('dot')).toBe(false);
+      expect(supportsPayerDetection('polkadot')).toBe(false);
+    });
+
+    it('dash не поддерживает определение плательщика', () => {
+      expect(supportsPayerDetection('dash')).toBe(false);
+    });
+
+    it('незнакомая сеть не поддерживает определение плательщика — fail-closed', () => {
+      expect(supportsPayerDetection('SOLANA')).toBe(false);
+    });
+
+    it('пустая строка не поддерживает определение плательщика', () => {
+      expect(supportsPayerDetection('')).toBe(false);
     });
   });
 

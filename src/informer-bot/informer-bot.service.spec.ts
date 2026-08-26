@@ -674,11 +674,15 @@ describe('InformerBotService.handleUserMessage (retry wallet, flow B)', () => {
 });
 
 describe('мастер возврата в сервисе', () => {
+  // Taler, not Tron: payer detection is now whitelisted to Taler only
+  // (fail-closed elsewhere, see informer.refund.formatters.ts). This suite
+  // exercises the "вернуть плательщику" branch end-to-end, so its wallet
+  // must sit on the one network where that branch is actually reachable.
   const ITEM = {
     wallet_id: 1611,
     created_at: '2026-08-24T17:02:11Z',
     withdraw_address: '0xcust',
-    withdraw_network: 'TRON',
+    withdraw_network: 'TALER',
     withdraw_token: 'usdt',
     withdraw_amount: '50',
   };

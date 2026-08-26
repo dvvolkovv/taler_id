@@ -9,6 +9,7 @@ const CTX = {
   address: '0xcust',
 };
 const TRON_CTX = { ...CTX, network: 'TRON' };
+const TALER_CTX = { ...CTX, network: 'TALER' };
 
 describe('parseRefundEntry — вход в мастер', () => {
   it('распознаёт кнопку возврата с id', () => {
@@ -57,9 +58,9 @@ describe('advanceRefundFlow — переходы', () => {
     expect(r.call).toBeUndefined();
   });
 
-  it('method + «плательщику» → confirm с toPayer', () => {
+  it('method + «плательщику» на Taler → confirm с toPayer', () => {
     const r = advanceRefundFlow(
-      { ...method, ctx: TRON_CTX },
+      { ...method, ctx: TALER_CTX },
       refundLabels.toPayer(1611),
     );
     expect(r.next).toMatchObject({

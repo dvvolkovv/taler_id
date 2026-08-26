@@ -55,30 +55,32 @@ export const REFUND_CANCEL_BUTTON = `[ACTION:${refundLabels.cancel}]`;
 export const BACK_TO_WALLETS_BUTTON = '[ACTION:📋 Кошельки оператора]';
 
 /**
- * Payer detection reads the transaction history, which the platform keeps
- * only for Tron and Taler. On the other six an empty refund_address is a
- * guaranteed 400.
+ * Payer detection reads the transaction history, which the platform can
+ * reconstruct with confidence only for Taler. That used to read "Tron and
+ * Taler" and the gate was a blacklist of the other six networks matched
+ * fail-open — an unrecognised network got the payer button on the theory
+ * that a network the platform adds later would work without a release on
+ * our side.
  *
- * Networks are matched fail-open: an unrecognised network gets the payer
- * button, so a network the platform adds later works without a release on
- * our side. The cost of being wrong is one 400 with a readable message.
+ * Reversed 2026-08-26 at the request of Vladimir (admin-API owner):
+ * "Пока давай ограничимся только Taler. Для остальных сетей пока не
+ * хватает фактуры." Tron in particular never belonged on the supported
+ * side — on Tron the platform's history lookup resolves the transaction's
+ * *signer*, not the token sender, and the signer can be an exchange's hot
+ * wallet that has nothing to do with the client we're refunding.
+ *
+ * So the gate is now a whitelist of one, matched fail-closed: anything
+ * that isn't recognised — including a brand-new network the platform adds
+ * later — does not get the payer button until we have evidence for it and
+ * ship a release. For a refund that can't be undone, requiring a release
+ * before trusting a new network is the right trade, even though it means
+ * the button doesn't self-activate for networks the platform supports in
+ * the future.
  */
-const NETWORKS_WITHOUT_PAYER_DETECTION = new Set([
-  'ethereum',
-  'eth',
-  'bsc',
-  'binance-smart-chain',
-  'bitcoin',
-  'btc',
-  'litecoin',
-  'ltc',
-  'dash',
-  'polkadot',
-  'dot',
-]);
+const NETWORKS_WITH_PAYER_DETECTION = new Set(['taler']);
 
 export function supportsPayerDetection(network: string): boolean {
-  return !NETWORKS_WITHOUT_PAYER_DETECTION.has(
+  return NETWORKS_WITH_PAYER_DETECTION.has(
     (network ?? '').trim().toLowerCase(),
   );
 }
@@ -152,8 +154,6 @@ export function formatRefundConfirm(
           '',
           'Что это значит:',
           '• показать адрес заранее невозможно — preview у платформы нет;',
-          `• на Tron определяется подписант транзакции, а не отправитель токенов — ` +
-            'им может оказаться кошелёк биржи, который клиенту не принадлежит;',
           '• после успеха платформа не сообщит, куда ушли деньги.',
           '',
         ];
