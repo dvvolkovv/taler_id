@@ -30,7 +30,27 @@ import { OPERATOR_BUTTONS } from './informer.formatters';
  * pending state — but nothing enforces the contract for future callers,
  * hence the note.
  */
-export const REFUND_CANCEL_BUTTON = '[ACTION:❌ Отмена возврата]';
+
+/**
+ * Single source of truth for wizard button labels: the same builder draws
+ * the `[ACTION:...]` button text AND is what `informer.refund-flow.ts`
+ * compares the echoed message against. Matching by `includes('keyword')`
+ * instead — as an earlier version of the automaton did — catches plain
+ * chat prose that happens to share the word: "ещё не сверил" contains
+ * "сверил", and on the double-payout gate step that inverts the operator's
+ * actual statement into `verifiedAbsent: true`. Building both sides from
+ * one constant makes that drift impossible by construction rather than a
+ * matter of remembering to keep two strings in sync.
+ */
+export const refundLabels = {
+  chooseAddress: (walletId: number) => `📮 Указать адрес #${walletId}`,
+  toPayer: (walletId: number) => `👤 Вернуть плательщику #${walletId}`,
+  confirm: (walletId: number) => `✅ Подтвердить возврат #${walletId}`,
+  gateCleared: (walletId: number) => `✅ Сверил, выплаты не было #${walletId}`,
+  cancel: '❌ Отмена возврата',
+} as const;
+
+export const REFUND_CANCEL_BUTTON = `[ACTION:${refundLabels.cancel}]`;
 
 export const BACK_TO_WALLETS_BUTTON = '[ACTION:📋 Кошельки оператора]';
 
@@ -78,10 +98,10 @@ export function formatRefundMethodChoice(
     '',
     'Куда вернуть?',
     '',
-    `[ACTION:📮 Указать адрес #${walletId}]`,
+    `[ACTION:${refundLabels.chooseAddress(walletId)}]`,
   ];
   if (supportsPayerDetection(ctx.network)) {
-    lines.push(`[ACTION:👤 Вернуть плательщику #${walletId}]`);
+    lines.push(`[ACTION:${refundLabels.toPayer(walletId)}]`);
   } else {
     lines.push(
       '',
@@ -142,7 +162,7 @@ export function formatRefundConfirm(
     ...body,
     'Перевод **необратим**.',
     '',
-    `[ACTION:✅ Подтвердить возврат #${walletId}]`,
+    `[ACTION:${refundLabels.confirm(walletId)}]`,
     REFUND_CANCEL_BUTTON,
   ].join('\n');
 }
@@ -232,7 +252,7 @@ export function formatRefundGate(
       'до обращения к бэкенду — она останется в журнале, даже если возврат ' +
       'затем упадёт.',
     '',
-    `[ACTION:✅ Сверил, выплаты не было #${walletId}]`,
+    `[ACTION:${refundLabels.gateCleared(walletId)}]`,
     REFUND_CANCEL_BUTTON,
   ].join('\n');
 }
