@@ -2423,6 +2423,21 @@ describe('мастер возврата в сервисе', () => {
     expect((m.client as any).refundOperatorWallet).not.toHaveBeenCalled();
   });
 
+  it('метка навигационной кнопки на шаге адреса не становится адресом', async () => {
+    const m = mocksWithWallet();
+    const svc = makeService(m);
+
+    await svc.handleUserMessage('u1', 'c1', '💸 Вернуть #1611');
+    await svc.handleUserMessage('u1', 'c1', '📮 Указать адрес #1611');
+    // Оператор по инерции жмёт навигацию из более раннего сообщения.
+    await svc.handleUserMessage('u1', 'c1', '📋 Кошельки оператора');
+
+    // Мастер сброшен, «адрес» не принят, показан список кошельков.
+    expect(m.redis.store.has('informer:pending_op:u1')).toBe(false);
+    expect((m.client as any).refundOperatorWallet).not.toHaveBeenCalled();
+    expect(m.published.join('')).toContain('Кошельки, требующие оператора');
+  });
+
   it('двойное нажатие кнопки возврата не дёргает список дважды', async () => {
     const m = mocksWithWallet();
     const svc = makeService(m);
@@ -2506,8 +2521,20 @@ const refundLockKey = (walletId: number) =>
     }
     const pending = await this.pending.load(userId);
     if (pending?.kind === 'refund') {
-      await this.runRefundStep(userId, conversationId, pending, content);
-      return;
+      // A navigation label tapped from an older message (e.g. «📋 Кошельки
+      // оператора») arrives as plain text like any other input. On the
+      // `address` step the wizard would take it for a refund address, burn
+      // the TOTP step and confuse the operator. The wizard cannot guard
+      // against this itself without knowing every button the bot renders —
+      // so a known static label always wins over wizard input, and clearing
+      // the pending state is the honest reading of "the operator navigated
+      // away".
+      if (this.parseAction(content) !== null) {
+        await this.pending.clear(userId);
+      } else {
+        await this.runRefundStep(userId, conversationId, pending, content);
+        return;
+      }
     }
 ```
 
