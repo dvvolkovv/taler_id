@@ -25,6 +25,17 @@ export interface RefundFailure {
   retryable: boolean;
 }
 
+// Order is significant: the loop below returns the FIRST rule whose needles
+// all match, so a more specific rule must sit above a more general one that
+// could also match its text. Right now the five needle sets below happen not
+// to overlap — that's a property of today's five known upstream messages,
+// not a guarantee the code enforces. Whoever adds a sixth rule needs to
+// re-check for overlap by hand, and pick where in the list it goes.
+//
+// This table only covers 5 of the 7 `RefundFailureKind`s. Two more live past
+// the loop, with a different comparison semantics (exact match, not
+// substring): `generic_business` and `transport` — see the branches after
+// the loop for why they aren't just two more rows here.
 const RULES: Array<{
   kind: RefundFailureKind;
   needles: string[];
@@ -70,6 +81,19 @@ export function classifyRefundFailure(rawMessage: string): RefundFailure {
   }
 
   // The platform's generic wrapper. Known, but carries no actionable detail.
+  //
+  // Exact match on purpose, not `includes`: this is the one rule in the
+  // whole function that isn't a substring test. Leading/trailing whitespace
+  // is tolerated via `.trim()` because it still comes from the platform's
+  // own wrapper, not from an intermediate proxy — trimming it into
+  // `transport` would tell the operator "looks like a transport failure"
+  // when the platform in fact answered on the merits, just without detail.
+  // If the platform ever starts attaching detail to this wrapper — e.g.
+  // "refund failed: no such wallet" — that message will NOT match here
+  // (extra text breaks the exact comparison) and will fall through to
+  // `transport` instead. That's a deliberate trade-off, not an oversight:
+  // widening this to `includes('refund failed')` would silently swallow
+  // any future detail the platform starts sending under the same prefix.
   if (haystack.trim() === 'refund failed') {
     return { kind: 'generic_business', message, retryable: false };
   }

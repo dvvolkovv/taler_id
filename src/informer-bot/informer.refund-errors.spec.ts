@@ -18,6 +18,17 @@ describe('classifyRefundFailure', () => {
     expect(r.retryable).toBe(true);
   });
 
+  it('одной иглы недостаточно для insufficient_hot — нужны обе', () => {
+    // Защита от подмены .every на .some: по отдельности эти фразы
+    // ничего не значат, а между ними в реальном сообщении стоят суммы.
+    expect(classifyRefundFailure('hot wallet holds 3 USDT').kind).toBe(
+      'transport',
+    );
+    expect(classifyRefundFailure('the refund needs 50 USDT').kind).toBe(
+      'transport',
+    );
+  });
+
   it('распознаёт отсутствие исходящего hot-wallet пути', () => {
     const r = classifyRefundFailure(
       'network dash has no hot wallet payout path; refund manually',
@@ -80,5 +91,12 @@ describe('classifyRefundFailure', () => {
     expect(r.kind).toBe('generic_business');
     // Текст сохраняется дословно, включая пробелы.
     expect(r.message).toBe('  refund failed  ');
+  });
+
+  it('переживает undefined с нетипизированной границы', () => {
+    // Типы TS тут не помогут — rawMessage приходит с HTTP-границы,
+    // где реальный ответ может не совпасть с объявленным типом.
+    expect(classifyRefundFailure(undefined as any).kind).toBe('transport');
+    expect(classifyRefundFailure(undefined as any).message).toBe('');
   });
 });
