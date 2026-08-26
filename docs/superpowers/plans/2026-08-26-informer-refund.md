@@ -1173,12 +1173,17 @@ git commit -m "feat(informer): метод возврата средств с т�
 ## Task 6: Форматтеры мастера возврата
 
 **Files:**
-- Modify: `src/informer-bot/informer.formatters.ts`
-- Test: `src/informer-bot/informer.formatters.spec.ts`
+- Create: `src/informer-bot/informer.refund.formatters.ts`
+- Test: `src/informer-bot/informer.refund.formatters.spec.ts`
+- Modify: `src/informer-bot/informer.formatters.ts` (только экспорт `OPERATOR_BUTTONS`, если он ещё не экспортирован)
+
+> **Почему отдельный файл, а не дописать в существующий.** `informer.formatters.ts` уже ~570 строк, и эта задача добавляет ~15 функций. Ревью качества Task 4 указало на это как на последний дешёвый момент разделить. Форматтеры мастера возврата — самостоятельный кластер с одной темой, поэтому они уезжают в свой файл, а `informer.formatters.ts` остаётся как есть, без move-рефакторинга работающего кода.
+>
+> Из существующего файла понадобится `OPERATOR_BUTTONS` — он уже экспортирован (`export const OPERATOR_BUTTONS`), просто импортируй. Хелпер `formatTimestamp` там приватный; в формате мастера время не печатается, так что он не нужен — если вдруг понадобится, экспортируй его отдельным решением, а не по умолчанию.
 
 - [ ] **Step 1: Написать падающий тест**
 
-Дописать в конец `src/informer-bot/informer.formatters.spec.ts`:
+Создать `src/informer-bot/informer.refund.formatters.spec.ts` со следующим содержимым (импорты в нём уже указаны — файл самодостаточный):
 
 ```ts
 import {
@@ -1192,7 +1197,7 @@ import {
   formatRefundFailure,
   formatRefundTimeout,
   formatRefundInFlight,
-} from './informer.formatters';
+} from './informer.refund.formatters';
 import { classifyRefundFailure } from './informer.refund-errors';
 
 describe('мастер возврата — карточки', () => {
@@ -1316,18 +1321,24 @@ describe('мастер возврата — карточки', () => {
 
 - [ ] **Step 2: Прогнать тест, убедиться что падает**
 
-Run: `npx jest src/informer-bot/informer.formatters.spec.ts -t 'мастер возврата'`
-Expected: FAIL — `formatRefundMethodChoice is not a function` / ошибка импорта.
+Run: `npx jest src/informer-bot/informer.refund.formatters.spec.ts`
+Expected: FAIL — `Cannot find module './informer.refund.formatters'`.
 
 - [ ] **Step 3: Реализовать**
 
-В `src/informer-bot/informer.formatters.ts` добавить импорты в существующий блок из `./informer.types`: `OperatorWalletRefundResult`, `RefundTarget`, `WalletCtx`. Добавить новый импорт:
+Создать `src/informer-bot/informer.refund.formatters.ts`. Шапка файла:
 
 ```ts
+import {
+  OperatorWalletRefundResult,
+  RefundTarget,
+  WalletCtx,
+} from './informer.types';
 import { RefundFailure } from './informer.refund-errors';
+import { OPERATOR_BUTTONS } from './informer.formatters';
 ```
 
-Добавить в конец файла:
+Далее — тело файла:
 
 ```ts
 // ── Мастер возврата ──────────────────────────────────────────
@@ -1621,13 +1632,16 @@ export function formatRefundInFlight(walletId: number): string {
 
 - [ ] **Step 4: Прогнать тесты, убедиться что проходят**
 
-Run: `npx jest src/informer-bot/informer.formatters.spec.ts`
-Expected: PASS, включая 16 новых тестов.
+Run: `npx jest src/informer-bot/informer.refund.formatters.spec.ts`
+Expected: PASS, 16 тестов.
+
+Run: `npx jest src/informer-bot`
+Expected: PASS, весь модуль.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/informer-bot/informer.formatters.ts src/informer-bot/informer.formatters.spec.ts
+git add src/informer-bot/informer.refund.formatters.ts src/informer-bot/informer.refund.formatters.spec.ts
 git commit -m "feat(informer): карточки мастера возврата и разбор отказов"
 ```
 
@@ -1847,7 +1861,7 @@ import {
   formatRefundGate,
   formatRefundMethodChoice,
   supportsPayerDetection,
-} from './informer.formatters';
+} from './informer.refund.formatters';
 
 /** What the service should do after the transition. */
 export interface RefundCall {
@@ -2458,7 +2472,7 @@ import {
   formatRefundResult,
   formatRefundTimeout,
   formatRefundTotpRejected,
-} from './informer.formatters';
+} from './informer.refund.formatters';
 import { WalletCtx } from './informer.types';
 ```
 
