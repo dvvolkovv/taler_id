@@ -35,12 +35,54 @@ export interface OperatorRequiredItem {
   withdraw_network: string;
   withdraw_token: string;
   withdraw_amount: string;
+
+  // Last recorded failure for this wallet — the one that put it in the
+  // operator queue. All three are optional and disappear together in two
+  // very different cases: no failure was ever recorded for this wallet, OR
+  // the platform's own journal is unavailable. Never render their absence
+  // as "this wallet is fine".
+  last_error_event?: string;
+  // Prose for most events; for gate rejections the platform sends its
+  // details-payload instead, e.g. {"reason":"withdrawal_intent_exists"}.
+  // Union-typed so the formatter stringifies an object instead of crashing.
+  last_error?: string | Record<string, unknown>;
+  last_error_at?: string;
 }
 
 // ── /operator-required-wallets/{id}/retry ────────────────────
 export interface OperatorWalletRetryResult {
   wallet_id: number;
   status: string;
+}
+
+// ── /operator-required-wallets/{id}/refund ───────────────────
+export interface OperatorWalletRefundResult {
+  wallet_id: number;
+  status: string;
+}
+
+/**
+ * Exactly one of the two shapes. The admin-API answers 400 with
+ * "refund_address and refund_to_payer are mutually exclusive: send exactly
+ * one" when both fields arrive together, so the union is enforced at the
+ * type level rather than by runtime validation.
+ */
+export type RefundTarget =
+  | { refundAddress: string }
+  | { refundToPayer: true };
+
+/**
+ * Wallet facts captured at the moment the operator taps the refund button.
+ * Carried through the wizard so the confirmation card can say
+ * "50 usdt · BSC → 0xB1c4…" instead of a bare "#1611". The list may change
+ * during the wizard; re-fetching on every step costs more and still gives
+ * no guarantee.
+ */
+export interface WalletCtx {
+  network: string;
+  token: string;
+  amount: string;
+  address: string;
 }
 
 export interface OperatorRequiredList {
