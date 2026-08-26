@@ -11,7 +11,6 @@ import {
   formatRefundFailure,
   formatRefundTimeout,
   formatRefundInFlight,
-  supportsPayerDetection,
 } from './informer.refund.formatters';
 import { classifyRefundFailure } from './informer.refund-errors';
 
@@ -25,33 +24,37 @@ describe('мастер возврата — карточки', () => {
     amount: '50',
     address: '0xcust',
   };
-  const TRON_CTX = { ...CTX, network: 'TRON' };
   const TALER_CTX = { ...CTX, network: 'TALER' };
 
-  it('на BSC предлагает только адрес и объясняет почему', () => {
-    const md = formatRefundMethodChoice(1611, CTX);
-    expect(md).toContain('[ACTION:📮 Указать адрес #1611]');
-    expect(md).not.toContain('плательщику #1611]');
-    expect(md).toContain('плательщик не определяется');
-  });
+  // withdraw_network says nothing about the deposit network — the API has
+  // no field for it at all — so the wizard cannot gate the payer button
+  // locally. Both buttons must render regardless of what withdraw_network
+  // says; only the platform can accept or reject "refund to payer" (see
+  // the confirm-card test below for the Taler caveat that carries that).
+  it.each([['BSC', CTX], ['TALER', TALER_CTX]] as const)(
+    'предлагает обе кнопки способа возврата независимо от сети (%s)',
+    (_label, ctx) => {
+      const md = formatRefundMethodChoice(1611, ctx);
+      expect(md).toContain('[ACTION:📮 Указать адрес #1611]');
+      expect(md).toContain('[ACTION:👤 Вернуть плательщику #1611]');
+    },
+  );
 
-  it('на TRON предлагает только адрес — Tron больше не поддерживается', () => {
-    const md = formatRefundMethodChoice(1611, TRON_CTX);
-    expect(md).toContain('[ACTION:📮 Указать адрес #1611]');
-    expect(md).not.toContain('плательщику #1611]');
-    expect(md).toContain('плательщик не определяется');
-  });
-
-  it('на Taler предлагает оба способа', () => {
-    const md = formatRefundMethodChoice(1611, TALER_CTX);
-    expect(md).toContain('[ACTION:📮 Указать адрес #1611]');
-    expect(md).toContain('[ACTION:👤 Вернуть плательщику #1611]');
-  });
-
-  it('на незнакомой сети предлагает только адрес — fail-closed', () => {
-    const md = formatRefundMethodChoice(1611, { ...CTX, network: 'SOLANA' });
-    expect(md).not.toContain('плательщику #1611]');
-    expect(md).toContain('плательщик не определяется');
+  it('карточка выбора способа не выдаёт цель вывода за сумму возврата', () => {
+    const md = formatRefundMethodChoice(1646, {
+      network: 'bsc',
+      token: 'usdc',
+      amount: '59.7',
+      address: '0x75c77b569461C6065A0dec22D9fD23FaF3295157',
+    });
+    // The withdraw figures are present but must read as a failed
+    // withdrawal, not as a preview of the refund — old rendering was the
+    // bare `#1646 · 59.7 usdc · bsc` that reads as "this will be sent".
+    expect(md).toContain('не прошёл вывод 59.7 usdc в bsc');
+    expect(md).not.toContain('#1646** · 59.7 usdc · bsc');
+    expect(md).toContain(
+      'Сумма и сеть возврата определяются пополнением кошелька',
+    );
   });
 
   it('в каждой карточке мастера есть отмена', () => {
@@ -66,16 +69,31 @@ describe('мастер возврата — карточки', () => {
     );
   });
 
-  it('подтверждение адреса показывает сумму, сеть и адрес назначения', () => {
+  it('адрес запрашивается для сети пополнения, а не для сети вывода из карточки', () => {
+    const md = formatRefundAddressPrompt(1646, {
+      network: 'bsc',
+      token: 'usdc',
+      amount: '59.7',
+      address: '0x75c77b569461C6065A0dec22D9fD23FaF3295157',
+    });
+    expect(md).toContain('сетью пополняли');
+    expect(md).toContain('а НЕ в сети вывода');
+    expect(md).toContain('`bsc`');
+  });
+
+  it('подтверждение адреса показывает целевые параметры вывода и явно предупреждает, что это не сумма возврата', () => {
     const md = formatRefundConfirm(1611, CTX, { refundAddress: '0xB1c4' });
     expect(md).toContain('50');
     expect(md).toContain('BSC');
     expect(md).toContain('0xB1c4');
     expect(md).toContain('необратим');
     expect(md).toContain('[ACTION:✅ Подтвердить возврат #1611]');
+    expect(md).toContain(
+      'Сумма и сеть возврата определяются пополнением кошелька',
+    );
   });
 
-  it('подтверждение возврата плательщику (Taler) предупреждает про невидимый адрес, без Tron', () => {
+  it('подтверждение возврата плательщику предупреждает про Taler-only и что платформа ничего не отправит при другом пополнении, без Tron', () => {
     const md = formatRefundConfirm(1611, TALER_CTX, { refundToPayer: true });
     expect(md).not.toContain('биржи');
     expect(md).not.toContain('Tron');
@@ -83,6 +101,17 @@ describe('мастер возврата — карточки', () => {
     expect(md).toContain('необратим');
     // Третье последствие: после успеха платформа не сообщает адрес.
     expect(md).toContain('не сообщит, куда ушли деньги');
+    // Оговорка про решение платформы: Taler-only + отказ без отправки.
+    expect(md).toContain('Taler');
+    expect(md).toContain('отклонит запрос и **ничего не отправит**');
+  });
+
+  it('оговорка про Taler и отказ платформы появляется независимо от withdraw_network карточки', () => {
+    // withdraw_network не говорит ничего о сети пополнения, так что
+    // оговорка не должна зависеть от него — она про решение платформы.
+    const md = formatRefundConfirm(1611, CTX, { refundToPayer: true });
+    expect(md).toContain('Taler');
+    expect(md).toContain('отклонит запрос и **ничего не отправит**');
   });
 
   it('успешный возврат плательщику честно говорит, что адрес неизвестен', () => {
@@ -171,65 +200,6 @@ describe('мастер возврата — карточки', () => {
     const f = classifyRefundFailure('refund failed');
     const md = formatRefundFailure(1611, f);
     expect(md).not.toContain('[ACTION:💸 Вернуть');
-  });
-
-  describe('supportsPayerDetection — регистр не влияет на результат', () => {
-    it.each([
-      ['taler', true],
-      ['Taler', true],
-      ['TALER', true],
-      ['tron', false],
-      ['Tron', false],
-      ['TRON', false],
-      ['bsc', false],
-      ['Bsc', false],
-      ['BSC', false],
-    ])('%s → %s', (network, expected) => {
-      expect(supportsPayerDetection(network)).toBe(expected);
-    });
-  });
-
-  describe('supportsPayerDetection — только Taler в белом списке, всё остальное — fail-closed', () => {
-    it('пробелы по краям обрезаются перед сравнением', () => {
-      expect(supportsPayerDetection('  taler  ')).toBe(true);
-    });
-
-    it('eth и ethereum оба не поддерживают определение плательщика', () => {
-      expect(supportsPayerDetection('eth')).toBe(false);
-      expect(supportsPayerDetection('ethereum')).toBe(false);
-    });
-
-    it('btc и bitcoin оба не поддерживают определение плательщика', () => {
-      expect(supportsPayerDetection('btc')).toBe(false);
-      expect(supportsPayerDetection('bitcoin')).toBe(false);
-    });
-
-    it('bsc и binance-smart-chain оба не поддерживают определение плательщика', () => {
-      expect(supportsPayerDetection('bsc')).toBe(false);
-      expect(supportsPayerDetection('binance-smart-chain')).toBe(false);
-    });
-
-    it('ltc и litecoin оба не поддерживают определение плательщика', () => {
-      expect(supportsPayerDetection('ltc')).toBe(false);
-      expect(supportsPayerDetection('litecoin')).toBe(false);
-    });
-
-    it('dot и polkadot оба не поддерживают определение плательщика', () => {
-      expect(supportsPayerDetection('dot')).toBe(false);
-      expect(supportsPayerDetection('polkadot')).toBe(false);
-    });
-
-    it('dash не поддерживает определение плательщика', () => {
-      expect(supportsPayerDetection('dash')).toBe(false);
-    });
-
-    it('незнакомая сеть не поддерживает определение плательщика — fail-closed', () => {
-      expect(supportsPayerDetection('SOLANA')).toBe(false);
-    });
-
-    it('пустая строка не поддерживает определение плательщика', () => {
-      expect(supportsPayerDetection('')).toBe(false);
-    });
   });
 
   describe('карточки без отдельного теста на кнопку — не тупики', () => {

@@ -8,7 +8,6 @@ const CTX = {
   amount: '50',
   address: '0xcust',
 };
-const TRON_CTX = { ...CTX, network: 'TRON' };
 const TALER_CTX = { ...CTX, network: 'TALER' };
 
 describe('parseRefundEntry — вход в мастер', () => {
@@ -58,31 +57,26 @@ describe('advanceRefundFlow — переходы', () => {
     expect(r.call).toBeUndefined();
   });
 
-  it('method + «плательщику» на Taler → confirm с toPayer', () => {
-    const r = advanceRefundFlow(
-      { ...method, ctx: TALER_CTX },
-      refundLabels.toPayer(1611),
-    );
-    expect(r.next).toMatchObject({
-      step: 'confirm',
-      target: { refundToPayer: true },
-    });
-  });
-
-  it('method + «плательщику» на сети без определения → остаётся, объясняет', () => {
-    const r = advanceRefundFlow(method, refundLabels.toPayer(1611));
-    expect(r.next).toMatchObject({ step: 'method' });
-    expect(r.messages.join('')).toContain('не определяется');
-  });
+  // withdraw_network carries no information about the deposit network, so
+  // the transition to `confirm` on "вернуть плательщику" must not depend
+  // on it at all — no in-flow gate, on any network. The platform is the
+  // only party that can accept or reject the target once we get to confirm.
+  it.each([['BSC', method], ['TALER', { ...method, ctx: TALER_CTX }]] as const)(
+    'method + «плательщику» → confirm с toPayer, независимо от сети (%s)',
+    (_label, state) => {
+      const r = advanceRefundFlow(state, refundLabels.toPayer(1611));
+      expect(r.next).toMatchObject({
+        step: 'confirm',
+        target: { refundToPayer: true },
+      });
+    },
+  );
 
   it('method + обычная речь со словом «плательщик» НЕ выбирает получателя', () => {
     // Регрессия: "плательщик уже писал в поддержку" содержит слово
     // "плательщик", но это не нажатие кнопки — includes() ловил бы это как
     // выбор получателя и перескакивал сознательный выбор способа возврата.
-    const r = advanceRefundFlow(
-      { ...method, ctx: TRON_CTX },
-      'плательщик уже писал в поддержку',
-    );
+    const r = advanceRefundFlow(method, 'плательщик уже писал в поддержку');
     expect(r.call).toBeUndefined();
     expect(r.next).toMatchObject({ step: 'method' });
   });

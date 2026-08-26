@@ -55,63 +55,58 @@ export const REFUND_CANCEL_BUTTON = `[ACTION:${refundLabels.cancel}]`;
 export const BACK_TO_WALLETS_BUTTON = '[ACTION:📋 Кошельки оператора]';
 
 /**
- * Payer detection reads the transaction history, which the platform can
- * reconstruct with confidence only for Taler. That used to read "Tron and
- * Taler" and the gate was a blacklist of the other six networks matched
- * fail-open — an unrecognised network got the payer button on the theory
- * that a network the platform adds later would work without a release on
- * our side.
+ * There used to be a local function here that gated the "Вернуть
+ * плательщику" button, hiding it unless `withdraw_network` was `taler`.
+ * That was wrong at the root, not just miscalibrated: `withdraw_network` names
+ * the network the client tried to withdraw TO, and `GET
+ * /informer/v1/operator-required-wallets` carries no field at all for the
+ * network the wallet was funded FROM. A refund is a return of the deposit,
+ * so the one variable an in-app gate would need to reason about — which
+ * network the client actually paid in — is simply absent from the API. A
+ * wallet can show `withdraw_network: bsc` and still have been funded on
+ * Taler (wallet #1646 in production is exactly this case); no amount of
+ * matching on `withdraw_network` can distinguish that from a BSC deposit.
  *
- * Reversed 2026-08-26 at the request of Vladimir (admin-API owner):
- * "Пока давай ограничимся только Taler. Для остальных сетей пока не
- * хватает фактуры." Tron in particular never belonged on the supported
- * side — on Tron the platform's history lookup resolves the transaction's
- * *signer*, not the token sender, and the signer can be an exchange's hot
- * wallet that has nothing to do with the client we're refunding.
- *
- * So the gate is now a whitelist of one, matched fail-closed: anything
- * that isn't recognised — including a brand-new network the platform adds
- * later — does not get the payer button until we have evidence for it and
- * ship a release. For a refund that can't be undone, requiring a release
- * before trusting a new network is the right trade, even though it means
- * the button doesn't self-activate for networks the platform supports in
- * the future.
+ * So both buttons are offered unconditionally now, on every network. Only
+ * the platform holds the deposit history, so only the platform can decide
+ * whether "refund to payer" is resolvable — see `formatRefundConfirm`,
+ * which spells out that a non-Taler deposit gets rejected server-side with
+ * nothing sent, rather than pretending we can predict that here.
  */
-const NETWORKS_WITH_PAYER_DETECTION = new Set(['taler']);
-
-export function supportsPayerDetection(network: string): boolean {
-  return NETWORKS_WITH_PAYER_DETECTION.has(
-    (network ?? '').trim().toLowerCase(),
-  );
-}
-
 function walletLine(walletId: number, ctx: WalletCtx): string {
-  return `**#${walletId}** · ${ctx.amount} ${ctx.token} · ${ctx.network}`;
+  return `**#${walletId}** · не прошёл вывод ${ctx.amount} ${ctx.token} в ${ctx.network}`;
 }
+
+/**
+ * `WalletCtx` is built entirely from `withdraw_*` fields (see
+ * `informer.types.ts`) — it describes the failed withdrawal, not the
+ * refund. The refund's own amount and network come from whatever the
+ * client originally deposited, which this API never reports. Every card
+ * that shows `walletLine()` repeats this note so an operator can't read
+ * the withdrawal figures as a preview of what will actually be sent back.
+ */
+const REFUND_UNKNOWN_NOTE =
+  'Сумма и сеть возврата определяются пополнением кошелька, а не выводом ' +
+  'выше — платформа их не отдаёт, здесь показаны только параметры ' +
+  'несостоявшегося вывода.';
 
 export function formatRefundMethodChoice(
   walletId: number,
   ctx: WalletCtx,
 ): string {
-  const lines = [
+  return [
     `💸 **Возврат средств** ${walletLine(walletId, ctx)}`,
     '',
     `Адрес вывода: \`${ctx.address}\``,
     '',
+    REFUND_UNKNOWN_NOTE,
+    '',
     'Куда вернуть?',
     '',
     `[ACTION:${refundLabels.chooseAddress(walletId)}]`,
-  ];
-  if (supportsPayerDetection(ctx.network)) {
-    lines.push(`[ACTION:${refundLabels.toPayer(walletId)}]`);
-  } else {
-    lines.push(
-      '',
-      `_В сети ${ctx.network} плательщик не определяется — нужен явный адрес._`,
-    );
-  }
-  lines.push(REFUND_CANCEL_BUTTON);
-  return lines.join('\n');
+    `[ACTION:${refundLabels.toPayer(walletId)}]`,
+    REFUND_CANCEL_BUTTON,
+  ].join('\n');
 }
 
 export function formatRefundAddressPrompt(
@@ -121,8 +116,11 @@ export function formatRefundAddressPrompt(
   return [
     `📮 **Адрес возврата для ${walletLine(walletId, ctx)}**`,
     '',
-    'Пришли адрес одним сообщением. Проверю только то, что он непустой — ' +
-      'формат сверит платформа.',
+    `Адрес должен быть в сети, которой клиент пополнял кошелёк, — ` +
+      `а НЕ в сети вывода (\`${ctx.network}\`, показана выше). Какой ` +
+      'сетью пополняли, нам неизвестно; формат и сеть сверит платформа.',
+    '',
+    'Пришли адрес одним сообщением. Проверю только то, что он непустой.',
     '',
     REFUND_CANCEL_BUTTON,
   ].join('\n');
@@ -145,7 +143,12 @@ export function formatRefundConfirm(
   ctx: WalletCtx,
   target: RefundTarget,
 ): string {
-  const head = [`⚠️ **Подтверди возврат** ${walletLine(walletId, ctx)}`, ''];
+  const head = [
+    `⚠️ **Подтверди возврат** ${walletLine(walletId, ctx)}`,
+    '',
+    REFUND_UNKNOWN_NOTE,
+    '',
+  ];
   const body =
     'refundAddress' in target
       ? [`Получатель: \`${target.refundAddress}\``, '']
@@ -153,6 +156,10 @@ export function formatRefundConfirm(
           'Получатель: **адрес плательщика, который выберет платформа**.',
           '',
           'Что это значит:',
+          '• платформа умеет надёжно определить плательщика по истории, ' +
+            'только если кошелёк пополняли в сети **Taler**. Если это не ' +
+            'так, платформа отклонит запрос и **ничего не отправит** — ' +
+            'решение принимает она, у нас данных о сети пополнения нет;',
           '• показать адрес заранее невозможно — preview у платформы нет;',
           '• после успеха платформа не сообщит, куда ушли деньги.',
           '',

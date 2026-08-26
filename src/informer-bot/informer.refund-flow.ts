@@ -9,7 +9,6 @@ import {
   formatRefundGate,
   formatRefundMethodChoice,
   refundLabels,
-  supportsPayerDetection,
 } from './informer.refund.formatters';
 
 /** What the service should do after the transition. */
@@ -114,14 +113,12 @@ export function advanceRefundFlow(
         };
       }
       if (matchesLabel(text, refundLabels.toPayer(state.walletId))) {
-        if (!supportsPayerDetection(state.ctx.network)) {
-          return stay(
-            state,
-            `⚠️ В сети ${state.ctx.network} плательщик не определяется — ` +
-              'платформа ответит 400. Нужен явный адрес.',
-            formatRefundMethodChoice(state.walletId, state.ctx),
-          );
-        }
+        // No local gate on `state.ctx.network`: that field is
+        // `withdraw_network` (the failed withdrawal's target), which says
+        // nothing about which network funded the wallet. Only the platform
+        // knows the deposit network, so only the platform can accept or
+        // reject "refund to payer" — see the Taler-only caveat rendered on
+        // the confirm card in informer.refund.formatters.ts.
         const target: RefundTarget = { refundToPayer: true };
         return {
           next: { ...state, step: 'confirm', target },

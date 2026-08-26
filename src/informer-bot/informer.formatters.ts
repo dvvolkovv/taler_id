@@ -167,8 +167,13 @@ export function formatOperatorWalletsList(
         : `🪪 ${i.withdraw_network} / ${i.withdraw_token}`;
     const lines = [
       idLine,
-      `Адрес: \`${i.withdraw_address}\``,
-      `Сумма: \`${i.withdraw_amount}\``,
+      // Explicitly "вывода": these are the failed withdrawal's target
+      // address/amount, not a refund amount — the refund wizard reached
+      // from `💸 Вернуть` below draws on the same withdraw_* fields and
+      // repeats this caveat, see REFUND_UNKNOWN_NOTE in
+      // informer.refund.formatters.ts.
+      `Адрес вывода: \`${i.withdraw_address}\``,
+      `Сумма вывода: \`${i.withdraw_amount}\``,
       `Создан: ${at}`,
       ...reasonLines(i),
     ];
