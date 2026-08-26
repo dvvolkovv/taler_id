@@ -114,7 +114,9 @@ export function formatRefundAddressPrompt(
   ctx: WalletCtx,
 ): string {
   return [
-    `📮 **Адрес возврата для ${walletLine(walletId, ctx)}**`,
+    // walletLine already carries its own bold markers; wrapping it in another
+    // pair leaves unbalanced ** and renders as a broken bold run.
+    `📮 **Адрес возврата** для ${walletLine(walletId, ctx)}`,
     '',
     `Адрес должен быть в сети, которой клиент пополнял кошелёк, — ` +
       `а НЕ в сети вывода (\`${ctx.network}\`, показана выше). Какой ` +
