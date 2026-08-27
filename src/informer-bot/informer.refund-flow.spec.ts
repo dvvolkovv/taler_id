@@ -3,12 +3,18 @@ import { PendingOp } from './informer.pending-state';
 import { refundLabels } from './informer.refund.formatters';
 
 const CTX = {
-  network: 'BSC',
-  token: 'usdt',
-  amount: '50',
-  address: '0xcust',
+  deposit: {
+    network: 'bsc',
+    token: 'usdc',
+    amount: '123.45',
+    address: '0xdep',
+  },
+  withdraw: { network: 'BSC', token: 'usdt', amount: '50', address: '0xcust' },
 };
-const TALER_CTX = { ...CTX, network: 'TALER' };
+const TALER_CTX = {
+  ...CTX,
+  deposit: { ...CTX.deposit, network: 'taler' },
+};
 
 describe('parseRefundEntry — вход в мастер', () => {
   it('распознаёт кнопку возврата с id', () => {
@@ -57,20 +63,70 @@ describe('advanceRefundFlow — переходы', () => {
     expect(r.call).toBeUndefined();
   });
 
-  // withdraw_network carries no information about the deposit network, so
-  // the transition to `confirm` on "вернуть плательщику" must not depend
-  // on it at all — no in-flow gate, on any network. The platform is the
-  // only party that can accept or reject the target once we get to confirm.
-  it.each([['BSC', method], ['TALER', { ...method, ctx: TALER_CTX }]] as const)(
-    'method + «плательщику» → confirm с toPayer, независимо от сети (%s)',
-    (_label, state) => {
-      const r = advanceRefundFlow(state, refundLabels.toPayer(1611));
-      expect(r.next).toMatchObject({
-        step: 'confirm',
-        target: { refundToPayer: true },
-      });
-    },
-  );
+  // The gate lives on ctx.deposit.network — the network that funded the
+  // wallet — never on ctx.withdraw.network. `method.ctx` here has
+  // deposit.network='bsc' (unsupported) while TALER_CTX has
+  // deposit.network='taler' (supported); withdraw.network is 'BSC' in
+  // both, on purpose, to prove the gate isn't reading that field.
+  it('method + «плательщику», deposit.network=taler → confirm с toPayer', () => {
+    const r = advanceRefundFlow(
+      { ...method, ctx: TALER_CTX },
+      refundLabels.toPayer(1611),
+    );
+    expect(r.next).toMatchObject({
+      step: 'confirm',
+      target: { refundToPayer: true },
+    });
+  });
+
+  it('method + «плательщику», deposit.network=bsc → остаётся на method, без API-вызова', () => {
+    const r = advanceRefundFlow(method, refundLabels.toPayer(1611));
+    expect(r.call).toBeUndefined();
+    expect(r.next).toMatchObject({ step: 'method' });
+    expect(r.messages.join('')).toContain('плательщик не определяется');
+  });
+
+  it('method + «плательщику», deposit.network пустой → остаётся на method (fail-closed)', () => {
+    const emptyDepositNetwork = {
+      ...method,
+      ctx: { ...CTX, deposit: { ...CTX.deposit, network: '' } },
+    };
+    const r = advanceRefundFlow(
+      emptyDepositNetwork,
+      refundLabels.toPayer(1611),
+    );
+    expect(r.call).toBeUndefined();
+    expect(r.next).toMatchObject({ step: 'method' });
+  });
+
+  // Insurance test: catches a regression back to gating on withdraw_network.
+  // Production wallet #1646 is exactly this shape — withdraw_network=bsc
+  // masking a Taler deposit — but the failure mode we must never repeat is
+  // the inverse: a withdraw.network that HAPPENS to read 'taler' must not
+  // wrongly unlock the payer button for a wallet whose real deposit was on
+  // another network.
+  it('гейт-страховка: withdraw.network=taler, deposit.network=bsc → плательщику недоступно', () => {
+    const mismatched = {
+      ...method,
+      ctx: {
+        deposit: {
+          network: 'bsc',
+          token: 'usdc',
+          amount: '59.7',
+          address: '0xdep',
+        },
+        withdraw: {
+          network: 'taler',
+          token: 'tal',
+          amount: '0.0047',
+          address: 'tALNcust',
+        },
+      },
+    };
+    const r = advanceRefundFlow(mismatched, refundLabels.toPayer(1611));
+    expect(r.call).toBeUndefined();
+    expect(r.next).toMatchObject({ step: 'method' });
+  });
 
   it('method + обычная речь со словом «плательщик» НЕ выбирает получателя', () => {
     // Регрессия: "плательщик уже писал в поддержку" содержит слово

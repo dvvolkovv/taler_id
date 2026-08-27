@@ -205,7 +205,9 @@ describe('formatNewOperatorWalletAlert', () => {
 import { formatRefillDigest } from './informer.formatters';
 import { RefillDeficit } from './informer.types';
 
-const sampleDeficit = (overrides: Partial<RefillDeficit> = {}): RefillDeficit => ({
+const sampleDeficit = (
+  overrides: Partial<RefillDeficit> = {},
+): RefillDeficit => ({
   chain: 'tron',
   token: 'usdt',
   hotAddress: 'TXxxxYYY',
@@ -529,7 +531,9 @@ describe('OPERATOR_BUTTONS main menu (5 actions)', () => {
   it('contains all five main-menu buttons (regression after Sub-2c)', () => {
     expect(OPERATOR_BUTTONS).toContain('[ACTION:📋 Кошельки оператора]');
     expect(OPERATOR_BUTTONS).toContain('[ACTION:💰 Балансы mini-acquiring]');
-    expect(OPERATOR_BUTTONS).toContain('[ACTION:🏦 Системные кошельки gateway]');
+    expect(OPERATOR_BUTTONS).toContain(
+      '[ACTION:🏦 Системные кошельки gateway]',
+    );
     expect(OPERATOR_BUTTONS).toContain('[ACTION:💶 Балансы в евро]');
     expect(OPERATOR_BUTTONS).toContain('[ACTION:⚙️ Настройки алёртов]');
   });
@@ -683,6 +687,53 @@ describe('formatOperatorWalletsList — причина отказа', () => {
     });
     expect(msgs[1]).toContain('[ACTION:🔁 Повторить #1611]');
     expect(msgs[1]).toContain('[ACTION:💸 Вернуть #1611]');
+  });
+
+  it('показывает обе стороны для кошелька #1646: ждём TAL на Taler, не прошёл вывод в usdc/bsc', () => {
+    const msgs = formatOperatorWalletsList({
+      items: [
+        {
+          wallet_id: 1646,
+          created_at: '2026-08-24T17:02:11Z',
+          deposit_address: 'tALNFJxXR5ZBVgrkPpiNX3KAHJSg1wHkYmMipx45fZJgmpC22',
+          deposit_network: 'taler',
+          deposit_token: 'tal',
+          deposit_amount: '0.004760555556000000',
+          withdraw_address: '0x75c77b569461C6065A0dec22D9fD23FaF3295157',
+          withdraw_network: 'bsc',
+          withdraw_token: 'usdc',
+          withdraw_amount: '59.700000005589338905',
+        },
+      ],
+      total: 1,
+      page: 1,
+      per_page: 50,
+    });
+    const card = msgs[1];
+    // Deposit side: address for the explorer check + expected amount.
+    expect(card).toContain('tALNFJxXR5ZBVgrkPpiNX3KAHJSg1wHkYmMipx45fZJgmpC22');
+    expect(card).toContain('0.004760555556000000');
+    expect(card).toContain('taler');
+    // Withdraw side: still present, clearly labelled as the failed side.
+    expect(card).toContain('0x75c77b569461C6065A0dec22D9fD23FaF3295157');
+    expect(card).toContain('59.700000005589338905');
+    expect(card).toContain('bsc');
+    expect(card).toContain('не прошёл');
+    // Mismatched network/token between the two sides is a normal swap —
+    // must not be flagged as an error.
+    expect(card).not.toMatch(/несовпаден|ошибк/i);
+  });
+
+  it('без сторона пополнения в ответе — блок пополнения не рисуется, кошелёк остаётся тем же по сути', () => {
+    const msgs = formatOperatorWalletsList({
+      items: [base], // `base` has no deposit_* fields
+      total: 1,
+      page: 1,
+      per_page: 50,
+    });
+    const card = msgs[1];
+    expect(card).not.toContain('Пополнение');
+    expect(card).not.toContain('Адрес пополнения');
   });
 
   it('без wallet_id не рисует ни повтор, ни возврат', () => {

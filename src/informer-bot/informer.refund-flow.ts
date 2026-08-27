@@ -9,6 +9,7 @@ import {
   formatRefundGate,
   formatRefundMethodChoice,
   refundLabels,
+  supportsPayerDetection,
 } from './informer.refund.formatters';
 
 /** What the service should do after the transition. */
@@ -113,12 +114,22 @@ export function advanceRefundFlow(
         };
       }
       if (matchesLabel(text, refundLabels.toPayer(state.walletId))) {
-        // No local gate on `state.ctx.network`: that field is
-        // `withdraw_network` (the failed withdrawal's target), which says
-        // nothing about which network funded the wallet. Only the platform
-        // knows the deposit network, so only the platform can accept or
-        // reject "refund to payer" — see the Taler-only caveat rendered on
-        // the confirm card in informer.refund.formatters.ts.
+        // Gate on `state.ctx.deposit.network` — the network that funded
+        // the wallet — and NEVER on `state.ctx.withdraw.network` (the
+        // failed withdrawal's target). See the doc-comment on
+        // `supportsPayerDetection` in informer.refund.formatters.ts: this
+        // exact mix-up (gating on the withdrawal side instead of the
+        // deposit side) already shipped once and was caught on production
+        // wallet #1646, whose `withdraw_network` is `bsc` while its
+        // deposit was Taler.
+        if (!supportsPayerDetection(state.ctx.deposit.network)) {
+          return stay(
+            state,
+            `⚠️ В сети пополнения \`${state.ctx.deposit.network || '(неизвестно)'}\` ` +
+              'плательщик не определяется — платформа ответит отказом. Нужен явный адрес.',
+            formatRefundMethodChoice(state.walletId, state.ctx),
+          );
+        }
         const target: RefundTarget = { refundToPayer: true };
         return {
           next: { ...state, step: 'confirm', target },

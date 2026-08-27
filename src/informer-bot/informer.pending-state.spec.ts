@@ -20,10 +20,13 @@ function makeRedisStub() {
 }
 
 const CTX = {
-  network: 'BSC',
-  token: 'usdt',
-  amount: '50',
-  address: '0xcust',
+  deposit: {
+    network: 'taler',
+    token: 'tal',
+    amount: '0.0047',
+    address: 'tALNcust',
+  },
+  withdraw: { network: 'BSC', token: 'usdt', amount: '50', address: '0xcust' },
 };
 
 describe('PendingStateStore', () => {
@@ -64,6 +67,48 @@ describe('PendingStateStore', () => {
   it('отдаёт null и чистит ключ на битом JSON', async () => {
     const redis = makeRedisStub();
     redis.store.set('informer:pending_op:u1', '{not json');
+    const store = new PendingStateStore(redis as any);
+
+    expect(await store.load('u1')).toBeNull();
+    expect(redis.del).toHaveBeenCalledWith('informer:pending_op:u1');
+  });
+
+  it('отдаёт null и чистит ключ на старой плоской форме ctx (до входящей стороны)', async () => {
+    // Pre-2026-08-24 shape: ctx was {network, token, amount, address}
+    // built from withdraw_* alone, no nested deposit/withdraw. A stale
+    // key in this shape must not survive into the wizard as a "valid"
+    // PendingOp — every card now dereferences ctx.deposit.* / ctx.withdraw.*
+    // and would render `undefined` on an irreversible refund.
+    const redis = makeRedisStub();
+    redis.store.set(
+      'informer:pending_op:u1',
+      JSON.stringify({
+        kind: 'refund',
+        step: 'method',
+        walletId: 1611,
+        ctx: { network: 'BSC', token: 'usdt', amount: '50', address: '0xcust' },
+      }),
+    );
+    const store = new PendingStateStore(redis as any);
+
+    expect(await store.load('u1')).toBeNull();
+    expect(redis.del).toHaveBeenCalledWith('informer:pending_op:u1');
+  });
+
+  it('отдаёт null и чистит ключ когда deposit или withdraw пуст/отсутствует', async () => {
+    const redis = makeRedisStub();
+    redis.store.set(
+      'informer:pending_op:u1',
+      JSON.stringify({
+        kind: 'refund',
+        step: 'method',
+        walletId: 1611,
+        ctx: {
+          deposit: { network: '', token: 'tal', amount: '1', address: 'x' },
+          withdraw: CTX.withdraw,
+        },
+      }),
+    );
     const store = new PendingStateStore(redis as any);
 
     expect(await store.load('u1')).toBeNull();

@@ -70,10 +70,21 @@ export class InformerRefundService {
     const item = list.items.find((i) => i.wallet_id === walletId);
     if (item) {
       ctx = {
-        network: item.withdraw_network,
-        token: item.withdraw_token,
-        amount: item.withdraw_amount,
-        address: item.withdraw_address,
+        // Optional on the type — platform guarantees them non-empty, but
+        // an older stand or a rollback must still produce a renderable
+        // (if gate-closed) wizard instead of `undefined` reaching a card.
+        deposit: {
+          network: item.deposit_network ?? '',
+          token: item.deposit_token ?? '',
+          amount: item.deposit_amount ?? '',
+          address: item.deposit_address ?? '',
+        },
+        withdraw: {
+          network: item.withdraw_network,
+          token: item.withdraw_token,
+          amount: item.withdraw_amount,
+          address: item.withdraw_address,
+        },
       };
     }
 

@@ -315,9 +315,7 @@ describe('InformerBotService.handleUserMessage (fiat actions)', () => {
               {
                 role: 'hot_wallet',
                 address: 'TX',
-                balances: [
-                  { asset: 'usdt', kind: 'native', balance: '12450' },
-                ],
+                balances: [{ asset: 'usdt', kind: 'native', balance: '12450' }],
               },
             ],
           },
@@ -388,7 +386,7 @@ describe('InformerBotService.handleUserMessage (fiat actions)', () => {
     expect(m.client.getGatewaySystemWalletBalances).toHaveBeenCalledTimes(1);
     expect(m.rates.getEurRates).toHaveBeenCalledTimes(1);
     expect(m.rates.invalidateCache).not.toHaveBeenCalled();
-    const assets = (m.rates.getEurRates.mock.calls[0][0] as string[]).map((s) =>
+    const assets = m.rates.getEurRates.mock.calls[0][0].map((s) =>
       s.toLowerCase(),
     );
     expect(assets).toContain('usdt');
@@ -674,17 +672,20 @@ describe('InformerBotService.handleUserMessage (retry wallet, flow B)', () => {
 });
 
 describe('мастер возврата в сервисе', () => {
-  // withdraw_network (here TALER) is just the failed withdrawal's target —
-  // it says nothing about the deposit network, so it no longer gates which
-  // network can reach the "вернуть плательщику" branch (any network can,
-  // see informer.refund.formatters.ts / informer.refund-flow.ts). Kept as
-  // TALER only because that's the one case the platform is expected to
-  // actually accept for refund-to-payer; the wizard itself is uniform.
+  // deposit_network (here 'taler') is what gates the "вернуть плательщику"
+  // branch — see supportsPayerDetection in informer.refund.formatters.ts.
+  // withdraw_network is deliberately a DIFFERENT network (bsc) here, to
+  // prove the wizard actually reads deposit_network and not
+  // withdraw_network to decide whether the payer button works.
   const ITEM = {
     wallet_id: 1611,
     created_at: '2026-08-24T17:02:11Z',
+    deposit_address: 'tALNcust',
+    deposit_network: 'taler',
+    deposit_token: 'tal',
+    deposit_amount: '0.0047',
     withdraw_address: '0xcust',
-    withdraw_network: 'TALER',
+    withdraw_network: 'bsc',
     withdraw_token: 'usdt',
     withdraw_amount: '50',
   };
@@ -714,6 +715,38 @@ describe('мастер возврата в сервисе', () => {
     await svc.handleUserMessage('u1', 'c1', '👤 Вернуть плательщику #1611');
     await svc.handleUserMessage('u1', 'c1', '✅ Подтвердить возврат #1611');
   }
+
+  it('гейт-страховка: deposit_network=bsc (даже если withdraw_network=taler) не пускает «вернуть плательщику»', async () => {
+    const m = mocksWithWallet();
+    m.client.getOperatorRequiredList = jest.fn(async () => ({
+      items: [
+        {
+          wallet_id: 1611,
+          created_at: '2026-08-24T17:02:11Z',
+          deposit_address: '0xdep',
+          deposit_network: 'bsc',
+          deposit_token: 'usdc',
+          deposit_amount: '59.7',
+          withdraw_address: 'tALNcust',
+          withdraw_network: 'taler', // deliberately the OPPOSITE of ITEM
+          withdraw_token: 'tal',
+          withdraw_amount: '0.0047',
+        },
+      ],
+      total: 1,
+      page: 1,
+      per_page: 50,
+    }));
+    const svc = makeService(m);
+
+    await svc.handleUserMessage('u1', 'c1', '💸 Вернуть #1611');
+    await svc.handleUserMessage('u1', 'c1', '👤 Вернуть плательщику #1611');
+
+    expect((m.client as any).refundOperatorWallet).not.toHaveBeenCalled();
+    const state = JSON.parse(m.redis.store.get('informer:pending_op:u1')!);
+    expect(state.step).toBe('method');
+    expect(m.published.join('')).toContain('плательщик не определяется');
+  });
 
   it('проходит мастер целиком и зовёт API', async () => {
     const m = mocksWithWallet();

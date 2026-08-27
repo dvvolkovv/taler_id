@@ -167,13 +167,27 @@ export function formatOperatorWalletsList(
         : `🪪 ${i.withdraw_network} / ${i.withdraw_token}`;
     const lines = [
       idLine,
-      // Explicitly "вывода": these are the failed withdrawal's target
-      // address/amount, not a refund amount — the refund wizard reached
-      // from `💸 Вернуть` below draws on the same withdraw_* fields and
-      // repeats this caveat, see REFUND_UNKNOWN_NOTE in
-      // informer.refund.formatters.ts.
+      // Deposit side (added by the platform 2026-08-24, see
+      // informer-deposit-side-client-changes.md): what we're waiting to
+      // receive, and where to check for it. Omitted entirely — not
+      // rendered as "nothing pending" — when absent, which happens on an
+      // older admin-API stand or if the platform rolls this release back.
+      // `deposit_amount` is worded as an expectation ("ждём"), never as a
+      // confirmed receipt: it's captured at request creation, not updated
+      // when money actually arrives.
+      ...(i.deposit_network
+        ? [
+            `Пополнение (ждём): \`${i.deposit_amount ?? '?'}\` ${i.deposit_token ?? ''} ` +
+              `в сети \`${i.deposit_network}\``,
+            `Адрес пополнения: \`${i.deposit_address ?? '?'}\` _(сверить поступление в эксплорере)_`,
+          ]
+        : []),
+      // Explicitly "вывода"/"не прошёл": this is the failed withdrawal's
+      // target address/amount, a different operation from the deposit
+      // above — the refund wizard reached from `💸 Вернуть` below returns
+      // the deposit, it does not retry or undo this withdrawal.
+      `Вывод (не прошёл): \`${i.withdraw_amount}\` ${i.withdraw_token} в сети \`${i.withdraw_network}\``,
       `Адрес вывода: \`${i.withdraw_address}\``,
-      `Сумма вывода: \`${i.withdraw_amount}\``,
       `Создан: ${at}`,
       ...reasonLines(i),
     ];
@@ -397,9 +411,7 @@ export function formatRefillEnabled(): string {
   ].join('\n');
 }
 
-export function formatRefillSettings(
-  cfg: InformerAlertConfig | null,
-): string {
+export function formatRefillSettings(cfg: InformerAlertConfig | null): string {
   const enabled = cfg?.enabled ?? true;
   const snoozedUntil = cfg?.snoozedUntil ?? null;
   const snoozed = snoozedUntil !== null && snoozedUntil > new Date();
@@ -409,7 +421,7 @@ export function formatRefillSettings(
     status = '[B:red]🔇 Отключено[/B]';
     toggleButton = '[ACTION:🔔 Включить обратно]';
   } else if (snoozed) {
-    status = `[B:blue]🔕 Заглушено до ${snoozedUntil!.toISOString()}[/B]`;
+    status = `[B:blue]🔕 Заглушено до ${snoozedUntil.toISOString()}[/B]`;
     toggleButton = '[ACTION:🔔 Включить обратно]';
   } else {
     status = '[B:green]🔔 Активно[/B]';
@@ -536,8 +548,10 @@ export function formatFiatBalances(r: FiatBalancesResult): string {
 
   const mini = r.pools.find((p) => p.poolName === 'mini-acquiring');
   const gateway = r.pools.find((p) => p.poolName === 'gateway');
-  if (mini) sections.push(...renderMiniAcquiringPool(mini, r.coingeckoStatus), '');
-  if (gateway) sections.push(...renderGatewayPool(gateway, r.coingeckoStatus), '');
+  if (mini)
+    sections.push(...renderMiniAcquiringPool(mini, r.coingeckoStatus), '');
+  if (gateway)
+    sections.push(...renderGatewayPool(gateway, r.coingeckoStatus), '');
 
   const allUnpriced = r.pools.flatMap((p) => p.unpricedAssets);
   if (allUnpriced.length > 0) {

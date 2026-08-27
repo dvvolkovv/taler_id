@@ -55,58 +55,100 @@ export const REFUND_CANCEL_BUTTON = `[ACTION:${refundLabels.cancel}]`;
 export const BACK_TO_WALLETS_BUTTON = '[ACTION:📋 Кошельки оператора]';
 
 /**
- * There used to be a local function here that gated the "Вернуть
- * плательщику" button, hiding it unless `withdraw_network` was `taler`.
- * That was wrong at the root, not just miscalibrated: `withdraw_network` names
- * the network the client tried to withdraw TO, and `GET
- * /informer/v1/operator-required-wallets` carries no field at all for the
- * network the wallet was funded FROM. A refund is a return of the deposit,
- * so the one variable an in-app gate would need to reason about — which
- * network the client actually paid in — is simply absent from the API. A
- * wallet can show `withdraw_network: bsc` and still have been funded on
- * Taler (wallet #1646 in production is exactly this case); no amount of
- * matching on `withdraw_network` can distinguish that from a BSC deposit.
+ * Gates the "Вернуть плательщику" button on the DEPOSIT network — the
+ * network that funded the wallet — never on the withdrawal network. The
+ * parameter name is deliberately not `network`: call this ONLY with
+ * `ctx.deposit.network`, never with `ctx.withdraw.network`.
  *
- * So both buttons are offered unconditionally now, on every network. Only
- * the platform holds the deposit history, so only the platform can decide
- * whether "refund to payer" is resolvable — see `formatRefundConfirm`,
- * which spells out that a non-Taler deposit gets rejected server-side with
- * nothing sent, rather than pretending we can predict that here.
+ * ⚠️ We have already shipped this bug once. Before 2026-08-24 the API had
+ * no deposit-side fields at all, and an earlier version of this gate
+ * matched on `withdraw_network` because that was the only network field
+ * available — production wallet #1646 shows exactly why that was wrong:
+ * `withdraw_network: bsc`, but the wallet was funded on Taler, so the
+ * refund is TAL on Taler. Matching on `withdraw_network` cannot distinguish
+ * that from a genuine BSC deposit no matter how the whitelist is
+ * calibrated (Taler-only, Taler+Tron, fail-open, fail-closed — all tried,
+ * all wrong the same way), because it names the wrong side of the
+ * operation: a refund returns the DEPOSIT, it does not undo the
+ * withdrawal. The bug was reverted same-day to "no gate at all" rather
+ * than recalibrated, specifically because no calibration of
+ * `withdraw_network` could have been correct. Only once the platform
+ * added `deposit_network` did a real gate become possible — this is that
+ * gate, and it must never again be pointed at `withdraw_network`.
+ *
+ * Whitelist of one (`taler`), matched fail-closed: an empty or
+ * unrecognised deposit network hides the button, including a brand-new
+ * network the platform starts supporting later — trusting it before we
+ * have evidence and ship a release is the wrong default for an
+ * irreversible transfer. Per Vladimir (admin-API owner): "Пока давай
+ * ограничимся только Taler. Для остальных сетей пока не хватает
+ * фактуры." Tron in particular is a bad candidate even in principle: the
+ * platform's history lookup there resolves the transaction's *signer*,
+ * not the token sender, and the signer can be an exchange's hot wallet
+ * unrelated to the client being refunded.
  */
-function walletLine(walletId: number, ctx: WalletCtx): string {
-  return `**#${walletId}** · не прошёл вывод ${ctx.amount} ${ctx.token} в ${ctx.network}`;
+const NETWORKS_WITH_PAYER_DETECTION = new Set(['taler']);
+
+export function supportsPayerDetection(depositNetwork: string): boolean {
+  return NETWORKS_WITH_PAYER_DETECTION.has(
+    (depositNetwork ?? '').trim().toLowerCase(),
+  );
 }
 
 /**
- * `WalletCtx` is built entirely from `withdraw_*` fields (see
- * `informer.types.ts`) — it describes the failed withdrawal, not the
- * refund. The refund's own amount and network come from whatever the
- * client originally deposited, which this API never reports. Every card
- * that shows `walletLine()` repeats this note so an operator can't read
- * the withdrawal figures as a preview of what will actually be sent back.
+ * Describes the failed withdrawal — NOT the refund. `WalletCtx.withdraw`
+ * is what the client tried (and failed) to withdraw to; the refund itself
+ * draws on `WalletCtx.deposit`, rendered separately by each card below.
  */
-const REFUND_UNKNOWN_NOTE =
-  'Сумма и сеть возврата определяются пополнением кошелька, а не выводом ' +
-  'выше — платформа их не отдаёт, здесь показаны только параметры ' +
-  'несостоявшегося вывода.';
+function failedWithdrawLine(walletId: number, ctx: WalletCtx): string {
+  return `**#${walletId}** · не прошёл вывод ${ctx.withdraw.amount} ${ctx.withdraw.token} в ${ctx.withdraw.network}`;
+}
+
+/**
+ * The refund's own network + expected amount, from `WalletCtx.deposit`.
+ * `deposit.amount` is what the platform expected when the deposit request
+ * was created, not a confirmed receipt — worded as an expectation
+ * ("ожидали"/"ожидание") everywhere it appears so it can't be read as the
+ * amount that will actually be sent back. The real refund amount is
+ * whatever actually arrived; that's checked against `deposit.address` in
+ * the explorer, not printed here.
+ */
+function depositSummary(ctx: WalletCtx): string {
+  const net = ctx.deposit.network || '(неизвестно)';
+  return (
+    `Возврат уйдёт в сети пополнения \`${net}\`. Ожидавшаяся сумма ` +
+    `пополнения (зафиксирована при создании заявки, **не факт ` +
+    `поступления**): \`${ctx.deposit.amount || '?'}\` ${ctx.deposit.token || ''}.`
+  );
+}
 
 export function formatRefundMethodChoice(
   walletId: number,
   ctx: WalletCtx,
 ): string {
-  return [
-    `💸 **Возврат средств** ${walletLine(walletId, ctx)}`,
+  const lines = [
+    `💸 **Возврат средств** ${failedWithdrawLine(walletId, ctx)}`,
     '',
-    `Адрес вывода: \`${ctx.address}\``,
+    `Адрес вывода: \`${ctx.withdraw.address}\``,
     '',
-    REFUND_UNKNOWN_NOTE,
+    depositSummary(ctx),
     '',
     'Куда вернуть?',
     '',
     `[ACTION:${refundLabels.chooseAddress(walletId)}]`,
-    `[ACTION:${refundLabels.toPayer(walletId)}]`,
-    REFUND_CANCEL_BUTTON,
-  ].join('\n');
+  ];
+  if (supportsPayerDetection(ctx.deposit.network)) {
+    lines.push(`[ACTION:${refundLabels.toPayer(walletId)}]`);
+  } else {
+    lines.push(
+      '',
+      '_Плательщик определяется платформой только для пополнений в Taler — ' +
+        `в сети пополнения \`${ctx.deposit.network || '(неизвестно)'}\` кнопки нет. ` +
+        'Нужен явный адрес.',
+    );
+  }
+  lines.push(REFUND_CANCEL_BUTTON);
+  return lines.join('\n');
 }
 
 export function formatRefundAddressPrompt(
@@ -114,13 +156,13 @@ export function formatRefundAddressPrompt(
   ctx: WalletCtx,
 ): string {
   return [
-    // walletLine already carries its own bold markers; wrapping it in another
-    // pair leaves unbalanced ** and renders as a broken bold run.
-    `📮 **Адрес возврата** для ${walletLine(walletId, ctx)}`,
+    // failedWithdrawLine already carries its own bold markers; wrapping it
+    // in another pair leaves unbalanced ** and renders as a broken bold run.
+    `📮 **Адрес возврата** для ${failedWithdrawLine(walletId, ctx)}`,
     '',
-    `Адрес должен быть в сети, которой клиент пополнял кошелёк, — ` +
-      `а НЕ в сети вывода (\`${ctx.network}\`, показана выше). Какой ` +
-      'сетью пополняли, нам неизвестно; формат и сеть сверит платформа.',
+    `Адрес должен быть в сети пополнения \`${ctx.deposit.network || '(неизвестно)'}\` ` +
+      `— а НЕ в сети вывода (\`${ctx.withdraw.network}\`, показана выше). ` +
+      'Формат сверит платформа.',
     '',
     'Пришли адрес одним сообщением. Проверю только то, что он непустой.',
     '',
@@ -146,22 +188,28 @@ export function formatRefundConfirm(
   target: RefundTarget,
 ): string {
   const head = [
-    `⚠️ **Подтверди возврат** ${walletLine(walletId, ctx)}`,
+    `⚠️ **Подтверди возврат** ${failedWithdrawLine(walletId, ctx)}`,
     '',
-    REFUND_UNKNOWN_NOTE,
+    depositSummary(ctx),
+    'Фактическая сумма возврата определяется тем, что реально пришло на ' +
+      `\`${ctx.deposit.address || '?'}\` — сверяй по эксплореру, а не по ` +
+      'цифре выше.',
     '',
   ];
   const body =
     'refundAddress' in target
       ? [`Получатель: \`${target.refundAddress}\``, '']
       : [
-          'Получатель: **адрес плательщика, который выберет платформа**.',
+          // The `method` step already refuses to reach `confirm` with
+          // `refundToPayer` unless `supportsPayerDetection(ctx.deposit.network)`
+          // — see informer.refund-flow.ts — so by the time this branch
+          // renders, the deposit network IS Taler. No need to re-litigate
+          // "what if it isn't" here; only the parts of the old copy that
+          // don't depend on that gate stay.
+          'Получатель: **адрес плательщика, который выберет платформа** ' +
+            '(определяется по истории пополнения в сети Taler).',
           '',
           'Что это значит:',
-          '• платформа умеет надёжно определить плательщика по истории, ' +
-            'только если кошелёк пополняли в сети **Taler**. Если это не ' +
-            'так, платформа отклонит запрос и **ничего не отправит** — ' +
-            'решение принимает она, у нас данных о сети пополнения нет;',
           '• показать адрес заранее невозможно — preview у платформы нет;',
           '• после успеха платформа не сообщит, куда ушли деньги.',
           '',
@@ -252,8 +300,8 @@ export function formatRefundGate(
       'Возврат сейчас заплатит ему **дважды**.',
     '',
     'Прежде чем снимать гейт, проверь:',
-    `• в обозревателе ${ctx.network} нет исходящей транзакции на \`${ctx.address}\` ` +
-      `на ${ctx.amount} ${ctx.token};`,
+    `• в обозревателе ${ctx.withdraw.network} нет исходящей транзакции на \`${ctx.withdraw.address}\` ` +
+      `на ${ctx.withdraw.amount} ${ctx.withdraw.token};`,
     '• в бэкофисе нет успешного order id по этой выплате.',
     '',
     'Нажимая кнопку, ты утверждаешь, что сверил цепочку и выплаты не было. ' +

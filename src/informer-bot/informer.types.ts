@@ -36,6 +36,23 @@ export interface OperatorRequiredItem {
   withdraw_token: string;
   withdraw_amount: string;
 
+  // Deposit side — what funded the wallet, added by the platform on
+  // 2026-08-24 (see informer-deposit-side-client-changes.md). The platform
+  // guarantees these four are non-empty for every wallet, but they're
+  // typed optional and MUST be handled as absent anyway: an older admin-API
+  // stand, or the platform rolling this release back, would otherwise omit
+  // them and crash rendering or the refund wizard instead of degrading.
+  //
+  // `deposit_amount` is captured when the deposit request was CREATED — it
+  // is the expected amount, not a confirmed receipt. Never render it as
+  // "this is what gets refunded"; the actual refund amount is whatever
+  // really arrived, checked via `deposit_address` in the explorer for
+  // `deposit_network`.
+  deposit_address?: string;
+  deposit_network?: string;
+  deposit_token?: string;
+  deposit_amount?: string;
+
   // Last recorded failure for this wallet — the one that put it in the
   // operator queue. All three are optional and disappear together in two
   // very different cases: no failure was ever recorded for this wallet, OR
@@ -67,22 +84,46 @@ export interface OperatorWalletRefundResult {
  * one" when both fields arrive together, so the union is enforced at the
  * type level rather than by runtime validation.
  */
-export type RefundTarget =
-  | { refundAddress: string }
-  | { refundToPayer: true };
+export type RefundTarget = { refundAddress: string } | { refundToPayer: true };
 
 /**
- * Wallet facts captured at the moment the operator taps the refund button.
- * Carried through the wizard so the confirmation card can say
- * "50 usdt · BSC → 0xB1c4…" instead of a bare "#1611". The list may change
- * during the wizard; re-fetching on every step costs more and still gives
- * no guarantee.
+ * One side of a wallet operation: a network/token/amount/address quadruple.
+ * Used for both `deposit` and `withdraw` below — always through the named
+ * field, never bare, so a caller can't mix the two up by accident the way
+ * the original flat `WalletCtx` allowed (see its docstring).
  */
-export interface WalletCtx {
+export interface WalletSide {
   network: string;
   token: string;
   amount: string;
   address: string;
+}
+
+/**
+ * Wallet facts captured at the moment the operator taps the refund button.
+ * Carried through the wizard so the confirmation card can say
+ * "0.0047 tal · taler → адрес плательщика" instead of a bare "#1611". The
+ * list may change during the wizard; re-fetching on every step costs more
+ * and still gives no guarantee.
+ *
+ * Used to be a flat four-field object built entirely from `withdraw_*`
+ * (the failed withdrawal's target) — before the platform added the
+ * deposit_* fields, that was the only side the API exposed at all. That
+ * flatness is exactly what let the refund wizard's original network gate
+ * get built on `withdraw_network`, which is not the refund's network (see
+ * `supportsPayerDetection` in informer.refund.formatters.ts for the full
+ * incident). Split into two explicitly-named sides now that both exist,
+ * specifically so "which side is this field from" is answered by reading
+ * the access path (`ctx.deposit.network` vs `ctx.withdraw.network`)
+ * instead of trusting a comment.
+ */
+export interface WalletCtx {
+  /** What actually funded the wallet — the side that gets refunded. */
+  deposit: WalletSide;
+  /** The failed withdrawal's target — NOT what gets refunded. Carried
+   * only so cards can explain what went wrong and why the wallet is
+   * stuck. */
+  withdraw: WalletSide;
 }
 
 export interface OperatorRequiredList {
@@ -134,27 +175,28 @@ export interface GatewaySystemWalletBalances {
 
 // ── Refill deficit (computed locally, not from admin-API) ───
 export interface RefillDeficit {
-  chain: string;                  // e.g. "tron"
-  token: string;                  // e.g. "usdt"
-  hotAddress: string;             // mini-acquiring role address
-  hotBalance: string;             // raw amount as string, e.g. "1000.00"
-  pendingTotal: string;           // raw aggregated pending withdrawal amount
+  chain: string; // e.g. "tron"
+  token: string; // e.g. "usdt"
+  hotAddress: string; // mini-acquiring role address
+  hotBalance: string; // raw amount as string, e.g. "1000.00"
+  pendingTotal: string; // raw aggregated pending withdrawal amount
   availableForWithdrawal: string; // hotBalance × (1 − SAFETY_MARGIN_PCT)
-  deficit: string;                // pendingTotal − availableForWithdrawal, > 0 when alertable
+  deficit: string; // pendingTotal − availableForWithdrawal, > 0 when alertable
 }
 
 // ── Fiat balances (Sub-2c, EUR dashboard) ───────────────────
 export interface FiatRoleBreakdown {
   role: 'hot_wallet' | 'cold_wallet' | 'gas_funding';
-  eurTotal: string;       // BigNumber.toFixed()
+  eurTotal: string; // BigNumber.toFixed()
   tokens: Array<{ asset: string; native: string; eur: string | null }>;
 }
 
 export interface FiatChainBreakdown {
   chain: string;
-  eurTotal: string;       // BigNumber.toFixed()
-  roles?: FiatRoleBreakdown[];                          // mini-acquiring only
-  flatTokens?: Array<{                                  // gateway only
+  eurTotal: string; // BigNumber.toFixed()
+  roles?: FiatRoleBreakdown[]; // mini-acquiring only
+  flatTokens?: Array<{
+    // gateway only
     asset: string;
     walletType: string;
     native: string;
@@ -171,7 +213,7 @@ export interface FiatPoolDigest {
 
 export interface FiatBalancesResult {
   pools: FiatPoolDigest[];
-  ratesCacheAgeMin: number | null;  // null = no fetch yet
+  ratesCacheAgeMin: number | null; // null = no fetch yet
   coingeckoStatus: 'ok' | 'stale' | 'failed';
 }
 

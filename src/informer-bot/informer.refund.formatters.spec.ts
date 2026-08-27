@@ -11,50 +11,103 @@ import {
   formatRefundFailure,
   formatRefundTimeout,
   formatRefundInFlight,
+  supportsPayerDetection,
 } from './informer.refund.formatters';
 import { classifyRefundFailure } from './informer.refund-errors';
+import { WalletCtx } from './informer.types';
 
 /** Any `[ACTION:...]` label — used to assert a card is never a dead end. */
 const HAS_ACTION_BUTTON = /\[ACTION:[^\]]+\]/;
 
+describe('supportsPayerDetection — гейт на сети пополнения', () => {
+  it('taler → true', () => {
+    expect(supportsPayerDetection('taler')).toBe(true);
+    expect(supportsPayerDetection('TALER')).toBe(true);
+    expect(supportsPayerDetection('  taler  ')).toBe(true);
+  });
+
+  it('bsc → false', () => {
+    expect(supportsPayerDetection('bsc')).toBe(false);
+  });
+
+  it('пустая строка → false (fail-closed)', () => {
+    expect(supportsPayerDetection('')).toBe(false);
+  });
+
+  it('незнакомая сеть → false (fail-closed)', () => {
+    expect(supportsPayerDetection('some-new-chain')).toBe(false);
+  });
+});
+
 describe('мастер возврата — карточки', () => {
-  const CTX = {
-    network: 'BSC',
-    token: 'usdt',
-    amount: '50',
-    address: '0xcust',
-  };
-  const TALER_CTX = { ...CTX, network: 'TALER' };
-
-  // withdraw_network says nothing about the deposit network — the API has
-  // no field for it at all — so the wizard cannot gate the payer button
-  // locally. Both buttons must render regardless of what withdraw_network
-  // says; only the platform can accept or reject "refund to payer" (see
-  // the confirm-card test below for the Taler caveat that carries that).
-  it.each([['BSC', CTX], ['TALER', TALER_CTX]] as const)(
-    'предлагает обе кнопки способа возврата независимо от сети (%s)',
-    (_label, ctx) => {
-      const md = formatRefundMethodChoice(1611, ctx);
-      expect(md).toContain('[ACTION:📮 Указать адрес #1611]');
-      expect(md).toContain('[ACTION:👤 Вернуть плательщику #1611]');
-    },
-  );
-
-  it('карточка выбора способа не выдаёт цель вывода за сумму возврата', () => {
-    const md = formatRefundMethodChoice(1646, {
+  const CTX: WalletCtx = {
+    deposit: {
       network: 'bsc',
       token: 'usdc',
-      amount: '59.7',
-      address: '0x75c77b569461C6065A0dec22D9fD23FaF3295157',
-    });
-    // The withdraw figures are present but must read as a failed
-    // withdrawal, not as a preview of the refund — old rendering was the
-    // bare `#1646 · 59.7 usdc · bsc` that reads as "this will be sent".
-    expect(md).toContain('не прошёл вывод 59.7 usdc в bsc');
-    expect(md).not.toContain('#1646** · 59.7 usdc · bsc');
-    expect(md).toContain(
-      'Сумма и сеть возврата определяются пополнением кошелька',
+      amount: '123.45',
+      address: '0xdep',
+    },
+    withdraw: {
+      network: 'BSC',
+      token: 'usdt',
+      amount: '50',
+      address: '0xcust',
+    },
+  };
+  const TALER_CTX: WalletCtx = {
+    ...CTX,
+    deposit: { ...CTX.deposit, network: 'taler' },
+  };
+
+  // Gated on deposit.network, matching supportsPayerDetection: only a
+  // Taler deposit gets the payer button. See informer.refund-flow.spec.ts
+  // for the flow-level insurance test against gating on withdraw.network
+  // instead.
+  it('кнопка «вернуть плательщику» есть только когда deposit.network=taler', () => {
+    expect(formatRefundMethodChoice(1611, CTX)).not.toContain(
+      '[ACTION:👤 Вернуть плательщику #1611]',
     );
+    expect(formatRefundMethodChoice(1611, TALER_CTX)).toContain(
+      '[ACTION:👤 Вернуть плательщику #1611]',
+    );
+  });
+
+  it('кнопка «указать адрес» всегда доступна, независимо от сети пополнения', () => {
+    expect(formatRefundMethodChoice(1611, CTX)).toContain(
+      '[ACTION:📮 Указать адрес #1611]',
+    );
+    expect(formatRefundMethodChoice(1611, TALER_CTX)).toContain(
+      '[ACTION:📮 Указать адрес #1611]',
+    );
+  });
+
+  it('карточка выбора способа не выдаёт ожидаемую сумму пополнения за факт и показывает обе стороны для кошелька #1646', () => {
+    const md = formatRefundMethodChoice(1646, {
+      deposit: {
+        network: 'taler',
+        token: 'tal',
+        amount: '0.004760555556000000',
+        address: 'tALNFJxXR5ZBVgrkPpiNX3KAHJSg1wHkYmMipx45fZJgmpC22',
+      },
+      withdraw: {
+        network: 'bsc',
+        token: 'usdc',
+        amount: '59.700000005589338905',
+        address: '0x75c77b569461C6065A0dec22D9fD23FaF3295157',
+      },
+    });
+    // The withdraw figures must read as a failed withdrawal, not as a
+    // preview of the refund — old rendering was the bare
+    // `#1646 · 59.7 usdc · bsc` that reads as "this will be sent".
+    expect(md).toContain('не прошёл вывод 59.700000005589338905 usdc в bsc');
+    expect(md).not.toContain('#1646** · 59.7 usdc · bsc');
+    // Deposit amount is worded as an expectation, never as a fact.
+    expect(md).toContain('Ожидавшаяся сумма');
+    expect(md).toContain('не факт');
+    expect(md).toContain('0.004760555556000000');
+    expect(md).toContain('taler');
+    // deposit/withdraw mismatch is a normal swap, not an error.
+    expect(md).not.toMatch(/несовпаден|ошибк/i);
   });
 
   it('в каждой карточке мастера есть отмена', () => {
@@ -71,47 +124,50 @@ describe('мастер возврата — карточки', () => {
 
   it('адрес запрашивается для сети пополнения, а не для сети вывода из карточки', () => {
     const md = formatRefundAddressPrompt(1646, {
-      network: 'bsc',
-      token: 'usdc',
-      amount: '59.7',
-      address: '0x75c77b569461C6065A0dec22D9fD23FaF3295157',
+      deposit: {
+        network: 'taler',
+        token: 'tal',
+        amount: '0.0047',
+        address: 'tALNcust',
+      },
+      withdraw: {
+        network: 'bsc',
+        token: 'usdc',
+        amount: '59.7',
+        address: '0x75c77b569461C6065A0dec22D9fD23FaF3295157',
+      },
     });
-    expect(md).toContain('сетью пополняли');
+    // Now that we know the deposit network, the caveat states it instead
+    // of pleading ignorance.
+    expect(md).not.toContain('нам неизвестно');
+    expect(md).toContain('сети пополнения');
+    expect(md).toContain('`taler`');
     expect(md).toContain('а НЕ в сети вывода');
     expect(md).toContain('`bsc`');
   });
 
-  it('подтверждение адреса показывает целевые параметры вывода и явно предупреждает, что это не сумма возврата', () => {
+  it('подтверждение адреса показывает ожидавшуюся сумму пополнения с пометкой «не факт» и параметры несостоявшегося вывода', () => {
     const md = formatRefundConfirm(1611, CTX, { refundAddress: '0xB1c4' });
-    expect(md).toContain('50');
-    expect(md).toContain('BSC');
+    expect(md).toContain('123.45'); // ожидавшаяся сумма пополнения
+    expect(md).toContain('bsc'); // сеть пополнения (CTX.deposit.network)
+    expect(md).toContain('50'); // сумма несостоявшегося вывода
+    expect(md).toContain('BSC'); // сеть несостоявшегося вывода
     expect(md).toContain('0xB1c4');
     expect(md).toContain('необратим');
     expect(md).toContain('[ACTION:✅ Подтвердить возврат #1611]');
-    expect(md).toContain(
-      'Сумма и сеть возврата определяются пополнением кошелька',
-    );
+    expect(md).toContain('Ожидавшаяся сумма');
+    expect(md).toContain('не факт');
   });
 
-  it('подтверждение возврата плательщику предупреждает про Taler-only и что платформа ничего не отправит при другом пополнении, без Tron', () => {
+  it('подтверждение возврата плательщику упоминает Taler, не Tron/биржи, и сохраняет предупреждения о необратимости', () => {
     const md = formatRefundConfirm(1611, TALER_CTX, { refundToPayer: true });
     expect(md).not.toContain('биржи');
     expect(md).not.toContain('Tron');
     expect(md).toContain('показать');
     expect(md).toContain('необратим');
-    // Третье последствие: после успеха платформа не сообщает адрес.
+    // Предупреждения, которые остаются независимо от гейта.
     expect(md).toContain('не сообщит, куда ушли деньги');
-    // Оговорка про решение платформы: Taler-only + отказ без отправки.
     expect(md).toContain('Taler');
-    expect(md).toContain('отклонит запрос и **ничего не отправит**');
-  });
-
-  it('оговорка про Taler и отказ платформы появляется независимо от withdraw_network карточки', () => {
-    // withdraw_network не говорит ничего о сети пополнения, так что
-    // оговорка не должна зависеть от него — она про решение платформы.
-    const md = formatRefundConfirm(1611, CTX, { refundToPayer: true });
-    expect(md).toContain('Taler');
-    expect(md).toContain('отклонит запрос и **ничего не отправит**');
   });
 
   it('успешный возврат плательщику честно говорит, что адрес неизвестен', () => {

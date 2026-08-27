@@ -49,6 +49,34 @@ export type PendingOp =
 
 const KNOWN_KINDS = new Set(['retry', 'refund']);
 
+/** A `WalletSide` needs at least a non-empty `network` to be usable —
+ * that's the one field every card and the payer-detection gate dereference
+ * without a fallback. */
+function isValidWalletSide(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  const network = (value as Record<string, unknown>).network;
+  return typeof network === 'string' && network.trim() !== '';
+}
+
+/**
+ * `WalletCtx` used to be a flat `{network, token, amount, address}` built
+ * from `withdraw_*` alone; it is now `{deposit, withdraw}`, each a nested
+ * `WalletSide` (see informer.types.ts). A pending entry saved by the old
+ * code — or surviving a partial deploy where the writer is new but a
+ * reader is still old, or just a stale key nobody expired yet — has
+ * `ctx.network` at the top level and `ctx.deposit` / `ctx.withdraw`
+ * `undefined`. A shallow `typeof ctx === 'object'` check would accept that
+ * shape and hand it to the wizard, which would then render `undefined` for
+ * every field on the confirm card of an irreversible operation. Requiring
+ * both nested sides, each with its own non-empty `network`, rejects the
+ * old flat shape by construction.
+ */
+function isValidWalletCtx(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return isValidWalletSide(v.deposit) && isValidWalletSide(v.withdraw);
+}
+
 /**
  * Validates that a parsed value has exactly the fields its `step` needs.
  * Guards against a truncated write (e.g. Redis restart mid-`save`, or a
@@ -68,7 +96,7 @@ function isValidPendingOp(value: unknown): boolean {
 
   // v.kind === 'refund'
   if (typeof v.walletId !== 'number') return false;
-  if (typeof v.ctx !== 'object' || v.ctx === null) return false;
+  if (!isValidWalletCtx(v.ctx)) return false;
 
   switch (v.step) {
     case 'method':
