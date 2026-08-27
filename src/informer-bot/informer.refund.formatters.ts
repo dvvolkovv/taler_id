@@ -140,14 +140,17 @@ export function formatRefundMethodChoice(
   if (supportsPayerDetection(ctx.deposit.network)) {
     lines.push(`[ACTION:${refundLabels.toPayer(walletId)}]`);
   } else {
+    // Italic markers must be balanced: an unclosed `_` swallows the rest of
+    // the card into one run when the client renders markdown.
     lines.push(
       '',
       '_Плательщик определяется платформой только для пополнений в Taler — ' +
-        `в сети пополнения \`${ctx.deposit.network || '(неизвестно)'}\` кнопки нет. ` +
-        'Нужен явный адрес.',
+        `в сети пополнения \`${ctx.deposit.network || '(неизвестно)'}\` ` +
+        'кнопки нет, нужен явный адрес._',
     );
   }
-  lines.push(REFUND_CANCEL_BUTTON);
+  // Blank line so prose never runs straight into a button marker.
+  lines.push('', REFUND_CANCEL_BUTTON);
   return lines.join('\n');
 }
 
