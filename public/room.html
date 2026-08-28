@@ -96,7 +96,10 @@
     .btn-danger { background: var(--error); color: #fff; }
     .error-msg { color: var(--error); margin-top: 12px; font-size: 13px; min-height: 18px; }
 
-    .call-room { display: flex; flex-direction: column; height: 100dvh; width: 100%; overflow: hidden; }
+    /* Visibility rides on .in-call rather than an inline style so the landscape
+       media query below can swap the flex column for a grid. */
+    .call-room { display: none; flex-direction: column; height: 100dvh; width: 100%; overflow: hidden; }
+    .call-room.in-call { display: flex; }
     .call-header {
       display: flex; align-items: center; gap: 12px; padding: 12px 16px;
       background: rgba(15,15,26,0.88); backdrop-filter: blur(16px);
@@ -532,6 +535,97 @@
     @media (max-width: 640px) {
       .chat-panel { position: fixed; inset: 0; width: 100%; z-index: 200; border-left: none; }
       .cam-prompt { left: 16px; right: 16px; transform: none; flex-wrap: wrap; justify-content: center; }
+    }
+
+    /* ── Phone landscape ──
+       Header and control bar stacked vertically leave almost no height for video
+       on a rotated phone, so the controls move into a rail on the right and the
+       video takes the full height. Scoped to touch devices with a short viewport
+       so tablets and desktop browsers keep the layout they have. */
+    @media (orientation: landscape) and (max-height: 550px) and (pointer: coarse) {
+      /* Pre-join screens: the 88px icon plus margins overflow a ~350px viewport */
+      body { justify-content: flex-start; overflow-y: auto; }
+      .container { padding: 16px 20px; max-width: 520px; }
+      .app-icon { width: 56px; height: 56px; border-radius: 16px; margin-bottom: 12px; }
+      .app-name { font-size: 22px; }
+      .app-subtitle { margin-bottom: 16px; }
+      .room-title { font-size: 16px; margin-bottom: 14px; }
+
+      .call-room.in-call {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        grid-template-rows: auto auto auto 1fr;
+      }
+      .call-header       { grid-column: 1; grid-row: 1; }
+      .rec-banner        { grid-column: 1; grid-row: 2; }
+      .transcript-banner { grid-column: 1; grid-row: 3; }
+      .call-body         { grid-column: 1; grid-row: 4; min-height: 0; }
+      .controls          { grid-column: 2; grid-row: 1 / -1; }
+
+      .call-header {
+        padding: 6px 12px 6px calc(12px + env(safe-area-inset-left));
+        gap: 8px;
+      }
+      .call-header-icon { width: 28px; height: 28px; border-radius: 8px; }
+      .call-header-title { font-size: 14px; }
+      .copy-link-btn { padding: 6px 8px; }
+      #copy-link-text { display: none; }
+      .rec-banner, .transcript-banner { padding: 4px 12px; font-size: 12px; }
+
+      .video-grid { padding-left: calc(8px + env(safe-area-inset-left)); }
+
+      /* Two columns: eleven buttons in a single stack would not fit ~330px.
+         The rail must not scroll — its overflow would clip the device and
+         background popups, which open to the left, outside the rail's box. */
+      .controls {
+        display: grid;
+        grid-template-columns: repeat(2, auto);
+        gap: 6px;
+        align-content: center;
+        justify-content: center;
+        padding: 8px calc(8px + env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) 8px;
+        border-top: none;
+        border-left: 1px solid var(--border-s);
+        overflow: visible;
+      }
+      .ctrl-btn { width: 40px; height: 40px; border-radius: 11px; }
+      .ctrl-btn svg { width: 17px; height: 17px; }
+      .ctrl-btn-leave { width: 40px; height: 40px; border-radius: 12px; }
+      /* Labels go, but the device pickers must stay reachable: the ▾ becomes a
+         badge on the button's corner instead of a row underneath it. */
+      .ctrl-label { display: none; }
+      .ctrl-label-row { position: absolute; right: -3px; bottom: -3px; margin: 0; gap: 0; }
+      .device-arrow {
+        font-size: 9px; line-height: 1; padding: 3px 4px; border-radius: 7px;
+        background: var(--card); border: 1px solid var(--border-s); color: var(--text);
+      }
+      .ctrl-btn-tooltip { display: none; }
+
+      /* Popups open to the left of the rail instead of above the button */
+      .device-popup, .bg-picker {
+        top: 50%; bottom: auto; left: auto; right: calc(100% + 8px);
+        transform: translateY(-50%);
+      }
+      #popup-translator { bottom: auto !important; }
+      .bg-picker { min-width: 260px; }
+      .bg-picker-grid { grid-template-columns: repeat(3, 1fr); }
+      .device-popup { max-height: 80dvh; overflow-y: auto; }
+
+      .chat-panel { width: 280px; min-width: 240px; }
+      .tiles-strip { height: 56px; }
+      .participant-tile.mini {
+        flex: 0 0 96px !important; width: 96px !important; max-width: 96px !important;
+      }
+      .participant-avatar { width: 48px; height: 48px; font-size: 20px; }
+      .cam-prompt { top: 8px; padding: 8px 14px; }
+      .cam-prompt-text { font-size: 13px; }
+    }
+
+    /* Shorter landscape viewports (most phones once the browser chrome is in):
+       a third column keeps all eleven buttons on screen at a full-size tap
+       target instead of shrinking them. */
+    @media (orientation: landscape) and (max-height: 430px) and (pointer: coarse) {
+      .controls { grid-template-columns: repeat(3, auto); }
     }
   </style>
 </head>
@@ -1649,24 +1743,72 @@
       updateTileLayout();
     }
 
+    // Upper/lower bounds per participant count. The maximums are the ones the
+    // layout has always used, so a roomy desktop grid looks unchanged; the
+    // minimums are the floor when the viewport is too small to fit everyone.
+    const TILE_BOUNDS = [
+      { upTo: 1,        max: 600, min: 200 },
+      { upTo: 2,        max: 500, min: 160 },
+      { upTo: 4,        max: 400, min: 120 },
+      { upTo: 6,        max: 320, min: 100 },
+      { upTo: Infinity, max: 260, min: 90  },
+    ];
+
     function updateTileLayout() {
       if (pinnedTileId) { rebuildPinnedLayout(); return; }
       const grid = document.getElementById('video-grid');
       if (!grid) return;
-      const tiles = grid.querySelectorAll('.participant-tile');
+      const tiles = Array.from(grid.querySelectorAll('.participant-tile'));
       const count = tiles.length;
-      let basis, maxW, minW;
-      if (count <= 1) { basis = '90%'; maxW = '600px'; minW = '200px'; }
-      else if (count === 2) { basis = '45%'; maxW = '500px'; minW = '160px'; }
-      else if (count <= 4) { basis = '30%'; maxW = '400px'; minW = '120px'; }
-      else if (count <= 6) { basis = '22%'; maxW = '320px'; minW = '100px'; }
-      else { basis = '18%'; maxW = '260px'; minW = '90px'; }
+      if (!count) return;
+
+      const bounds = TILE_BOUNDS.find(b => count <= b.upTo);
+      const cs = getComputedStyle(grid);
+      const gap = parseFloat(cs.gap) || 8;
+      const availW = grid.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      const availH = grid.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+      // Grid is hidden (step-join, chat overlay) — nothing meaningful to measure.
+      if (!(availW > 0) || !(availH > 0)) return;
+
+      // Widest 16:9 tile that still lets every row fit without scrolling. Flex
+      // may pack more per row than the winning column count, which only ever
+      // means fewer rows, so the height still fits.
+      let fitW = 0;
+      for (let cols = 1; cols <= count; cols++) {
+        const rows = Math.ceil(count / cols);
+        const byWidth = (availW - gap * (cols - 1)) / cols;
+        const byHeight = ((availH - gap * (rows - 1)) / rows) * (16 / 9);
+        fitW = Math.max(fitW, Math.min(byWidth, byHeight));
+      }
+      // On a roomy grid the ceiling wins and the result matches the fixed
+      // maximums the layout used before; only a cramped viewport shrinks it.
+      // Basis equals the ceiling so rows wrap at that width and come out even.
+      // Floor, never round: half a pixel over and the last tile in a row wraps,
+      // which costs a whole extra row and puts the grid into scroll.
+      const cap = Math.floor(Math.min(bounds.max, Math.max(1, fitW)));
+
       tiles.forEach(t => {
-        t.style.flex = `1 1 ${basis}`;
-        t.style.maxWidth = maxW;
-        t.style.minWidth = minW;
+        t.style.flex = `1 1 ${cap}px`;
+        t.style.maxWidth = `${cap}px`;
+        t.style.minWidth = `${Math.min(bounds.min, cap)}px`;
       });
     }
+
+    // Rotation, chat opening and fullscreen all resize the grid; recompute on any
+    // of them. rAF-coalesced so a scrollbar appearing cannot start a feedback loop.
+    (function watchGridSize() {
+      const grid = document.getElementById('video-grid');
+      if (!grid) return;
+      let pending = 0;
+      const schedule = () => {
+        if (pending) return;
+        pending = requestAnimationFrame(() => { pending = 0; updateTileLayout(); });
+      };
+      if (typeof ResizeObserver !== 'undefined') new ResizeObserver(schedule).observe(grid);
+      else window.addEventListener('resize', schedule);
+      // iOS Safari reports stale dimensions right after the rotation event.
+      window.addEventListener('orientationchange', () => setTimeout(updateTileLayout, 300));
+    })();
 
     function removeParticipant(participant) {
       const _tid = 'tile-' + participant.identity;
@@ -1828,8 +1970,9 @@
     function showStep(id) {
       document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
       document.getElementById(id).classList.add('active');
-      document.getElementById('main-container').style.display = id === 'step-call' ? 'none' : '';
-      document.getElementById('step-call').style.display = id === 'step-call' ? 'flex' : 'none';
+      const isCall = id === 'step-call';
+      document.getElementById('main-container').style.display = isCall ? 'none' : '';
+      document.getElementById('step-call').classList.toggle('in-call', isCall);
     }
 
     document.getElementById('guest-name').addEventListener('keydown', e => {
