@@ -11,6 +11,34 @@ export interface AppRelease {
 // Keep notes user-facing (no internal jargon, no commit hashes).
 export const APP_RELEASES: AppRelease[] = [
   {
+    version: '1.1.27',
+    build: 228,
+    date: '2026-08-28',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.27 — громкая связь в звонках на Android.\n\n' +
+      '🔊 Кнопка «Динамик» наконец работает. Раньше на Android приложение ' +
+      'включало громкую связь и тут же само её выключало — звук так и оставался ' +
+      'в разговорном динамике. Теперь выбранный вывод сохраняется до конца ' +
+      'разговора.\n\n' +
+      '📞 Возврат после чужого звонка. Если во время разговора приходил ' +
+      'телефонный вызов или срабатывал будильник, после него звук больше не ' +
+      'сбрасывается обратно в трубку.\n\n' +
+      '🎧 Bluetooth-гарнитура. Её отключение больше не уводит звук с громкой ' +
+      'связи, если вы включили её осознанно.\n\n' +
+      'На iOS вывод звука работал корректно и не менялся.',
+    notes_en:
+      'Release 1.1.27 — speakerphone in calls on Android.\n\n' +
+      '🔊 The Speaker button finally works. On Android the app used to switch ' +
+      'the loudspeaker on and immediately back off, leaving the call on the ' +
+      'earpiece. The output you pick now sticks for the whole call.\n\n' +
+      '📞 Coming back from an interruption. After an incoming phone call or an ' +
+      'alarm, the call no longer drops back to the earpiece.\n\n' +
+      '🎧 Bluetooth headsets. Unplugging one no longer yanks the call off the ' +
+      'loudspeaker you deliberately turned on.\n\n' +
+      'iOS audio routing was already correct and is unchanged.',
+  },
+  {
     version: '1.1.26',
     build: 227,
     date: '2026-08-11',
