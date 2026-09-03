@@ -369,7 +369,7 @@ export class VoiceController {
     return this.service.sendRoomChatMessage(
       roomName,
       body?.text ?? '',
-      body?.name ?? 'Ассистент',
+      body?.name ?? '',
     );
   }
 
