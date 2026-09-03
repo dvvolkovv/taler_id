@@ -1239,8 +1239,12 @@
             if (msg.type === 'recorder_status') {
               // legacy AI recorder status
             }
-            if (msg.type === 'chat_message' && participant) {
-              appendChatMessage(msg.name || getDisplayName(participant), msg.text, msg.ts || Date.now(), false);
+            if (msg.type === 'chat_message') {
+              // Участника может не быть: сервер публикует через
+              // RoomServiceClient.sendData от своего имени, без отправителя.
+              // Имя в таком пакете всегда лежит в msg.name.
+              const who = participant ? getDisplayName(participant) : '';
+              appendChatMessage(msg.name || who || 'Taler ID', msg.text, msg.ts || Date.now(), false);
             }
             // ── Recording consent protocol ──
             if (msg.type === 'recording_consent_request' && participant) {
@@ -3368,12 +3372,9 @@
         ts: Date.now(),
       };
 
-      try {
-        room.localParticipant.publishData(encoder.encode(JSON.stringify(msg)), { reliable: true });
-      } catch (e) {
-        console.warn('[CHAT] Failed to send:', e);
-        return;
-      }
+      // broadcastData проставляет msgId — без него приёмная дедупликация
+      // не работает, а отправителей теперь трое: веб, приложение и сервер.
+      broadcastData(msg);
 
       appendChatMessage(msg.name, text, msg.ts, true);
     }
