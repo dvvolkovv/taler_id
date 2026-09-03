@@ -885,7 +885,8 @@
     let lkToken = '';
     let roomCode = '';
     let roomTitle = 'Голосовая комната';
-    let micEnabled = true;
+    // Rooms are entered muted — see joinRoom().
+    let micEnabled = false;
     let camEnabled = true;
     let screenEnabled = false;
     let pinnedTileId = null;
@@ -1351,19 +1352,23 @@
         acquireWakeLock();
         startAudioWatchdog();
         const micOpts = currentMicId ? { deviceId: currentMicId } : undefined;
-        // Enable only microphone on join; camera will be offered via prompt.
-        // micEnabled has to follow what actually happened here: it is a
-        // page-lifetime global and the page never reloads between sessions, so
-        // a stale `false` left over from a previous join used to paint the
-        // button muted while this join had the microphone live.
+        // Rooms are entered muted: nobody is heard until they say so. The
+        // microphone is still published, so everyone sees the crossed-out
+        // badge and unmuting is instant — but the track is muted *before* it
+        // is published, so not a frame of audio leaves the machine first.
+        // micEnabled must follow what actually happened here: it is a
+        // page-lifetime global and the page never reloads between sessions,
+        // so a stale value used to describe the previous join.
         camEnabled = false;
-        micEnabled = true;
+        micEnabled = false;
         try {
-          await room.localParticipant.setMicrophoneEnabled(true, micOpts);
+          const micTrack = await LivekitClient.createLocalAudioTrack(micOpts);
+          await micTrack.mute();
+          await room.localParticipant.publishTrack(micTrack, {
+            source: LivekitClient.Track.Source.Microphone,
+          });
         } catch (e) {
-          // And a mic we failed to open must not be advertised as live either.
-          console.warn('[MIC] enable on join failed:', e);
-          micEnabled = false;
+          console.warn('[MIC] muted-join setup failed:', e);
         }
         localIdentity = room.localParticipant.identity;
         showStep('step-call');
@@ -1579,9 +1584,14 @@
         // Fallback for mic/cam: re-publish track with new device
         try {
           if (type === 'mic') {
+            // Only re-publish live for someone who was already unmuted:
+            // picking a different microphone is not consent to be heard.
+            // While muted the choice is remembered in currentMicId and takes
+            // effect the moment they unmute.
             await room.localParticipant.setMicrophoneEnabled(false);
-            await room.localParticipant.setMicrophoneEnabled(true, { deviceId });
-            micEnabled = true;
+            if (micEnabled) {
+              await room.localParticipant.setMicrophoneEnabled(true, { deviceId });
+            }
             updateControlButtons();
             console.log('[DEV] Mic fallback OK');
           } else if (type === 'cam') {
@@ -1975,7 +1985,7 @@
       // The media toggles live as long as the page does, and leaving the room
       // is not a reload. Clear them here so the next join never renders
       // controls describing the previous session.
-      micEnabled = true;
+      micEnabled = false;
       camEnabled = false;
       screenEnabled = false;
       document.getElementById('video-grid').innerHTML = '';
