@@ -1351,9 +1351,20 @@
         acquireWakeLock();
         startAudioWatchdog();
         const micOpts = currentMicId ? { deviceId: currentMicId } : undefined;
-        // Enable only microphone on join; camera will be offered via prompt
+        // Enable only microphone on join; camera will be offered via prompt.
+        // micEnabled has to follow what actually happened here: it is a
+        // page-lifetime global and the page never reloads between sessions, so
+        // a stale `false` left over from a previous join used to paint the
+        // button muted while this join had the microphone live.
         camEnabled = false;
-        try { await room.localParticipant.setMicrophoneEnabled(true, micOpts); } catch (_2) {}
+        micEnabled = true;
+        try {
+          await room.localParticipant.setMicrophoneEnabled(true, micOpts);
+        } catch (e) {
+          // And a mic we failed to open must not be advertised as live either.
+          console.warn('[MIC] enable on join failed:', e);
+          micEnabled = false;
+        }
         localIdentity = room.localParticipant.identity;
         showStep('step-call');
         updateCount();
@@ -1961,6 +1972,12 @@
     }
 
     function showDisconnected() {
+      // The media toggles live as long as the page does, and leaving the room
+      // is not a reload. Clear them here so the next join never renders
+      // controls describing the previous session.
+      micEnabled = true;
+      camEnabled = false;
+      screenEnabled = false;
       document.getElementById('video-grid').innerHTML = '';
       document.getElementById('btn-join').disabled = false;
       document.getElementById('btn-join').textContent = 'Войти в комнату';
