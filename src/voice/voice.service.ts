@@ -198,38 +198,59 @@ export class VoiceService {
    * надёжной доставкой. Ничего специфичного для сервера в пакете нет —
    * клиенты рисуют его как обычное сообщение.
    *
-   * Клиент SFU берётся через `sfuFor`, а не из `this.rooms` напрямую:
-   * CIS-комнаты (`call-ru-…`) живут на отдельном российском сервере, и
-   * отправка на основной просто не дошла бы до участников.
+   * `text` и `name` нормализуются здесь, а не в вызывающем коде: метод —
+   * переиспользуемый шов (ручка, ассистент), и инвариант должен быть один
+   * на всех. `name` в вебе рисуется как имя автора, поэтому режется по длине
+   * и подменяется дефолтом, если пришёл пустым или не строкой.
+   *
+   * Клиент SFU берётся через `sfuFor`, а не из `this.rooms` напрямую —
+   * ради симметрии с `deleteRoom` и `joinRoom`. Сама CIS-развилка сейчас
+   * не задействована: с 2026-07-25 `createRoom` всегда выдаёт `call-<uuid>`,
+   * комнат `call-ru-…` никто не создаёт (см. `void region` в `createRoom`).
+   *
+   * Бросает, если LiveKit недоступен. Ошибка не глотается намеренно:
+   * ретраев у нас нет, и молчаливый успех означал бы, что вызывающий считает
+   * сообщение доставленным, тогда как в комнате его никто не увидел.
    */
   async sendRoomChatMessage(
     roomName: string,
     text: string,
     name: string,
-  ): Promise<{ ok: true; ts: number }> {
-    const trimmed = (text ?? '').trim();
+  ): Promise<{ ts: number }> {
+    const trimmed = typeof text === 'string' ? text.trim() : '';
     if (!trimmed) throw new BadRequestException('text is empty');
     if (trimmed.length > 500) {
       throw new BadRequestException('text is longer than 500 characters');
     }
+    const who =
+      (typeof name === 'string' ? name.trim() : '').slice(0, 64) || 'Taler ID';
 
     const ts = Date.now();
     const packet = {
       type: 'chat_message',
       text: trimmed,
-      name,
+      name: who,
       ts,
       msgId: `server_${uuidv4()}`,
     };
 
-    await this.sfuFor(roomName).client.sendData(
-      roomName,
-      new TextEncoder().encode(JSON.stringify(packet)),
-      DataPacket_Kind.RELIABLE,
-      {},
-    );
+    try {
+      await this.sfuFor(roomName).client.sendData(
+        roomName,
+        new TextEncoder().encode(JSON.stringify(packet)),
+        DataPacket_Kind.RELIABLE,
+        // SendDataOptions актуальной перегрузки sendData — без этого аргумента
+        // вызов уходит в @deprecated-ветку с позиционным списком получателей.
+        {},
+      );
+    } catch (e) {
+      // Чат эфемерный, истории у него нет — эта строка единственный след того,
+      // что сообщение до комнаты не дошло.
+      console.error(`Failed to send chat message to room ${roomName}:`, e);
+      throw e;
+    }
 
-    return { ok: true, ts };
+    return { ts };
   }
 
   async endCallLog(roomName: string): Promise<void> {
