@@ -2658,20 +2658,30 @@
     }
 
     let _msgSeq = 0;
+    // Префикс уникален на загрузку страницы, а не на identity: identity
+    // переживает перезагрузку, а _msgSeq — нет. Со счётчиком от identity
+    // после перезагрузки мы бы пошли по номерам заново и попали в id,
+    // которые собеседники уже обработали, — они молча отбросили бы наши
+    // первые сообщения как дубли.
+    const _msgPrefix = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2));
     const _processedMsgIds = new Set();
+    /** @returns {boolean} удалось ли отдать пакет транспорту. Не подтверждение
+     *  доставки: publishData асинхронный, catch ловит только синхронный бросок. */
     function broadcastData(msg) {
-      if (!room) return;
-      msg.msgId = (localIdentity || 'web') + '_' + (_msgSeq++);
+      if (!room) return false;
+      msg.msgId = _msgPrefix + '_' + (_msgSeq++);
       try {
         room.localParticipant.publishData(encoder.encode(JSON.stringify(msg)), { reliable: true });
+        return true;
       } catch (e) {
         console.warn('[DATA] Failed to broadcast:', e);
+        return false;
       }
     }
 
     function sendDataTo(identity, msg) {
       if (!room) return;
-      msg.msgId = (localIdentity || 'web') + '_' + (_msgSeq++);
+      msg.msgId = _msgPrefix + '_' + (_msgSeq++);
       try {
         room.localParticipant.publishData(encoder.encode(JSON.stringify(msg)), {
           reliable: true,
@@ -3401,7 +3411,9 @@
 
       // broadcastData проставляет msgId — без него приёмная дедупликация
       // не работает, а отправителей теперь трое: веб, приложение и сервер.
-      broadcastData(msg);
+      // Своё сообщение рисуем только если пакет ушёл: иначе неотправленное
+      // выглядело бы отправленным.
+      if (!broadcastData(msg)) return;
 
       appendChatMessage(msg.name, text, msg.ts, true);
     }
