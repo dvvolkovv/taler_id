@@ -3,8 +3,13 @@ import {
   Logger,
   NotFoundException,
   ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
-import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
+import {
+  AccessToken,
+  RoomServiceClient,
+  DataPacket_Kind,
+} from 'livekit-server-sdk';
 import { v4 as uuidv4 } from 'uuid';
 import * as crypto from 'crypto';
 import * as bcrypt from 'bcrypt';
@@ -184,6 +189,47 @@ export class VoiceService {
    */
   async removeParticipant(roomName: string, identity: string): Promise<void> {
     await this.rooms.removeParticipant(roomName, identity);
+  }
+
+  /**
+   * Публикует сообщение в чат комнаты тем же протоколом, которым
+   * обмениваются между собой браузерные клиенты: пакет
+   * `{type:'chat_message', text, name, ts, msgId}` в data-канал LiveKit,
+   * надёжной доставкой. Ничего специфичного для сервера в пакете нет —
+   * клиенты рисуют его как обычное сообщение.
+   *
+   * Клиент SFU берётся через `sfuFor`, а не из `this.rooms` напрямую:
+   * CIS-комнаты (`call-ru-…`) живут на отдельном российском сервере, и
+   * отправка на основной просто не дошла бы до участников.
+   */
+  async sendRoomChatMessage(
+    roomName: string,
+    text: string,
+    name: string,
+  ): Promise<{ ok: true; ts: number }> {
+    const trimmed = (text ?? '').trim();
+    if (!trimmed) throw new BadRequestException('text is empty');
+    if (trimmed.length > 500) {
+      throw new BadRequestException('text is longer than 500 characters');
+    }
+
+    const ts = Date.now();
+    const packet = {
+      type: 'chat_message',
+      text: trimmed,
+      name,
+      ts,
+      msgId: `server_${uuidv4()}`,
+    };
+
+    await this.sfuFor(roomName).client.sendData(
+      roomName,
+      new TextEncoder().encode(JSON.stringify(packet)),
+      DataPacket_Kind.RELIABLE,
+      {},
+    );
+
+    return { ok: true, ts };
   }
 
   async endCallLog(roomName: string): Promise<void> {
