@@ -356,6 +356,23 @@ export class VoiceController {
     return this.service.getRecorderStatus(roomName);
   }
 
+  // ─── Чат комнаты ───
+  // Тот же протокол, что у клиентов: пакет chat_message в data-канале.
+  // Доступ — как у управления записью: RoomAccessGuard.
+
+  @Post('rooms/:roomName/chat')
+  @UseGuards(RoomAccessGuard)
+  sendRoomChat(
+    @Param('roomName') roomName: string,
+    @Body() body: { text?: string; name?: string },
+  ) {
+    return this.service.sendRoomChatMessage(
+      roomName,
+      body?.text ?? '',
+      body?.name ?? 'Ассистент',
+    );
+  }
+
   // ─── E2EE ───
 
   @Post('rooms/:roomName/disable-e2ee')
