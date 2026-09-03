@@ -273,7 +273,39 @@ git commit -m "feat(voice): ручка POST /voice/rooms/:roomName/chat"
 **Files:**
 - Modify: `public/room.html` (функция `sendChatMessage`, около строки 3357)
 
-Сейчас чат публикуется напрямую через `publishData`, минуя `broadcastData()`, — а `msgId` для дедупликации проставляет именно `broadcastData`. Пока отправитель один, это сходит с рук; с появлением приложения и сервера повторы станут заметны.
+Две правки, обе про появление новых отправителей.
+
+**Отправка.** Чат публикуется напрямую через `publishData`, минуя `broadcastData()`, — а `msgId` для дедупликации проставляет именно `broadcastData`. Пока отправитель один, это сходит с рук; с появлением приложения и сервера повторы станут заметны.
+
+**Приём.** Ветка приёма гейтится наличием участника-отправителя:
+
+```js
+if (msg.type === 'chat_message' && participant) {
+```
+
+`RoomServiceClient.sendData` публикует пакет от имени сервера, без publishing participant, поэтому в браузере второй аргумент `RoomEvent.DataReceived` будет `undefined` и серверное сообщение молча отбросится — ручка ответит 200, а в комнате ничего не появится. Имя отправителя сервер всегда кладёт в `msg.name`, так что участник для отображения не нужен. Найдено при реализации Task 1.
+
+- [ ] **Шаг 0: Снять гейт на участника в приёме**
+
+Найти около строки 1242:
+
+```js
+            if (msg.type === 'chat_message' && participant) {
+              appendChatMessage(msg.name || getDisplayName(participant), msg.text, msg.ts || Date.now(), false);
+            }
+```
+
+Заменить на:
+
+```js
+            if (msg.type === 'chat_message') {
+              // Участника может не быть: сервер публикует через
+              // RoomServiceClient.sendData от своего имени, без отправителя.
+              // Имя в таком пакете всегда лежит в msg.name.
+              const who = participant ? getDisplayName(participant) : '';
+              appendChatMessage(msg.name || who || 'Taler ID', msg.text, msg.ts || Date.now(), false);
+            }
+```
 
 - [ ] **Шаг 1: Заменить тело отправки**
 
