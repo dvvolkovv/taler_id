@@ -11,6 +11,36 @@ export interface AppRelease {
 // Keep notes user-facing (no internal jargon, no commit hashes).
 export const APP_RELEASES: AppRelease[] = [
   {
+    version: '1.1.28',
+    build: 229,
+    date: '2026-09-04',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.28 — чат в комнате звонка.\n\n' +
+      '💬 В звонке появился текстовый чат: можно писать друг другу, не прерывая ' +
+      'разговор. Удобно для ссылок, адресов, номеров, кодов и сумм — того, что ' +
+      'проще написать, чем продиктовать.\n\n' +
+      '🌐 Чат общий для всех участников: он работает между приложением на телефоне, ' +
+      'десктопом и теми, кто зашёл в комнату из браузера по ссылке.\n\n' +
+      '🤖 Ассистенту можно сказать «напиши в чат» — он отправит сообщение сам, ' +
+      'не отвлекая вас от разговора.\n\n' +
+      '🔔 Непрочитанные сообщения отмечаются значком на кнопке чата.\n\n' +
+      'Чат живёт только во время звонка: вошедший позже не увидит написанного до ' +
+      'него, а после завершения переписка не сохраняется.',
+    notes_en:
+      'Release 1.1.28 — chat inside the call room.\n\n' +
+      '💬 Calls now have a text chat, so you can write to each other without ' +
+      'interrupting the conversation. Handy for links, addresses, numbers, codes ' +
+      'and amounts — anything easier to type than to say out loud.\n\n' +
+      '🌐 The chat is shared by everyone in the room: it works between the phone ' +
+      'app, the desktop app and guests who joined from a browser link.\n\n' +
+      '🤖 You can tell the assistant to write something in the chat and it will ' +
+      'send the message for you, without pulling you out of the call.\n\n' +
+      '🔔 Unread messages are marked with a badge on the chat button.\n\n' +
+      'The chat lives only for the duration of the call: whoever joins later will ' +
+      'not see earlier messages, and nothing is kept after the call ends.',
+  },
+  {
     version: '1.1.27',
     build: 228,
     date: '2026-08-28',
