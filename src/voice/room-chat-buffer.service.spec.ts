@@ -457,8 +457,12 @@ describe('RoomChatBufferService', () => {
     });
 
     it('повторный вызов на уже пустой ленте не падает', async () => {
-      await expect(buffer.clearFeed('call-empty')).resolves.not.toThrow();
-      await expect(buffer.clearFeed('call-empty')).resolves.not.toThrow();
+      // .resolves само по себе и есть проверка: если бы clearFeed отклонил
+      // промис, .resolves провалил бы тест раньше, чем дело дошло бы до
+      // .toBeUndefined(). Не .not.toThrow() — на нефункции toThrow ничего
+      // не проверяет и всегда проходит, каким бы ни было значение.
+      await expect(buffer.clearFeed('call-empty')).resolves.toBeUndefined();
+      await expect(buffer.clearFeed('call-empty')).resolves.toBeUndefined();
     });
 
     // Главный тест: ради чего счётчик вообще оставили в живых. Если бы он

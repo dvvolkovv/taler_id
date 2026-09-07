@@ -1,6 +1,31 @@
 import { ForbiddenException } from '@nestjs/common';
 import { VoiceService } from './voice.service';
 
+/**
+ * True if `p` has not settled within `ms` of real (not fake/mocked) time.
+ *
+ * Used to prove a join method genuinely `await`s the chat-clear helper
+ * rather than firing it and moving on (`void` instead of `await` would be a
+ * silent regression — see the tests below). Counting microtask ticks
+ * (`await Promise.resolve()` in a loop) does NOT work for this: token
+ * minting goes through `AccessToken.toJwt()` (`livekit-server-sdk` →
+ * `jose`'s HS256 signing), which resolves via real async crypto rather than
+ * a plain microtask chain, so a fixed number of `Promise.resolve()` ticks
+ * elapses before minting finishes *regardless* of whether the clear was
+ * awaited — a fire-and-forget clear and a properly-awaited one both leave
+ * `joinRoom`'s overall promise unsettled after a handful of ticks, which
+ * would make the mutation this test exists to catch pass silently. A real
+ * timer sidesteps that: it gives any pending crypto callback ample room to
+ * fire, so "still pending after `ms`" means genuinely blocked, not merely
+ * "hasn't gotten there yet".
+ */
+function stillPending(p: Promise<unknown>, ms = 100): Promise<boolean> {
+  return Promise.race([
+    p.then(() => false),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(true), ms)),
+  ]);
+}
+
 // Regression cover for the 2026-07-27 audit finding: POST /voice/rooms/:name/join
 // issued a LiveKit token to any authenticated caller who knew a room name, and
 // added them to participantIds on the way in.
@@ -29,8 +54,18 @@ describe('VoiceService.joinRoom entitlement', () => {
       {} as any,
       {} as any,
       {} as any,
-      {} as any,
+      // Task 4b: joinRoom now calls clearChatIfNewMeeting before minting a
+      // token, which calls this. A bare `{}` made every admitting test in
+      // this block route through a real (refused) HTTP call to
+      // localhost:7880 and then a swallowed TypeError — harmless (the
+      // helper is best-effort) but noisy, and a latent hang if :7880 ever
+      // blackholes instead of refusing. Stubbed for real below, same as
+      // the describe block after this one.
+      { clearFeed: jest.fn().mockResolvedValue(undefined) } as any,
     );
+    (service as any).rooms = {
+      listParticipants: jest.fn().mockResolvedValue([]),
+    };
   });
 
   it('refuses a caller who was never invited', async () => {
@@ -102,9 +137,12 @@ describe('VoiceService.joinRoom entitlement', () => {
 // section — so there's no clean "this meeting just ended" signal to clear
 // the room chat feed on exit. The boundary is caught on entry instead: all
 // three join paths ask LiveKit who's already in the room before handing
-// out a token, and treat "nobody" (including "room doesn't exist yet",
-// which listParticipants reports by throwing) as "this join starts a new
-// meeting" and clears any chat left over from a previous one.
+// out a token, and treat "nobody" — including a listParticipants call that
+// rejects outright (LiveKit unreachable, or possibly a room that doesn't
+// exist yet; the client SDK's own empty-array fallback means "doesn't
+// exist" may just as well resolve `[]` instead, we don't rely on which) —
+// as "this join starts a new meeting" and clears any chat left over from
+// a previous one.
 describe('VoiceService — очистка ленты чата на входе в комнату', () => {
   let service: VoiceService;
   let prisma: any;
@@ -192,6 +230,31 @@ describe('VoiceService — очистка ленты чата на входе в
     const res = await service.joinRoom(PERSONAL_ROOM, OWNER);
 
     expect(typeof res.token).toBe('string');
+    expect(res.token.length).toBeGreaterThan(0);
+  });
+
+  // Порядок операций — весь смысл этой задачи, не только сам факт вызова
+  // clearFeed: если бы его не дожидались (await → случайно превратился в
+  // fire-and-forget), joinRoom мог бы вернуть токен раньше, чем лента
+  // реально очистится, — и участник, успевший подключиться и написать
+  // первым, увидел бы своё же сообщение стёртым чуть позже, когда
+  // отложенная очистка наконец доедет. Обычные `toHaveBeenCalledWith` тесты
+  // выше этого не ловят вовсе: им всё равно, дождались клира или нет, лишь
+  // бы он был вызван хоть когда-нибудь.
+  it('joinRoom дожидается очистки ленты, прежде чем вернуть токен', async () => {
+    rooms.listParticipants.mockResolvedValue([]);
+    let releaseClear!: () => void;
+    chatBuffer.clearFeed.mockImplementation(
+      () => new Promise<void>((resolve) => (releaseClear = resolve)),
+    );
+
+    const pending = service.joinRoom(PERSONAL_ROOM, OWNER);
+    expect(await stillPending(pending)).toBe(true);
+
+    releaseClear();
+    await expect(pending).resolves.toMatchObject({
+      token: expect.any(String),
+    });
   });
 
   it('joinPublicRoom чистит ленту, когда комната пуста', async () => {
@@ -210,6 +273,22 @@ describe('VoiceService — очистка ленты чата на входе в
     expect(chatBuffer.clearFeed).not.toHaveBeenCalled();
   });
 
+  it('joinPublicRoom дожидается очистки ленты, прежде чем вернуть токен', async () => {
+    rooms.listParticipants.mockResolvedValue([]);
+    let releaseClear!: () => void;
+    chatBuffer.clearFeed.mockImplementation(
+      () => new Promise<void>((resolve) => (releaseClear = resolve)),
+    );
+
+    const pending = service.joinPublicRoom('code-1', 'Гость');
+    expect(await stillPending(pending)).toBe(true);
+
+    releaseClear();
+    await expect(pending).resolves.toMatchObject({
+      token: expect.any(String),
+    });
+  });
+
   it('joinPublicRoomAuth чистит ленту, когда комната пуста', async () => {
     rooms.listParticipants.mockResolvedValue([]);
 
@@ -224,6 +303,22 @@ describe('VoiceService — очистка ленты чата на входе в
     await service.joinPublicRoomAuth('code-1', OWNER);
 
     expect(chatBuffer.clearFeed).not.toHaveBeenCalled();
+  });
+
+  it('joinPublicRoomAuth дожидается очистки ленты, прежде чем вернуть токен', async () => {
+    rooms.listParticipants.mockResolvedValue([]);
+    let releaseClear!: () => void;
+    chatBuffer.clearFeed.mockImplementation(
+      () => new Promise<void>((resolve) => (releaseClear = resolve)),
+    );
+
+    const pending = service.joinPublicRoomAuth('code-1', OWNER);
+    expect(await stillPending(pending)).toBe(true);
+
+    releaseClear();
+    await expect(pending).resolves.toMatchObject({
+      token: expect.any(String),
+    });
   });
 
   it('createRoom не спрашивает LiveKit о старой ленте — имя всегда свежий uuid', async () => {

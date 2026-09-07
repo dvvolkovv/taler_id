@@ -809,13 +809,16 @@ export class VoiceService {
    * so there's no clean "this meeting just ended" signal to clear the feed
    * on exit. The boundary is caught on entry instead: called from every
    * join path right before a token is handed out, it asks LiveKit who's
-   * already in the room. Nobody there — or the room not existing yet at
-   * all, which `listParticipants` reports by throwing rather than
-   * resolving an empty array — means this join is starting a new meeting
-   * rather than continuing an old one, so whatever chat is left over from a
-   * previous meeting under this room name gets cleared
-   * (`RoomChatBufferService.clearFeed` — note it deliberately leaves the
-   * `seq` counter alone; see its docstring for why).
+   * already in the room. Nobody there — or the call rejecting outright,
+   * which covers both "LiveKit is unreachable" and possibly "the room
+   * doesn't exist yet" (the client SDK falls back to an empty array on its
+   * own, so a missing room may just as well resolve `[]`; we don't depend
+   * on which) — means this join is starting a new meeting rather than
+   * continuing an old one, so whatever chat is left over from a previous
+   * meeting under this room name gets cleared (`RoomChatBufferService.
+   * clearFeed` — note it deliberately leaves the `seq` counter alone; see
+   * its docstring for why, and for the horizon that reasoning stops holding
+   * at).
    *
    * Not called from `createRoom`: that path always mints a fresh
    * `call-<uuid>` room name, so there is no previous meeting's chat to
@@ -826,9 +829,14 @@ export class VoiceService {
    * far worse outcome than one meeting's chat surviving into the next, so
    * every failure (LiveKit unreachable, Redis down, anything) is caught and
    * logged, never thrown. Two people joining at the same moment can both
-   * observe zero participants and both clear — harmless, since there is by
-   * definition nothing worth keeping at the start of a meeting, and
-   * `clearFeed` is safe to call more than once.
+   * observe zero participants and both clear — accepted as harmless. Not
+   * *quite* nothing-to-lose in the strictest sense: the loser's `clearFeed`
+   * could in principle land after the winner has already connected and sent
+   * the new meeting's first message, wiping that instead of anything from
+   * the old one. The window for that is one Redis round-trip wide and the
+   * cost is one lost chat line, not a correctness break, so it's accepted
+   * rather than synchronized against. `clearFeed` itself is safe to call
+   * more than once regardless.
    */
   private async clearChatIfNewMeeting(roomName: string): Promise<void> {
     try {
