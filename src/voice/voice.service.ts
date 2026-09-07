@@ -52,6 +52,32 @@ export class VoiceService {
     LK_API_KEY,
     LK_API_SECRET,
   );
+  // I2 (Task 4b review): a separate pair of clients, used only by the
+  // meeting-boundary check in clearChatIfNewMeeting. `livekit-server-sdk`'s
+  // TwirpRpc defaults `requestTimeout` to 60s (`AbortSignal.timeout(timeout
+  // * 1000)`) — fine for `rooms`/`ruRooms` above, which back `sendData` and
+  // recording uploads, nothing a human is blocked waiting on. It is NOT
+  // fine for a call sitting on the room-join critical path: a fast refusal
+  // degrades gracefully (the `catch` in clearChatIfNewMeeting logs and
+  // moves on in milliseconds), but a blackholed connection — packets going
+  // nowhere, no RST — would hang every join for up to a minute, two for the
+  // public-room paths where a similarly-unbounded `createRoom` runs first.
+  // A 2s cap turns that into "briefly slow", not "looks hung". Deliberately
+  // NOT applied to the shared `rooms`/`ruRooms` above — lowering their
+  // timeout would make `sendData` and recording uploads fail under load or
+  // latency that 2s was never meant to police.
+  private participantsCheckRooms = new RoomServiceClient(
+    LK_HOST,
+    LK_API_KEY,
+    LK_API_SECRET,
+    { requestTimeout: 2 },
+  );
+  private participantsCheckRuRooms = new RoomServiceClient(
+    LK_HOST_RU,
+    LK_API_KEY,
+    LK_API_SECRET,
+    { requestTimeout: 2 },
+  );
 
   /** Pick the SFU for a room by its name prefix. CIS rooms are named
    * `call-ru-…` and live on the Selectel SFU; everything else on the EU/DO SFU. */
@@ -59,6 +85,14 @@ export class VoiceService {
     return roomName.startsWith('call-ru-')
       ? { client: this.ruRooms, wsUrl: LK_WS_URL_RU }
       : { client: this.rooms, wsUrl: LK_WS_URL };
+  }
+
+  /** Same room→SFU split as `sfuFor`, but for the short-timeout client pair
+   * used only by the meeting-boundary check — see the fields' comment. */
+  private participantsCheckClient(roomName: string) {
+    return roomName.startsWith('call-ru-')
+      ? this.participantsCheckRuRooms
+      : this.participantsCheckRooms;
   }
 
   constructor(
@@ -809,7 +843,10 @@ export class VoiceService {
    * so there's no clean "this meeting just ended" signal to clear the feed
    * on exit. The boundary is caught on entry instead: called from every
    * join path right before a token is handed out, it asks LiveKit who's
-   * already in the room.
+   * already in the room — through `participantsCheckClient`, a dedicated
+   * short-timeout client pair, not `sfuFor`'s shared one; see that field's
+   * comment for why a call sitting on the join critical path can't use the
+   * SDK's 60s default.
    *
    * `listParticipants` on a room that doesn't exist yet resolves an empty
    * array rather than rejecting — confirmed against a live LiveKit instance
@@ -846,16 +883,20 @@ export class VoiceService {
    * harmless. Not *quite* nothing-to-lose in the strictest sense: the
    * loser's `clearFeed` could in principle land after the winner has
    * already connected and sent the new meeting's first message, wiping
-   * that instead of anything from the old one. The window for that is one
-   * Redis round-trip wide and the cost is one lost chat line, not a
-   * correctness break, so it's accepted rather than synchronized against.
-   * `clearFeed` itself is safe to call more than once regardless.
+   * that instead of anything from the old one. The window for that is not
+   * the sub-millisecond gap to Redis — it lasts until the winner has
+   * actually connected to the SFU, since `listParticipants` only reports a
+   * participant once their ICE handshake completes, so realistically a
+   * couple of seconds after their token was minted. The cost is still just
+   * one lost chat line, not a correctness break, so it's accepted rather
+   * than synchronized against. `clearFeed` itself is safe to call more than
+   * once regardless.
    */
   private async clearChatIfNewMeeting(roomName: string): Promise<void> {
     let participants;
     try {
       participants =
-        await this.sfuFor(roomName).client.listParticipants(roomName);
+        await this.participantsCheckClient(roomName).listParticipants(roomName);
     } catch (e) {
       // API-авария — не то же самое, что пустая комната (см. докстринг):
       // не трогаем ленту вслепую, только предупреждаем.

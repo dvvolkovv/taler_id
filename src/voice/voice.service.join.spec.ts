@@ -63,7 +63,10 @@ describe('VoiceService.joinRoom entitlement', () => {
       // the describe block after this one.
       { clearFeed: jest.fn().mockResolvedValue(undefined) } as any,
     );
-    (service as any).rooms = {
+    // I2: the meeting-boundary check calls a dedicated short-timeout client
+    // (`participantsCheckRooms`), not the shared `rooms` used by
+    // sendData/recording uploads — see clearChatIfNewMeeting's docstring.
+    (service as any).participantsCheckRooms = {
       listParticipants: jest.fn().mockResolvedValue([]),
     };
   });
@@ -144,12 +147,19 @@ describe('VoiceService.joinRoom entitlement', () => {
 // over from a previous one. A *rejected* call means the LiveKit API itself
 // is unreachable, which says nothing about who's in the room — that does
 // NOT clear, only logs a warning, so a transient LiveKit outage can't wipe
-// a live meeting's chat.
+// a live meeting's chat. The reject-doesn't-clear and clearFeed-can-fail
+// branches are only exercised via `joinRoom` below, not repeated for
+// `joinPublicRoom`/`joinPublicRoomAuth` too: all three call the exact same
+// private `clearChatIfNewMeeting`, so re-running its internal branches
+// through every call site would just re-test the same lines: the
+// per-path tests below stick to what actually differs by path — whether
+// clearing happens at all, and with which room name.
 describe('VoiceService — очистка ленты чата на входе в комнату', () => {
   let service: VoiceService;
   let prisma: any;
   let chatBuffer: { clearFeed: jest.Mock };
-  let rooms: { listParticipants: jest.Mock; createRoom: jest.Mock };
+  let rooms: { createRoom: jest.Mock };
+  let participantsCheckRooms: { listParticipants: jest.Mock };
 
   const OWNER = 'abcdef12-3456-7890-abcd-ef1234567890';
   const PERSONAL_ROOM = `personal-${OWNER.substring(0, 8)}-deadbeef`;
@@ -177,9 +187,9 @@ describe('VoiceService — очистка ленты чата на входе в
       },
     };
     chatBuffer = { clearFeed: jest.fn().mockResolvedValue(undefined) };
-    rooms = {
+    rooms = { createRoom: jest.fn().mockResolvedValue(undefined) };
+    participantsCheckRooms = {
       listParticipants: jest.fn().mockResolvedValue([]),
-      createRoom: jest.fn().mockResolvedValue(undefined),
     };
 
     service = new VoiceService(
@@ -194,12 +204,16 @@ describe('VoiceService — очистка ленты чата на входе в
     // Same override pattern as voice.service.chat.spec.ts: rooms/ruRooms are
     // constructed inline in the class, not injected, so tests replace them
     // post-construction. None of these room names carry the `call-ru-`
-    // prefix, so sfuFor always resolves to `rooms`.
+    // prefix, so sfuFor and participantsCheckClient both always resolve to
+    // the non-RU instance. I2: clearChatIfNewMeeting's LiveKit call goes
+    // through the dedicated short-timeout `participantsCheckRooms`, not the
+    // shared `rooms` used by sendData/recording uploads — see its docstring.
     (service as any).rooms = rooms;
+    (service as any).participantsCheckRooms = participantsCheckRooms;
   });
 
   it('joinRoom чистит ленту, когда LiveKit сообщает о пустой комнате', async () => {
-    rooms.listParticipants.mockResolvedValue([]);
+    participantsCheckRooms.listParticipants.mockResolvedValue([]);
 
     await service.joinRoom(PERSONAL_ROOM, OWNER);
 
@@ -208,7 +222,9 @@ describe('VoiceService — очистка ленты чата на входе в
   });
 
   it('joinRoom не чистит ленту, когда в комнате уже есть участники', async () => {
-    rooms.listParticipants.mockResolvedValue([{ identity: 'someone-else' }]);
+    participantsCheckRooms.listParticipants.mockResolvedValue([
+      { identity: 'someone-else' },
+    ]);
 
     await service.joinRoom(PERSONAL_ROOM, OWNER);
 
@@ -216,7 +232,9 @@ describe('VoiceService — очистка ленты чата на входе в
   });
 
   it('joinRoom всё равно выдаёт токен, если listParticipants упал, — но ленту НЕ чистит: авария API не значит пустую комнату', async () => {
-    rooms.listParticipants.mockRejectedValue(new Error('livekit unavailable'));
+    participantsCheckRooms.listParticipants.mockRejectedValue(
+      new Error('livekit unavailable'),
+    );
 
     const res = await service.joinRoom(PERSONAL_ROOM, OWNER);
 
@@ -232,7 +250,7 @@ describe('VoiceService — очистка ленты чата на входе в
   });
 
   it('joinRoom входит и без чистки, даже если сам clearFeed падает', async () => {
-    rooms.listParticipants.mockResolvedValue([]);
+    participantsCheckRooms.listParticipants.mockResolvedValue([]);
     chatBuffer.clearFeed.mockRejectedValue(new Error('redis down'));
 
     const res = await service.joinRoom(PERSONAL_ROOM, OWNER);
@@ -250,7 +268,7 @@ describe('VoiceService — очистка ленты чата на входе в
   // выше этого не ловят вовсе: им всё равно, дождались клира или нет, лишь
   // бы он был вызван хоть когда-нибудь.
   it('joinRoom дожидается очистки ленты, прежде чем вернуть токен', async () => {
-    rooms.listParticipants.mockResolvedValue([]);
+    participantsCheckRooms.listParticipants.mockResolvedValue([]);
     let releaseClear!: () => void;
     chatBuffer.clearFeed.mockImplementation(
       () => new Promise<void>((resolve) => (releaseClear = resolve)),
@@ -266,7 +284,7 @@ describe('VoiceService — очистка ленты чата на входе в
   });
 
   it('joinPublicRoom чистит ленту, когда комната пуста', async () => {
-    rooms.listParticipants.mockResolvedValue([]);
+    participantsCheckRooms.listParticipants.mockResolvedValue([]);
 
     await service.joinPublicRoom('code-1', 'Гость');
 
@@ -274,7 +292,9 @@ describe('VoiceService — очистка ленты чата на входе в
   });
 
   it('joinPublicRoom не чистит ленту, когда в комнате уже есть гости', async () => {
-    rooms.listParticipants.mockResolvedValue([{ identity: 'guest-abc' }]);
+    participantsCheckRooms.listParticipants.mockResolvedValue([
+      { identity: 'guest-abc' },
+    ]);
 
     await service.joinPublicRoom('code-1', 'Гость');
 
@@ -282,7 +302,7 @@ describe('VoiceService — очистка ленты чата на входе в
   });
 
   it('joinPublicRoom дожидается очистки ленты, прежде чем вернуть токен', async () => {
-    rooms.listParticipants.mockResolvedValue([]);
+    participantsCheckRooms.listParticipants.mockResolvedValue([]);
     let releaseClear!: () => void;
     chatBuffer.clearFeed.mockImplementation(
       () => new Promise<void>((resolve) => (releaseClear = resolve)),
@@ -298,7 +318,7 @@ describe('VoiceService — очистка ленты чата на входе в
   });
 
   it('joinPublicRoomAuth чистит ленту, когда комната пуста', async () => {
-    rooms.listParticipants.mockResolvedValue([]);
+    participantsCheckRooms.listParticipants.mockResolvedValue([]);
 
     await service.joinPublicRoomAuth('code-1', OWNER);
 
@@ -306,7 +326,9 @@ describe('VoiceService — очистка ленты чата на входе в
   });
 
   it('joinPublicRoomAuth не чистит ленту, когда в комнате уже есть участники', async () => {
-    rooms.listParticipants.mockResolvedValue([{ identity: 'someone-else' }]);
+    participantsCheckRooms.listParticipants.mockResolvedValue([
+      { identity: 'someone-else' },
+    ]);
 
     await service.joinPublicRoomAuth('code-1', OWNER);
 
@@ -314,7 +336,7 @@ describe('VoiceService — очистка ленты чата на входе в
   });
 
   it('joinPublicRoomAuth дожидается очистки ленты, прежде чем вернуть токен', async () => {
-    rooms.listParticipants.mockResolvedValue([]);
+    participantsCheckRooms.listParticipants.mockResolvedValue([]);
     let releaseClear!: () => void;
     chatBuffer.clearFeed.mockImplementation(
       () => new Promise<void>((resolve) => (releaseClear = resolve)),
@@ -332,7 +354,7 @@ describe('VoiceService — очистка ленты чата на входе в
   it('createRoom не спрашивает LiveKit о старой ленте — имя всегда свежий uuid', async () => {
     await service.createRoom(OWNER);
 
-    expect(rooms.listParticipants).not.toHaveBeenCalled();
+    expect(participantsCheckRooms.listParticipants).not.toHaveBeenCalled();
     expect(chatBuffer.clearFeed).not.toHaveBeenCalled();
   });
 });

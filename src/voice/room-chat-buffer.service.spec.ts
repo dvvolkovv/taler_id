@@ -247,20 +247,31 @@ describe('RoomChatBufferService', () => {
     expect(page.truncated).toBe(false);
   });
 
-  it('курсор не меньше последнего номера отдаёт пустой список без truncated', async () => {
+  it('курсор ровно на последнем номере отдаёт пустой список без truncated', async () => {
     await buffer.append('call-42', entry('раз'));
     await buffer.append('call-42', entry('два'));
 
     const atLatest = await buffer.read('call-42', 2);
     expect(atLatest.messages).toEqual([]);
     expect(atLatest.truncated).toBe(false);
+  });
 
-    // Курсор дальше последнего номера — клиент утверждает, что видел то,
-    // чего ещё не было. Такое не должно случаться в норме, но не должно и
-    // выглядеть как потерянная история.
+  // I4 (ревью Task 4b, 4-й круг): курсор строго дальше последнего номера
+  // раньше молчал (truncated: false) — то же самое поведение, что и у
+  // застрявшего курсора после того, как счётчик seq истёк сам по себе
+  // (см. следующий тест и докстринг clearFeed): и там, и там ассистент
+  // утверждает, что видел то, чего ещё не было, и ответ должен честно на
+  // это указывать, а не выглядеть как «новых сообщений нет». Одна и та же
+  // строка (`since > latest`) в read() закрывает оба случая разом — курсор
+  // из будущего это лишь частный случай "курсор больше того, что реально
+  // есть в комнате".
+  it('курсор дальше последнего номера — truncated:true, а не тишина', async () => {
+    await buffer.append('call-42', entry('раз'));
+    await buffer.append('call-42', entry('два'));
+
     const pastLatest = await buffer.read('call-42', 5);
     expect(pastLatest.messages).toEqual([]);
-    expect(pastLatest.truncated).toBe(false);
+    expect(pastLatest.truncated).toBe(true);
   });
 
   it('на пустой комнате отдаёт пустую ленту, а не падает', async () => {
@@ -307,6 +318,36 @@ describe('RoomChatBufferService', () => {
 
     const page = await buffer.read('call-42', 0);
     expect(page.messages).toEqual([]);
+    expect(page.truncated).toBe(true);
+  });
+
+  // I4: горизонт из докстринга clearFeed — если следующая встреча в комнате
+  // случается позже, чем через сутки, счётчик seq истекает сам, и append()
+  // после этого стартует нумерацию заново с единицы. До этого теста и до
+  // строки `since > latest` в read() застрявший курсор ассистента в этом
+  // случае получал бы truncated:false и пустой список — то есть тихую
+  // потерю ровно того рода, ради которой clearFeed вообще оставляет
+  // счётчик в живых, только добравшуюся сюда другим путём (естественный
+  // TTL, а не обнуление при очистке).
+  it('счётчик истёк естественным TTL до следующей встречи — застрявший курсор получает truncated, а не тишину', async () => {
+    await buffer.append('call-42', entry('раз')); // seq 1
+    await buffer.append('call-42', entry('два')); // seq 2
+    const staleCursor = 40; // ассистент давно не опрашивал эту комнату
+
+    // Тот же приём, что и в предыдущем тесте, только на ключе счётчика, а
+    // не списка: настоящие часы фейка и evictIfExpired, не ручное стирание
+    // values — иначе тест проверял бы не ту функцию, что реально стоит на
+    // пути чтения.
+    await redis.expire('roomchat:call-42:seq', 1);
+    redis.advance(2);
+
+    const fresh = await buffer.append('call-42', entry('три'));
+    // INCR несуществующего ключа стартует с единицы, не с 3 — вот он,
+    // горизонт: append() не виноват, ему просто неоткуда взять старое
+    // значение счётчика.
+    expect(fresh.seq).toBe(1);
+
+    const page = await buffer.read('call-42', staleCursor);
     expect(page.truncated).toBe(true);
   });
 

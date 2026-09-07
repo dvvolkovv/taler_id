@@ -53,13 +53,24 @@ export class VoiceController {
   ) {}
 
   /**
-   * LiveKit webhook receiver. The LiveKit server is configured (server-side,
-   * outside this repo) with `webhook.urls = [https://id.taler.tirol/voice/livekit-webhook]`
-   * and signs every payload with the same API key/secret pair we use to mint
-   * AccessTokens. `WebhookReceiver.receive` verifies the JWT in the
-   * `Authorization` header against the raw body, so we MUST read the unparsed
-   * body — `main.ts` enables `rawBody: true` globally so `req.rawBody` is a
-   * Buffer that we stringify here.
+   * LiveKit webhook receiver. NOT currently reachable in practice: the
+   * LiveKit server is not configured (server-side, outside this repo) with
+   * `webhook.urls` pointing here on any environment (checked DEV, TEST and
+   * DO-media during Task 4b). It was once — DEV still has a
+   * `livekit.yaml.bak.before-webhook-rollback` from 2026-04-30 with
+   * `webhook.urls` set to this exact route — so the rollback was
+   * deliberate, not an oversight, but nothing since has pointed it back.
+   * Practical effect: `handleLivekitParticipantLeft` below never fires for
+   * `group-*` rooms today, so a group-call participant who just closes the
+   * tab is never marked as left. Not this task's fix — logged as a
+   * standalone finding in the Task 4b room-chat design spec.
+   *
+   * If `webhook.urls` is ever pointed back here, the verify path is ready:
+   * LiveKit signs each payload with the same API key/secret pair used to
+   * mint AccessTokens, and `WebhookReceiver.receive` checks the JWT in the
+   * `Authorization` header against the raw body — which is why we MUST
+   * read the unparsed body here (`main.ts` enables `rawBody: true`
+   * globally so `req.rawBody` is a Buffer we stringify).
    *
    * Phase 1 only consumes `participant_left` for `group-*` rooms. Other event
    * types (room_started, room_finished, track_published, recording_*) are

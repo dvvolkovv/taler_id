@@ -1,4 +1,11 @@
+import { RequestMethod } from '@nestjs/common';
+import {
+  GUARDS_METADATA,
+  PATH_METADATA,
+  METHOD_METADATA,
+} from '@nestjs/common/constants';
 import { VoiceController } from './voice.controller';
+import { RoomAccessGuard } from './guards/room-access.guard';
 
 // Контроллер создаётся напрямую с мок-сервисом — без поднятия настоящего
 // Nest-приложения (тот же приём, что в mcp.controller.spec.ts / app.controller.spec.ts).
@@ -214,5 +221,35 @@ describe('VoiceController — чат комнаты', () => {
 
       expect(result).toBe(fakePage);
     });
+  });
+});
+
+// C1 (ревью, 4-й круг подряд на этом классе дефектов): ни один тест выше
+// не проверяет, что маршрут вообще под guard'ом — они создают контроллер
+// напрямую и зовут методы как обычные функции, а HTTP-уровень Nest
+// (`@UseGuards`, `@Post`/`@Get` роутинг) в этом обходе не участвует.
+// Удаление `@UseGuards(RoomAccessGuard)` со строки объявления метода или
+// переименование маршрута оставляли всё выше зелёным — ручка отдаёт
+// переписку встречи, и без guard'а отдаёт её любому предъявителю токена.
+// Единственное место, где это закреплено, — метаданные, которые кладут на
+// сам метод класса декораторы; читаем их напрямую тем же Reflect, которым
+// пользуется сам Nest при построении роутов, без поднятия приложения.
+describe('маршруты чата закреплены RoomAccessGuard', () => {
+  it('sendRoomChat: POST rooms/:roomName/chat под RoomAccessGuard', () => {
+    // Метод берётся как значение, чтобы прочитать его метаданные, а не
+    // вызвать, — unbound-method здесь ложное срабатывание.
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const h = VoiceController.prototype.sendRoomChat;
+    expect(Reflect.getMetadata(GUARDS_METADATA, h)).toContain(RoomAccessGuard);
+    expect(Reflect.getMetadata(PATH_METADATA, h)).toBe('rooms/:roomName/chat');
+    expect(Reflect.getMetadata(METHOD_METADATA, h)).toBe(RequestMethod.POST);
+  });
+
+  it('readRoomChat: GET rooms/:roomName/chat под RoomAccessGuard', () => {
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const h = VoiceController.prototype.readRoomChat;
+    expect(Reflect.getMetadata(GUARDS_METADATA, h)).toContain(RoomAccessGuard);
+    expect(Reflect.getMetadata(PATH_METADATA, h)).toBe('rooms/:roomName/chat');
+    expect(Reflect.getMetadata(METHOD_METADATA, h)).toBe(RequestMethod.GET);
   });
 });
