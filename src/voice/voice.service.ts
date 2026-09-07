@@ -809,51 +809,66 @@ export class VoiceService {
    * so there's no clean "this meeting just ended" signal to clear the feed
    * on exit. The boundary is caught on entry instead: called from every
    * join path right before a token is handed out, it asks LiveKit who's
-   * already in the room. Nobody there — or the call rejecting outright,
-   * which covers both "LiveKit is unreachable" and possibly "the room
-   * doesn't exist yet" (the client SDK falls back to an empty array on its
-   * own, so a missing room may just as well resolve `[]`; we don't depend
-   * on which) — means this join is starting a new meeting rather than
-   * continuing an old one, so whatever chat is left over from a previous
+   * already in the room.
+   *
+   * `listParticipants` on a room that doesn't exist yet resolves an empty
+   * array rather than rejecting — confirmed against a live LiveKit instance
+   * (2026-09-07: `listParticipants("no-such-room-…")` → `ok, participants =
+   * []`), not assumed. So "nobody's here" and "room not created yet" are
+   * the same successful, empty response, and both correctly mean "this join
+   * starts a new meeting": whatever chat is left over from a previous
    * meeting under this room name gets cleared (`RoomChatBufferService.
    * clearFeed` — note it deliberately leaves the `seq` counter alone; see
    * its docstring for why, and for the horizon that reasoning stops holding
    * at).
    *
+   * A *rejected* call is a different thing and is handled differently: it
+   * means the LiveKit API itself is unreachable or erroring, which says
+   * nothing about who's actually in the room — the "room doesn't exist yet"
+   * case that a reject-means-clear rule would have been protecting against
+   * is already covered by the empty-array behavior above, so there's no
+   * scenario left where clearing-on-reject helps. Clearing on it anyway
+   * would let a transient LiveKit outage wipe a live meeting's chat for a
+   * reason that has nothing to do with whether the room is empty. So a
+   * rejection does not clear — it's logged and the feed is left alone,
+   * same "don't know, don't touch" policy as a `clearFeed` failure below.
+   *
    * Not called from `createRoom`: that path always mints a fresh
    * `call-<uuid>` room name, so there is no previous meeting's chat to
    * inherit and the LiveKit round-trip would be pure overhead.
    *
-   * Best-effort by construction — nothing here is allowed to stop someone
-   * from joining. A person locked out because the feed wouldn't clear is a
-   * far worse outcome than one meeting's chat surviving into the next, so
-   * every failure (LiveKit unreachable, Redis down, anything) is caught and
-   * logged, never thrown. Two people joining at the same moment can both
-   * observe zero participants and both clear — accepted as harmless. Not
-   * *quite* nothing-to-lose in the strictest sense: the loser's `clearFeed`
-   * could in principle land after the winner has already connected and sent
-   * the new meeting's first message, wiping that instead of anything from
-   * the old one. The window for that is one Redis round-trip wide and the
-   * cost is one lost chat line, not a correctness break, so it's accepted
-   * rather than synchronized against. `clearFeed` itself is safe to call
-   * more than once regardless.
+   * Best-effort by construction on the clearing side — nothing here is
+   * allowed to stop someone from joining. A person locked out because the
+   * feed wouldn't clear is a far worse outcome than one meeting's chat
+   * surviving into the next, so a `clearFeed` failure (Redis down) is
+   * caught and logged, never thrown. Two people joining at the same moment
+   * can both observe zero participants and both clear — accepted as
+   * harmless. Not *quite* nothing-to-lose in the strictest sense: the
+   * loser's `clearFeed` could in principle land after the winner has
+   * already connected and sent the new meeting's first message, wiping
+   * that instead of anything from the old one. The window for that is one
+   * Redis round-trip wide and the cost is one lost chat line, not a
+   * correctness break, so it's accepted rather than synchronized against.
+   * `clearFeed` itself is safe to call more than once regardless.
    */
   private async clearChatIfNewMeeting(roomName: string): Promise<void> {
+    let participants;
     try {
-      let empty = true;
-      try {
-        const participants =
-          await this.sfuFor(roomName).client.listParticipants(roomName);
-        empty = participants.length === 0;
-      } catch {
-        // Room doesn't exist yet, or LiveKit is unreachable — either way
-        // treat it the same as "nobody's here": there's nothing to lose by
-        // clearing, and staying silent would mean this join never gets a
-        // chance to start a clean feed.
-      }
-      if (empty) {
-        await this.chatBuffer.clearFeed(roomName);
-      }
+      participants =
+        await this.sfuFor(roomName).client.listParticipants(roomName);
+    } catch (e) {
+      // API-авария — не то же самое, что пустая комната (см. докстринг):
+      // не трогаем ленту вслепую, только предупреждаем.
+      this.log.warn(
+        `listParticipants(${roomName}) не отработал на входе в комнату — ` +
+          `лента не тронута: ${e}`,
+      );
+      return;
+    }
+    if (participants.length > 0) return;
+
+    try {
+      await this.chatBuffer.clearFeed(roomName);
     } catch (e) {
       this.log.warn(
         `не удалось очистить ленту чата ${roomName} на входе в комнату: ${e}`,

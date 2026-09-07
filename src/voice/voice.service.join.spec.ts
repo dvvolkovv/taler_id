@@ -137,12 +137,14 @@ describe('VoiceService.joinRoom entitlement', () => {
 // section — so there's no clean "this meeting just ended" signal to clear
 // the room chat feed on exit. The boundary is caught on entry instead: all
 // three join paths ask LiveKit who's already in the room before handing
-// out a token, and treat "nobody" — including a listParticipants call that
-// rejects outright (LiveKit unreachable, or possibly a room that doesn't
-// exist yet; the client SDK's own empty-array fallback means "doesn't
-// exist" may just as well resolve `[]` instead, we don't rely on which) —
-// as "this join starts a new meeting" and clears any chat left over from
-// a previous one.
+// out a token. A room that doesn't exist yet resolves an empty participant
+// list rather than rejecting — confirmed against a live LiveKit instance,
+// not assumed — so an empty result (vacant room or not-yet-created room
+// alike) means "this join starts a new meeting" and clears any chat left
+// over from a previous one. A *rejected* call means the LiveKit API itself
+// is unreachable, which says nothing about who's in the room — that does
+// NOT clear, only logs a warning, so a transient LiveKit outage can't wipe
+// a live meeting's chat.
 describe('VoiceService — очистка ленты чата на входе в комнату', () => {
   let service: VoiceService;
   let prisma: any;
@@ -213,14 +215,20 @@ describe('VoiceService — очистка ленты чата на входе в
     expect(chatBuffer.clearFeed).not.toHaveBeenCalled();
   });
 
-  it('joinRoom всё равно выдаёт токен, если listParticipants упал — и чистит ленту, трактуя это как новую встречу', async () => {
+  it('joinRoom всё равно выдаёт токен, если listParticipants упал, — но ленту НЕ чистит: авария API не значит пустую комнату', async () => {
     rooms.listParticipants.mockRejectedValue(new Error('livekit unavailable'));
 
     const res = await service.joinRoom(PERSONAL_ROOM, OWNER);
 
     expect(typeof res.token).toBe('string');
     expect(res.token.length).toBeGreaterThan(0);
-    expect(chatBuffer.clearFeed).toHaveBeenCalledWith(PERSONAL_ROOM);
+    // Живая проверка на LiveKit (2026-09-07) показала: несуществующая
+    // комната отдаёт [] через listParticipants, а не бросает — то есть
+    // единственный сценарий, ради которого раньше держали "отказ → чистим",
+    // и без этого правила покрыт успешным пустым списком. Отказ теперь
+    // значит только "сам API недоступен", и на этом трогать чужую ленту
+    // работающей встречи нельзя.
+    expect(chatBuffer.clearFeed).not.toHaveBeenCalled();
   });
 
   it('joinRoom входит и без чистки, даже если сам clearFeed падает', async () => {
