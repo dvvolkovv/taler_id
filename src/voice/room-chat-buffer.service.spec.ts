@@ -66,6 +66,14 @@ class FakeRedis {
     this.evictIfExpired(key);
     return Promise.resolve(this.values.get(key) ?? null);
   }
+  del(key: string) {
+    const existed = this.lists.has(key) || this.values.has(key) ? 1 : 0;
+    this.lists.delete(key);
+    this.values.delete(key);
+    this.expires.delete(key);
+    this.expiresAt.delete(key);
+    return Promise.resolve(existed);
+  }
   rpush(key: string, value: string) {
     const err = this.armedTxError('rpush');
     if (err) return Promise.reject(err);
@@ -411,5 +419,71 @@ describe('RoomChatBufferService', () => {
       expect(await buffer.hitRateLimit('call-42', 'guest-1')).toBe(false);
       redis.advance(2);
     }
+  });
+
+  // clearFeed: вызывается на входе в комнату, когда VoiceService решает, что
+  // начинается новая встреча (см. её докстринг). Счётчик seq переживает
+  // очистку намеренно — тесты ниже закрепляют именно это, а не просто факт
+  // очистки списка.
+  describe('clearFeed', () => {
+    it('стирает список сообщений', async () => {
+      await buffer.append('call-42', entry('раз'));
+      await buffer.append('call-42', entry('два'));
+
+      await buffer.clearFeed('call-42');
+
+      expect((await buffer.read('call-42')).messages).toEqual([]);
+    });
+
+    it('не трогает счётчик — следующее сообщение продолжает прежнюю нумерацию, а не начинает с единицы', async () => {
+      await buffer.append('call-42', entry('раз'));
+      await buffer.append('call-42', entry('два'));
+
+      await buffer.clearFeed('call-42');
+      const next = await buffer.append('call-42', entry('три'));
+
+      expect(next.seq).toBe(3);
+    });
+
+    it('не задевает ленту других комнат', async () => {
+      await buffer.append('call-42', entry('раз'));
+      await buffer.append('call-7', entry('чужое'));
+
+      await buffer.clearFeed('call-42');
+
+      expect((await buffer.read('call-7')).messages.map((m) => m.text)).toEqual(
+        ['чужое'],
+      );
+    });
+
+    it('повторный вызов на уже пустой ленте не падает', async () => {
+      await expect(buffer.clearFeed('call-empty')).resolves.not.toThrow();
+      await expect(buffer.clearFeed('call-empty')).resolves.not.toThrow();
+    });
+
+    // Главный тест: ради чего счётчик вообще оставили в живых. Если бы он
+    // обнулялся вместе со списком, у внешнего ассистента с застрявшим
+    // курсором прошлой встречи не осталось бы ни одного признака поломки —
+    // новые сообщения оказались бы «старее» его курсора и просто исчезли
+    // бы из ответа, без единого сигнала, что что-то пошло не так.
+    it('застрявший курсор прошлой встречи после очистки получает truncated:true и новые сообщения, а не тишину', async () => {
+      // Старая встреча: два сообщения. Ассистент опрашивал ленту и в
+      // последний раз видел только первое — его курсор застрял на seq=1
+      // (он не досмотрел до seq=2, потому что старая встреча оборвалась
+      // прямо тогда: разрыв соединения, крэш агента — неважно что именно).
+      await buffer.append('call-42', entry('раз')); // seq 1
+      await buffer.append('call-42', entry('два')); // seq 2
+      const staleCursor = 1;
+
+      // Новая встреча в той же комнате: VoiceService видит пустую комнату
+      // на входе и чистит ленту, не трогая счётчик.
+      await buffer.clearFeed('call-42');
+      const fresh = await buffer.append('call-42', entry('три')); // seq 3, не 1
+      expect(fresh.seq).toBe(3);
+
+      const page = await buffer.read('call-42', staleCursor);
+      expect(page.truncated).toBe(true);
+      expect(page.messages.map((m) => m.text)).toEqual(['три']);
+    });
   });
 });

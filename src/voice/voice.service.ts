@@ -131,6 +131,7 @@ export class VoiceService {
       throw new ForbiddenException('Not invited to this room');
     }
 
+    await this.clearChatIfNewMeeting(roomName);
     return {
       token: await this.makeToken(roomName, userId, sessionId),
       livekitWsUrl: this.sfuFor(roomName).wsUrl,
@@ -754,6 +755,7 @@ export class VoiceService {
         maxParticipants: 20,
       });
     } catch (_) {}
+    await this.clearChatIfNewMeeting(room.roomName);
     return {
       token: await this.makeGuestToken(room.roomName, guestName),
       roomName: room.roomName,
@@ -793,10 +795,62 @@ export class VoiceService {
         maxParticipants: 20,
       });
     } catch (_) {}
+    await this.clearChatIfNewMeeting(room.roomName);
     return {
       token: await this.makeToken(room.roomName, userId, sessionId),
       roomName: room.roomName,
     };
+  }
+
+  /**
+   * Meeting-boundary heuristic for the room chat feed. LiveKit webhooks
+   * (`room_finished`) aren't configured on any environment as of this
+   * writing — DEV, TEST and DO-media configs all lack a `webhook` section —
+   * so there's no clean "this meeting just ended" signal to clear the feed
+   * on exit. The boundary is caught on entry instead: called from every
+   * join path right before a token is handed out, it asks LiveKit who's
+   * already in the room. Nobody there — or the room not existing yet at
+   * all, which `listParticipants` reports by throwing rather than
+   * resolving an empty array — means this join is starting a new meeting
+   * rather than continuing an old one, so whatever chat is left over from a
+   * previous meeting under this room name gets cleared
+   * (`RoomChatBufferService.clearFeed` — note it deliberately leaves the
+   * `seq` counter alone; see its docstring for why).
+   *
+   * Not called from `createRoom`: that path always mints a fresh
+   * `call-<uuid>` room name, so there is no previous meeting's chat to
+   * inherit and the LiveKit round-trip would be pure overhead.
+   *
+   * Best-effort by construction — nothing here is allowed to stop someone
+   * from joining. A person locked out because the feed wouldn't clear is a
+   * far worse outcome than one meeting's chat surviving into the next, so
+   * every failure (LiveKit unreachable, Redis down, anything) is caught and
+   * logged, never thrown. Two people joining at the same moment can both
+   * observe zero participants and both clear — harmless, since there is by
+   * definition nothing worth keeping at the start of a meeting, and
+   * `clearFeed` is safe to call more than once.
+   */
+  private async clearChatIfNewMeeting(roomName: string): Promise<void> {
+    try {
+      let empty = true;
+      try {
+        const participants =
+          await this.sfuFor(roomName).client.listParticipants(roomName);
+        empty = participants.length === 0;
+      } catch {
+        // Room doesn't exist yet, or LiveKit is unreachable — either way
+        // treat it the same as "nobody's here": there's nothing to lose by
+        // clearing, and staying silent would mean this join never gets a
+        // chance to start a clean feed.
+      }
+      if (empty) {
+        await this.chatBuffer.clearFeed(roomName);
+      }
+    } catch (e) {
+      this.log.warn(
+        `не удалось очистить ленту чата ${roomName} на входе в комнату: ${e}`,
+      );
+    }
   }
 
   private async makeGuestToken(room: string, displayName: string) {
