@@ -28,11 +28,21 @@ class FakeRedis {
    *  тестов. */
   now = 0;
   private expiresAt = new Map<string, number>();
-  /** Когда установлено, следующий RPUSH внутри exec() отдаёт слот с ошибкой
-   *  вместо результата — эмулирует WRONGTYPE и подобные отказы, которые
-   *  ioredis резолвит как [Error, null] в нужном слоте транзакции, а не
-   *  бросает из exec() целиком. Сбрасывается после первого использования. */
-  nextRpushError: Error | null = null;
+  /** Когда установлено, следующий вызов указанной команды внутри exec()
+   *  отдаёт слот с ошибкой вместо результата — эмулирует WRONGTYPE и
+   *  подобные отказы транзакции записи в ленту (RPUSH/LTRIM). Настоящий
+   *  ioredis в этом случае кладёт в слот одноэлементный массив `[Error]`,
+   *  а не `[Error, null]`, как ниже: для всех потребителей (`slot?.[0]`,
+   *  `typeof slot[1] !== 'number'`, `?? 0`) это неразличимо, поэтому фейк
+   *  всё равно хранит пару. Сбрасывается после первого использования. */
+  nextTxError: { command: 'rpush' | 'ltrim'; error: Error } | null = null;
+
+  private armedTxError(command: 'rpush' | 'ltrim'): Error | null {
+    if (this.nextTxError?.command !== command) return null;
+    const err = this.nextTxError.error;
+    this.nextTxError = null;
+    return err;
+  }
 
   advance(seconds: number) {
     this.now += seconds;
@@ -59,17 +69,16 @@ class FakeRedis {
     return Promise.resolve(this.values.get(key) ?? null);
   }
   rpush(key: string, value: string) {
-    if (this.nextRpushError) {
-      const err = this.nextRpushError;
-      this.nextRpushError = null;
-      return Promise.reject(err);
-    }
+    const err = this.armedTxError('rpush');
+    if (err) return Promise.reject(err);
     const list = this.lists.get(key) ?? [];
     list.push(value);
     this.lists.set(key, list);
     return Promise.resolve(list.length);
   }
   ltrim(key: string, start: number, stop: number) {
+    const err = this.armedTxError('ltrim');
+    if (err) return Promise.reject(err);
     const list = this.lists.get(key) ?? [];
     // Буфер зовёт только ltrim(key, -N, -1) — держим последние N.
     const from = start < 0 ? Math.max(list.length + start, 0) : start;
@@ -124,11 +133,13 @@ class FakeRedis {
       },
       exec: async () => {
         // Реальный ioredis не отклоняет exec() из-за отказа одной команды
-        // внутри транзакции — он резолвит весь пакет, подставляя [Error,
-        // null] в слот упавшей команды. Копируем это здесь: без per-op
-        // try/catch отказ rpush() (см. nextRpushError) улетел бы наружу как
-        // отклонённый exec(), чего в проде не бывает, и тест на молчаливую
-        // потерю (WRONGTYPE-слот) проверял бы не тот сценарий.
+        // внутри транзакции — он резолвит весь пакет, подставляя в слот
+        // упавшей команды одноэлементный массив [Error] (см. комментарий у
+        // nextTxError — фейк ниже хранит [Error, null], разница не видна
+        // ни одному потребителю). Копируем поведение здесь: без per-op
+        // try/catch отказ rpush()/ltrim() (см. nextTxError) улетел бы
+        // наружу как отклонённый exec(), чего в проде не бывает, и тест на
+        // молчаливую потерю (WRONGTYPE-слот) проверял бы не тот сценарий.
         const results: Array<[Error | null, unknown]> = [];
         for (const op of ops) {
           try {
@@ -170,17 +181,39 @@ describe('RoomChatBufferService', () => {
     expect((await buffer.append('call-7', entry('раз'))).seq).toBe(1);
   });
 
-  it('громко отказывает, если слот транзакции записи в ленту пришёл с ошибкой', async () => {
+  it('громко отказывает, если слот RPUSH транзакции записи в ленту пришёл с ошибкой', async () => {
     // WRONGTYPE и подобное: ioredis не бросает из exec(), он резолвит слот
-    // упавшей команды как [Error, null]. Молчание здесь означало бы, что
-    // append() отдаёт «нормальную на вид» запись с проставленным seq,
-    // sendRoomChatMessage разошлёт её в комнату — а в ленте её не будет
-    // никогда: ни строки в истории, ни следа в логе.
-    redis.nextRpushError = new Error(
-      'WRONGTYPE Operation against a key holding the wrong kind of value',
-    );
+    // упавшей команды одноэлементным массивом [Error] (фейк ниже хранит
+    // [Error, null] — см. комментарий у nextTxError, для append() разницы
+    // нет). Молчание здесь означало бы, что append() отдаёт «нормальную на
+    // вид» запись с проставленным seq, sendRoomChatMessage разошлёт её в
+    // комнату — а в ленте её не будет никогда: ни строки в истории, ни
+    // следа в логе.
+    redis.nextTxError = {
+      command: 'rpush',
+      error: new Error(
+        'WRONGTYPE Operation against a key holding the wrong kind of value',
+      ),
+    };
     await expect(buffer.append('call-42', entry('раз'))).rejects.toThrow();
     expect((await buffer.read('call-42')).messages).toEqual([]);
+  });
+
+  it('громко отказывает, если слот LTRIM транзакции записи в ленту пришёл с ошибкой', async () => {
+    // Тот же риск, что и для слота RPUSH в тесте выше, но для другого слота
+    // той же транзакции: append() проверяет все три слота (RPUSH/LTRIM/
+    // EXPIRE) через `slots.find(...)`, а тест выше закрывает только RPUSH —
+    // мутант «проверять только первый слот» остался бы незамеченным. Тут
+    // RPUSH успевает выполниться (список получает запись), поэтому эта
+    // проверка не повторяет «лента пуста» из теста выше — только то, что
+    // отказ слота LTRIM тоже громко останавливает append().
+    redis.nextTxError = {
+      command: 'ltrim',
+      error: new Error(
+        'WRONGTYPE Operation against a key holding the wrong kind of value',
+      ),
+    };
+    await expect(buffer.append('call-42', entry('раз'))).rejects.toThrow();
   });
 
   it('без курсора отдаёт всю ленту по порядку', async () => {

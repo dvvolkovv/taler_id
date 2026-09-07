@@ -161,6 +161,7 @@ describe('VoiceService.sendRoomChatMessage', () => {
       service.sendRoomChatMessage('call-42', 'Привет', 'Ассистент'),
     ).rejects.toThrow('lk down');
     expect(buffer.remove).toHaveBeenCalledTimes(1);
+    expect(buffer.remove.mock.calls[0][0]).toBe('call-42');
     // Тождество, а не toMatchObject: LREM в проде сравнивает строки, поэтому
     // клон с переставленными полями (тот же набор значений, другой JSON.
     // stringify) прошёл бы toMatchObject, но в бою remove() ничего не нашёл
