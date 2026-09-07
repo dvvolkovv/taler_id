@@ -29,6 +29,7 @@ describe('VoiceService.joinRoom entitlement', () => {
       {} as any,
       {} as any,
       {} as any,
+      {} as any,
     );
   });
 

@@ -4,6 +4,8 @@ import {
   NotFoundException,
   ForbiddenException,
   BadRequestException,
+  HttpException,
+  HttpStatus,
 } from '@nestjs/common';
 import {
   AccessToken,
@@ -22,6 +24,7 @@ import { MeteringService } from '../billing/services/metering.service';
 import { LedgerService } from '../billing/services/ledger.service';
 import { PricingService } from '../billing/services/pricing.service';
 import { FEATURE_KEYS } from '../billing/constants/feature-keys';
+import { RoomChatBufferService } from './room-chat-buffer.service';
 
 const LK_HOST = process.env.LIVEKIT_HOST || 'http://localhost:7880';
 import { LK_API_KEY, LK_API_SECRET } from '../common/livekit-credentials';
@@ -60,6 +63,7 @@ export class VoiceService {
     private readonly metering: MeteringService,
     private readonly ledger: LedgerService,
     private readonly pricing: PricingService,
+    private readonly chatBuffer: RoomChatBufferService,
   ) {}
 
   async createRoom(
@@ -192,16 +196,20 @@ export class VoiceService {
   }
 
   /**
-   * Публикует сообщение в чат комнаты тем же протоколом, которым
-   * обмениваются между собой браузерные клиенты: пакет
-   * `{type:'chat_message', text, name, ts, msgId}` в data-канал LiveKit,
-   * надёжной доставкой. Ничего специфичного для сервера в пакете нет —
-   * клиенты рисуют его как обычное сообщение.
+   * Единственный путь сообщения в чат комнаты: и от людей, и от ассистента.
+   * Сначала запись в ленту — иначе читать через API было бы нечего, — потом
+   * рассылка в data-канал. Если рассылка не удалась, запись снимается: то,
+   * чего никто не видел, не должно всплыть у открывшего историю.
    *
    * `text` и `name` нормализуются здесь, а не в вызывающем коде: метод —
    * переиспользуемый шов (ручка, ассистент), и инвариант должен быть один
    * на всех. `name` в вебе рисуется как имя автора, поэтому режется по длине
    * и подменяется дефолтом, если пришёл пустым или не строкой.
+   *
+   * `actor` — необязательный идентификатор отправителя для потолка частоты
+   * (`RoomChatBufferService.hitRateLimit`). Без него потолок не проверяется:
+   * серверные вызовы (ассистент) не обязаны его передавать, а вот ручка для
+   * гостя/участника — обязана.
    *
    * Клиент SFU берётся через `sfuFor`, а не из `this.rooms` напрямую —
    * ради симметрии с `deleteRoom` и `joinRoom`. Сама CIS-развилка сейчас
@@ -216,7 +224,8 @@ export class VoiceService {
     roomName: string,
     text: string,
     name: string,
-  ): Promise<{ ts: number }> {
+    actor?: string,
+  ): Promise<{ ts: number; seq: number; msgId: string }> {
     const trimmed = typeof text === 'string' ? text.trim() : '';
     if (!trimmed) throw new BadRequestException('text is empty');
     if (trimmed.length > 500) {
@@ -225,14 +234,21 @@ export class VoiceService {
     const who =
       (typeof name === 'string' ? name.trim() : '').slice(0, 64) || 'Taler ID';
 
-    const ts = Date.now();
-    const packet = {
-      type: 'chat_message',
+    if (actor && (await this.chatBuffer.hitRateLimit(roomName, actor))) {
+      throw new HttpException(
+        'too many chat messages, slow down',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    const stored = await this.chatBuffer.append(roomName, {
+      msgId: `server_${uuidv4()}`,
       text: trimmed,
       name: who,
-      ts,
-      msgId: `server_${uuidv4()}`,
-    };
+      ts: Date.now(),
+    });
+
+    const packet = { type: 'chat_message', ...stored };
 
     try {
       await this.sfuFor(roomName).client.sendData(
@@ -244,13 +260,30 @@ export class VoiceService {
         {},
       );
     } catch (e) {
+      const removed = await this.chatBuffer.remove(roomName, stored);
+      if (removed === 0) {
+        // Законных причин для нуля тут почти нет: запись только что вернул
+        // append(), вытеснить её мог бы только LTRIM за 500 сообщений,
+        // прилетевших между append и этим remove. Скорее всего откат не
+        // сработал, и сообщение осталось призраком в ленте — молчать нельзя.
+        this.log.warn(
+          `chatBuffer.remove() вернул 0 сразу после append() для ${roomName} ` +
+            `seq=${stored.seq} msgId=${stored.msgId}: рассылка отказала, но ` +
+            `откат записи не подтверждён — сообщение могло остаться в ленте`,
+        );
+      }
       // Чат эфемерный, истории у него нет — эта строка единственный след того,
       // что сообщение до комнаты не дошло.
       console.error(`Failed to send chat message to room ${roomName}:`, e);
       throw e;
     }
 
-    return { ts };
+    return { ts: stored.ts, seq: stored.seq, msgId: stored.msgId };
+  }
+
+  /** Лента комнаты для клиента и внешнего ассистента. */
+  async readRoomChat(roomName: string, since?: number) {
+    return this.chatBuffer.read(roomName, since);
   }
 
   async endCallLog(roomName: string): Promise<void> {

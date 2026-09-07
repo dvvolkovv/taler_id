@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, HttpException } from '@nestjs/common';
 import { VoiceService } from './voice.service';
 
 describe('VoiceService.sendRoomChatMessage', () => {
@@ -9,7 +9,18 @@ describe('VoiceService.sendRoomChatMessage', () => {
   const decode = (mock: jest.Mock, i = 0) =>
     JSON.parse(Buffer.from(mock.mock.calls[i][1]).toString('utf8'));
 
+  let buffer: {
+    append: jest.Mock;
+    remove: jest.Mock;
+    hitRateLimit: jest.Mock;
+  };
+
   beforeEach(() => {
+    buffer = {
+      append: jest.fn((_room: string, entry: any) => ({ ...entry, seq: 7 })),
+      remove: jest.fn().mockResolvedValue(1),
+      hitRateLimit: jest.fn().mockResolvedValue(false),
+    };
     service = new VoiceService(
       {} as any,
       {} as any,
@@ -17,6 +28,7 @@ describe('VoiceService.sendRoomChatMessage', () => {
       {} as any,
       {} as any,
       {} as any,
+      buffer as any,
     );
     euSendData = jest.fn().mockResolvedValue(undefined);
     ruSendData = jest.fn().mockResolvedValue(undefined);
@@ -110,5 +122,58 @@ describe('VoiceService.sendRoomChatMessage', () => {
     await service.sendRoomChatMessage('call-42', 'раз', 'Ассистент');
     await service.sendRoomChatMessage('call-42', 'два', 'Ассистент');
     expect(decode(euSendData).msgId).not.toBe(decode(euSendData, 1).msgId);
+  });
+
+  it('кладёт сообщение в ленту и возвращает его номер', async () => {
+    const res = await service.sendRoomChatMessage(
+      'call-42',
+      'Привет',
+      'Ассистент',
+    );
+
+    expect(buffer.append).toHaveBeenCalledTimes(1);
+    expect(buffer.append.mock.calls[0][0]).toBe('call-42');
+    expect(buffer.append.mock.calls[0][1]).toMatchObject({
+      text: 'Привет',
+      name: 'Ассистент',
+    });
+    expect(res.seq).toBe(7);
+    expect(res.msgId).toBe(decode(euSendData).msgId);
+    expect(typeof res.ts).toBe('number');
+  });
+
+  it('номер уезжает в комнату вместе с пакетом', async () => {
+    await service.sendRoomChatMessage('call-42', 'Привет', 'Ассистент');
+    expect(decode(euSendData).seq).toBe(7);
+  });
+
+  it('снимает запись из ленты, если рассылка не удалась', async () => {
+    euSendData.mockRejectedValue(new Error('lk down'));
+    await expect(
+      service.sendRoomChatMessage('call-42', 'Привет', 'Ассистент'),
+    ).rejects.toThrow('lk down');
+    expect(buffer.remove).toHaveBeenCalledTimes(1);
+    expect(buffer.remove.mock.calls[0][1]).toMatchObject({ seq: 7 });
+  });
+
+  it('на пустом тексте до ленты не доходит', async () => {
+    await expect(
+      service.sendRoomChatMessage('call-42', '  ', 'Ассистент'),
+    ).rejects.toThrow(BadRequestException);
+    expect(buffer.append).not.toHaveBeenCalled();
+  });
+
+  it('превышенный потолок — 429, и ничего не отправляется', async () => {
+    buffer.hitRateLimit.mockResolvedValue(true);
+    await expect(
+      service.sendRoomChatMessage('call-42', 'Привет', 'Ассистент', 'guest-1'),
+    ).rejects.toThrow(HttpException);
+    expect(buffer.append).not.toHaveBeenCalled();
+    expect(euSendData).not.toHaveBeenCalled();
+  });
+
+  it('без актора потолок не проверяется', async () => {
+    await service.sendRoomChatMessage('call-42', 'Привет', 'Ассистент');
+    expect(buffer.hitRateLimit).not.toHaveBeenCalled();
   });
 });
