@@ -3589,8 +3589,18 @@
       if (!pending || !pending.failed) return; // эхо уже само подтвердило — клик устарел
       // Старую запись не удаляем молча — метим "заменена": если эхо ИСХОДНОЙ
       // попытки всё же дойдёт после повтора (сервер мог принять и её, просто
-      // оба ответа потерялись), DataReceived не должен трогать pending.el —
-      // на нём уже новая попытка отправки, а не та, что подтверждает эхо.
+      // оба ответа потерялись), DataReceived (и loadChatHistory — она тоже
+      // сверяется с _pendingChatMsgs) не должны трогать pending.el — на нём
+      // уже новая попытка отправки, а не та, что подтверждает эхо.
+      //
+      // Отдельно, сознательно НЕ чиним: если человек нажмёт "повторить"
+      // быстрее, чем успеет дойти эхо ИСХОДНОЙ попытки (то есть быстрее
+      // одного сетевого круга), на сервер уйдут ОБА сообщения — это уже не
+      // визуальный дубль на клиенте (тот погашен пометкой superseded выше),
+      // а настоящее двойное сообщение в ленте комнаты, которое увидят все
+      // участники. Полное закрытие потребовало бы вести цепочку всех
+      // вытесненных попыток одного черновика, а не только последнюю — не
+      // тот объём, который оправдан для окна размером в один RTT.
       pending.superseded = true;
       unmarkChatBubbleFailed(pending.el);
       await doSendChat(pending.text, pending.name, pending.el);
@@ -3658,7 +3668,16 @@
      *  закономерно придут как own:false. Это свойство модели идентичности
      *  бэкенда, а не ошибка чтения этого поля здесь. У залогиненных
      *  участников приложения (не этой страницы) личность привязана к сессии,
-     *  и own переживает переподключение. */
+     *  и own переживает переподключение.
+     *
+     *  Сообщения с известным нам clientMsgId (сервер отдаёт его отдельным
+     *  полем — см. DataReceived) сверяются с _pendingChatMsgs и НЕ
+     *  дорисовываются повторно: пузырь уже есть, история лишь подтверждает
+     *  его настоящим msgId. Это третий независимый путь починки состояния —
+     *  рядом с эхом (DataReceived) и ответом на сам POST (doSendChat/M1).
+     *  Не избыточность: каждый закрывает своё окно, где двух других ещё
+     *  не было (эхо ещё не пришло, ответ на POST ещё летит, а история уже
+     *  успела прочитать ленту). */
     async function loadChatHistory() {
       if (!room) return;
       const myGen = chatConnectionGen;
@@ -3678,9 +3697,32 @@
         if (chatConnectionGen !== myGen) return;
         const frag = document.createDocumentFragment();
         for (const m of data.messages || []) {
+          if (m.msgId && _processedMsgIds.has(m.msgId)) continue;
+
+          if ('clientMsgId' in m && _pendingChatMsgs.has(m.clientMsgId)) {
+            // Наше собственное сообщение, ещё числящееся ожидающим: пузырь
+            // уже нарисован оптимистично в doSendChat(), рисовать второй раз
+            // не нужно — подтверждаем существующий.
+            const pending = _pendingChatMsgs.get(m.clientMsgId);
+            _pendingChatMsgs.delete(m.clientMsgId);
+            if (pending && !pending.superseded) {
+              if (pending.failed) unmarkChatBubbleFailed(pending.el);
+              if (m.msgId) pending.el.dataset.msgId = m.msgId;
+            }
+            // pending.superseded: узел уже показывает более новую попытку
+            // (см. retryChatMessage) — его не трогаем, только регистрируем
+            // msgId ниже, чтобы позже не пришедшее сюда же эхо не нарисовало
+            // ещё одну копию.
+            if (m.msgId) {
+              _processedMsgIds.add(m.msgId);
+              if (_processedMsgIds.size > 200) _processedMsgIds.clear();
+            }
+            continue;
+          }
+
           if (m.msgId) {
-            if (_processedMsgIds.has(m.msgId)) continue;
             _processedMsgIds.add(m.msgId);
+            if (_processedMsgIds.size > 200) _processedMsgIds.clear();
           }
           frag.appendChild(buildChatMsgEl(m.name, m.text, m.ts, !!m.own, m.msgId));
         }
