@@ -39,6 +39,18 @@
  * Новых зависимостей не требует: playwright резолвится через обычный
  * require() из родительских node_modules окружения (require.resolve
  * подтверждён отдельно, в package.json ничего добавлять не нужно).
+ *
+ * ВАЖНО: скрипт проверяет страницу, которую ОТДАЁТ СЕРВЕР по ROOM_BASE_URL,
+ * а не файл public/room.html из рабочего дерева. Перед прогоном своей
+ * правки скопируй файл на DEV и верни обратно после:
+ *   scp public/room.html dvolkov@89.169.55.217:~/taler-id/public/room.html
+ *   node scripts/test-room-chat-race.js
+ *   ssh dvolkov@89.169.55.217 'cd ~/taler-id && git checkout public/room.html'
+ * Скрипт сверяет отданную страницу с опорными строками текущей реализации
+ * перед прогоном сценариев и падает отдельным сообщением, если их нет —
+ * но это не отменяет необходимость самому не забыть про scp: зелёный
+ * прогон означает «то, что задеплоено, работает», а не «то, что лежит в
+ * рабочем дереве, работает» — это разные утверждения.
  */
 
 const https = require('https');
@@ -81,6 +93,65 @@ function httpJson(method, url, body, headers) {
     if (data) req.write(data);
     req.end();
   });
+}
+
+function httpText(url) {
+  return new Promise((resolve, reject) => {
+    https
+      .get(url, (res) => {
+        let raw = '';
+        res.on('data', (c) => (raw += c));
+        res.on('end', () => resolve({ status: res.statusCode, text: raw }));
+      })
+      .on('error', reject);
+  });
+}
+
+/**
+ * Опорные строки текущей реализации в public/room.html. Не номер версии —
+ * этот файл его не несёт — а буквальные фрагменты кода, которых не может
+ * быть без соответствующей правки. Список должен расти вместе со схемой:
+ * при следующей структурной правке чата добавь сюда новый отличительный
+ * фрагмент, а не полагайся на старые (иначе прекешек будет проверять
+ * позапрошлый раунд, а не текущий).
+ */
+const REQUIRED_CODE_MARKERS = [
+  '_pendingChatMsgs', // раунд 2: оптимистичная отправка + учёт ожидания эха
+  "'clientMsgId' in m && _pendingChatMsgs.has(m.clientMsgId)", // раунд 4: история как третий путь реконсиляции
+];
+
+/**
+ * Проверяет, что СЕРВЕР (не рабочее дерево) отдаёт код, который дальше
+ * будут проверять сценарии. Без этой проверки зелёный прогон против
+ * страницы без нужного кода означает «на сервере то, что там есть, не
+ * падает» — а читается как «мои правки работают», что не одно и то же
+ * (ровно так один раз и запутались: после git checkout на сервере остался
+ * прошлый раунд, а тест этого не заметил и тихо проверил его).
+ */
+async function assertServerHasCodeUnderTest(pageUrl) {
+  const res = await httpText(pageUrl);
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error('не удалось получить страницу комнаты (' + res.status + '): ' + pageUrl);
+  }
+  const missing = REQUIRED_CODE_MARKERS.filter((marker) => !res.text.includes(marker));
+  if (missing.length) {
+    console.error(
+      '\nСЕРВЕР ОТДАЁТ СТРАНИЦУ БЕЗ ПРОВЕРЯЕМОГО КОДА — сценарии не запускаются.\n' +
+        'Не найдены опорные строки:\n' +
+        missing.map((m) => '  - ' + m).join('\n') +
+        '\n\n' +
+        pageUrl +
+        ' раздаёт другую версию public/room.html, чем та, что в рабочем\n' +
+        'дереве/ветке (например, DEV откачен на предыдущий круг ревью git checkout\n' +
+        'после чужой проверки). Выкатите изменения или скопируйте файл вручную:\n' +
+        '  scp public/room.html dvolkov@89.169.55.217:~/taler-id/public/room.html\n' +
+        'и верните после прогона:\n' +
+        '  ssh dvolkov@89.169.55.217 \'cd ~/taler-id && git checkout public/room.html\'\n\n' +
+        'Список провалов сценариев ниже был бы про логику, которой на сервере\n' +
+        'просто нет, — поэтому его не будет.'
+    );
+    process.exit(1);
+  }
 }
 
 let passed = 0;
@@ -193,6 +264,10 @@ async function main() {
   }
   const roomCode = roomRes.body.code;
   console.log('  room: ' + BASE_URL + '/room/' + roomCode);
+
+  console.log('\n== Проверка: сервер отдаёт код, который мы собираемся тестировать ==');
+  await assertServerHasCodeUnderTest(BASE_URL + '/room/' + roomCode);
+  console.log('  OK    опорные строки текущей реализации найдены в отданной странице');
 
   const browser = await chromium.launch({
     args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'],
