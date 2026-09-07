@@ -4,16 +4,17 @@ import {
 } from './room-chat-buffer.service';
 
 /** Минимальная копия ioredis-транзакции для FakeRedis: команды копятся в
- *  очередь и выполняются одним проходом на exec(), возвращая [err, result]
- *  на каждую — этого достаточно для трёх транзакций буфера (append
- *  открывает две: на счётчик и на список; hitRateLimit — одну), большего
- *  фейку тут не нужно. */
+ *  очередь и выполняются одним проходом на exec(), каждая отдаёт [null,
+ *  result] при успехе или одноэлементный [error] при отказе (как настоящий
+ *  ioredis) — этого достаточно для трёх транзакций буфера (append открывает
+ *  две: на счётчик и на список; hitRateLimit — одну), большего фейку тут не
+ *  нужно. */
 interface FakeMulti {
   incr(key: string): FakeMulti;
   expire(key: string, ttl: number, mode?: 'NX'): FakeMulti;
   rpush(key: string, value: string): FakeMulti;
   ltrim(key: string, start: number, stop: number): FakeMulti;
-  exec(): Promise<Array<[Error | null, unknown]>>;
+  exec(): Promise<Array<[Error | null, unknown?]>>;
 }
 
 /** Поддельный ioredis: только те команды, которыми пользуется буфер.
@@ -30,11 +31,8 @@ class FakeRedis {
   private expiresAt = new Map<string, number>();
   /** Когда установлено, следующий вызов указанной команды внутри exec()
    *  отдаёт слот с ошибкой вместо результата — эмулирует WRONGTYPE и
-   *  подобные отказы транзакции записи в ленту (RPUSH/LTRIM). Настоящий
-   *  ioredis в этом случае кладёт в слот одноэлементный массив `[Error]`,
-   *  а не `[Error, null]`, как ниже: для всех потребителей (`slot?.[0]`,
-   *  `typeof slot[1] !== 'number'`, `?? 0`) это неразличимо, поэтому фейк
-   *  всё равно хранит пару. Сбрасывается после первого использования. */
+   *  подобные отказы транзакции записи в ленту (RPUSH/LTRIM). Сбрасывается
+   *  после первого использования. */
   nextTxError: { command: 'rpush' | 'ltrim'; error: Error } | null = null;
 
   private armedTxError(command: 'rpush' | 'ltrim'): Error | null {
@@ -134,18 +132,18 @@ class FakeRedis {
       exec: async () => {
         // Реальный ioredis не отклоняет exec() из-за отказа одной команды
         // внутри транзакции — он резолвит весь пакет, подставляя в слот
-        // упавшей команды одноэлементный массив [Error] (см. комментарий у
-        // nextTxError — фейк ниже хранит [Error, null], разница не видна
-        // ни одному потребителю). Копируем поведение здесь: без per-op
+        // упавшей команды одноэлементный массив [error]. Копируем это
+        // здесь (не только текстом в комментарии — сам фейк отдаёт такой
+        // же по форме слот, а не объявленный тип на бумаге): без per-op
         // try/catch отказ rpush()/ltrim() (см. nextTxError) улетел бы
         // наружу как отклонённый exec(), чего в проде не бывает, и тест на
         // молчаливую потерю (WRONGTYPE-слот) проверял бы не тот сценарий.
-        const results: Array<[Error | null, unknown]> = [];
+        const results: Array<[Error | null, unknown?]> = [];
         for (const op of ops) {
           try {
             results.push([null, await op()]);
           } catch (e) {
-            results.push([e as Error, null]);
+            results.push([e as Error]);
           }
         }
         return results;
@@ -183,37 +181,42 @@ describe('RoomChatBufferService', () => {
 
   it('громко отказывает, если слот RPUSH транзакции записи в ленту пришёл с ошибкой', async () => {
     // WRONGTYPE и подобное: ioredis не бросает из exec(), он резолвит слот
-    // упавшей команды одноэлементным массивом [Error] (фейк ниже хранит
-    // [Error, null] — см. комментарий у nextTxError, для append() разницы
-    // нет). Молчание здесь означало бы, что append() отдаёт «нормальную на
-    // вид» запись с проставленным seq, sendRoomChatMessage разошлёт её в
-    // комнату — а в ленте её не будет никогда: ни строки в истории, ни
-    // следа в логе.
+    // упавшей команды одноэлементным массивом [Error]. Молчание здесь
+    // означало бы, что append() отдаёт «нормальную на вид» запись с
+    // проставленным seq, sendRoomChatMessage разошлёт её в комнату — а в
+    // ленте её не будет никогда: ни строки в истории, ни следа в логе.
     redis.nextTxError = {
       command: 'rpush',
       error: new Error(
         'WRONGTYPE Operation against a key holding the wrong kind of value',
       ),
     };
-    await expect(buffer.append('call-42', entry('раз'))).rejects.toThrow();
+    await expect(buffer.append('call-42', entry('раз'))).rejects.toThrow(
+      /WRONGTYPE/,
+    );
     expect((await buffer.read('call-42')).messages).toEqual([]);
   });
 
   it('громко отказывает, если слот LTRIM транзакции записи в ленту пришёл с ошибкой', async () => {
-    // Тот же риск, что и для слота RPUSH в тесте выше, но для другого слота
-    // той же транзакции: append() проверяет все три слота (RPUSH/LTRIM/
-    // EXPIRE) через `slots.find(...)`, а тест выше закрывает только RPUSH —
-    // мутант «проверять только первый слот» остался бы незамеченным. Тут
-    // RPUSH успевает выполниться (список получает запись), поэтому эта
-    // проверка не повторяет «лента пуста» из теста выше — только то, что
-    // отказ слота LTRIM тоже громко останавливает append().
+    // Не воспроизведение реального отказа: RPUSH/LTRIM/EXPIRE идут одной
+    // атомарной MULTI по одному и тому же ключу, и раз RPUSH (тест выше)
+    // уже отработал, ключ точно список — WRONGTYPE на LTRIM сразу за этим
+    // невозможен. Это защита самой проверки, а не сценарий из прода:
+    // append() читает все три слота через `slots.find(...)`, а один тест
+    // на RPUSH этого не показывает — RPUSH и есть slots[0], так что мутант
+    // «смотреть только slots[0]» им не ловится. Состояние ленты после
+    // отказа здесь не проверяется: RPUSH к этому моменту уже вставил
+    // запись, поэтому, в отличие от теста выше, «лента пуста» было бы
+    // неправдой.
     redis.nextTxError = {
       command: 'ltrim',
       error: new Error(
         'WRONGTYPE Operation against a key holding the wrong kind of value',
       ),
     };
-    await expect(buffer.append('call-42', entry('раз'))).rejects.toThrow();
+    await expect(buffer.append('call-42', entry('раз'))).rejects.toThrow(
+      /WRONGTYPE/,
+    );
   });
 
   it('без курсора отдаёт всю ленту по порядку', async () => {
