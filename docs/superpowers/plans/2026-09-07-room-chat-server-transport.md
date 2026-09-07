@@ -225,7 +225,7 @@ describe('RoomChatBufferService', () => {
 
 - [ ] **Step 2: Запустить тест и убедиться, что он падает**
 
-Run: `cd ~/taler-id && npx jest src/voice/room-chat-buffer.service.spec.ts`
+Run: `cd ~/Downloads/taler_id/.worktrees/room-chat-api && npx jest src/voice/room-chat-buffer.service.spec.ts`
 Expected: FAIL — `Cannot find module './room-chat-buffer.service'`.
 
 - [ ] **Step 3: Написать сервис**
@@ -376,7 +376,7 @@ export class RoomChatBufferService {
 
 - [ ] **Step 4: Запустить тест и убедиться, что он проходит**
 
-Run: `cd ~/taler-id && npx jest src/voice/room-chat-buffer.service.spec.ts`
+Run: `cd ~/Downloads/taler_id/.worktrees/room-chat-api && npx jest src/voice/room-chat-buffer.service.spec.ts`
 Expected: PASS, 14 тестов.
 
 - [ ] **Step 5: Зарегистрировать провайдер**
@@ -400,7 +400,7 @@ export class VoiceModule {}
 - [ ] **Step 6: Коммит**
 
 ```bash
-cd ~/taler-id
+cd ~/Downloads/taler_id/.worktrees/room-chat-api
 git add src/voice/room-chat-buffer.service.ts src/voice/room-chat-buffer.service.spec.ts src/voice/voice.module.ts
 git commit -m "feat(voice): лента чата комнаты в Redis"
 ```
@@ -507,7 +507,7 @@ import { BadRequestException, HttpException } from '@nestjs/common';
 
 - [ ] **Step 2: Запустить тест и убедиться, что он падает**
 
-Run: `cd ~/taler-id && npx jest src/voice/voice.service.chat.spec.ts`
+Run: `cd ~/Downloads/taler_id/.worktrees/room-chat-api && npx jest src/voice/voice.service.chat.spec.ts`
 Expected: FAIL — `buffer.append` не вызывался, `res.seq` undefined.
 
 - [ ] **Step 3: Реализовать**
@@ -606,18 +606,18 @@ import { RoomChatBufferService } from './room-chat-buffer.service';
 
 - [ ] **Step 4: Запустить тесты и убедиться, что они проходят**
 
-Run: `cd ~/taler-id && npx jest src/voice/voice.service.chat.spec.ts`
+Run: `cd ~/Downloads/taler_id/.worktrees/room-chat-api && npx jest src/voice/voice.service.chat.spec.ts`
 Expected: PASS, все прежние проверки плюс шесть новых.
 
 - [ ] **Step 5: Убедиться, что остальные тесты голоса не сломались**
 
-Run: `cd ~/taler-id && npx jest src/voice`
+Run: `cd ~/Downloads/taler_id/.worktrees/room-chat-api && npx jest src/voice`
 Expected: PASS. Если падает `voice.service.spec.ts` или `voice.service.join.spec.ts` на числе аргументов конструктора — дописать в их `new VoiceService(...)` седьмой `{} as any`.
 
 - [ ] **Step 6: Коммит**
 
 ```bash
-cd ~/taler-id
+cd ~/Downloads/taler_id/.worktrees/room-chat-api
 git add src/voice/voice.service.ts src/voice/voice.service.chat.spec.ts src/voice/voice.service.spec.ts src/voice/voice.service.join.spec.ts
 git commit -m "feat(voice): отправка чата пишет в ленту и отдаёт seq"
 ```
@@ -667,7 +667,7 @@ git commit -m "feat(voice): отправка чата пишет в ленту �
 
 - [ ] **Step 2: Запустить тест и убедиться, что он падает**
 
-Run: `cd ~/taler-id && npx jest src/voice/guards/room-access.guard.spec.ts`
+Run: `cd ~/Downloads/taler_id/.worktrees/room-chat-api && npx jest src/voice/guards/room-access.guard.spec.ts`
 Expected: FAIL — `expect(received).toBe('guest-460c6508')`, получено `undefined`.
 
 - [ ] **Step 3: Реализовать**
@@ -729,13 +729,13 @@ Expected: FAIL — `expect(received).toBe('guest-460c6508')`, получено `
 
 - [ ] **Step 4: Запустить тесты и убедиться, что они проходят**
 
-Run: `cd ~/taler-id && npx jest src/voice/guards/room-access.guard.spec.ts`
+Run: `cd ~/Downloads/taler_id/.worktrees/room-chat-api && npx jest src/voice/guards/room-access.guard.spec.ts`
 Expected: PASS — прежние проверки доступа плюс новая про `roomActor`.
 
 - [ ] **Step 5: Коммит**
 
 ```bash
-cd ~/taler-id
+cd ~/Downloads/taler_id/.worktrees/room-chat-api
 git add src/voice/guards/room-access.guard.ts src/voice/guards/room-access.guard.spec.ts
 git commit -m "feat(voice): RoomAccessGuard называет отправителя в roomActor"
 ```
@@ -787,18 +787,18 @@ git commit -m "feat(voice): RoomAccessGuard называет отправите�
 
 - [ ] **Step 2: Собрать и убедиться, что компилируется**
 
-Run: `cd ~/taler-id && npm run build`
+Run: `cd ~/Downloads/taler_id/.worktrees/room-chat-api && npm run build`
 Expected: сборка проходит без ошибок.
 
 - [ ] **Step 3: Прогнать все тесты бэкенда**
 
-Run: `cd ~/taler-id && npx jest src/voice`
+Run: `cd ~/Downloads/taler_id/.worktrees/room-chat-api && npx jest src/voice`
 Expected: PASS.
 
 - [ ] **Step 4: Коммит**
 
 ```bash
-cd ~/taler-id
+cd ~/Downloads/taler_id/.worktrees/room-chat-api
 git add src/voice/voice.controller.ts
 git commit -m "feat(voice): GET /voice/rooms/:roomName/chat — лента встречи"
 ```
@@ -898,7 +898,7 @@ Expected: сообщение появляется в обеих вкладках
 - [ ] **Step 4: Коммит**
 
 ```bash
-cd ~/taler-id
+cd ~/Downloads/taler_id/.worktrees/room-chat-api
 git add public/room.html
 git commit -m "feat(room): веб шлёт чат через бэкенд"
 ```
@@ -976,7 +976,7 @@ Expected: во второй вкладке видны оба сообщения 
 - [ ] **Step 5: Коммит**
 
 ```bash
-cd ~/taler-id
+cd ~/Downloads/taler_id/.worktrees/room-chat-api
 git add public/room.html
 git commit -m "feat(room): веб показывает историю чата встречи"
 ```
@@ -1035,13 +1035,13 @@ git commit -m "feat(room): веб показывает историю чата �
 
 - [ ] **Step 3: Проверить, что собирается**
 
-Run: `cd ~/Downloads/taler_id_mobile && flutter analyze lib/features/voice/presentation/screens/voice_call_screen.dart lib/core/services/call_state_service.dart`
+Run: `cd ~/Downloads/taler_id_mobile/.worktrees/room-chat-api && flutter analyze lib/features/voice/presentation/screens/voice_call_screen.dart lib/core/services/call_state_service.dart`
 Expected: новых замечаний по этим файлам нет (старые в репозитории есть — см. память про долг анализатора).
 
 - [ ] **Step 4: Коммит**
 
 ```bash
-cd ~/Downloads/taler_id_mobile
+cd ~/Downloads/taler_id_mobile/.worktrees/room-chat-api
 git add lib/features/voice/presentation/screens/voice_call_screen.dart lib/core/services/call_state_service.dart
 git commit -m "feat(voice): экран звонка помнит room-scoped токен"
 ```
@@ -1124,7 +1124,7 @@ void main() {
 
 - [ ] **Step 2: Запустить тест и убедиться, что он падает**
 
-Run: `cd ~/Downloads/taler_id_mobile && flutter test test/features/voice/room_chat_history_test.dart`
+Run: `cd ~/Downloads/taler_id_mobile/.worktrees/room-chat-api && flutter test test/features/voice/room_chat_history_test.dart`
 Expected: FAIL — `Target of URI doesn't exist: room_chat_history.dart`.
 
 - [ ] **Step 3: Написать разбор**
@@ -1205,13 +1205,13 @@ RoomChatHistoryPage parseRoomChatHistory(Map<String, dynamic> body) {
 
 - [ ] **Step 4: Запустить тест и убедиться, что он проходит**
 
-Run: `cd ~/Downloads/taler_id_mobile && flutter test test/features/voice/room_chat_history_test.dart`
+Run: `cd ~/Downloads/taler_id_mobile/.worktrees/room-chat-api && flutter test test/features/voice/room_chat_history_test.dart`
 Expected: PASS, 5 тестов.
 
 - [ ] **Step 5: Коммит**
 
 ```bash
-cd ~/Downloads/taler_id_mobile
+cd ~/Downloads/taler_id_mobile/.worktrees/room-chat-api
 git add lib/features/voice/domain/room_chat_history.dart test/features/voice/room_chat_history_test.dart
 git commit -m "feat(voice): разбор ленты чата комнаты"
 ```
@@ -1299,13 +1299,13 @@ class RoomChatApi {
 
 - [ ] **Step 2: Проверить, что собирается**
 
-Run: `cd ~/Downloads/taler_id_mobile && flutter analyze lib/features/voice/data/room_chat_api.dart`
+Run: `cd ~/Downloads/taler_id_mobile/.worktrees/room-chat-api && flutter analyze lib/features/voice/data/room_chat_api.dart`
 Expected: `No issues found`.
 
 - [ ] **Step 3: Коммит**
 
 ```bash
-cd ~/Downloads/taler_id_mobile
+cd ~/Downloads/taler_id_mobile/.worktrees/room-chat-api
 git add lib/features/voice/data/room_chat_api.dart
 git commit -m "feat(voice): клиент ручек чата комнаты"
 ```
@@ -1379,7 +1379,7 @@ git commit -m "feat(voice): клиент ручек чата комнаты"
 
 - [ ] **Step 2: Запустить тесты и убедиться, что они падают**
 
-Run: `cd ~/Downloads/taler_id_mobile && flutter test test/voice/room_chat_controller_test.dart test/voice/room_data_packet_ids_test.dart`
+Run: `cd ~/Downloads/taler_id_mobile/.worktrees/room-chat-api && flutter test test/voice/room_chat_controller_test.dart test/voice/room_data_packet_ids_test.dart`
 Expected: FAIL — `setHistory` и `remember` не определены.
 
 - [ ] **Step 3: Реализовать**
@@ -1424,13 +1424,13 @@ Expected: FAIL — `setHistory` и `remember` не определены.
 
 - [ ] **Step 4: Запустить тесты и убедиться, что они проходят**
 
-Run: `cd ~/Downloads/taler_id_mobile && flutter test test/voice/`
+Run: `cd ~/Downloads/taler_id_mobile/.worktrees/room-chat-api && flutter test test/voice/`
 Expected: PASS — новые тесты и все прежние тесты чата.
 
 - [ ] **Step 5: Коммит**
 
 ```bash
-cd ~/Downloads/taler_id_mobile
+cd ~/Downloads/taler_id_mobile/.worktrees/room-chat-api
 git add lib/features/voice/presentation/controllers/ test/voice/
 git commit -m "feat(voice): контроллер чата принимает историю встречи"
 ```
@@ -1616,13 +1616,13 @@ import '../../data/room_chat_api.dart';
 
 - [ ] **Step 6: Прогнать тесты и анализатор**
 
-Run: `cd ~/Downloads/taler_id_mobile && flutter test && flutter analyze lib/features/voice/`
+Run: `cd ~/Downloads/taler_id_mobile/.worktrees/room-chat-api && flutter test && flutter analyze lib/features/voice/`
 Expected: тесты зелёные; новых замечаний по тронутым файлам нет.
 
 - [ ] **Step 7: Коммит**
 
 ```bash
-cd ~/Downloads/taler_id_mobile
+cd ~/Downloads/taler_id_mobile/.worktrees/room-chat-api
 git add lib/features/voice/ lib/core/di/injection_container.dart
 git commit -m "feat(voice): приложение шлёт чат через бэкенд и грузит историю"
 ```
@@ -1654,7 +1654,7 @@ git commit -m "feat(voice): приложение шлёт чат через бэ
 
 - [ ] **Step 2: Запустить тест и убедиться, что он падает**
 
-Run: `cd ~/Downloads/taler_id_mobile && flutter test test/features/assistant/send_room_chat_tool_test.dart`
+Run: `cd ~/Downloads/taler_id_mobile/.worktrees/room-chat-api && flutter test test/features/assistant/send_room_chat_tool_test.dart`
 Expected: FAIL — `Bad state: No element`.
 
 - [ ] **Step 3: Добавить инструмент в схему**
@@ -1739,13 +1739,13 @@ import '../../voice/data/room_chat_api.dart';
 
 - [ ] **Step 5: Запустить тесты**
 
-Run: `cd ~/Downloads/taler_id_mobile && flutter test && flutter analyze lib/features/assistant/`
+Run: `cd ~/Downloads/taler_id_mobile/.worktrees/room-chat-api && flutter test && flutter analyze lib/features/assistant/`
 Expected: PASS; новых замечаний нет.
 
 - [ ] **Step 6: Коммит**
 
 ```bash
-cd ~/Downloads/taler_id_mobile
+cd ~/Downloads/taler_id_mobile/.worktrees/room-chat-api
 git add lib/features/assistant/ test/features/assistant/
 git commit -m "feat(assistant): read_room_chat и отправка room-scoped токеном"
 ```

@@ -196,7 +196,7 @@ describe('fetchRemoteImage', () => {
 
 - [ ] **Step 2: Запустить тест и убедиться, что он падает**
 
-Run: `cd ~/taler-id && npx jest src/common/safe-remote-fetch.spec.ts`
+Run: `cd ~/Downloads/taler_id/.worktrees/room-chat-api && npx jest src/common/safe-remote-fetch.spec.ts`
 Expected: FAIL — модуль не найден.
 
 - [ ] **Step 3: Написать модуль**
@@ -343,13 +343,13 @@ export async function fetchRemoteImage(
 
 - [ ] **Step 4: Запустить тест и убедиться, что он проходит**
 
-Run: `cd ~/taler-id && npx jest src/common/safe-remote-fetch.spec.ts`
+Run: `cd ~/Downloads/taler_id/.worktrees/room-chat-api && npx jest src/common/safe-remote-fetch.spec.ts`
 Expected: PASS, 23 проверки (`it.each` разворачивается в отдельные).
 
 - [ ] **Step 5: Коммит**
 
 ```bash
-cd ~/taler-id
+cd ~/Downloads/taler_id/.worktrees/room-chat-api
 git add src/common/safe-remote-fetch.ts src/common/safe-remote-fetch.spec.ts
 git commit -m "feat(common): намордник от SSRF для скачивания по чужому URL"
 ```
@@ -450,7 +450,7 @@ describe('RoomChatImageService', () => {
 
 - [ ] **Step 2: Запустить тест и убедиться, что он падает**
 
-Run: `cd ~/taler-id && npx jest src/voice/room-chat-image.service.spec.ts`
+Run: `cd ~/Downloads/taler_id/.worktrees/room-chat-api && npx jest src/voice/room-chat-image.service.spec.ts`
 Expected: FAIL — модуль не найден.
 
 - [ ] **Step 3: Написать сервис**
@@ -542,7 +542,7 @@ export class RoomChatImageService {
 
 - [ ] **Step 4: Запустить тест и убедиться, что он проходит**
 
-Run: `cd ~/taler-id && npx jest src/voice/room-chat-image.service.spec.ts`
+Run: `cd ~/Downloads/taler_id/.worktrees/room-chat-api && npx jest src/voice/room-chat-image.service.spec.ts`
 Expected: PASS, 6 тестов.
 
 - [ ] **Step 5: Зарегистрировать провайдеры**
@@ -566,7 +566,7 @@ import { RoomChatImageService } from './room-chat-image.service';
 - [ ] **Step 6: Коммит**
 
 ```bash
-cd ~/taler-id
+cd ~/Downloads/taler_id/.worktrees/room-chat-api
 git add src/voice/room-chat-image.service.ts src/voice/room-chat-image.service.spec.ts src/voice/voice.module.ts
 git commit -m "feat(voice): картинка чата комнаты в S3 с превью"
 ```
@@ -622,7 +622,7 @@ git commit -m "feat(voice): картинка чата комнаты в S3 с п
 
 - [ ] **Step 2: Запустить тест и убедиться, что он падает**
 
-Run: `cd ~/taler-id && npx jest src/voice/voice.service.chat.spec.ts`
+Run: `cd ~/Downloads/taler_id/.worktrees/room-chat-api && npx jest src/voice/voice.service.chat.spec.ts`
 Expected: FAIL — `service.sendRoomChatImage is not a function`.
 
 - [ ] **Step 3: Реализовать**
@@ -721,13 +721,13 @@ export interface RoomChatEntry {
 
 - [ ] **Step 4: Запустить тесты и убедиться, что они проходят**
 
-Run: `cd ~/taler-id && npx jest src/voice`
+Run: `cd ~/Downloads/taler_id/.worktrees/room-chat-api && npx jest src/voice`
 Expected: PASS — прежние проверки текста и четыре новые про картинку.
 
 - [ ] **Step 5: Коммит**
 
 ```bash
-cd ~/taler-id
+cd ~/Downloads/taler_id/.worktrees/room-chat-api
 git add src/voice/room-chat-buffer.service.ts src/voice/voice.service.ts src/voice/voice.service.chat.spec.ts
 git commit -m "feat(voice): картинка в пакете и ленте чата комнаты"
 ```
@@ -802,7 +802,7 @@ import { fetchRemoteImage } from '../common/safe-remote-fetch';
 
 - [ ] **Step 2: Собрать**
 
-Run: `cd ~/taler-id && npm run build && npx jest src/voice`
+Run: `cd ~/Downloads/taler_id/.worktrees/room-chat-api && npm run build && npx jest src/voice`
 Expected: сборка проходит, тесты зелёные.
 
 - [ ] **Step 3: Проверить на живом DEV**
@@ -833,7 +833,7 @@ Expected: первые два — `{"ts":…,"seq":…,"msgId":…}`; трети
 - [ ] **Step 4: Коммит**
 
 ```bash
-cd ~/taler-id
+cd ~/Downloads/taler_id/.worktrees/room-chat-api
 git add src/voice/voice.controller.ts
 git commit -m "feat(voice): POST /voice/rooms/:roomName/chat/image"
 ```
@@ -951,7 +951,7 @@ Expected: обе картинки появляются в обеих вклад�
 - [ ] **Step 4: Коммит**
 
 ```bash
-cd ~/taler-id
+cd ~/Downloads/taler_id/.worktrees/room-chat-api
 git add public/room.html
 git commit -m "feat(room): картинки в чате веб-комнаты"
 ```
@@ -1038,7 +1038,7 @@ git commit -m "feat(room): картинки в чате веб-комнаты"
 
 - [ ] **Step 2: Запустить тест и убедиться, что он падает**
 
-Run: `cd ~/Downloads/taler_id_mobile && flutter test test/voice/room_chat_controller_test.dart`
+Run: `cd ~/Downloads/taler_id_mobile/.worktrees/room-chat-api && flutter test test/voice/room_chat_controller_test.dart`
 Expected: FAIL — у `RoomChatMessage` нет поля `image`.
 
 - [ ] **Step 3: Реализовать модель и разбор**
@@ -1118,7 +1118,7 @@ class RoomChatImage {
 
 - [ ] **Step 4: Запустить тесты и убедиться, что они проходят**
 
-Run: `cd ~/Downloads/taler_id_mobile && flutter test test/voice/ test/features/voice/`
+Run: `cd ~/Downloads/taler_id_mobile/.worktrees/room-chat-api && flutter test test/voice/ test/features/voice/`
 Expected: PASS.
 
 - [ ] **Step 5: Дописать отправку в клиент ручек**
@@ -1296,13 +1296,13 @@ import 'package:cached_network_image/cached_network_image.dart';
 
 - [ ] **Step 9: Прогнать тесты и анализатор**
 
-Run: `cd ~/Downloads/taler_id_mobile && flutter test && flutter analyze lib/features/voice/`
+Run: `cd ~/Downloads/taler_id_mobile/.worktrees/room-chat-api && flutter test && flutter analyze lib/features/voice/`
 Expected: PASS; новых замечаний по тронутым файлам нет.
 
 - [ ] **Step 10: Коммит**
 
 ```bash
-cd ~/Downloads/taler_id_mobile
+cd ~/Downloads/taler_id_mobile/.worktrees/room-chat-api
 git add lib/features/voice/ lib/l10n/ test/voice/
 git commit -m "feat(voice): картинки в чате комнаты на телефоне и десктопе"
 ```

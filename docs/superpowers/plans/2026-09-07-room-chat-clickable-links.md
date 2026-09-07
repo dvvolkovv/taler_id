@@ -120,7 +120,7 @@ void main() {
 
 - [ ] **Step 2: Запустить тест и убедиться, что он падает**
 
-Run: `cd ~/Downloads/taler_id_mobile && flutter test test/features/voice/room_chat_links_test.dart`
+Run: `cd ~/Downloads/taler_id_mobile/.worktrees/room-chat-api && flutter test test/features/voice/room_chat_links_test.dart`
 Expected: FAIL — `Target of URI doesn't exist: room_chat_links.dart`.
 
 - [ ] **Step 3: Написать разбор**
@@ -195,13 +195,13 @@ List<RoomChatTextPart> splitRoomChatLinks(String text) {
 
 - [ ] **Step 4: Запустить тест и убедиться, что он проходит**
 
-Run: `cd ~/Downloads/taler_id_mobile && flutter test test/features/voice/room_chat_links_test.dart`
+Run: `cd ~/Downloads/taler_id_mobile/.worktrees/room-chat-api && flutter test test/features/voice/room_chat_links_test.dart`
 Expected: PASS, 11 тестов.
 
 - [ ] **Step 5: Коммит**
 
 ```bash
-cd ~/Downloads/taler_id_mobile
+cd ~/Downloads/taler_id_mobile/.worktrees/room-chat-api
 git add lib/features/voice/domain/room_chat_links.dart test/features/voice/room_chat_links_test.dart
 git commit -m "feat(voice): разбор ссылок в сообщениях чата комнаты"
 ```
@@ -255,7 +255,7 @@ git commit -m "feat(voice): разбор ссылок в сообщениях ч
 
 - [ ] **Step 2: Запустить тест и убедиться, что он падает**
 
-Run: `cd ~/Downloads/taler_id_mobile && flutter test test/voice/room_chat_panel_test.dart`
+Run: `cd ~/Downloads/taler_id_mobile/.worktrees/room-chat-api && flutter test test/voice/room_chat_panel_test.dart`
 Expected: FAIL — распознавателей нажатия ноль.
 
 - [ ] **Step 3: Реализовать**
@@ -330,13 +330,13 @@ import '../../domain/room_chat_links.dart';
 
 - [ ] **Step 4: Запустить тесты и убедиться, что они проходят**
 
-Run: `cd ~/Downloads/taler_id_mobile && flutter test test/voice/ && flutter analyze lib/features/voice/`
+Run: `cd ~/Downloads/taler_id_mobile/.worktrees/room-chat-api && flutter test test/voice/ && flutter analyze lib/features/voice/`
 Expected: PASS; новых замечаний по тронутым файлам нет.
 
 - [ ] **Step 5: Коммит**
 
 ```bash
-cd ~/Downloads/taler_id_mobile
+cd ~/Downloads/taler_id_mobile/.worktrees/room-chat-api
 git add lib/features/voice/presentation/widgets/room_chat_panel.dart test/voice/room_chat_panel_test.dart
 git commit -m "feat(voice): ссылки в чате комнаты открываются нажатием"
 ```
@@ -450,7 +450,7 @@ Expected: первая ссылка кликабельна и открывает
 - [ ] **Step 5: Коммит**
 
 ```bash
-cd ~/taler-id
+cd ~/Downloads/taler_id/.worktrees/room-chat-api
 git add public/room.html
 git commit -m "feat(room): ссылки в веб-чате комнаты кликабельны"
 ```
@@ -469,7 +469,7 @@ ssh dvolkov@89.169.55.217 'cd ~/taler-id && git pull && npm run build && pm2 res
 
 - [ ] **Step 2: Прогнать тесты приложения**
 
-Run: `cd ~/Downloads/taler_id_mobile && flutter test`
+Run: `cd ~/Downloads/taler_id_mobile/.worktrees/room-chat-api && flutter test`
 Expected: всё зелёное.
 
 - [ ] **Step 3: Выкатить на TEST**
