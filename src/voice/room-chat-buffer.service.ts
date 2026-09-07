@@ -14,7 +14,18 @@ export interface RoomChatPage {
   messages: RoomChatEntry[];
   /** Номер последнего известного сообщения — курсор для следующего запроса. */
   seq: number;
-  /** true — между курсором запроса и первым отданным сообщением есть дыра. */
+  /**
+   * true — между курсором запроса и первым отданным сообщением, возможно,
+   * есть дыра. Флаг сознательно осторожен: он может сработать вхолостую,
+   * например сразу после отката `remove()` первого сообщения ленты, когда
+   * курсор формально «упирается» в освободившееся место, хотя на деле
+   * ничего не потеряно. Это подсказка «стоит перезагрузить историю», а не
+   * гарантия «история потеряна».
+   *
+   * Без курсора (`since` не передан) флаг не выставляется никогда — даже
+   * если `LTRIM` уже выкинул сотни сообщений: сравнивать курсор не с чем,
+   * отдаётся вся оставшаяся лента как есть.
+   */
   truncated: boolean;
 }
 
@@ -31,13 +42,15 @@ export interface RoomChatPage {
  */
 @Injectable()
 export class RoomChatBufferService {
+  // --- Лента: срок жизни и потолок длины ---
   /** Сутки. Встреча столько не идёт, но отставший клиент дотянется. */
   static readonly ttlSeconds = 86400;
   /** Потолок ленты в одной комнате; дальше вытесняются самые старые. */
   static readonly maxMessages = 500;
-  /** Мягкий потолок на запись: `rateLimit` сообщений за `rateWindowSeconds`
-   *  с одного отправителя в одну комнату. Ловит зациклившегося бота,
-   *  человеку недостижим. */
+
+  // --- Потолок на запись: сколько сообщений и за какое окно ---
+  /** `rateLimit` сообщений за `rateWindowSeconds` с одного отправителя в
+   *  одну комнату. Ловит зациклившегося бота, человеку недостижим. */
   static readonly rateLimit = 10;
   static readonly rateWindowSeconds = 10;
 
@@ -59,24 +72,26 @@ export class RoomChatBufferService {
     entry: Omit<RoomChatEntry, 'seq'>,
   ): Promise<RoomChatEntry> {
     const client = this.redis.getClient();
+    // INCR остаётся вне транзакции не для простоты, а потому что его
+    // результат нужен ДО того, как соберутся остальные команды: seq — часть
+    // тела сообщения, а очередь MULTI/EXEC в ioredis собирается на клиенте
+    // вслепую — результат INCR внутри неё недоступен, пока не выполнится вся
+    // пачка. Значит, сериализовать stored для RPUSH можно только после того,
+    // как INCR уже отработал сам по себе.
     const seq = await client.incr(this.seqKey(roomName));
     const stored: RoomChatEntry = { ...entry, seq };
-    // Команды идут по одной, без транзакции: писатель на сообщение один, а
-    // недоставленный EXPIRE поправит следующая запись.
-    await client.rpush(this.logKey(roomName), JSON.stringify(stored));
-    await client.ltrim(
-      this.logKey(roomName),
-      -RoomChatBufferService.maxMessages,
-      -1,
-    );
-    await client.expire(
-      this.logKey(roomName),
-      RoomChatBufferService.ttlSeconds,
-    );
-    await client.expire(
-      this.seqKey(roomName),
-      RoomChatBufferService.ttlSeconds,
-    );
+    // А вот сама запись сообщения — одной транзакцией: RPUSH, LTRIM и оба
+    // EXPIRE. Раньше это были 4 последовательных вызова, и на последнем
+    // сообщении комнаты обрыв связи между любыми двумя из них навсегда
+    // оставлял список без TTL — чинить было некому, ведь «следующей записи»
+    // могло и не случиться.
+    await client
+      .multi()
+      .rpush(this.logKey(roomName), JSON.stringify(stored))
+      .ltrim(this.logKey(roomName), -RoomChatBufferService.maxMessages, -1)
+      .expire(this.logKey(roomName), RoomChatBufferService.ttlSeconds)
+      .expire(this.seqKey(roomName), RoomChatBufferService.ttlSeconds)
+      .exec();
     return stored;
   }
 
@@ -87,14 +102,18 @@ export class RoomChatBufferService {
    *
    * Сравнение идёт по строке, поэтому передавать сюда нужно ровно тот объект,
    * что вернул `append` — с другим порядком полей `LREM` не найдёт запись.
+   * Возвращает число снятых записей (0 или 1): 0 не всегда ошибка вызывающей
+   * стороны — запись могла уже уйти по `LTRIM`, — но решать, что с этим
+   * делать, должна вызывающая сторона, а не эта функция молча.
    */
-  async remove(roomName: string, entry: RoomChatEntry): Promise<void> {
+  async remove(roomName: string, entry: RoomChatEntry): Promise<number> {
     try {
-      await this.redis
+      return await this.redis
         .getClient()
         .lrem(this.logKey(roomName), 1, JSON.stringify(entry));
     } catch (e) {
-      this.log.warn(`не удалось снять запись ${entry.msgId} из ленты: ${e}`);
+      this.log.debug(`не удалось снять запись ${entry.msgId} из ленты: ${e}`);
+      return 0;
     }
   }
 
@@ -111,6 +130,13 @@ export class RoomChatBufferService {
         // Одна испорченная строка не должна уносить всю ленту.
       }
     }
+    // RPUSH может лечь не в том порядке, в котором писатели получили свои
+    // seq: на PROD две app-ноды делят один Redis, а внутри одного процесса
+    // `await incr` тоже отпускает event loop между INCR и RPUSH. Двое,
+    // печатающих одновременно, — норма встречи, а не редкий случай.
+    // Сортируем явно, чтобы oldest/latest и фильтр по since были верны по
+    // построению, а не по случайному порядку доставки.
+    entries.sort((a, b) => a.seq - b.seq);
 
     const counter = Number(await client.get(this.seqKey(roomName))) || 0;
     const latest = entries.length ? entries[entries.length - 1].seq : counter;
@@ -136,10 +162,20 @@ export class RoomChatBufferService {
   async hitRateLimit(roomName: string, actor: string): Promise<boolean> {
     const client = this.redis.getClient();
     const key = `roomchat:${roomName}:rate:${actor}`;
-    const n = await client.incr(key);
-    if (n === 1) {
-      await client.expire(key, RoomChatBufferService.rateWindowSeconds);
-    }
+    // INCR и EXPIRE — одной транзакцией, как в DCR-лимитере (src/main.ts):
+    // порознь есть окно, где EXPIRE не долетел (обрыв связи, failover
+    // Sentinel, смерть процесса между вызовами) — ключ остаётся без TTL, а
+    // отправитель заглушён в этой комнате навсегда. TTL сдвигается на
+    // каждом сообщении, а не только на первом: со скользящим окном не нужно
+    // отдельно помнить, ставили мы уже TTL или нет, а отправитель, который
+    // перестал писать, всё равно остынет через rateWindowSeconds после
+    // последнего сообщения.
+    const results = await client
+      .multi()
+      .incr(key)
+      .expire(key, RoomChatBufferService.rateWindowSeconds)
+      .exec();
+    const n = Number(results?.[0]?.[1] ?? 0);
     return n > RoomChatBufferService.rateLimit;
   }
 }

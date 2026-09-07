@@ -1,4 +1,19 @@
-import { RoomChatBufferService } from './room-chat-buffer.service';
+import {
+  RoomChatBufferService,
+  RoomChatEntry,
+} from './room-chat-buffer.service';
+
+/** Минимальная копия ioredis-транзакции для FakeRedis: команды копятся в
+ *  очередь и выполняются одним проходом на exec(), возвращая [err, result]
+ *  на каждую — этого достаточно для двух транзакций буфера (append,
+ *  hitRateLimit), большего фейку тут не нужно. */
+interface FakeMulti {
+  incr(key: string): FakeMulti;
+  expire(key: string, ttl: number): FakeMulti;
+  rpush(key: string, value: string): FakeMulti;
+  ltrim(key: string, start: number, stop: number): FakeMulti;
+  exec(): Promise<Array<[null, unknown]>>;
+}
 
 /** Поддельный ioredis: только те команды, которыми пользуется буфер.
  *  Список и счётчик живут в памяти, поэтому тест проверяет поведение
@@ -8,41 +23,75 @@ class FakeRedis {
   values = new Map<string, string>();
   expires = new Map<string, number>();
 
-  async incr(key: string) {
+  incr(key: string) {
     const next = Number(this.values.get(key) ?? 0) + 1;
     this.values.set(key, String(next));
-    return next;
+    return Promise.resolve(next);
   }
-  async get(key: string) {
-    return this.values.get(key) ?? null;
+  get(key: string) {
+    return Promise.resolve(this.values.get(key) ?? null);
   }
-  async rpush(key: string, value: string) {
+  rpush(key: string, value: string) {
     const list = this.lists.get(key) ?? [];
     list.push(value);
     this.lists.set(key, list);
-    return list.length;
+    return Promise.resolve(list.length);
   }
-  async ltrim(key: string, start: number, stop: number) {
+  ltrim(key: string, start: number, stop: number) {
     const list = this.lists.get(key) ?? [];
     // Буфер зовёт только ltrim(key, -N, -1) — держим последние N.
     const from = start < 0 ? Math.max(list.length + start, 0) : start;
     const to = stop < 0 ? list.length + stop : stop;
     this.lists.set(key, list.slice(from, to + 1));
+    return Promise.resolve();
   }
-  async lrange(key: string, start: number, stop: number) {
+  lrange(key: string, start: number, stop: number) {
     const list = this.lists.get(key) ?? [];
-    return stop === -1 ? list.slice(start) : list.slice(start, stop + 1);
+    return Promise.resolve(
+      stop === -1 ? list.slice(start) : list.slice(start, stop + 1),
+    );
   }
-  async lrem(key: string, count: number, value: string) {
+  lrem(key: string, count: number, value: string) {
     const list = this.lists.get(key) ?? [];
     const i = list.indexOf(value);
-    if (i === -1) return 0;
+    if (i === -1) return Promise.resolve(0);
     list.splice(i, 1);
     void count;
-    return 1;
+    return Promise.resolve(1);
   }
-  async expire(key: string, ttl: number) {
+  expire(key: string, ttl: number) {
     this.expires.set(key, ttl);
+    return Promise.resolve();
+  }
+
+  multi(): FakeMulti {
+    const ops: Array<() => Promise<unknown>> = [];
+    const chain: FakeMulti = {
+      incr: (key) => {
+        ops.push(() => this.incr(key));
+        return chain;
+      },
+      expire: (key, ttl) => {
+        ops.push(() => this.expire(key, ttl));
+        return chain;
+      },
+      rpush: (key, value) => {
+        ops.push(() => this.rpush(key, value));
+        return chain;
+      },
+      ltrim: (key, start, stop) => {
+        ops.push(() => this.ltrim(key, start, stop));
+        return chain;
+      },
+      exec: async () => {
+        const results: Array<[null, unknown]> = [];
+        for (const op of ops) {
+          results.push([null, await op()]);
+        }
+        return results;
+      },
+    };
+    return chain;
   }
 }
 
@@ -92,6 +141,15 @@ describe('RoomChatBufferService', () => {
     expect(page.truncated).toBe(false);
   });
 
+  it('курсор не меньше последнего номера отдаёт пустой список без truncated', async () => {
+    await buffer.append('call-42', entry('раз'));
+    await buffer.append('call-42', entry('два'));
+
+    const page = await buffer.read('call-42', 2);
+    expect(page.messages).toEqual([]);
+    expect(page.truncated).toBe(false);
+  });
+
   it('на пустой комнате отдаёт пустую ленту, а не падает', async () => {
     const page = await buffer.read('call-empty');
     expect(page.messages).toEqual([]);
@@ -131,10 +189,43 @@ describe('RoomChatBufferService', () => {
     expect(page.truncated).toBe(true);
   });
 
+  it('сортирует по seq, даже если RPUSH лёг не по порядку', async () => {
+    // Гонка двух писателей: тот, что получил seq=2, кладёт RPUSH раньше,
+    // чем обладатель seq=1 — на PROD это норма (две app-ноды на одном
+    // Redis), а не редкий случай.
+    const first = { ...entry('два'), seq: 2 };
+    const second = { ...entry('раз'), seq: 1 };
+    redis.lists.set('roomchat:call-42:log', [
+      JSON.stringify(first),
+      JSON.stringify(second),
+    ]);
+    redis.values.set('roomchat:call-42:seq', '2');
+
+    const page = await buffer.read('call-42');
+    expect(page.messages.map((m) => m.text)).toEqual(['раз', 'два']);
+    expect(page.seq).toBe(2);
+  });
+
   it('remove снимает запись из ленты', async () => {
     const stored = await buffer.append('call-42', entry('раз'));
-    await buffer.remove('call-42', stored);
+    expect(await buffer.remove('call-42', stored)).toBe(1);
     expect((await buffer.read('call-42')).messages).toEqual([]);
+  });
+
+  it('remove с другим порядком полей ничего не снимает и сообщает об этом', async () => {
+    const stored = await buffer.append('call-42', entry('раз'));
+    // Те же значения, но поля собраны в другом порядке — JSON.stringify
+    // даёт другую строку, LREM её не найдёт. Ровно тот случай, от которого
+    // предостерегает докстринг remove().
+    const reordered: RoomChatEntry = {
+      seq: stored.seq,
+      ts: stored.ts,
+      name: stored.name,
+      text: stored.text,
+      msgId: stored.msgId,
+    };
+    expect(await buffer.remove('call-42', reordered)).toBe(0);
+    expect((await buffer.read('call-42')).messages).toHaveLength(1);
   });
 
   it('ставит TTL на список и на счётчик', async () => {
@@ -166,5 +257,19 @@ describe('RoomChatBufferService', () => {
       await buffer.hitRateLimit('call-42', 'guest-1');
     }
     expect(await buffer.hitRateLimit('call-42', 'guest-2')).toBe(false);
+  });
+
+  it('потолок считается отдельно для каждой комнаты', async () => {
+    for (let i = 0; i < 11; i++) {
+      await buffer.hitRateLimit('call-42', 'guest-1');
+    }
+    expect(await buffer.hitRateLimit('call-7', 'guest-1')).toBe(false);
+  });
+
+  it('ставит TTL на ключ потолка', async () => {
+    await buffer.hitRateLimit('call-42', 'guest-1');
+    expect(redis.expires.get('roomchat:call-42:rate:guest-1')).toBe(
+      RoomChatBufferService.rateWindowSeconds,
+    );
   });
 });
