@@ -6,6 +6,7 @@ import {
   BadRequestException,
   HttpException,
   HttpStatus,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import {
   AccessToken,
@@ -24,7 +25,11 @@ import { MeteringService } from '../billing/services/metering.service';
 import { LedgerService } from '../billing/services/ledger.service';
 import { PricingService } from '../billing/services/pricing.service';
 import { FEATURE_KEYS } from '../billing/constants/feature-keys';
-import { RoomChatBufferService } from './room-chat-buffer.service';
+import {
+  RoomChatBufferService,
+  RoomChatEntry,
+  RoomChatPage,
+} from './room-chat-buffer.service';
 
 const LK_HOST = process.env.LIVEKIT_HOST || 'http://localhost:7880';
 import { LK_API_KEY, LK_API_SECRET } from '../common/livekit-credentials';
@@ -215,10 +220,18 @@ export class VoiceService {
    * ради симметрии с `deleteRoom` и `joinRoom`. Сама CIS-развилка сейчас
    * не задействована: с 2026-07-25 `createRoom` всегда выдаёт `call-<uuid>`,
    * комнат `call-ru-…` никто не создаёт (см. `void region` в `createRoom`).
+   * Одно и то же `roomName` обязано уйти и в `chatBuffer`, и в `sendData` —
+   * лента и рассылка это разные комнаты по определению, если имена разойдутся.
    *
    * Бросает, если LiveKit недоступен. Ошибка не глотается намеренно:
    * ретраев у нас нет, и молчаливый успех означал бы, что вызывающий считает
    * сообщение доставленным, тогда как в комнате его никто не увидел.
+   *
+   * Отказ самого хранилища (Redis недоступен, а не «превышен потолок» —
+   * это законный `HttpException`, а не отказ) на этапе `hitRateLimit`/
+   * `append` превращается в `ServiceUnavailableException`: голый `Error`
+   * снаружи ушёл бы через общий `HttpExceptionFilter` как безликий 500,
+   * неотличимый от «ты прислал ерунду», и без единой строки в логе.
    */
   async sendRoomChatMessage(
     roomName: string,
@@ -234,19 +247,35 @@ export class VoiceService {
     const who =
       (typeof name === 'string' ? name.trim() : '').slice(0, 64) || 'Taler ID';
 
-    if (actor && (await this.chatBuffer.hitRateLimit(roomName, actor))) {
-      throw new HttpException(
-        'too many chat messages, slow down',
-        HttpStatus.TOO_MANY_REQUESTS,
+    let stored: RoomChatEntry;
+    try {
+      if (actor && (await this.chatBuffer.hitRateLimit(roomName, actor))) {
+        throw new HttpException(
+          'too many chat messages, slow down',
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+      stored = await this.chatBuffer.append(roomName, {
+        msgId: `server_${uuidv4()}`,
+        text: trimmed,
+        name: who,
+        ts: Date.now(),
+      });
+    } catch (e) {
+      // 429 выше — законный, ожидаемый отказ: пробрасываем как есть. Всё
+      // остальное здесь — отказ самого Redis (hitRateLimit тоже бросает,
+      // а не только резолвит fail-open: fail-open у него только на уровне
+      // одного повреждённого слота внутри УСПЕШНОЙ транзакции; если Redis
+      // недоступен целиком, exec() отклоняется, и hitRateLimit падает
+      // ровно как append).
+      if (e instanceof HttpException) throw e;
+      this.log.error(
+        `хранилище ленты чата недоступно для комнаты ${roomName}: ${e}`,
+      );
+      throw new ServiceUnavailableException(
+        'chat storage is unavailable, try again',
       );
     }
-
-    const stored = await this.chatBuffer.append(roomName, {
-      msgId: `server_${uuidv4()}`,
-      text: trimmed,
-      name: who,
-      ts: Date.now(),
-    });
 
     const packet = { type: 'chat_message', ...stored };
 
@@ -262,28 +291,38 @@ export class VoiceService {
     } catch (e) {
       const removed = await this.chatBuffer.remove(roomName, stored);
       if (removed === 0) {
-        // Законных причин для нуля тут почти нет: запись только что вернул
-        // append(), вытеснить её мог бы только LTRIM за 500 сообщений,
-        // прилетевших между append и этим remove. Скорее всего откат не
-        // сработал, и сообщение осталось призраком в ленте — молчать нельзя.
+        // Ноль тут значит одно из двух: штатное вытеснение LTRIM'ом (500
+        // сообщений успели прилететь между append и этим remove — обычное
+        // дело под нагрузкой) — или что запись так и не попала в ленту,
+        // хотя append() отрапортовал об успехе. Второе теперь перекрыто
+        // проверкой слотов транзакции внутри append() (см. её комментарий),
+        // но remove() смотрит только на своё единственное число и не может
+        // доказать, какая из причин сработала, — поэтому предупреждаем при
+        // любой, а не только когда уверены.
         this.log.warn(
           `chatBuffer.remove() вернул 0 сразу после append() для ${roomName} ` +
-            `seq=${stored.seq} msgId=${stored.msgId}: рассылка отказала, но ` +
-            `откат записи не подтверждён — сообщение могло остаться в ленте`,
+            `seq=${stored.seq} msgId=${stored.msgId}: рассылка отказала, откат ` +
+            `не подтверждён`,
         );
       }
       // Сообщение уже снято из ленты (либо залогировано выше, если снять не
       // удалось) — эта строка единственный оставшийся след того, что
       // рассылка в комнату не задалась.
-      console.error(`Failed to send chat message to room ${roomName}:`, e);
+      this.log.error(
+        `не удалось разослать сообщение чата в комнату ${roomName}: ${e}`,
+      );
       throw e;
     }
 
     return { ts: stored.ts, seq: stored.seq, msgId: stored.msgId };
   }
 
-  /** Лента комнаты для клиента и внешнего ассистента. */
-  async readRoomChat(roomName: string, since?: number) {
+  /**
+   * Лента комнаты для клиента и внешнего ассистента. Явный тип возврата
+   * не для красоты: это будущий HTTP-контракт (GET-ручка следующей задачи),
+   * и смена формы страницы внутри буфера не должна молча поменять ответ API.
+   */
+  async readRoomChat(roomName: string, since?: number): Promise<RoomChatPage> {
     return this.chatBuffer.read(roomName, since);
   }
 

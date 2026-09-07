@@ -106,12 +106,27 @@ export class RoomChatBufferService {
     // TTL — чинить было некому, ведь «следующей записи» могло и не
     // случиться. Круговых обходов по-прежнему два: один на счётчик, один на
     // список, — просто внутри каждого больше нет дыры.
-    await client
+    const writeResult = await client
       .multi()
       .rpush(this.logKey(roomName), JSON.stringify(stored))
       .ltrim(this.logKey(roomName), -RoomChatBufferService.maxMessages, -1)
       .expire(this.logKey(roomName), RoomChatBufferService.ttlSeconds)
       .exec();
+    // Тот же риск, что и у seqSlot чуть выше, только опаснее по последствиям:
+    // если промолчать здесь, append() отдаст «нормальную на вид» запись с
+    // проставленным seq, sendRoomChatMessage разошлёт её в комнату — и все
+    // участники её увидят, — а в ленте её не будет никогда: ни строки в
+    // истории, ни следа в логе. Тихая потеря на пути, который специально
+    // существует, чтобы историю не терять. Проверяем все три слота: RPUSH —
+    // главный подозреваемый (WRONGTYPE на ключе списка), LTRIM/EXPIRE следом
+    // по той же логике, раз уж транзакция уже здесь.
+    const slots = writeResult ?? [];
+    const failedSlot = slots.find((slot) => slot?.[0]);
+    if (!writeResult || failedSlot) {
+      throw new Error(
+        `не удалось записать сообщение в ленту ${roomName}: ${failedSlot?.[0] ?? 'нет результата транзакции'}`,
+      );
+    }
     return stored;
   }
 

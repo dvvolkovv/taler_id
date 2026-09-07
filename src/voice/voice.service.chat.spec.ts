@@ -1,4 +1,9 @@
-import { BadRequestException, HttpException } from '@nestjs/common';
+import {
+  BadRequestException,
+  HttpException,
+  HttpStatus,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { VoiceService } from './voice.service';
 
 describe('VoiceService.sendRoomChatMessage', () => {
@@ -17,7 +22,10 @@ describe('VoiceService.sendRoomChatMessage', () => {
 
   beforeEach(() => {
     buffer = {
-      append: jest.fn((_room: string, entry: any) => ({ ...entry, seq: 7 })),
+      append: jest.fn(async (_room: string, entry: any) => ({
+        ...entry,
+        seq: 7,
+      })),
       remove: jest.fn().mockResolvedValue(1),
       hitRateLimit: jest.fn().mockResolvedValue(false),
     };
@@ -153,7 +161,14 @@ describe('VoiceService.sendRoomChatMessage', () => {
       service.sendRoomChatMessage('call-42', 'Привет', 'Ассистент'),
     ).rejects.toThrow('lk down');
     expect(buffer.remove).toHaveBeenCalledTimes(1);
-    expect(buffer.remove.mock.calls[0][1]).toMatchObject({ seq: 7 });
+    // Тождество, а не toMatchObject: LREM в проде сравнивает строки, поэтому
+    // клон с переставленными полями (тот же набор значений, другой JSON.
+    // stringify) прошёл бы toMatchObject, но в бою remove() ничего не нашёл
+    // бы и откат молча перестал бы работать. append — async-мок, поэтому
+    // mock.results[0].value — это Promise; сравнивать нужно с тем, что он
+    // резолвит, а не с обёрткой.
+    const appended = await buffer.append.mock.results[0].value;
+    expect(buffer.remove.mock.calls[0][1]).toBe(appended);
   });
 
   it('на пустом тексте до ленты не доходит', async () => {
@@ -175,5 +190,69 @@ describe('VoiceService.sendRoomChatMessage', () => {
   it('без актора потолок не проверяется', async () => {
     await service.sendRoomChatMessage('call-42', 'Привет', 'Ассистент');
     expect(buffer.hitRateLimit).not.toHaveBeenCalled();
+  });
+
+  it('пишет в ленту раньше, чем рассылает', async () => {
+    await service.sendRoomChatMessage('call-42', 'Привет', 'Ассистент');
+    // invocationCallOrder — общий счётчик вызовов по всем мокам в тесте;
+    // меньше номер — раньше вызов. Порядок операций — весь смысл этой
+    // задачи: если бы рассылка ушла до записи, читающий историю через API
+    // не увидел бы то, что уже разослано в комнату.
+    expect(buffer.append.mock.invocationCallOrder[0]).toBeLessThan(
+      euSendData.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('лента и рассылка используют одно и то же имя комнаты (включая CIS-маршрут)', async () => {
+    await service.sendRoomChatMessage('call-ru-7', 'Привет', 'Ассистент');
+    // call-ru-* уходит на отдельный SFU (ruRooms/ruSendData) — самое опасное
+    // место для расхождения: запись в буфер под одним именем, рассылка под
+    // другим (или не в ту комнату) прошла бы незамеченной, потому что у
+    // каждого мока свой собственный набор вызовов.
+    expect(buffer.append.mock.calls[0][0]).toBe('call-ru-7');
+    expect(ruSendData.mock.calls[0][0]).toBe('call-ru-7');
+  });
+
+  it('не рассылает, если запись в ленту отказала, и превращает отказ хранилища в 503', async () => {
+    buffer.append.mockRejectedValue(new Error('redis down'));
+    await expect(
+      service.sendRoomChatMessage('call-42', 'Привет', 'Ассистент'),
+    ).rejects.toThrow(ServiceUnavailableException);
+    expect(euSendData).not.toHaveBeenCalled();
+  });
+
+  it('превышенный потолок остаётся 429, а не превращается в отказ хранилища (503)', async () => {
+    // ServiceUnavailableException — тоже HttpException, поэтому одного
+    // toThrow(HttpException) (как в тесте про 429 выше) недостаточно: он бы
+    // не заметил, если бы catch-обёртка вокруг hitRateLimit/append случайно
+    // проглотила наш собственный 429 и переупаковала его в 503. Проверяем
+    // конкретный класс и код статуса напрямую.
+    buffer.hitRateLimit.mockResolvedValue(true);
+    let caught: unknown;
+    try {
+      await service.sendRoomChatMessage(
+        'call-42',
+        'Привет',
+        'Ассистент',
+        'guest-1',
+      );
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(HttpException);
+    expect(caught).not.toBeInstanceOf(ServiceUnavailableException);
+    expect((caught as HttpException).getStatus()).toBe(
+      HttpStatus.TOO_MANY_REQUESTS,
+    );
+  });
+
+  it('предупреждает в логе, если remove() вернул 0 после неудачной рассылки', async () => {
+    euSendData.mockRejectedValue(new Error('lk down'));
+    buffer.remove.mockResolvedValue(0);
+    const warnSpy = jest.spyOn((service as any).log, 'warn');
+    await expect(
+      service.sendRoomChatMessage('call-42', 'Привет', 'Ассистент'),
+    ).rejects.toThrow('lk down');
+    expect(warnSpy).toHaveBeenCalledTimes(1);
   });
 });

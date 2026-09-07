@@ -13,7 +13,7 @@ interface FakeMulti {
   expire(key: string, ttl: number, mode?: 'NX'): FakeMulti;
   rpush(key: string, value: string): FakeMulti;
   ltrim(key: string, start: number, stop: number): FakeMulti;
-  exec(): Promise<Array<[null, unknown]>>;
+  exec(): Promise<Array<[Error | null, unknown]>>;
 }
 
 /** Поддельный ioredis: только те команды, которыми пользуется буфер.
@@ -28,6 +28,11 @@ class FakeRedis {
    *  тестов. */
   now = 0;
   private expiresAt = new Map<string, number>();
+  /** Когда установлено, следующий RPUSH внутри exec() отдаёт слот с ошибкой
+   *  вместо результата — эмулирует WRONGTYPE и подобные отказы, которые
+   *  ioredis резолвит как [Error, null] в нужном слоте транзакции, а не
+   *  бросает из exec() целиком. Сбрасывается после первого использования. */
+  nextRpushError: Error | null = null;
 
   advance(seconds: number) {
     this.now += seconds;
@@ -54,6 +59,11 @@ class FakeRedis {
     return Promise.resolve(this.values.get(key) ?? null);
   }
   rpush(key: string, value: string) {
+    if (this.nextRpushError) {
+      const err = this.nextRpushError;
+      this.nextRpushError = null;
+      return Promise.reject(err);
+    }
     const list = this.lists.get(key) ?? [];
     list.push(value);
     this.lists.set(key, list);
@@ -113,9 +123,19 @@ class FakeRedis {
         return chain;
       },
       exec: async () => {
-        const results: Array<[null, unknown]> = [];
+        // Реальный ioredis не отклоняет exec() из-за отказа одной команды
+        // внутри транзакции — он резолвит весь пакет, подставляя [Error,
+        // null] в слот упавшей команды. Копируем это здесь: без per-op
+        // try/catch отказ rpush() (см. nextRpushError) улетел бы наружу как
+        // отклонённый exec(), чего в проде не бывает, и тест на молчаливую
+        // потерю (WRONGTYPE-слот) проверял бы не тот сценарий.
+        const results: Array<[Error | null, unknown]> = [];
         for (const op of ops) {
-          results.push([null, await op()]);
+          try {
+            results.push([null, await op()]);
+          } catch (e) {
+            results.push([e as Error, null]);
+          }
         }
         return results;
       },
@@ -148,6 +168,19 @@ describe('RoomChatBufferService', () => {
   it('нумерация у каждой комнаты своя', async () => {
     await buffer.append('call-42', entry('раз'));
     expect((await buffer.append('call-7', entry('раз'))).seq).toBe(1);
+  });
+
+  it('громко отказывает, если слот транзакции записи в ленту пришёл с ошибкой', async () => {
+    // WRONGTYPE и подобное: ioredis не бросает из exec(), он резолвит слот
+    // упавшей команды как [Error, null]. Молчание здесь означало бы, что
+    // append() отдаёт «нормальную на вид» запись с проставленным seq,
+    // sendRoomChatMessage разошлёт её в комнату — а в ленте её не будет
+    // никогда: ни строки в истории, ни следа в логе.
+    redis.nextRpushError = new Error(
+      'WRONGTYPE Operation against a key holding the wrong kind of value',
+    );
+    await expect(buffer.append('call-42', entry('раз'))).rejects.toThrow();
+    expect((await buffer.read('call-42')).messages).toEqual([]);
   });
 
   it('без курсора отдаёт всю ленту по порядку', async () => {
