@@ -341,6 +341,78 @@ describe('VoiceService.sendRoomChatMessage', () => {
     });
   });
 
+  // clientMsgId-эхо в пакете: namespaced msgId (c_<hash(actor)>_<id>) решает
+  // подделку, но хеш считает сервер — клиент не может предсказать msgId ДО
+  // отправки, а значит и не может пометить его обработанным раньше echo.
+  // Чтобы разорвать именно эту гонку, пакет несёт clientMsgId ОТДЕЛЬНЫМ
+  // полем, ровно тем значением, что прислал клиент (не в пространстве имён):
+  // автор сравнивает строки напрямую, остальным участникам поле безразлично.
+  describe('clientMsgId-эхо в пакете data-канала', () => {
+    it('годный clientMsgId уходит в пакет эхом отдельным полем, msgId остаётся namespaced', async () => {
+      await service.sendRoomChatMessage(
+        'call-42',
+        'Привет',
+        'Ассистент',
+        'guest-1',
+        'abc123',
+      );
+      // Каст к Record<string, unknown>, а не голый decode() (тот any) — три
+      // новых теста ниже держат декодированный пакет в переменной для
+      // нескольких проверок подряд, и без каста каждая такая переменная
+      // добавляла бы unsafe-assignment/-member-access поверх уже
+      // существующих в файле (decode() как таковой лениво типизирован
+      // намеренно, менять его ради четырёх мест не стали).
+      const packet = decode(euSendData) as Record<string, unknown>;
+      expect(packet.clientMsgId).toBe('abc123');
+      expect(packet.msgId).toBe(namespacedId('guest-1', 'abc123'));
+    });
+
+    it.each([
+      ['посторонний символ', 'bad id with spaces'],
+      ['не строка', 42],
+    ])(
+      'негодный clientMsgId (%s) не попадает в пакет вовсе — ни как undefined, ни как пустая строка',
+      async (_label, bad) => {
+        await service.sendRoomChatMessage(
+          'call-42',
+          'Привет',
+          'Ассистент',
+          'guest-1',
+          bad,
+        );
+        const packet = decode(euSendData) as Record<string, unknown>;
+        expect('clientMsgId' in packet).toBe(false);
+        // Регрессия по соседству: неудачный clientMsgId не должен тайно
+        // испортить и построение msgId — он остаётся обычным server_<uuid>.
+        expect(packet.msgId).toMatch(/^server_/);
+      },
+    );
+
+    it('клиент ничего не прислал — ключа clientMsgId в пакете нет', async () => {
+      await service.sendRoomChatMessage(
+        'call-42',
+        'Привет',
+        'Ассистент',
+        'guest-1',
+      );
+      const packet = decode(euSendData) as Record<string, unknown>;
+      expect('clientMsgId' in packet).toBe(false);
+    });
+
+    it('без actor валидный clientMsgId тоже не попадает в пакет — та же граница, что и у построения msgId', async () => {
+      await service.sendRoomChatMessage(
+        'call-42',
+        'Привет',
+        'Ассистент',
+        undefined,
+        'abc123',
+      );
+      const packet = decode(euSendData) as Record<string, unknown>;
+      expect('clientMsgId' in packet).toBe(false);
+      expect(packet.msgId).toMatch(/^server_/);
+    });
+  });
+
   // actor: нужен буферу для own (см. RoomChatBufferService.read), но не
   // должен утечь ни в комнату (data-канал видят все участники, включая
   // гостей), ни в HTTP-ответ POST (его тоже мог бы прочитать кто угодно на
