@@ -158,4 +158,31 @@ describe('RoomAccessGuard', () => {
       guard.canActivate(ctxFor('call-1', `Bearer ${idToken}`)),
     ).rejects.toThrow(ForbiddenException);
   });
+
+  // Существующий хелпер `ctxFor` строит запрос внутри себя, поэтому добраться
+  // до него после вызова нельзя — здесь запрос нужен снаружи, чтобы прочитать
+  // `roomActor`.
+  const ctxWithReq = (req: any) =>
+    ({ switchToHttp: () => ({ getRequest: () => req }) }) as any;
+
+  it('кладёт в запрос отправителя из LiveKit-токена', async () => {
+    const req: any = {
+      params: { roomName: 'call-1' },
+      headers: { authorization: `Bearer ${livekitToken('call-1')}` },
+    };
+
+    await expect(guard.canActivate(ctxWithReq(req))).resolves.toBe(true);
+    expect(req.roomActor).toBe('guest-1');
+  });
+
+  it('кладёт в запрос отправителя из токена Taler ID', async () => {
+    prisma.publicRoom.findFirst.mockResolvedValue({ id: 'pr-1' });
+    const req: any = {
+      params: { roomName: 'call-1' },
+      headers: { authorization: `Bearer ${userToken('user-1')}` },
+    };
+
+    await expect(guard.canActivate(ctxWithReq(req))).resolves.toBe(true);
+    expect(req.roomActor).toBe('user-1');
+  });
 });
