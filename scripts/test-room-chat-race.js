@@ -313,46 +313,39 @@ async function main() {
       // содержит ЭТО сообщение (сервер успел положить его в ленту раньше,
       // чем пришло эхо или ответ на POST — воспроизводим сценарий I1 из
       // ревью буквально: "история приходит раньше эха и уже содержит
-      // сообщение").
+      // сообщение"). Бэкенд отдаёт clientMsgId отдельным полем для таких
+      // сообщений (backend-фикс после раунда 3) — включаем его в мок.
       await page.evaluate(() => {
         window.__historyReload = loadChatHistory();
       });
       await waitForPendingChatFetch(page, '(method) => method === "GET"');
       await resolveChatFetch(page, '(method) => method === "GET"', 200, {
-        messages: [{ msgId, name: 'RaceBot', text, ts: Date.now(), own: true }],
+        messages: [{ msgId, clientMsgId, name: 'RaceBot', text, ts: Date.now(), own: true }],
         seq: 3,
       });
       await page.evaluate(() => window.__historyReload);
 
-      // Гейт дедупликации теперь уже видел msgId (через историю). Раньше
-      // именно это глушило эхо через return до реконсиляции. Проверяем, что
-      // эхо всё равно доходит до починки состояния.
+      // История уже должна была сама подтвердить сообщение по clientMsgId —
+      // проверяем ДО прихода эха, что дубля нет и пузырь дотегирован.
+      const afterHistory = await readState(page, text);
+      assert(afterHistory.bubbleCount === 1, 'I1: история распознала своё сообщение — пузырь один, а не два');
+      assert(
+        afterHistory.bubbles[0] && afterHistory.bubbles[0].msgId === msgId,
+        'I1: история дотегировала пузырь настоящим msgId сама, не дожидаясь эха'
+      );
+      assert(afterHistory.pendingSize === 0, 'I1: история сняла запись из _pendingChatMsgs — эхо ей для этого не нужно');
+
+      // Эхо всё равно приходит следом (сервер шлёт его независимо от того,
+      // что клиент уже сам всё выяснил через историю) — избыточное, не
+      // должно ничего задвоить или сломать.
       await emitChatEcho(page, { clientMsgId, msgId, name: 'RaceBot', text });
       await resolveChatFetch(page, '(method) => method === "POST"', 201, { ts: Date.now(), seq: 3, msgId });
       await awaitLastSend(page);
 
       const state = await readState(page, text);
-      // Гарантия, которую даёт именно этот фикс: состояние не зависает и не
-      // портится, даже если гейт уже видел msgId раньше эха.
-      assert(state.pendingSize === 0, 'I1: запись в _pendingChatMsgs не зависла навсегда');
-      const own = state.bubbles.find((b) => b.className === 'chat-msg own');
-      assert(!!own, 'I1: есть хотя бы один пузырь, стилизованный как own (не потерялось)');
-      assert(!own || own.msgId === msgId, 'I1: свой пузырь дотегирован настоящим msgId, а не оставлен пустым');
-      assert(!own || !own.hasRetry, 'I1: свой пузырь не висит с пометкой "не отправлено"');
-      // Честно фиксируем известное ограничение: history.own-рендер не умеет
-      // сверяться с _pendingChatMsgs (в ленте нет clientMsgId, только msgId,
-      // см. commit 07ada9d) — поэтому в этом узком окне возможен ВТОРОЙ,
-      // визуально лишний пузырь от самой истории. Фикс не обещал убрать это,
-      // только — не терять состояние. Логируем факт, не проваливаем тест.
-      if (state.bubbleCount > 1) {
-        info(
-          'ИЗВЕСТНОЕ ОГРАНИЧЕНИЕ: history отрисовала свою копию до прихода эха (' +
-            state.bubbleCount +
-            ' пузыря вместо 1) — см. комментарий выше и отчёт'
-        );
-      } else {
-        info('дубля от истории в этом прогоне не случилось (' + state.bubbleCount + ' пузырь)');
-      }
+      assert(state.bubbleCount === 1, 'I1: после последующего избыточного эха пузырь всё ещё ровно один');
+      assert(state.pendingSize === 0, 'I1: _pendingChatMsgs остаётся пустым');
+      assert(state.bubbles[0] && !state.bubbles[0].hasRetry, 'I1: пузырь не помечен как неотправленный');
     }
 
     // ── Сценарий 4: отказ POST-а раньше эха ─────────────────────────────
