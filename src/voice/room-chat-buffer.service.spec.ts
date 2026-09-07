@@ -9,7 +9,7 @@ import {
  *  hitRateLimit), большего фейку тут не нужно. */
 interface FakeMulti {
   incr(key: string): FakeMulti;
-  expire(key: string, ttl: number): FakeMulti;
+  expire(key: string, ttl: number, mode?: 'NX'): FakeMulti;
   rpush(key: string, value: string): FakeMulti;
   ltrim(key: string, start: number, stop: number): FakeMulti;
   exec(): Promise<Array<[null, unknown]>>;
@@ -22,8 +22,28 @@ class FakeRedis {
   lists = new Map<string, string[]>();
   values = new Map<string, string>();
   expires = new Map<string, number>();
+  /** Виртуальные часы: тесты двигают их через advance(), не полагаясь на
+   *  реальное время — проверка границы окна не зависит от скорости прогона
+   *  тестов. */
+  now = 0;
+  private expiresAt = new Map<string, number>();
+
+  advance(seconds: number) {
+    this.now += seconds;
+  }
+
+  private evictIfExpired(key: string) {
+    const at = this.expiresAt.get(key);
+    if (at !== undefined && at <= this.now) {
+      this.values.delete(key);
+      this.lists.delete(key);
+      this.expires.delete(key);
+      this.expiresAt.delete(key);
+    }
+  }
 
   incr(key: string) {
+    this.evictIfExpired(key);
     const next = Number(this.values.get(key) ?? 0) + 1;
     this.values.set(key, String(next));
     return Promise.resolve(next);
@@ -59,9 +79,15 @@ class FakeRedis {
     void count;
     return Promise.resolve(1);
   }
-  expire(key: string, ttl: number) {
+  expire(key: string, ttl: number, mode?: 'NX') {
+    if (mode === 'NX' && this.expiresAt.has(key)) {
+      // NX: TTL уже стоит — не трогаем. Ровно семантика фиксированного
+      // окна, которую проверяет тест про границу окна ниже.
+      return Promise.resolve(0);
+    }
     this.expires.set(key, ttl);
-    return Promise.resolve();
+    this.expiresAt.set(key, this.now + ttl);
+    return Promise.resolve(1);
   }
 
   multi(): FakeMulti {
@@ -71,8 +97,8 @@ class FakeRedis {
         ops.push(() => this.incr(key));
         return chain;
       },
-      expire: (key, ttl) => {
-        ops.push(() => this.expire(key, ttl));
+      expire: (key, ttl, mode) => {
+        ops.push(() => this.expire(key, ttl, mode));
         return chain;
       },
       rpush: (key, value) => {
@@ -145,9 +171,16 @@ describe('RoomChatBufferService', () => {
     await buffer.append('call-42', entry('раз'));
     await buffer.append('call-42', entry('два'));
 
-    const page = await buffer.read('call-42', 2);
-    expect(page.messages).toEqual([]);
-    expect(page.truncated).toBe(false);
+    const atLatest = await buffer.read('call-42', 2);
+    expect(atLatest.messages).toEqual([]);
+    expect(atLatest.truncated).toBe(false);
+
+    // Курсор дальше последнего номера — клиент утверждает, что видел то,
+    // чего ещё не было. Такое не должно случаться в норме, но не должно и
+    // выглядеть как потерянная история.
+    const pastLatest = await buffer.read('call-42', 5);
+    expect(pastLatest.messages).toEqual([]);
+    expect(pastLatest.truncated).toBe(false);
   });
 
   it('на пустой комнате отдаёт пустую ленту, а не падает', async () => {
@@ -204,6 +237,20 @@ describe('RoomChatBufferService', () => {
     const page = await buffer.read('call-42');
     expect(page.messages.map((m) => m.text)).toEqual(['раз', 'два']);
     expect(page.seq).toBe(2);
+  });
+
+  it('пропускает запись без числового seq вместо падения сортировки', async () => {
+    await buffer.append('call-42', entry('раз'));
+    // Синтаксически валидный JSON, но без seq — JSON.parse его пропустит,
+    // а вот компаратор сортировки на нечисловом seq уйдёт в NaN, и latest
+    // может стать undefined. То же рассуждение, что и для битой строки.
+    redis.lists
+      .get('roomchat:call-42:log')!
+      .push(JSON.stringify({ msgId: 'm_x', text: 'без seq', name: 'X' }));
+
+    const page = await buffer.read('call-42');
+    expect(page.messages.map((m) => m.text)).toEqual(['раз']);
+    expect(page.seq).toBe(1);
   });
 
   it('remove снимает запись из ленты', async () => {
@@ -271,5 +318,18 @@ describe('RoomChatBufferService', () => {
     expect(redis.expires.get('roomchat:call-42:rate:guest-1')).toBe(
       RoomChatBufferService.rateWindowSeconds,
     );
+  });
+
+  it('не блокирует отправителя, укладывающегося в потолок, на границе окна', async () => {
+    // Раз в 2 секунды — вдвое медленнее разрешённых 10 за 10 секунд, 11
+    // сообщений подряд пересекают границу окна дважды (на 10-й и 20-й
+    // секунде). Без NX EXPIRE продлевался на каждом сообщении, ключ никогда
+    // не истекал, и счётчик рос без остановки — к 20-й секунде (11-е
+    // сообщение) отправитель словил бы блокировку, хотя ни разу не превысил
+    // 10 сообщений за настоящее десятисекундное окно.
+    for (let i = 0; i < 11; i++) {
+      expect(await buffer.hitRateLimit('call-42', 'guest-1')).toBe(false);
+      redis.advance(2);
+    }
   });
 });

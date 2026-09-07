@@ -72,25 +72,33 @@ export class RoomChatBufferService {
     entry: Omit<RoomChatEntry, 'seq'>,
   ): Promise<RoomChatEntry> {
     const client = this.redis.getClient();
-    // INCR остаётся вне транзакции не для простоты, а потому что его
-    // результат нужен ДО того, как соберутся остальные команды: seq — часть
-    // тела сообщения, а очередь MULTI/EXEC в ioredis собирается на клиенте
-    // вслепую — результат INCR внутри неё недоступен, пока не выполнится вся
-    // пачка. Значит, сериализовать stored для RPUSH можно только после того,
-    // как INCR уже отработал сам по себе.
-    const seq = await client.incr(this.seqKey(roomName));
+    // INCR и EXPIRE счётчика — одной транзакцией, отдельной от записи самого
+    // сообщения. Прочитать результат INCR из середины чужой транзакции
+    // нельзя (MULTI/EXEC не отдаёт промежуточные результаты клиенту, пока не
+    // выполнится вся пачка), а seq нужен ДО того, как соберётся тело
+    // сообщения для RPUSH — поэтому у счётчика своя пара INCR+EXPIRE. Но это
+    // не повод оставлять INCR голым: без парного EXPIRE в той же транзакции
+    // процесс, умерший между двумя вызовами, оставляет ключ счётчика без TTL
+    // навсегда, если в комнату больше никто не напишет, — ровно та дыра,
+    // ради которой транзакции и вводили.
+    const seqResult = await client
+      .multi()
+      .incr(this.seqKey(roomName))
+      .expire(this.seqKey(roomName), RoomChatBufferService.ttlSeconds)
+      .exec();
+    const seq = Number(seqResult?.[0]?.[1] ?? 0);
     const stored: RoomChatEntry = { ...entry, seq };
-    // А вот сама запись сообщения — одной транзакцией: RPUSH, LTRIM и оба
-    // EXPIRE. Раньше это были 4 последовательных вызова, и на последнем
-    // сообщении комнаты обрыв связи между любыми двумя из них навсегда
-    // оставлял список без TTL — чинить было некому, ведь «следующей записи»
-    // могло и не случиться.
+    // Запись самого сообщения — тоже одной транзакцией: RPUSH, LTRIM и
+    // EXPIRE. Раньше (до выноса INCR) это были 4 последовательных вызова, и
+    // обрыв связи между любыми двумя из них навсегда оставлял список без
+    // TTL — чинить было некому, ведь «следующей записи» могло и не
+    // случиться. Круговых обходов по-прежнему два: один на счётчик, один на
+    // список, — просто внутри каждого больше нет дыры.
     await client
       .multi()
       .rpush(this.logKey(roomName), JSON.stringify(stored))
       .ltrim(this.logKey(roomName), -RoomChatBufferService.maxMessages, -1)
       .expire(this.logKey(roomName), RoomChatBufferService.ttlSeconds)
-      .expire(this.seqKey(roomName), RoomChatBufferService.ttlSeconds)
       .exec();
     return stored;
   }
@@ -112,7 +120,11 @@ export class RoomChatBufferService {
         .getClient()
         .lrem(this.logKey(roomName), 1, JSON.stringify(entry));
     } catch (e) {
-      this.log.debug(`не удалось снять запись ${entry.msgId} из ленты: ${e}`);
+      // warn, не debug: сюда попадает отказ самого хранилища (обрыв,
+      // таймаут). Законное «строка не совпала» (включая уже вытесненную по
+      // LTRIM запись) исключения не бросает — оно тихо возвращает 0 веткой
+      // выше, и это осознанно не логируется.
+      this.log.warn(`не удалось снять запись ${entry.msgId} из ленты: ${e}`);
       return 0;
     }
   }
@@ -125,7 +137,12 @@ export class RoomChatBufferService {
     const entries: RoomChatEntry[] = [];
     for (const line of raw) {
       try {
-        entries.push(JSON.parse(line) as RoomChatEntry);
+        const parsed = JSON.parse(line) as RoomChatEntry;
+        // Синтаксически валидная строка без числового seq — та же угроза
+        // ленте, что и битая строка: компаратор сортировки ниже уйдёт в
+        // NaN, а latest может стать undefined. Пропускаем так же тихо.
+        if (typeof parsed.seq !== 'number') continue;
+        entries.push(parsed);
       } catch {
         // Одна испорченная строка не должна уносить всю ленту.
       }
@@ -162,18 +179,19 @@ export class RoomChatBufferService {
   async hitRateLimit(roomName: string, actor: string): Promise<boolean> {
     const client = this.redis.getClient();
     const key = `roomchat:${roomName}:rate:${actor}`;
-    // INCR и EXPIRE — одной транзакцией, как в DCR-лимитере (src/main.ts):
-    // порознь есть окно, где EXPIRE не долетел (обрыв связи, failover
-    // Sentinel, смерть процесса между вызовами) — ключ остаётся без TTL, а
-    // отправитель заглушён в этой комнате навсегда. TTL сдвигается на
-    // каждом сообщении, а не только на первом: со скользящим окном не нужно
-    // отдельно помнить, ставили мы уже TTL или нет, а отправитель, который
-    // перестал писать, всё равно остынет через rateWindowSeconds после
-    // последнего сообщения.
+    // INCR и EXPIRE — одной транзакцией: порознь есть окно, где EXPIRE не
+    // долетел (обрыв связи, failover Sentinel, смерть процесса между
+    // вызовами) и ключ остаётся без TTL навсегда. EXPIRE идёт с NX — окно
+    // фиксированное, а не скользящее: TTL ставится один раз при первом
+    // сообщении окна и не продлевается последующими. Без NX (безусловный
+    // EXPIRE на каждом вызове) ключ не истекает, пока отправитель хоть
+    // изредка пишет, — тогда счётчик копится бесконечно и в итоге глушит
+    // даже человека, который укладывается в лимит, просто пишет короткими
+    // репликами («да», «ок», «+1») дольше одного окна.
     const results = await client
       .multi()
       .incr(key)
-      .expire(key, RoomChatBufferService.rateWindowSeconds)
+      .expire(key, RoomChatBufferService.rateWindowSeconds, 'NX')
       .exec();
     const n = Number(results?.[0]?.[1] ?? 0);
     return n > RoomChatBufferService.rateLimit;
