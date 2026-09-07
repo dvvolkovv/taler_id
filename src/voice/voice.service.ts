@@ -43,6 +43,59 @@ const AI_AGENT_URL = process.env.AI_AGENT_URL || 'http://localhost:3100';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const BASE_URL = process.env.BASE_URL || 'https://id.taler.tirol';
 
+/** Формат допустимого клиентского id сообщения чата: непустая строка не
+ *  длиннее 64 символов из латиницы/цифр/подчёркивания/дефиса. */
+const CLIENT_MSG_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * Строит итоговый `msgId` сообщения чата комнаты.
+ *
+ * Если у отправителя (`actor`) есть валидный `clientMsgId`, итоговый id
+ * строится в пространстве имён, производном от самого отправителя:
+ * `c_<8 hex символов sha256(actor)>_<clientMsgId>`. Так клиент узнаёт свой
+ * `msgId` ДО того, как отправит сообщение (может отрисовать пузырь сразу и
+ * пометить id обработанным раньше, чем придёт echo из data-канала —
+ * `sendRoomChatMessage` шлёт `sendData` до того, как этот HTTP-ответ
+ * долетит до клиента, см. её докстринг) — а два разных отправителя
+ * физически не могут произвести одинаковый итоговый id, даже сговорившись
+ * на одном `clientMsgId`: подделать чужое пространство имён значило бы
+ * найти прообраз sha256 чужого `actor`, что бессмысленно.
+ *
+ * Негодный `clientMsgId` — не строка, пустая строка, длиннее 64 символов
+ * или с символами вне `[A-Za-z0-9_-]` — не отклоняет запрос: он молча
+ * заменяется серверным `server_<uuid>`, как если бы поля не было вовсе.
+ * Клиент с кривым id должен получить работающий чат, а не 400.
+ *
+ * Без `actor` (`sendRoomChatMessage` вызывается и без него — например от
+ * лица ассистента, см. её докстринг) `clientMsgId` игнорируется целиком:
+ * пространство имён строить не из чего, а взять клиентский id как есть
+ * означало бы открыть ту самую дыру с подделкой, которую всё это призвано
+ * закрыть.
+ *
+ * Экспортирована (а не приватный метод класса) по тому же соображению, что
+ * и `roomActorFactory` в `room-actor.decorator.ts`: логика с двумя разными
+ * последствиями отказа (тихий фолбэк vs пространство имён) должна быть
+ * проверяема тестом напрямую, без поднятия всего VoiceService.
+ */
+export function buildChatMsgId(
+  actor: string | undefined,
+  clientMsgId?: unknown,
+): string {
+  if (
+    actor &&
+    typeof clientMsgId === 'string' &&
+    CLIENT_MSG_ID_PATTERN.test(clientMsgId)
+  ) {
+    const namespace = crypto
+      .createHash('sha256')
+      .update(actor)
+      .digest('hex')
+      .slice(0, 8);
+    return `c_${namespace}_${clientMsgId}`;
+  }
+  return `server_${uuidv4()}`;
+}
+
 @Injectable()
 export class VoiceService {
   private readonly log = new Logger(VoiceService.name);
@@ -249,7 +302,21 @@ export class VoiceService {
    * `actor` — необязательный идентификатор отправителя для потолка частоты
    * (`RoomChatBufferService.hitRateLimit`). Без него потолок не проверяется:
    * серверные вызовы (ассистент) не обязаны его передавать, а вот ручка для
-   * гостя/участника — обязана.
+   * гостя/участника — обязана. `actor` также попадает в саму запись ленты
+   * (`RoomChatEntry.actor`) — так `RoomChatBufferService.read` может
+   * посчитать `own` для того, кто её потом читает; наружу (ни в пакет
+   * data-канала, ни в HTTP-ответ этого метода) actor не идёт — см. сборку
+   * `packet` ниже, она собрана явным списком полей, а не спредом `stored`.
+   *
+   * `clientMsgId` — необязательный клиентский id сообщения (см.
+   * `buildChatMsgId`). Если он проходит проверку формата и есть `actor`,
+   * итоговый `msgId` строится из него в пространстве имён отправителя —
+   * клиент, отправляющий сообщение, знает свой будущий `msgId` заранее и
+   * может пометить его обработанным ДО того, как придёт echo из data-канала
+   * (сначала уходит `sendData` в комнату, потом резолвится этот HTTP-ответ —
+   * так что полагаться на ответ, чтобы узнать msgId, физически поздно).
+   * Иначе (невалидный формат, нет actor) — обычный `server_<uuid>`, как
+   * раньше.
    *
    * Клиент SFU берётся через `sfuFor`, а не из `this.rooms` напрямую —
    * ради симметрии с `deleteRoom` и `joinRoom`. Сама CIS-развилка сейчас
@@ -273,6 +340,7 @@ export class VoiceService {
     text: string,
     name: string,
     actor?: string,
+    clientMsgId?: unknown,
   ): Promise<{ ts: number; seq: number; msgId: string }> {
     const trimmed = typeof text === 'string' ? text.trim() : '';
     if (!trimmed) throw new BadRequestException('text is empty');
@@ -291,10 +359,11 @@ export class VoiceService {
         );
       }
       stored = await this.chatBuffer.append(roomName, {
-        msgId: `server_${uuidv4()}`,
+        msgId: buildChatMsgId(actor, clientMsgId),
         text: trimmed,
         name: who,
         ts: Date.now(),
+        actor,
       });
     } catch (e) {
       // 429 выше — законный, ожидаемый отказ: пробрасываем как есть. Всё
@@ -312,7 +381,22 @@ export class VoiceService {
       );
     }
 
-    const packet = { type: 'chat_message', ...stored };
+    // Явный список полей, а не `{ type: 'chat_message', ...stored }`: спред
+    // разложил бы и `actor` — участники комнаты (включая гостей) не должны
+    // получить идентификатор отправителя через data-канал (см. докстринг
+    // RoomChatEntry.actor). Список полей дублирует форму RoomChatEntry
+    // намеренно: новое чувствительное поле в записи ленты не должно суметь
+    // просочиться в комнату молча, просто потому что кто-то расширил
+    // `stored` спредом где-то ещё, — на этом месте расширение обязано быть
+    // явным решением, а не побочным эффектом.
+    const packet = {
+      type: 'chat_message',
+      msgId: stored.msgId,
+      text: stored.text,
+      name: stored.name,
+      ts: stored.ts,
+      seq: stored.seq,
+    };
 
     try {
       await this.sfuFor(roomName).client.sendData(
@@ -354,11 +438,19 @@ export class VoiceService {
 
   /**
    * Лента комнаты для клиента и внешнего ассистента. Явный тип возврата
-   * не для красоты: это будущий HTTP-контракт (GET-ручка следующей задачи),
-   * и смена формы страницы внутри буфера не должна молча поменять ответ API.
+   * не для красоты: это HTTP-контракт GET-ручки, и смена формы страницы
+   * внутри буфера не должна молча поменять ответ API.
+   *
+   * `actor` — идентификатор запрашивающего (контроллер передаёт
+   * `@RoomActor()`), нужен только чтобы `chatBuffer.read` посчитал `own` на
+   * каждом сообщении; сам метод его больше никак не использует.
    */
-  async readRoomChat(roomName: string, since?: number): Promise<RoomChatPage> {
-    return this.chatBuffer.read(roomName, since);
+  async readRoomChat(
+    roomName: string,
+    since?: number,
+    actor?: string,
+  ): Promise<RoomChatPage> {
+    return this.chatBuffer.read(roomName, since, actor);
   }
 
   async endCallLog(roomName: string): Promise<void> {

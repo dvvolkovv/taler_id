@@ -172,6 +172,14 @@ describe('RoomChatBufferService', () => {
     ts: 1788767280107,
   });
 
+  /** Тот же формат, что entry(), плюс actor — для тестов own/actor ниже.
+   *  Отдельный хелпер, а не необязательный параметр у entry(), чтобы не
+   *  трогать вызовы entry() в ~30 уже существующих тестах выше. */
+  const entryWithActor = (text: string, actor: string) => ({
+    ...entry(text),
+    actor,
+  });
+
   beforeEach(() => {
     redis = new FakeRedis();
     buffer = new RoomChatBufferService({ getClient: () => redis } as any);
@@ -529,6 +537,92 @@ describe('RoomChatBufferService', () => {
       const page = await buffer.read('call-42', staleCursor);
       expect(page.truncated).toBe(true);
       expect(page.messages.map((m) => m.text)).toEqual(['три']);
+    });
+  });
+
+  // actor/own: actor хранится в записи (нужен sendRoomChatMessage для
+  // потолка и read() для own), но гостю комнаты, читающему через GET,
+  // сырой actor уходить не должен — по нему можно было бы собрать
+  // идентификаторы участников (guest-<hex>, голый uuid, uuid#хеш-устройства).
+  // read() поэтому заменяет его на own: сравнение с actor'ом самого
+  // запрашивающего.
+  describe('actor / own', () => {
+    it('append() возвращает actor в записи, если он был передан', async () => {
+      const stored = await buffer.append(
+        'call-42',
+        entryWithActor('раз', 'guest-1'),
+      );
+      expect(stored.actor).toBe('guest-1');
+    });
+
+    it('read() ставит own:true своим сообщениям и own:false чужим — сравнение по actor из round-trip через Redis, не по ссылке', async () => {
+      await buffer.append('call-42', entryWithActor('моё', 'guest-1'));
+      await buffer.append('call-42', entryWithActor('чужое', 'guest-2'));
+
+      const page = await buffer.read('call-42', undefined, 'guest-1');
+      expect(page.messages.map((m) => [m.text, m.own])).toEqual([
+        ['моё', true],
+        ['чужое', false],
+      ]);
+    });
+
+    it('read() без requestingActor помечает всё как own:false, даже если у сообщения есть actor — запрос без актора не имеет права выдавать чужое за своё', async () => {
+      await buffer.append('call-42', entryWithActor('раз', 'guest-1'));
+
+      const page = await buffer.read('call-42');
+      expect(page.messages[0].own).toBe(false);
+    });
+
+    it('легаси-запись без поля actor никогда не own, даже для запроса с actor', async () => {
+      // entry() (без actor) — так выглядели записи до этой задачи, и так
+      // выглядят сообщения от ассистента (sendRoomChatMessage зовётся без
+      // actor). Пустое пространство имён не должно случайно совпасть с
+      // запрашивающим.
+      await buffer.append('call-42', entry('без автора'));
+
+      const page = await buffer.read('call-42', undefined, 'guest-1');
+      expect(page.messages[0].own).toBe(false);
+    });
+
+    it('сообщение без actor, прочитанное запросом без requestingActor, — own:false, а не true из-за undefined === undefined', async () => {
+      // Отдельный, самый опасный случай, который два теста выше НЕ ловят:
+      // там либо у сообщения actor есть (own:false и без наивного
+      // сравнения — 'guest-1' !== undefined), либо у запроса actor есть
+      // (снова own:false без всякой защиты — undefined !== 'guest-1').
+      // Наивное сравнение `actor === requestingActor` без явной проверки
+      // `actor !== undefined` совпало бы именно здесь: undefined ===
+      // undefined — true. Мутация, убирающая эту проверку, зелена на обоих
+      // тестах выше и ловится только тут.
+      await buffer.append('call-42', entry('от ассистента')); // без actor
+
+      const page = await buffer.read('call-42'); // без requestingActor
+      expect(page.messages[0].own).toBe(false);
+    });
+
+    it('read() не отдаёт actor наружу — ни через toHaveProperty, ни в полном наборе ключей ответа', async () => {
+      await buffer.append('call-42', entryWithActor('раз', 'guest-1'));
+
+      const page = await buffer.read('call-42', undefined, 'guest-1');
+      expect(page.messages[0]).not.toHaveProperty('actor');
+      // Полный набор ключей — сильнее, чем not.toHaveProperty: ловит и
+      // "own не добавили" (пропущенный ключ), и "actor переименовали, а не
+      // убрали" одновременно.
+      expect(Object.keys(page.messages[0]).sort()).toEqual(
+        ['msgId', 'name', 'own', 'seq', 'text', 'ts'].sort(),
+      );
+    });
+
+    it('own считается верно и в ветке с курсором (since), не только в полной ленте', async () => {
+      // read() строит ответ в двух местах (since === undefined и since
+      // задан) — тест на полную ленту выше не проверяет вторую ветку.
+      await buffer.append('call-42', entryWithActor('моё', 'guest-1')); // seq 1
+      await buffer.append('call-42', entryWithActor('чужое', 'guest-2')); // seq 2
+
+      const page = await buffer.read('call-42', 0, 'guest-1');
+      expect(page.messages.map((m) => [m.text, m.own])).toEqual([
+        ['моё', true],
+        ['чужое', false],
+      ]);
     });
   });
 });
