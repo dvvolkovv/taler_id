@@ -5,8 +5,9 @@ import {
 
 /** Минимальная копия ioredis-транзакции для FakeRedis: команды копятся в
  *  очередь и выполняются одним проходом на exec(), возвращая [err, result]
- *  на каждую — этого достаточно для двух транзакций буфера (append,
- *  hitRateLimit), большего фейку тут не нужно. */
+ *  на каждую — этого достаточно для трёх транзакций буфера (append
+ *  открывает две: на счётчик и на список; hitRateLimit — одну), большего
+ *  фейку тут не нужно. */
 interface FakeMulti {
   incr(key: string): FakeMulti;
   expire(key: string, ttl: number, mode?: 'NX'): FakeMulti;
@@ -49,6 +50,7 @@ class FakeRedis {
     return Promise.resolve(next);
   }
   get(key: string) {
+    this.evictIfExpired(key);
     return Promise.resolve(this.values.get(key) ?? null);
   }
   rpush(key: string, value: string) {
@@ -66,6 +68,7 @@ class FakeRedis {
     return Promise.resolve();
   }
   lrange(key: string, start: number, stop: number) {
+    this.evictIfExpired(key);
     const list = this.lists.get(key) ?? [];
     return Promise.resolve(
       stop === -1 ? list.slice(start) : list.slice(start, stop + 1),
@@ -216,7 +219,15 @@ describe('RoomChatBufferService', () => {
 
   it('сообщает truncated, если лента истекла, а счётчик ушёл вперёд', async () => {
     await buffer.append('call-42', entry('раз'));
-    redis.lists.clear(); // TTL списка вышел, счётчик ещё жив
+    // Список и счётчик — разные ключи; append() выставляет им одинаковый
+    // TTL, но в проде они способны разойтись (эвикшн по памяти, частичная
+    // потеря данных). Эмулируем это через настоящие часы фейка, а не руками
+    // очищая lists, — так тест идёт через тот же evictIfExpired, что и
+    // боевое чтение: короткий TTL только списку, потом сдвигаем часы за
+    // него, но не за (гораздо более длинный) TTL счётчика.
+    await redis.expire('roomchat:call-42:log', 1);
+    redis.advance(2);
+
     const page = await buffer.read('call-42', 0);
     expect(page.messages).toEqual([]);
     expect(page.truncated).toBe(true);

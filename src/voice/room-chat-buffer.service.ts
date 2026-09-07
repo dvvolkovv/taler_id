@@ -86,7 +86,19 @@ export class RoomChatBufferService {
       .incr(this.seqKey(roomName))
       .expire(this.seqKey(roomName), RoomChatBufferService.ttlSeconds)
       .exec();
-    const seq = Number(seqResult?.[0]?.[1] ?? 0);
+    // Слот транзакции может прийти с ошибкой (например WRONGTYPE), и ioredis
+    // на это не бросает — он резолвит exec() с [Error, null] в нужном слоте.
+    // `?? 0` здесь недопустим: INCR никогда не возвращает 0 законно, поэтому
+    // 0 — всегда аномалия, и молча писать сообщение под нулевым seq хуже,
+    // чем громко отказать: тихая порча нумерации сломает сортировку и
+    // truncated для всех, кто читает эту комнату после.
+    const seqSlot = seqResult?.[0];
+    if (!seqSlot || seqSlot[0] || typeof seqSlot[1] !== 'number') {
+      throw new Error(
+        `не удалось получить номер сообщения для ${roomName}: ${seqSlot?.[0] ?? 'нет результата'}`,
+      );
+    }
+    const seq = seqSlot[1];
     const stored: RoomChatEntry = { ...entry, seq };
     // Запись самого сообщения — тоже одной транзакцией: RPUSH, LTRIM и
     // EXPIRE. Раньше (до выноса INCR) это были 4 последовательных вызова, и
@@ -193,6 +205,12 @@ export class RoomChatBufferService {
       .incr(key)
       .expire(key, RoomChatBufferService.rateWindowSeconds, 'NX')
       .exec();
+    // `?? 0` здесь, в отличие от append(), — осознанный выбор, а не
+    // недосмотр: цена ошибки другая. В append() нулевой seq портит
+    // нумерацию для всех, кто прочитает комнату позже, — это обязано
+    // упасть громко. Здесь худшее последствие сбойного слота — пропущенное
+    // разовое превышение потолка одним отправителем; блокировать законное
+    // сообщение из-за отказа самого лимитера было бы дороже этой ошибки.
     const n = Number(results?.[0]?.[1] ?? 0);
     return n > RoomChatBufferService.rateLimit;
   }
