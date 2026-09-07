@@ -883,6 +883,9 @@
     // LiveKit grant for this room — also our proof of entitlement when calling
     // room-scoped backend routes such as the recorder (see RoomAccessGuard).
     let lkToken = '';
+    // Highest chat seq we've seen (from history load or our own posts) — lets
+    // us know where the live feed picked up relative to the loaded history.
+    let chatSeq = 0;
     let roomCode = '';
     let roomTitle = 'Голосовая комната';
     // Rooms are entered muted — see joinRoom().
@@ -1246,6 +1249,16 @@
               // Имя в таком пакете всегда лежит в msg.name.
               const who = participant ? getDisplayName(participant) : '';
               appendChatMessage(msg.name || who || 'Taler ID', msg.text, msg.ts || Date.now(), false);
+              // Тег msgId на только что созданный пузырь — не часть протокола,
+              // это опора для sendChatMessage(): её собственное живое эхо
+              // (сервер шлёт chat_message всем, включая автора) на DEV
+              // стабильно обгоняет ответ на её же POST, и без метки нечем
+              // будет опознать, какой пузырь перекрасить в «своё» вместо
+              // рисования дубля. Сам приём пакета этим не меняется.
+              if (msg.msgId) {
+                const last = document.getElementById('chat-messages').lastElementChild;
+                if (last) last.dataset.msgId = msg.msgId;
+              }
             }
             // ── Recording consent protocol ──
             if (msg.type === 'recording_consent_request' && participant) {
@@ -1345,6 +1358,14 @@
         }
 
         await room.connect(getLivekitUrl(), token);
+        // Дёргаем историю чата первой же строкой после успешного connect(),
+        // без await. Пакеты DataReceived физически не могут идти раньше, чем
+        // room.connect() зарезолвится, а до этой строки в коде нет ни одного
+        // await — значит между резолвом connect() и стартом GET-запроса за
+        // историей управление ни разу не уходило браузеру, и обработчик
+        // chat_message не мог отработать раньше, чем уйдёт этот запрос. Раз
+        // не блокируем — вход в комнату не ждёт ленту.
+        loadChatHistory();
         // Unblock audio playback immediately while user gesture is still active
         room.startAudio().catch(() => {});
         // Safari + Chrome: when the tab becomes hidden the browser can suspend the AudioContext
@@ -3395,33 +3416,71 @@
       }
     }
 
-    function sendChatMessage() {
+    async function sendChatMessage() {
       if (!room) return;
       const input = document.getElementById('chat-input');
       const text = input.value.trim();
       if (!text) return;
       input.value = '';
 
-      const msg = {
-        type: 'chat_message',
-        text: text,
-        name: getDisplayName(room.localParticipant),
-        ts: Date.now(),
-      };
-
-      // broadcastData проставляет msgId — без него приёмная дедупликация
-      // не работает, а отправителей теперь трое: веб, приложение и сервер.
-      // Своё сообщение рисуем только если пакет ушёл: иначе неотправленное
-      // выглядело бы отправленным.
-      if (!broadcastData(msg)) return;
-
-      appendChatMessage(msg.name, text, msg.ts, true);
+      const name = getDisplayName(room.localParticipant);
+      try {
+        const res = await fetch(`${API_BASE}/voice/rooms/${room.name}/chat`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${lkToken}`,
+          },
+          body: JSON.stringify({ text, name }),
+        });
+        if (!res.ok) {
+          const err = new Error('HTTP ' + res.status);
+          err.status = res.status;
+          throw err;
+        }
+        const data = await res.json();
+        // Сервер рассылает пакет всем участникам, включая автора. Ожидание
+        // было — успеть пометить id обработанным до прихода эха. На деле на
+        // DEV эхо стабильно приходит РАНЬШЕ ответа на этот же POST (проверено
+        // руками дважды подряд: живой data-channel уже открыт, а это —
+        // отдельный HTTP round-trip). Поэтому: если id уже видели, значит эхо
+        // уже нарисовало пузырь как чужой — перекрашиваем его в «своё» вместо
+        // второй копии; иначе (ожидаемый порядок) помечаем и рисуем сами.
+        if (data.msgId && _processedMsgIds.has(data.msgId)) {
+          const el = document.querySelector('.chat-msg[data-msg-id="' + CSS.escape(data.msgId) + '"]');
+          if (el) {
+            el.classList.remove('other');
+            el.classList.add('own');
+          } else {
+            // Не нашли отрисованный эхом пузырь (например, id вытеснили из
+            // _processedMsgIds переполнением дедуп-сета) — рисуем сами, чтобы
+            // не потерять сообщение молча.
+            appendChatMessage(name, text, data.ts || Date.now(), true, false, data.msgId);
+          }
+        } else {
+          if (data.msgId) _processedMsgIds.add(data.msgId);
+          appendChatMessage(name, text, data.ts || Date.now(), true, false, data.msgId);
+        }
+        if (typeof data.seq === 'number') chatSeq = Math.max(chatSeq, data.seq);
+      } catch (e) {
+        // Неотправленное не должно выглядеть отправленным: возвращаем текст
+        // в поле, чтобы человек мог повторить, не набирая заново.
+        input.value = text;
+        // 429 — это временный потолок отправителя (10 сообщений/10с), а не
+        // поломка сервиса; отдельная честная фраза без выдуманного отсчёта
+        // до разблокировки (сервер его не сообщает).
+        const message = e.status === 429
+          ? 'Слишком много сообщений подряд. Подождите немного.'
+          : 'Сообщение не отправлено';
+        showNotification(message, 'error');
+      }
     }
 
-    function appendChatMessage(name, text, ts, own) {
+    function appendChatMessage(name, text, ts, own, silent, msgId) {
       const msgs = document.getElementById('chat-messages');
       const div = document.createElement('div');
       div.className = 'chat-msg ' + (own ? 'own' : 'other');
+      if (msgId) div.dataset.msgId = msgId;
 
       const nameEl = document.createElement('div');
       nameEl.className = 'chat-msg-name';
@@ -3441,9 +3500,34 @@
       msgs.appendChild(div);
       msgs.scrollTop = msgs.scrollHeight;
 
-      if (!own && !chatOpen) {
+      if (!own && !chatOpen && !silent) {
         chatUnread++;
         updateChatBadge();
+      }
+    }
+
+    /** Лента встречи до нашего входа. Грузится один раз сразу после connect —
+     *  до первого живого пакета, иначе старые сообщения легли бы ниже новых. */
+    async function loadChatHistory() {
+      if (!room) return;
+      try {
+        const res = await fetch(`${API_BASE}/voice/rooms/${room.name}/chat`, {
+          headers: { Authorization: `Bearer ${lkToken}` },
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        for (const m of data.messages || []) {
+          if (m.msgId) {
+            if (_processedMsgIds.has(m.msgId)) continue;
+            _processedMsgIds.add(m.msgId);
+          }
+          appendChatMessage(m.name, m.text, m.ts, false, true, m.msgId);
+        }
+        chatSeq = Math.max(chatSeq, data.seq || 0);
+      } catch (e) {
+        // История — приятное дополнение, а не условие работы чата: молча
+        // остаёмся без неё, живые сообщения продолжают приходить.
+        console.warn('chat history failed', e);
       }
     }
 
