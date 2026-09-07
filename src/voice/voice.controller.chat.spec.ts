@@ -43,11 +43,16 @@ describe('VoiceController — чат комнаты', () => {
       );
 
       expect(service.sendRoomChatMessage).toHaveBeenCalledTimes(1);
+      // 5-й аргумент (clientMsgId) — undefined, тела без него: явный
+      // trailing-undefined в ожидании обязателен, toHaveBeenCalledWith
+      // различает "аргумента не было" и "аргумент undefined" по длине
+      // массива вызова.
       expect(service.sendRoomChatMessage).toHaveBeenCalledWith(
         'call-42',
         'Привет',
         'Гость',
         'guest-abc123',
+        undefined,
       );
     });
 
@@ -72,6 +77,7 @@ describe('VoiceController — чат комнаты', () => {
         'Привет',
         'Гость',
         'user-9f8e#device-ab12',
+        undefined,
       );
     });
 
@@ -92,6 +98,7 @@ describe('VoiceController — чат комнаты', () => {
         'Привет',
         'Гость',
         undefined,
+        undefined,
       );
     });
 
@@ -109,6 +116,7 @@ describe('VoiceController — чат комнаты', () => {
         '',
         '',
         'actor-1',
+        undefined,
       );
     });
 
@@ -126,6 +134,29 @@ describe('VoiceController — чат комнаты', () => {
         '',
         '',
         'actor-1',
+        undefined,
+      );
+    });
+
+    it('clientMsgId из тела уходит в сервис пятым аргументом', async () => {
+      service.sendRoomChatMessage.mockResolvedValue({
+        ts: 1,
+        seq: 2,
+        msgId: 'c_abcd1234_local-1',
+      });
+
+      await controller.sendRoomChat(
+        'call-42',
+        { text: 'Привет', name: 'Гость', clientMsgId: 'local-1' },
+        'guest-abc123',
+      );
+
+      expect(service.sendRoomChatMessage).toHaveBeenCalledWith(
+        'call-42',
+        'Привет',
+        'Гость',
+        'guest-abc123',
+        'local-1',
       );
     });
 
@@ -153,7 +184,14 @@ describe('VoiceController — чат комнаты', () => {
 
       await controller.readRoomChat('call-42');
 
-      expect(service.readRoomChat).toHaveBeenCalledWith('call-42', undefined);
+      // 3-й аргумент (actor) — тоже undefined: декоратор в этом вызове не
+      // участвует (controller дёрнут напрямую), явный trailing-undefined
+      // обязателен по той же причине, что и в тестах sendRoomChat выше.
+      expect(service.readRoomChat).toHaveBeenCalledWith(
+        'call-42',
+        undefined,
+        undefined,
+      );
     });
 
     it('?since=5 зовёт сервис числом 5, а не строкой "5"', async () => {
@@ -167,7 +205,11 @@ describe('VoiceController — чат комнаты', () => {
 
       // toHaveBeenCalledWith сравнивает по значению И типу — если бы разбор
       // курсора не преобразовал строку в число, '5' !== 5 провалил бы тест.
-      expect(service.readRoomChat).toHaveBeenCalledWith('call-42', 5);
+      expect(service.readRoomChat).toHaveBeenCalledWith(
+        'call-42',
+        5,
+        undefined,
+      );
     });
 
     it.each(['abc', '-1'])(
@@ -181,7 +223,11 @@ describe('VoiceController — чат комнаты', () => {
 
         await controller.readRoomChat('call-42', bad);
 
-        expect(service.readRoomChat).toHaveBeenCalledWith('call-42', undefined);
+        expect(service.readRoomChat).toHaveBeenCalledWith(
+          'call-42',
+          undefined,
+          undefined,
+        );
       },
     );
 
@@ -194,7 +240,11 @@ describe('VoiceController — чат комнаты', () => {
 
       await controller.readRoomChat('call-42', '0');
 
-      expect(service.readRoomChat).toHaveBeenCalledWith('call-42', 0);
+      expect(service.readRoomChat).toHaveBeenCalledWith(
+        'call-42',
+        0,
+        undefined,
+      );
     });
 
     it('пустая строка since= — намеренно курсор 0 (Number(\'\') === 0), а не "с начала = undefined"', async () => {
@@ -206,12 +256,34 @@ describe('VoiceController — чат комнаты', () => {
 
       await controller.readRoomChat('call-42', '');
 
-      expect(service.readRoomChat).toHaveBeenCalledWith('call-42', 0);
+      expect(service.readRoomChat).toHaveBeenCalledWith(
+        'call-42',
+        0,
+        undefined,
+      );
+    });
+
+    it('actor из декоратора уходит в сервис третьим аргументом — read() строит по нему own', async () => {
+      service.readRoomChat.mockResolvedValue({
+        messages: [],
+        seq: 0,
+        truncated: false,
+      });
+
+      await controller.readRoomChat('call-42', '0', 'guest-abc123');
+
+      expect(service.readRoomChat).toHaveBeenCalledWith(
+        'call-42',
+        0,
+        'guest-abc123',
+      );
     });
 
     it('возвращает наружу ровно то, что вернул сервис', async () => {
       const fakePage = {
-        messages: [{ msgId: 'm1', text: 'hi', name: 'A', ts: 1, seq: 1 }],
+        messages: [
+          { msgId: 'm1', text: 'hi', name: 'A', ts: 1, seq: 1, own: true },
+        ],
         seq: 1,
         truncated: false,
       };

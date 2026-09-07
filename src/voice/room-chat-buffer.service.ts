@@ -1,17 +1,41 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { RedisService } from '../redis/redis.service';
 
-/** Одно сообщение чата комнаты, как оно лежит в ленте и уходит клиентам. */
+/** Одно сообщение чата комнаты, как оно лежит в ленте Redis. */
 export interface RoomChatEntry {
   msgId: string;
   text: string;
   name: string;
   ts: number;
   seq: number;
+  /**
+   * Идентификатор отправителя — то же значение, что `RoomAccessGuard` кладёт
+   * в `req.roomActor` (см. докстринг `roomActorFactory`): `guest-<hex>`,
+   * `meeting-recorder`, голый uuid пользователя или `<uuid>#<хеш-устройства>`.
+   *
+   * Хранится в записи только для того, чтобы `read()` мог вычислить `own`
+   * (см. `RoomChatEntryOut`) — наружу, ни клиенту через GET, ни в пакет
+   * data-канала, уходить не должен: по нему можно было бы собрать
+   * идентификаторы участников встречи, а гость комнаты видит ленту целиком.
+   *
+   * Опционален: `sendRoomChatMessage` вызывается и без `actor` (см. её
+   * докстринг — например от лица ассистента), и такие сообщения не могут
+   * быть «своими» ни для кого.
+   */
+  actor?: string;
 }
 
+/**
+ * Сообщение чата, как его видит клиент через `GET` (и внешний ассистент):
+ * `actor` заменён на `own` — сравнение хранимого `actor` с actor'ом самого
+ * запрашивающего, см. `RoomChatBufferService.read`.
+ */
+export type RoomChatEntryOut = Omit<RoomChatEntry, 'actor'> & {
+  own: boolean;
+};
+
 export interface RoomChatPage {
-  messages: RoomChatEntry[];
+  messages: RoomChatEntryOut[];
   /** Номер последнего известного сообщения — курсор для следующего запроса. */
   seq: number;
   /**
@@ -156,8 +180,17 @@ export class RoomChatBufferService {
     }
   }
 
-  /** Лента комнаты. `since` — номер последнего уже известного сообщения. */
-  async read(roomName: string, since?: number): Promise<RoomChatPage> {
+  /**
+   * Лента комнаты. `since` — номер последнего уже известного сообщения.
+   * `requestingActor` — actor того, кто читает (контроллер передаёт
+   * `@RoomActor()`); используется только для вычисления `own` на каждом
+   * сообщении, на состав/порядок/truncated не влияет.
+   */
+  async read(
+    roomName: string,
+    since?: number,
+    requestingActor?: string,
+  ): Promise<RoomChatPage> {
     const client = this.redis.getClient();
     const raw = await client.lrange(this.logKey(roomName), 0, -1);
 
@@ -185,8 +218,24 @@ export class RoomChatBufferService {
     const counter = Number(await client.get(this.seqKey(roomName))) || 0;
     const latest = entries.length ? entries[entries.length - 1].seq : counter;
 
+    // Вырезает actor и добавляет own. `actor !== undefined` в левой части —
+    // не просто "оба заданы": без него сообщение без actor (легаси-запись
+    // или пишет ассистент — см. докстринг RoomChatEntry.actor) читаемое
+    // запросом без requestingActor (такого пути сейчас нет, но метод должен
+    // быть честным) совпало бы как undefined === undefined и стало own:true,
+    // хотя ни у сообщения, ни у запроса нет отправителя, которым можно было
+    // бы это оправдать.
+    const toClientView = (e: RoomChatEntry): RoomChatEntryOut => {
+      const { actor, ...rest } = e;
+      return { ...rest, own: actor !== undefined && actor === requestingActor };
+    };
+
     if (since === undefined) {
-      return { messages: entries, seq: latest, truncated: false };
+      return {
+        messages: entries.map(toClientView),
+        seq: latest,
+        truncated: false,
+      };
     }
 
     const oldest = entries.length ? entries[0].seq : undefined;
@@ -207,7 +256,7 @@ export class RoomChatBufferService {
       (oldest === undefined ? latest > since : oldest > since + 1);
 
     return {
-      messages: entries.filter((e) => e.seq > since),
+      messages: entries.filter((e) => e.seq > since).map(toClientView),
       seq: latest,
       truncated,
     };

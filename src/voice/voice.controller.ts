@@ -390,11 +390,16 @@ export class VoiceController {
   // потолка на запись этого достаточно — различать ветки для доступа не
   // требуется.
 
+  // `clientMsgId` — необязательный клиентский id сообщения (см.
+  // `buildChatMsgId` в voice.service.ts). Контроллер его не проверяет и не
+  // трогает — как и `text`/`name`, он летит в сервис как есть, а формат
+  // проверяется там же, где строится итоговый msgId; невалидное значение
+  // тихо игнорируется на этом уровне, а не отклоняет запрос здесь.
   @Post('rooms/:roomName/chat')
   @UseGuards(RoomAccessGuard)
   sendRoomChat(
     @Param('roomName') roomName: string,
-    @Body() body: { text?: string; name?: string },
+    @Body() body: { text?: string; name?: string; clientMsgId?: string },
     @RoomActor() actor?: string,
   ) {
     return this.service.sendRoomChatMessage(
@@ -402,22 +407,26 @@ export class VoiceController {
       body?.text ?? '',
       body?.name ?? '',
       actor,
+      body?.clientMsgId,
     );
   }
 
   // Лента встречи. Ею пользуются и внешний ассистент (опрос по курсору), и
   // клиент при входе в комнату — вошедший позже видит написанное до него.
+  // `@RoomActor()` здесь — не для доступа (тот уже проверен guard'ом), а
+  // чтобы сервис мог посчитать `own` на каждом сообщении.
   @Get('rooms/:roomName/chat')
   @UseGuards(RoomAccessGuard)
   readRoomChat(
     @Param('roomName') roomName: string,
     @Query('since') since?: string,
+    @RoomActor() actor?: string,
   ) {
     // Мусор в курсоре — то же самое, что его отсутствие: отдаём всю ленту,
     // а не 400. Клиент, потерявший курсор, должен уметь начать заново.
     const parsed = Number(since);
     const cursor = Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
-    return this.service.readRoomChat(roomName, cursor);
+    return this.service.readRoomChat(roomName, cursor, actor);
   }
 
   // ─── E2EE ───

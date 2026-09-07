@@ -43,6 +43,80 @@ const AI_AGENT_URL = process.env.AI_AGENT_URL || 'http://localhost:3100';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const BASE_URL = process.env.BASE_URL || 'https://id.taler.tirol';
 
+/** Формат допустимого клиентского id сообщения чата: непустая строка не
+ *  длиннее 64 символов из латиницы/цифр/подчёркивания/дефиса. */
+const CLIENT_MSG_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * true, если `clientMsgId` проходит формат — единственная проверка формата
+ * в одном месте, чтобы `buildChatMsgId` (пространство имён msgId) и пакет
+ * data-канала (эхо `clientMsgId`, см. `sendRoomChatMessage`) не могли молча
+ * разойтись в том, что считают «годным». `actor` сюда не входит: у него
+ * своя проверка на стороне каждого вызывающего (пространство имён строить
+ * не из чего без actor, а вот сама строка годна или нет — от actor не
+ * зависит).
+ */
+function isValidClientMsgId(clientMsgId: unknown): clientMsgId is string {
+  return (
+    typeof clientMsgId === 'string' && CLIENT_MSG_ID_PATTERN.test(clientMsgId)
+  );
+}
+
+/**
+ * Строит итоговый `msgId` сообщения чата комнаты — устойчивый к подделке
+ * пространства имён, не более того.
+ *
+ * Если у отправителя (`actor`) есть валидный `clientMsgId`, итоговый id
+ * строится в пространстве имён, производном от самого отправителя:
+ * `c_<8 hex символов sha256(actor)>_<clientMsgId>`. Два разных отправителя
+ * физически не могут произвести одинаковый итоговый id, даже сговорившись
+ * на одном `clientMsgId`: подделать чужое пространство имён значило бы
+ * найти прообраз sha256 чужого `actor`, что бессмысленно. Это защита от
+ * коллизий/подделки, а не подпись и не секрет — `actor` в проде не тайна
+ * (виден другим участникам комнаты через сам чат), и не нужно, чтобы был.
+ *
+ * ВАЖНО: этот `msgId` клиент предсказать не может — хеш от `actor` считает
+ * сервер, и заранее (до ответа) клиенту взять его неоткуда. Поэтому для
+ * распознавания собственного echo (разорвать гонку «эхо из data-канала
+ * приходит раньше HTTP-ответа») используется НЕ этот `msgId`, а отдельное
+ * поле `clientMsgId` в пакете data-канала — оно уходит эхом ровно тем
+ * значением, что прислал клиент, без всякого пространства имён (см.
+ * докстринг `sendRoomChatMessage`). Раньше здесь было написано, что клиент
+ * узнаёт `msgId` заранее по этой самой namespaced-схеме — неверно: клиент
+ * не обязан (и не должен) воспроизводить sha256(actor) на своей стороне
+ * ради дедупликации.
+ *
+ * Негодный `clientMsgId` — не строка, пустая строка, длиннее 64 символов
+ * или с символами вне `[A-Za-z0-9_-]` — не отклоняет запрос: он молча
+ * заменяется серверным `server_<uuid>`, как если бы поля не было вовсе.
+ * Клиент с кривым id должен получить работающий чат, а не 400.
+ *
+ * Без `actor` (`sendRoomChatMessage` вызывается и без него — например от
+ * лица ассистента, см. её докстринг) `clientMsgId` игнорируется целиком:
+ * пространство имён строить не из чего, а взять клиентский id как есть
+ * означало бы открыть ту самую дыру с подделкой, которую всё это призвано
+ * закрыть.
+ *
+ * Экспортирована (а не приватный метод класса) по тому же соображению, что
+ * и `roomActorFactory` в `room-actor.decorator.ts`: логика с двумя разными
+ * последствиями отказа (тихий фолбэк vs пространство имён) должна быть
+ * проверяема тестом напрямую, без поднятия всего VoiceService.
+ */
+export function buildChatMsgId(
+  actor: string | undefined,
+  clientMsgId?: unknown,
+): string {
+  if (actor && isValidClientMsgId(clientMsgId)) {
+    const namespace = crypto
+      .createHash('sha256')
+      .update(actor)
+      .digest('hex')
+      .slice(0, 8);
+    return `c_${namespace}_${clientMsgId}`;
+  }
+  return `server_${uuidv4()}`;
+}
+
 @Injectable()
 export class VoiceService {
   private readonly log = new Logger(VoiceService.name);
@@ -249,7 +323,33 @@ export class VoiceService {
    * `actor` — необязательный идентификатор отправителя для потолка частоты
    * (`RoomChatBufferService.hitRateLimit`). Без него потолок не проверяется:
    * серверные вызовы (ассистент) не обязаны его передавать, а вот ручка для
-   * гостя/участника — обязана.
+   * гостя/участника — обязана. `actor` также попадает в саму запись ленты
+   * (`RoomChatEntry.actor`) — так `RoomChatBufferService.read` может
+   * посчитать `own` для того, кто её потом читает; наружу (ни в пакет
+   * data-канала, ни в HTTP-ответ этого метода) actor не идёт — см. сборку
+   * `packet` ниже, она собрана явным списком полей, а не спредом `stored`.
+   *
+   * `clientMsgId` — необязательный клиентский id сообщения. Делает две
+   * разные вещи двумя разными путями:
+   *  1. Если он проходит проверку формата и есть `actor` — идёт в
+   *     `buildChatMsgId`, который строит итоговый `msgId` в пространстве
+   *     имён отправителя (подделка бессмысленна, см. её докстринг). Иначе
+   *     (невалидный формат, нет `actor`) — обычный `server_<uuid>`.
+   *  2. ТЕМ ЖЕ УСЛОВИЕМ (см. `isValidClientMsgId` + `actor`) добавляется
+   *     отдельным полем `clientMsgId` в `packet` ниже, эхом, ровно тем
+   *     значением, что прислал клиент — это то, что реально разрывает
+   *     гонку: `sendData` уходит в комнату ДО того, как резолвится этот
+   *     HTTP-ответ (см. «пишет в ленту раньше, чем рассылает» — тот же
+   *     порядок сохраняется и для sendData относительно возврата из этого
+   *     метода), так что клиент не может узнать msgId из ответа вовремя —
+   *     а вот `clientMsgId` он и так знает, сам его сгенерировал, и просто
+   *     сравнивает строки в пришедшем пакете со своим ещё не отрисованным
+   *     значением, не дожидаясь ничего и не разбирая пространство имён
+   *     `msgId` (которое к тому же зависит от `actor` — воспроизводить
+   *     sha256 на клиенте не нужно и не предполагается).
+   * Если поле невалидно или отсутствует — в `packet` ключа `clientMsgId`
+   * нет вовсе (не `undefined`, не пустая строка): лишнее поле в протоколе,
+   * который видят все участники комнаты, не бесплатно.
    *
    * Клиент SFU берётся через `sfuFor`, а не из `this.rooms` напрямую —
    * ради симметрии с `deleteRoom` и `joinRoom`. Сама CIS-развилка сейчас
@@ -273,6 +373,7 @@ export class VoiceService {
     text: string,
     name: string,
     actor?: string,
+    clientMsgId?: unknown,
   ): Promise<{ ts: number; seq: number; msgId: string }> {
     const trimmed = typeof text === 'string' ? text.trim() : '';
     if (!trimmed) throw new BadRequestException('text is empty');
@@ -291,10 +392,11 @@ export class VoiceService {
         );
       }
       stored = await this.chatBuffer.append(roomName, {
-        msgId: `server_${uuidv4()}`,
+        msgId: buildChatMsgId(actor, clientMsgId),
         text: trimmed,
         name: who,
         ts: Date.now(),
+        actor,
       });
     } catch (e) {
       // 429 выше — законный, ожидаемый отказ: пробрасываем как есть. Всё
@@ -312,7 +414,43 @@ export class VoiceService {
       );
     }
 
-    const packet = { type: 'chat_message', ...stored };
+    // Явный список полей, а не `{ type: 'chat_message', ...stored }`: спред
+    // разложил бы и `actor` — участники комнаты (включая гостей) не должны
+    // получить идентификатор отправителя через data-канал (см. докстринг
+    // RoomChatEntry.actor). Список полей дублирует форму RoomChatEntry
+    // намеренно: новое чувствительное поле в записи ленты не должно суметь
+    // просочиться в комнату молча, просто потому что кто-то расширил
+    // `stored` спредом где-то ещё, — на этом месте расширение обязано быть
+    // явным решением, а не побочным эффектом.
+    const packet: {
+      type: string;
+      msgId: string;
+      text: string;
+      name: string;
+      ts: number;
+      seq: number;
+      clientMsgId?: string;
+    } = {
+      type: 'chat_message',
+      msgId: stored.msgId,
+      text: stored.text,
+      name: stored.name,
+      ts: stored.ts,
+      seq: stored.seq,
+    };
+    // clientMsgId — эхо клиентского id (докстринг метода, пункт 2) ровно тем
+    // значением, что прислал клиент, а НЕ производный от него namespaced
+    // msgId. То же условие, что и в buildChatMsgId (actor есть + формат
+    // годный) — не отдельная копия проверки через isValidClientMsgId:
+    // разойдись эти два условия, namespaced msgId и эхо clientMsgId могли бы
+    // присутствовать порознь, а эхо без того, что оправдывает namespaced
+    // msgId, бессмысленно. Ключ добавляется, только если условие
+    // выполнено, — не выставляется в undefined/'' при провале и не через
+    // спред: лишнее поле в протоколе, который видят все участники комнаты,
+    // не бесплатно.
+    if (actor && isValidClientMsgId(clientMsgId)) {
+      packet.clientMsgId = clientMsgId;
+    }
 
     try {
       await this.sfuFor(roomName).client.sendData(
@@ -354,11 +492,19 @@ export class VoiceService {
 
   /**
    * Лента комнаты для клиента и внешнего ассистента. Явный тип возврата
-   * не для красоты: это будущий HTTP-контракт (GET-ручка следующей задачи),
-   * и смена формы страницы внутри буфера не должна молча поменять ответ API.
+   * не для красоты: это HTTP-контракт GET-ручки, и смена формы страницы
+   * внутри буфера не должна молча поменять ответ API.
+   *
+   * `actor` — идентификатор запрашивающего (контроллер передаёт
+   * `@RoomActor()`), нужен только чтобы `chatBuffer.read` посчитал `own` на
+   * каждом сообщении; сам метод его больше никак не использует.
    */
-  async readRoomChat(roomName: string, since?: number): Promise<RoomChatPage> {
-    return this.chatBuffer.read(roomName, since);
+  async readRoomChat(
+    roomName: string,
+    since?: number,
+    actor?: string,
+  ): Promise<RoomChatPage> {
+    return this.chatBuffer.read(roomName, since, actor);
   }
 
   async endCallLog(roomName: string): Promise<void> {
