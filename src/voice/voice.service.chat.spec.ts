@@ -450,6 +450,74 @@ describe('VoiceService.sendRoomChatMessage', () => {
       expect(Object.keys(res).sort()).toEqual(['msgId', 'seq', 'ts'].sort());
     });
   });
+
+  // clientMsgId в записи ленты: без этого GET-ответ на историю не может
+  // сообщить клиенту, какую строку истории он уже отрисовал оптимистично.
+  // Баг воспроизводился так: пока летит первый GET, пользователь отправляет
+  // сообщение; сервер дописывает его в ленту раньше, чем приходит echo из
+  // data-канала, и ответ на этот GET прилетает с сообщением, для которого
+  // own:true, но сопоставить не с чем — клиент рисовал второй пузырь.
+  // RoomChatBufferService.read() уже отдаёт clientMsgId насквозь (см. её
+  // тесты) — единственное, чего не хватало, это положить его в запись
+  // здесь, при отправке.
+  describe('clientMsgId в записи ленты', () => {
+    it('годный clientMsgId уходит в буфер вместе с записью — ровно то же значение, что и в пакете', async () => {
+      await service.sendRoomChatMessage(
+        'call-42',
+        'Привет',
+        'Ассистент',
+        'guest-1',
+        'abc123',
+      );
+      expect(buffer.append.mock.calls[0][1]).toMatchObject({
+        clientMsgId: 'abc123',
+      });
+    });
+
+    it.each([
+      ['посторонний символ', 'bad id with spaces'],
+      ['не строка', 42],
+    ])(
+      'негодный clientMsgId (%s) не попадает в запись буфера вовсе — то же правило, что и для пакета',
+      async (_label, bad) => {
+        await service.sendRoomChatMessage(
+          'call-42',
+          'Привет',
+          'Ассистент',
+          'guest-1',
+          bad,
+        );
+        expect(buffer.append.mock.calls[0][1]).not.toHaveProperty(
+          'clientMsgId',
+        );
+      },
+    );
+
+    it('без actor валидный clientMsgId тоже не попадает в запись — та же граница, что у пакета и у msgId', async () => {
+      await service.sendRoomChatMessage(
+        'call-42',
+        'Привет',
+        'Ассистент',
+        undefined,
+        'abc123',
+      );
+      expect(buffer.append.mock.calls[0][1]).not.toHaveProperty('clientMsgId');
+    });
+
+    it('источник один: clientMsgId в пакете — то же значение, что ушло в запись буфера, не отдельная проверка', async () => {
+      await service.sendRoomChatMessage(
+        'call-42',
+        'Привет',
+        'Ассистент',
+        'guest-1',
+        'abc123',
+      );
+      const sentToBuffer = buffer.append.mock.calls[0][1] as {
+        clientMsgId?: string;
+      };
+      expect(decode(euSendData).clientMsgId).toBe(sentToBuffer.clientMsgId);
+    });
+  });
 });
 
 describe('buildChatMsgId (пространство имён итогового msgId)', () => {

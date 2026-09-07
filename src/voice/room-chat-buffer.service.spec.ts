@@ -180,6 +180,12 @@ describe('RoomChatBufferService', () => {
     actor,
   });
 
+  /** entry() + clientMsgId, для тестов на видимость clientMsgId в GET. */
+  const entryWithClientMsgId = (text: string, clientMsgId: string) => ({
+    ...entry(text),
+    clientMsgId,
+  });
+
   beforeEach(() => {
     redis = new FakeRedis();
     buffer = new RoomChatBufferService({ getClient: () => redis } as any);
@@ -623,6 +629,56 @@ describe('RoomChatBufferService', () => {
         ['моё', true],
         ['чужое', false],
       ]);
+    });
+  });
+
+  // clientMsgId в записи и в GET: баг, который это закрывает — пока летит
+  // первый GET-запрос истории, пользователь отправляет сообщение; сервер
+  // успевает дописать его в ленту раньше, чем клиент получит echo из
+  // data-канала, и ответ на этот GET приходит с сообщением, которое клиент
+  // уже отрисовал оптимистично. own говорит «моё», но не говорит «ровно тот
+  // пузырь, что уже на экране» — без clientMsgId в ответе сопоставить было
+  // нечем, и клиент рисовал второй пузырь. В отличие от actor, clientMsgId
+  // — безобидная случайная строка от самого клиента, вырезать её не нужно.
+  describe('clientMsgId в записи и в GET', () => {
+    it('append() возвращает clientMsgId в записи, если он был передан', async () => {
+      const stored = await buffer.append(
+        'call-42',
+        entryWithClientMsgId('раз', 'local-1'),
+      );
+      expect(stored.clientMsgId).toBe('local-1');
+    });
+
+    it('read() отдаёт clientMsgId в GET для сообщения, у которого он есть', async () => {
+      await buffer.append('call-42', entryWithClientMsgId('раз', 'local-1'));
+
+      const page = await buffer.read('call-42');
+      expect(page.messages[0].clientMsgId).toBe('local-1');
+    });
+
+    it('read() не отдаёт ключ clientMsgId для сообщения без него — не null, не пустая строка, ключа нет вовсе', async () => {
+      await buffer.append('call-42', entry('без клиентского id'));
+
+      const page = await buffer.read('call-42');
+      expect(page.messages[0]).not.toHaveProperty('clientMsgId');
+    });
+
+    it('сообщение со своим clientMsgId и own:true одновременно — actor всё равно вырезан', async () => {
+      // Ровно сочетание, из-за которого баг воспроизводился: сообщение,
+      // которое одновременно «моё» (own) и опознаваемо по clientMsgId —
+      // и при этом actor, из которого own считается, наружу не идёт.
+      await buffer.append('call-42', {
+        ...entryWithActor('моё', 'guest-1'),
+        clientMsgId: 'local-1',
+      });
+
+      const page = await buffer.read('call-42', undefined, 'guest-1');
+      expect(page.messages[0].own).toBe(true);
+      expect(page.messages[0].clientMsgId).toBe('local-1');
+      expect(page.messages[0]).not.toHaveProperty('actor');
+      expect(Object.keys(page.messages[0]).sort()).toEqual(
+        ['clientMsgId', 'msgId', 'name', 'own', 'seq', 'text', 'ts'].sort(),
+      );
     });
   });
 });
