@@ -865,7 +865,16 @@ Expected: FAIL — `expect(received).toBe('guest-460c6508')`, получено `
   }
 
   /** A LiveKit grant is scoped to one room, so it proves presence in it.
-   *  Returns the token subject, which identifies the sender. */
+   *  Returns the token subject, which identifies the sender (see the class
+   *  doc for the shapes that can take).
+   *
+   *  The `'livekit'` fallback is not just a label: `canActivate` treats a
+   *  falsy return as "no proof" and denies access, so a valid grant must
+   *  never resolve to `null`/`''` here merely because the token happened
+   *  not to carry a `sub` claim — that would turn a legitimate connection
+   *  into a 403. Unreachable today (every place that mints a LiveKit token
+   *  sets an identity, and livekit-server-sdk stores it as `sub`), but
+   *  cheap insurance against a future minting path that forgets to. */
   private livekitSubjectForRoom(
     token: string,
     roomName: string,
