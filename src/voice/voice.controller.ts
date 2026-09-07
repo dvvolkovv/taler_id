@@ -27,6 +27,7 @@ import { RecorderSecretGuard } from './guards/recorder-secret.guard';
 import { RoomAccessGuard } from './guards/room-access.guard';
 import { LK_API_KEY, LK_API_SECRET } from '../common/livekit-credentials';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { RoomActor } from '../common/decorators/room-actor.decorator';
 import { parseUserId } from '../common/participant-identity';
 import { FileStorageService } from '../common/file-storage.service';
 import { BillingExceptionFilter } from '../billing/filters/billing-exception.filter';
@@ -366,19 +367,39 @@ export class VoiceController {
   // ещё какое-то время после выхода, не будучи подключённым к комнате.
   // Подменить имя отправителя он может и так, прямо из браузера: веб
   // предпочитает msg.name реальному участнику. Сужать до токена Taler ID
-  // не стали — guard общий с записью и не сообщает, какая ветка сработала.
+  // не стали намеренно — гостю (веб-клиент без аккаунта Taler ID) чат нужен
+  // наравне со вошедшим пользователем; guard кладёт идентификатор сработавшей
+  // ветки в req.roomActor (см. @RoomActor() ниже) — его достаточно для
+  // потолка на запись, различать ветки для доступа не требуется.
 
   @Post('rooms/:roomName/chat')
   @UseGuards(RoomAccessGuard)
   sendRoomChat(
     @Param('roomName') roomName: string,
     @Body() body: { text?: string; name?: string },
+    @RoomActor() actor?: string,
   ) {
     return this.service.sendRoomChatMessage(
       roomName,
       body?.text ?? '',
       body?.name ?? '',
+      actor,
     );
+  }
+
+  // Лента встречи. Ею пользуются и внешний ассистент (опрос по курсору), и
+  // клиент при входе в комнату — вошедший позже видит написанное до него.
+  @Get('rooms/:roomName/chat')
+  @UseGuards(RoomAccessGuard)
+  readRoomChat(
+    @Param('roomName') roomName: string,
+    @Query('since') since?: string,
+  ) {
+    // Мусор в курсоре — то же самое, что его отсутствие: отдаём всю ленту,
+    // а не 400. Клиент, потерявший курсор, должен уметь начать заново.
+    const parsed = Number(since);
+    const cursor = Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+    return this.service.readRoomChat(roomName, cursor);
   }
 
   // ─── E2EE ───
