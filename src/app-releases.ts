@@ -11,6 +11,34 @@ export interface AppRelease {
 // Keep notes user-facing (no internal jargon, no commit hashes).
 export const APP_RELEASES: AppRelease[] = [
   {
+    version: '1.1.29',
+    build: 230,
+    date: '2026-09-08',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.29 — чат в звонке теперь помнит переписку.\n\n' +
+      '💬 История встречи. Вошли в звонок позже других — увидите, что писали до вас. ' +
+      'Раньше чат начинался с чистого листа у каждого.\n' +
+      '🔄 Ничего не теряется при обрыве связи. После переподключения приложение ' +
+      'догружает пропущенные сообщения само.\n' +
+      '🎙 Ассистент работает с чатом: попросите прочитать, что там написали, ' +
+      'или продиктуйте сообщение — он отправит.\n' +
+      '⚠️ Неотправленное видно сразу. Сообщение, которое не ушло, помечается ' +
+      'и отправляется повторно одним нажатием, а набранный текст не пропадает.\n' +
+      '🧹 Исправлено: при двух одновременных звонках переписки больше не смешиваются.',
+    notes_en:
+      'Release 1.1.29 — the in-call chat now remembers the conversation.\n\n' +
+      '💬 Meeting history. Join a call late and you will see what was written before you. ' +
+      'The chat used to start empty for everyone.\n' +
+      '🔄 Nothing is lost on a network drop. After reconnecting the app fetches ' +
+      'the messages you missed.\n' +
+      '🎙 The assistant works with the chat: ask it to read out what people wrote, ' +
+      'or dictate a message and it will send it.\n' +
+      '⚠️ Unsent messages are visible. A message that did not go through is marked ' +
+      'and can be retried with one tap, and your typed text is never dropped.\n' +
+      '🧹 Fixed: with two simultaneous calls the conversations no longer mix.',
+  },
+  {
     version: '1.1.28',
     build: 229,
     date: '2026-09-04',
