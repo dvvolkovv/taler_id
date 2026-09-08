@@ -11,6 +11,7 @@ import { GatingService } from "../billing/services/gating.service";
 import { MeteringService } from "../billing/services/metering.service";
 import { LedgerService } from "../billing/services/ledger.service";
 import { PricingService } from "../billing/services/pricing.service";
+import { RoomChatBufferService } from './room-chat-buffer.service';
 
 const mockPrisma = {
   callLog: {
@@ -66,6 +67,13 @@ const mockPricing = {
   calculatePlanckCost: jest.fn(),
 };
 
+const mockChatBuffer = {
+  append: jest.fn(),
+  remove: jest.fn(),
+  hitRateLimit: jest.fn(),
+  read: jest.fn(),
+};
+
 describe("VoiceService", () => {
   let service: VoiceService;
 
@@ -86,6 +94,7 @@ describe("VoiceService", () => {
         { provide: MeteringService, useValue: mockMetering },
         { provide: LedgerService, useValue: mockLedger },
         { provide: PricingService, useValue: mockPricing },
+        { provide: RoomChatBufferService, useValue: mockChatBuffer },
       ],
     }).compile();
 

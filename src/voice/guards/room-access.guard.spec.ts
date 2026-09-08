@@ -15,15 +15,22 @@ const { privateKey, publicKey } = generateKeyPairSync('rsa', {
   privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
 });
 
-const ctxFor = (roomName: string, authHeader?: string) =>
+/** Builds a bare request object. `ctxFor` wraps it for the common case;
+ *  `ctxWithReq` is used directly by tests that need a custom request shape
+ *  (e.g. a token missing a claim). Both `switchToHttp().getRequest()` calls
+ *  on a given ctx return the same `req` object, so callers can inspect it
+ *  (e.g. `roomActor`) after `canActivate` mutates it. */
+const reqFor = (roomName: string, authHeader?: string) =>
   ({
-    switchToHttp: () => ({
-      getRequest: () => ({
-        params: { roomName },
-        headers: authHeader ? { authorization: authHeader } : {},
-      }),
-    }),
+    params: { roomName },
+    headers: authHeader ? { authorization: authHeader } : {},
   }) as any;
+
+const ctxWithReq = (req: any) =>
+  ({ switchToHttp: () => ({ getRequest: () => req }) }) as any;
+
+const ctxFor = (roomName: string, authHeader?: string) =>
+  ctxWithReq(reqFor(roomName, authHeader));
 
 const livekitToken = (room: string) =>
   jwt.sign({ sub: 'guest-1', video: { roomJoin: true, room } }, LK_SECRET, {
@@ -71,8 +78,9 @@ describe('RoomAccessGuard', () => {
   });
 
   it('accepts a LiveKit grant naming this room', async () => {
-    const ctx = ctxFor('call-1', `Bearer ${livekitToken('call-1')}`);
-    await expect(guard.canActivate(ctx)).resolves.toBe(true);
+    const req = reqFor('call-1', `Bearer ${livekitToken('call-1')}`);
+    await expect(guard.canActivate(ctxWithReq(req))).resolves.toBe(true);
+    expect(req.roomActor).toBe('guest-1');
   });
 
   it('rejects a LiveKit grant for a different room', async () => {
@@ -97,8 +105,9 @@ describe('RoomAccessGuard', () => {
       roomName: 'call-1',
       participantIds: ['user-1', 'user-2'],
     });
-    const ctx = ctxFor('call-1', `Bearer ${userToken('user-1')}`);
-    await expect(guard.canActivate(ctx)).resolves.toBe(true);
+    const req = reqFor('call-1', `Bearer ${userToken('user-1')}`);
+    await expect(guard.canActivate(ctxWithReq(req))).resolves.toBe(true);
+    expect(req.roomActor).toBe('user-1');
   });
 
   it('rejects an authenticated user who is not a participant', async () => {
@@ -112,11 +121,12 @@ describe('RoomAccessGuard', () => {
 
   it('accepts the owner of a personal room', async () => {
     const owner = 'abcdef12-3456-7890-abcd-ef1234567890';
-    const ctx = ctxFor(
+    const req = reqFor(
       `personal-${owner.substring(0, 8)}-deadbeef`,
       `Bearer ${userToken(owner)}`,
     );
-    await expect(guard.canActivate(ctx)).resolves.toBe(true);
+    await expect(guard.canActivate(ctxWithReq(req))).resolves.toBe(true);
+    expect(req.roomActor).toBe(owner);
   });
 
   it("rejects a past guest of someone else's personal room", async () => {
@@ -133,8 +143,9 @@ describe('RoomAccessGuard', () => {
     // tmp-/pub- rooms have no CallLog; ownership lives in PublicRoom.
     prisma.publicRoom.findFirst.mockResolvedValue({ id: 'pr-1' });
 
-    const ctx = ctxFor('tmp-abcdef', `Bearer ${userToken('owner-1')}`);
-    await expect(guard.canActivate(ctx)).resolves.toBe(true);
+    const req = reqFor('tmp-abcdef', `Bearer ${userToken('owner-1')}`);
+    await expect(guard.canActivate(ctxWithReq(req))).resolves.toBe(true);
+    expect(req.roomActor).toBe('owner-1');
   });
 
   it('rejects a stranger at a temporary room they did not create', async () => {
@@ -157,5 +168,29 @@ describe('RoomAccessGuard', () => {
     await expect(
       guard.canActivate(ctxFor('call-1', `Bearer ${idToken}`)),
     ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('кладёт в запрос отправителя из LiveKit-токена', async () => {
+    const req = reqFor('call-1', `Bearer ${livekitToken('call-1')}`);
+    await expect(guard.canActivate(ctxWithReq(req))).resolves.toBe(true);
+    expect(req.roomActor).toBe('guest-1');
+  });
+
+  it('кладёт в запрос отправителя из токена Taler ID', async () => {
+    prisma.publicRoom.findFirst.mockResolvedValue({ id: 'pr-1' });
+    const req = reqFor('call-1', `Bearer ${userToken('user-1')}`);
+    await expect(guard.canActivate(ctxWithReq(req))).resolves.toBe(true);
+    expect(req.roomActor).toBe('user-1');
+  });
+
+  it('пропускает LiveKit-токен без sub, называя отправителя livekit', async () => {
+    const noSub = jwt.sign(
+      { video: { roomJoin: true, room: 'call-1' } },
+      LK_SECRET,
+      { algorithm: 'HS256', expiresIn: '1h' },
+    );
+    const req = reqFor('call-1', `Bearer ${noSub}`);
+    await expect(guard.canActivate(ctxWithReq(req))).resolves.toBe(true);
+    expect(req.roomActor).toBe('livekit');
   });
 });

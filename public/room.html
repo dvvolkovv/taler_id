@@ -395,6 +395,11 @@
     .chat-msg.own .chat-msg-name { color: rgba(255,255,255,0.7); }
     .chat-msg-time { font-size: 10px; color: var(--text-2); margin-top: 2px; text-align: right; }
     .chat-msg.own .chat-msg-time { color: rgba(255,255,255,0.5); }
+    /* Отправка не подтвердилась (POST отказал и эхо не пришло) — пузырь
+       остаётся на месте вместо того, чтобы пропасть или вернуть текст в
+       поле: сам пузырь и есть черновик, кликабельный для повтора. */
+    .chat-msg.failed { opacity: 0.6; cursor: pointer; }
+    .chat-msg-retry { font-size: 10px; color: #EF4444; margin-top: 4px; }
     .chat-input-wrap {
       display: flex; gap: 8px; padding: 12px 16px;
       border-top: 1px solid var(--border);
@@ -1228,6 +1233,55 @@
         .on(RoomEvent.DataReceived, (payload, participant) => {
           try {
             const msg = JSON.parse(decoder.decode(payload));
+            // Сверка своего эха по clientMsgId — ДО общего гейта дедупликации
+            // ниже, намеренно. Если поставить её после, гейт может съесть
+            // пакет молча раньше, чем до неё дойдёт очередь: например, если
+            // GET-история успела прийти и сама отрисовать это же сообщение
+            // (тем же настоящим msgId) раньше этого эха — она уже добавит
+            // msgId в _processedMsgIds, и гейт ниже отсечёт эхо через return,
+            // а запись в _pendingChatMsgs останется висеть без подтверждения
+            // и без второго пузыря сверху от истории. Починка состояния
+            // (реконсиляция своего сообщения) — не то же самое, что гейт
+            // отрисовки чужих, и не должна зависеть от его результата.
+            //
+            // Модель доверия здесь плоская, как и у остальных data-пакетов в
+            // этом обработчике (recording_status, consent и т.д.): clientMsgId
+            // не подписан и не проверяется на принадлежность отправителю.
+            // Любой участник комнаты может прислать пакет с ЧУЖИМ clientMsgId
+            // (например, подсмотрев его из легитимного эха, которое сервер и
+            // так рассылает всем) и досрочно снять пометку "не отправлено" с
+            // чужого пузыря. Текст и имя пузыря при этом не меняются —
+            // реконсиляция трогает только dataset.msgId и CSS-класс, — так что
+            // риск ограничен подменой момента подтверждения, не подменой
+            // содержимого. Раньше эта ветка стояла ниже общего гейта, менее
+            // заметно; теперь, когда она выше, фиксируем это явно как
+            // известное, сознательно не чинимое ограничение.
+            if (msg.type === 'chat_message' && msg.clientMsgId && _pendingChatMsgs.has(msg.clientMsgId)) {
+              const pending = _pendingChatMsgs.get(msg.clientMsgId);
+              _pendingChatMsgs.delete(msg.clientMsgId);
+              if (pending) {
+                // Позднее эхо: POST отказал (или ответ потерялся), мы уже
+                // показали пузырь как неотправленный с кнопкой повтора — а
+                // сообщение на самом деле дошло (или дошёл сам повтор: он
+                // переиспользует тот же clientMsgId, см. retryChatMessage,
+                // так что "исходная" и "повторная" попытки неразличимы и не
+                // должны различаться). Снимаем пометку неудачи, если она была.
+                if (pending.failed) unmarkChatBubbleFailed(pending.el);
+                if (msg.msgId) pending.el.dataset.msgId = msg.msgId;
+              }
+              // Регистрируем msgId и в общем гейте: канал заявлен reliable,
+              // но не exactly-once, а повторная доставка того же пакета,
+              // попав в разбор ниже (после того как мы уже вышли), отрисует
+              // его как "чужое" сообщение с нашим собственным именем. Ровно
+              // так же гасится и избыточное эхо повтора (тот же msgId, что и
+              // у исходной попытки, — см. retryChatMessage) у ВСЕХ участников,
+              // не только у автора.
+              if (msg.msgId) {
+                _processedMsgIds.add(msg.msgId);
+                if (_processedMsgIds.size > 200) _processedMsgIds.clear();
+              }
+              return;
+            }
             // Deduplicate messages
             if (msg.msgId) {
               if (_processedMsgIds.has(msg.msgId)) return;
@@ -1243,9 +1297,11 @@
             if (msg.type === 'chat_message') {
               // Участника может не быть: сервер публикует через
               // RoomServiceClient.sendData от своего имени, без отправителя.
-              // Имя в таком пакете всегда лежит в msg.name.
+              // Имя в таком пакете всегда лежит в msg.name. Запасные значения
+              // имени/времени — забота buildChatMsgEl (см. её комментарий),
+              // здесь передаём как есть.
               const who = participant ? getDisplayName(participant) : '';
-              appendChatMessage(msg.name || who || 'Taler ID', msg.text, msg.ts || Date.now(), false);
+              appendChatMessage(msg.name || who, msg.text, msg.ts, false, msg.msgId);
             }
             // ── Recording consent protocol ──
             if (msg.type === 'recording_consent_request' && participant) {
@@ -1345,6 +1401,27 @@
         }
 
         await room.connect(getLivekitUrl(), token);
+        // Сброс чат-состояния предыдущей сессии этой же вкладки:
+        // showDisconnected() пускает выйти и зайти снова без перезагрузки
+        // страницы, а бэкенд сам чистит ленту при входе в новую встречу —
+        // клиент обязан делать то же, иначе чужие (точнее, уже неактуальные)
+        // пузыри и id из предыдущего захода переживут повторный вход.
+        document.getElementById('chat-messages').innerHTML = '';
+        _processedMsgIds.clear();
+        _pendingChatMsgs.clear();
+        // roomCode разбирается из адреса один раз при загрузке страницы, так
+        // что room.name у "temporary"-комнаты — одна и та же строка на любом
+        // повторном входе; сравнивать по имени комнаты бессмысленно, оно не
+        // различает сессии. Поколение — единственное, что действительно их
+        // различает: инкремент здесь же, где чистим состояние.
+        chatConnectionGen++;
+        // Историю тянем сразу, без await, чтобы вход в комнату её не ждал.
+        // Корректный порядок (история под живыми сообщениями, а не поверх
+        // них) обеспечивает не момент ЭТОГО вызова, а момент ВСТАВКИ ответа
+        // внутри самой loadChatHistory() (см. её комментарий) — ответ придёт
+        // только через полный сетевой круг, и живые пакеты вполне успевают
+        // прийти раньше него.
+        loadChatHistory();
         // Unblock audio playback immediately while user gesture is still active
         room.startAudio().catch(() => {});
         // Safari + Chrome: when the tab becomes hidden the browser can suspend the AudioContext
@@ -3368,6 +3445,19 @@
 
     let chatOpen = false;
     let chatUnread = 0;
+    // Наши собственные отправленные сообщения, ожидающие эха:
+    // clientMsgId -> { el, text, name, failed }. el — уже отрисованный
+    // (оптимистично) DOM-узел. Живое эхо сервера несёт то же clientMsgId —
+    // по нему DataReceived узнаёт своё сообщение, забирает запись отсюда и
+    // не рисует второй пузырь. failed=true — POST отказал, но эхо ещё может
+    // прийти позже (см. sendChatMessage/doSendChat и I2 в ревью).
+    const _pendingChatMsgs = new Map();
+    // Инкрементируется в connectToRoom при каждом (пере)подключении — вместе
+    // с чисткой чат-состояния. roomCode парсится из URL один раз при загрузке
+    // страницы, так что room.name для "temporary"-комнаты не меняется между
+    // повторными входами и не годится в качестве различителя сессии;
+    // поколение — единственный надёжный признак "это всё ещё та же сессия".
+    let chatConnectionGen = 0;
 
     function toggleChat() {
       chatOpen = !chatOpen;
@@ -3395,37 +3485,157 @@
       }
     }
 
-    function sendChatMessage() {
+    async function sendChatMessage() {
       if (!room) return;
       const input = document.getElementById('chat-input');
       const text = input.value.trim();
       if (!text) return;
       input.value = '';
 
-      const msg = {
-        type: 'chat_message',
-        text: text,
-        name: getDisplayName(room.localParticipant),
-        ts: Date.now(),
-      };
-
-      // broadcastData проставляет msgId — без него приёмная дедупликация
-      // не работает, а отправителей теперь трое: веб, приложение и сервер.
-      // Своё сообщение рисуем только если пакет ушёл: иначе неотправленное
-      // выглядело бы отправленным.
-      if (!broadcastData(msg)) return;
-
-      appendChatMessage(msg.name, text, msg.ts, true);
+      const name = getDisplayName(room.localParticipant);
+      const el = appendChatMessage(name, text, Date.now(), true);
+      // crypto.randomUUID может отсутствовать (небезопасный контекст, iOS
+      // Safari < 15.4, старые WebView) — падение здесь непойманным, уже после
+      // того как поле ввода очищено выше, потеряло бы сообщение молча: ни
+      // пузыря, ни ошибки, ни текста обратно. Тот же запасной вариант, что и
+      // у _msgPrefix чуть выше.
+      const clientMsgId = crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2);
+      await doSendChat(clientMsgId, text, name, el);
     }
 
-    function appendChatMessage(name, text, ts, own) {
-      const msgs = document.getElementById('chat-messages');
+    /** Собственно отправка + учёт ожидания эха. Общая для первой попытки
+     *  (sendChatMessage, свежий clientMsgId) и повтора неудачной
+     *  (retryChatMessage — ТОТ ЖЕ clientMsgId, см. её комментарий почему). */
+    async function doSendChat(clientMsgId, text, name, el) {
+      // Бэкенд шлёт эхо в data-канал ДО того, как отвечает на сам POST (так
+      // устроен sendRoomChatMessage) — узнавать clientMsgId из ответа значит
+      // почти всегда узнавать его позже эха. Он уже готов у вызывающего кода,
+      // поэтому сразу помечаем его ожидающим: когда эхо придёт (см.
+      // DataReceived), оно найдёт себя в наборе и не станет рисовать пузырь
+      // второй раз.
+      _pendingChatMsgs.set(clientMsgId, { el, text, name, failed: false });
+
+      try {
+        const res = await fetch(`${API_BASE}/voice/rooms/${room.name}/chat`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${lkToken}`,
+          },
+          body: JSON.stringify({ text, name, clientMsgId }),
+          // Без таймаута повисший запрос (мобильная сеть, разрыв без сброса
+          // соединения) никогда не резолвится и не отклоняется: запись
+          // осталась бы висеть вечно, а пузырь выглядел бы отправленным — ни
+          // пометки failed, ни кнопки повтора.
+          signal: AbortSignal.timeout(15000),
+        });
+        if (!res.ok) {
+          const err = new Error('HTTP ' + res.status);
+          err.status = res.status;
+          throw err;
+        }
+        // Основной путь подтверждения — эхо в DataReceived. Тело ответа тоже
+        // несёт msgId — дешёвая страховка на случай, если эхо почему-то ещё
+        // не подоспело к этому моменту: если оно уже отработало, записи в
+        // _pendingChatMsgs уже нет, и это просто no-op.
+        const data = await res.json();
+        const pending = _pendingChatMsgs.get(clientMsgId);
+        if (pending) {
+          _pendingChatMsgs.delete(clientMsgId);
+          if (data.msgId) {
+            el.dataset.msgId = data.msgId;
+            // Регистрируем и в общем гейте: если эхо всё же придёт следом
+            // (просто отстало, не потерялось), оно должно быть узнано как
+            // уже обработанное там же, где обычно проверяют msgId, а не
+            // провалиться в общий разбор и не нарисоваться как "чужое"
+            // сообщение с нашим именем.
+            _processedMsgIds.add(data.msgId);
+            if (_processedMsgIds.size > 200) _processedMsgIds.clear();
+          }
+        }
+      } catch (e) {
+        // POST не удался — но это не то же самое, что «не дошло». Эхо может
+        // прийти и позже отказа (сервер разослал, а обратный путь ответа
+        // оборвался — 502/504, разрыв, или наш собственный таймаут выше).
+        // Поэтому запись не удаляем, а метим failed: если эхо всё же придёт,
+        // DataReceived найдёт помеченную запись и снимет пометку сам, не
+        // рисуя дубль.
+        const pending = _pendingChatMsgs.get(clientMsgId);
+        if (pending) {
+          pending.failed = true;
+          markChatBubbleFailed(el, clientMsgId);
+          // 429 — это временный потолок отправителя (10 сообщений/10с), а не
+          // поломка сервиса; отдельная честная фраза без выдуманного отсчёта
+          // до разблокировки (сервер его не сообщает).
+          const message = e.status === 429
+            ? 'Слишком много сообщений подряд. Подождите немного.'
+            : 'Сообщение не отправлено. Нажмите на него, чтобы повторить.';
+          showNotification(message, 'error');
+        }
+        // else: эхо уже подтвердило доставку раньше отказа. Сообщение в
+        // комнате есть, врать об ошибке нельзя — пузырь остаётся как есть.
+      }
+    }
+
+    /** Помечает пузырь неотправленным и вешает повтор по клику. Пузырь не
+     *  убираем и текст в поле не возвращаем: сам пузырь и есть черновик —
+     *  наберёт человек тем временем что-то новое в поле или нет, старое не
+     *  потеряется и не затрёт его. Если между делом придёт позднее эхо (см.
+     *  DataReceived), пометка снимется без следа вместо второй копии. */
+    function markChatBubbleFailed(el, clientMsgId) {
+      el.classList.add('failed');
+      if (!el.querySelector('.chat-msg-retry')) {
+        const retry = document.createElement('div');
+        retry.className = 'chat-msg-retry';
+        retry.textContent = 'Не отправлено — нажмите для повтора';
+        el.appendChild(retry);
+      }
+      el.onclick = () => retryChatMessage(clientMsgId);
+    }
+
+    function unmarkChatBubbleFailed(el) {
+      el.classList.remove('failed');
+      // Синхронно, до единственного await внутри retryChatMessage — второй,
+      // быстрый клик по тому же пузырю физически не может увидеть здесь
+      // старый обработчик: onclick уже null к моменту, когда управление
+      // вообще может вернуться в event loop.
+      el.onclick = null;
+      const retry = el.querySelector('.chat-msg-retry');
+      if (retry) retry.remove();
+    }
+
+    async function retryChatMessage(clientMsgId) {
+      const pending = _pendingChatMsgs.get(clientMsgId);
+      if (!pending || !pending.failed) return; // эхо уже само подтвердило — клик устарел
+      // Повтор переиспользует ТОТ ЖЕ clientMsgId, а не минтит новый. msgId на
+      // бэкенде строится из пространства имён отправителя (оно не меняется
+      // в пределах сессии) и clientMsgId — значит результат будет тем же
+      // самым msgId, что и у исходной попытки. Если она на самом деле дошла
+      // (POST отказал уже после рассылки), оба сообщения лягут в ленту с
+      // ОДИНАКОВЫМ msgId: избыточное эхо гасится тем же гейтом
+      // _processedMsgIds у ВСЕХ участников, не только у автора; в истории
+      // вторая строка отсекается тем же первым чеком в цикле; а запись в
+      // _pendingChatMsgs просто перезаписывается свежей (см. .set() ниже, в
+      // doSendChat) — учёт вытесненных попыток не нужен вовсе. Цена — лишняя
+      // строка в Redis, которую никто не увидит.
+      unmarkChatBubbleFailed(pending.el);
+      await doSendChat(clientMsgId, pending.text, pending.name, pending.el);
+    }
+
+    /** Строит DOM-узел одного сообщения, никуда его не вставляя. Общая часть
+     *  для appendChatMessage (сразу в живую ленту) и loadChatHistory (пачкой
+     *  во фрагмент — см. её комментарий, почему не сюда же). Запасные
+     *  значения имени/времени — здесь, а не у вызывающих: живой путь, история
+     *  и оптимистичная отправка должны выглядеть одинаково, если сервер
+     *  пришлёт пустое имя или не пришлёт время. */
+    function buildChatMsgEl(name, text, ts, own, msgId) {
       const div = document.createElement('div');
       div.className = 'chat-msg ' + (own ? 'own' : 'other');
+      if (msgId) div.dataset.msgId = msgId;
 
       const nameEl = document.createElement('div');
       nameEl.className = 'chat-msg-name';
-      nameEl.textContent = name;
+      nameEl.textContent = name || 'Taler ID';
       div.appendChild(nameEl);
 
       const textEl = document.createElement('div');
@@ -3434,16 +3644,107 @@
 
       const timeEl = document.createElement('div');
       timeEl.className = 'chat-msg-time';
-      const d = new Date(ts);
+      const d = new Date(ts || Date.now());
       timeEl.textContent = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
       div.appendChild(timeEl);
 
+      return div;
+    }
+
+    /** @returns {HTMLElement} добавленный узел — doSendChat держит на него
+     *  ссылку в _pendingChatMsgs, чтобы найти и подтвердить/пометить именно
+     *  его. */
+    function appendChatMessage(name, text, ts, own, msgId) {
+      const msgs = document.getElementById('chat-messages');
+      const div = buildChatMsgEl(name, text, ts, own, msgId);
       msgs.appendChild(div);
       msgs.scrollTop = msgs.scrollHeight;
 
       if (!own && !chatOpen) {
         chatUnread++;
         updateChatBadge();
+      }
+      return div;
+    }
+
+    /** Лента встречи до нашего входа. Грузится один раз сразу после connect
+     *  (см. connectToRoom, там же #chat-messages чистится от предыдущей
+     *  сессии). Собирается во фрагмент и вставляется ОДНИМ prepend-ом в
+     *  начало ленты, а не по одному в конец: пока ответ летит по сети (это
+     *  полный сетевой круг, а не момент отправки запроса), живые сообщения
+     *  вполне успевают прийти и лечь в конец ленты первыми — история обязана
+     *  оказаться НАД ними, а не под, и это уже нельзя понять по одному лишь
+     *  моменту, когда ушёл сам запрос.
+     *
+     *  own в ответе — сравнение бэкенда с личностью запрашивающего. У этой
+     *  страницы единственный путь входа гостевой, а гостю личность выдаётся
+     *  заново на каждый /join — поэтому own полезен только внутри одной
+     *  непрерывной сессии (отличить чужие сообщения от своих старых), а
+     *  после перезагрузки или переподключения даже свои же прежние сообщения
+     *  закономерно придут как own:false. Это свойство модели идентичности
+     *  бэкенда, а не ошибка чтения этого поля здесь. У залогиненных
+     *  участников приложения (не этой страницы) личность привязана к сессии,
+     *  и own переживает переподключение.
+     *
+     *  Сообщения с известным нам clientMsgId (сервер отдаёт его отдельным
+     *  полем — см. DataReceived) сверяются с _pendingChatMsgs и НЕ
+     *  дорисовываются повторно: пузырь уже есть, история лишь подтверждает
+     *  его настоящим msgId. Это третий независимый путь починки состояния —
+     *  рядом с эхом (DataReceived) и ответом на сам POST (doSendChat/M1).
+     *  Не избыточность: каждый закрывает своё окно, где двух других ещё
+     *  не было (эхо ещё не пришло, ответ на POST ещё летит, а история уже
+     *  успела прочитать ленту). */
+    async function loadChatHistory() {
+      if (!room) return;
+      const myGen = chatConnectionGen;
+      try {
+        const res = await fetch(`${API_BASE}/voice/rooms/${room.name}/chat`, {
+          headers: { Authorization: `Bearer ${lkToken}` },
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        // Пока ответ летел, могли успеть выйти и заново войти без
+        // перезагрузки страницы (showDisconnected → joinRoom). room.name при
+        // этом не меняется (roomCode разобран из URL один раз при загрузке
+        // страницы) — сверяем поколение подключения, а не имя: оно
+        // инкрементируется в connectToRoom при каждом новом входе вместе с
+        // чисткой состояния и, в отличие от имени, действительно различает
+        // сессии.
+        if (chatConnectionGen !== myGen) return;
+        const frag = document.createDocumentFragment();
+        for (const m of data.messages || []) {
+          if (m.msgId && _processedMsgIds.has(m.msgId)) continue;
+
+          if ('clientMsgId' in m && _pendingChatMsgs.has(m.clientMsgId)) {
+            // Наше собственное сообщение, ещё числящееся ожидающим: пузырь
+            // уже нарисован оптимистично в doSendChat(), рисовать второй раз
+            // не нужно — подтверждаем существующий.
+            const pending = _pendingChatMsgs.get(m.clientMsgId);
+            _pendingChatMsgs.delete(m.clientMsgId);
+            if (pending) {
+              if (pending.failed) unmarkChatBubbleFailed(pending.el);
+              if (m.msgId) pending.el.dataset.msgId = m.msgId;
+            }
+            if (m.msgId) {
+              _processedMsgIds.add(m.msgId);
+              if (_processedMsgIds.size > 200) _processedMsgIds.clear();
+            }
+            continue;
+          }
+
+          if (m.msgId) {
+            _processedMsgIds.add(m.msgId);
+            if (_processedMsgIds.size > 200) _processedMsgIds.clear();
+          }
+          frag.appendChild(buildChatMsgEl(m.name, m.text, m.ts, !!m.own, m.msgId));
+        }
+        const msgs = document.getElementById('chat-messages');
+        msgs.insertBefore(frag, msgs.firstChild);
+        msgs.scrollTop = msgs.scrollHeight;
+      } catch (e) {
+        // История — приятное дополнение, а не условие работы чата: молча
+        // остаёмся без неё, живые сообщения продолжают приходить.
+        console.warn('chat history failed', e);
       }
     }
 

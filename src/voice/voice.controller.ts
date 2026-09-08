@@ -27,6 +27,7 @@ import { RecorderSecretGuard } from './guards/recorder-secret.guard';
 import { RoomAccessGuard } from './guards/room-access.guard';
 import { LK_API_KEY, LK_API_SECRET } from '../common/livekit-credentials';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { RoomActor } from '../common/decorators/room-actor.decorator';
 import { parseUserId } from '../common/participant-identity';
 import { FileStorageService } from '../common/file-storage.service';
 import { BillingExceptionFilter } from '../billing/filters/billing-exception.filter';
@@ -52,13 +53,24 @@ export class VoiceController {
   ) {}
 
   /**
-   * LiveKit webhook receiver. The LiveKit server is configured (server-side,
-   * outside this repo) with `webhook.urls = [https://id.taler.tirol/voice/livekit-webhook]`
-   * and signs every payload with the same API key/secret pair we use to mint
-   * AccessTokens. `WebhookReceiver.receive` verifies the JWT in the
-   * `Authorization` header against the raw body, so we MUST read the unparsed
-   * body — `main.ts` enables `rawBody: true` globally so `req.rawBody` is a
-   * Buffer that we stringify here.
+   * LiveKit webhook receiver. NOT currently reachable in practice: the
+   * LiveKit server is not configured (server-side, outside this repo) with
+   * `webhook.urls` pointing here on any environment (checked DEV, TEST and
+   * DO-media during Task 4b). It was once — DEV still has a
+   * `livekit.yaml.bak.before-webhook-rollback` from 2026-04-30 with
+   * `webhook.urls` set to this exact route — so the rollback was
+   * deliberate, not an oversight, but nothing since has pointed it back.
+   * Practical effect: `handleLivekitParticipantLeft` below never fires for
+   * `group-*` rooms today, so a group-call participant who just closes the
+   * tab is never marked as left. Not this task's fix — logged as a
+   * standalone finding in the Task 4b room-chat design spec.
+   *
+   * If `webhook.urls` is ever pointed back here, the verify path is ready:
+   * LiveKit signs each payload with the same API key/secret pair used to
+   * mint AccessTokens, and `WebhookReceiver.receive` checks the JWT in the
+   * `Authorization` header against the raw body — which is why we MUST
+   * read the unparsed body here (`main.ts` enables `rawBody: true`
+   * globally so `req.rawBody` is a Buffer we stringify).
    *
    * Phase 1 only consumes `participant_left` for `group-*` rooms. Other event
    * types (room_started, room_finished, track_published, recording_*) are
@@ -361,24 +373,60 @@ export class VoiceController {
   // Доступ — как у управления записью: RoomAccessGuard.
   //
   // Оба вида доказательства допущены намеренно, включая гостевой
-  // LiveKit-токен. Помнить про его срок: он живёт 4 часа (см. ttl в
-  // VoiceService), то есть вышедший из встречи гость может писать в чат
-  // ещё какое-то время после выхода, не будучи подключённым к комнате.
-  // Подменить имя отправителя он может и так, прямо из браузера: веб
-  // предпочитает msg.name реальному участнику. Сужать до токена Taler ID
-  // не стали — guard общий с записью и не сообщает, какая ветка сработала.
+  // LiveKit-токен. Помнить про его срок: он живёт 6 часов (дефолтный ttl
+  // AccessToken в livekit-server-sdk — ни makeToken, ни makeGuestToken его
+  // не переопределяют; это не те же 4 часа, что у group-звонков в
+  // generateGroupCallToken). Всё это время вышедший из встречи гость может
+  // не только писать в чат, не будучи подключённым к комнате, но и читать
+  // его через GET ниже — а лента живёт сутки (RoomChatBufferService) и
+  // переживает саму встречу, то есть можно прочитать чужую, более позднюю
+  // встречу в той же комнате. Подменить имя отправителя гость может и так,
+  // прямо из браузера: веб предпочитает msg.name реальному участнику.
+  // Сужать до токена Taler ID не стали намеренно — гостю чат нужен наравне
+  // со вошедшим пользователем. Guard по-прежнему не гарантирует, какая
+  // ветка сработала: он кладёт в req.roomActor (см. @RoomActor() ниже)
+  // идентификатор отправителя, и лишь форма значения в большинстве случаев
+  // подсказывает ветку (подробности — в комментарии класса guard'а). Для
+  // потолка на запись этого достаточно — различать ветки для доступа не
+  // требуется.
 
+  // `clientMsgId` — необязательный клиентский id сообщения (см.
+  // `buildChatMsgId` в voice.service.ts). Контроллер его не проверяет и не
+  // трогает — как и `text`/`name`, он летит в сервис как есть, а формат
+  // проверяется там же, где строится итоговый msgId; невалидное значение
+  // тихо игнорируется на этом уровне, а не отклоняет запрос здесь.
   @Post('rooms/:roomName/chat')
   @UseGuards(RoomAccessGuard)
   sendRoomChat(
     @Param('roomName') roomName: string,
-    @Body() body: { text?: string; name?: string },
+    @Body() body: { text?: string; name?: string; clientMsgId?: string },
+    @RoomActor() actor?: string,
   ) {
     return this.service.sendRoomChatMessage(
       roomName,
       body?.text ?? '',
       body?.name ?? '',
+      actor,
+      body?.clientMsgId,
     );
+  }
+
+  // Лента встречи. Ею пользуются и внешний ассистент (опрос по курсору), и
+  // клиент при входе в комнату — вошедший позже видит написанное до него.
+  // `@RoomActor()` здесь — не для доступа (тот уже проверен guard'ом), а
+  // чтобы сервис мог посчитать `own` на каждом сообщении.
+  @Get('rooms/:roomName/chat')
+  @UseGuards(RoomAccessGuard)
+  readRoomChat(
+    @Param('roomName') roomName: string,
+    @Query('since') since?: string,
+    @RoomActor() actor?: string,
+  ) {
+    // Мусор в курсоре — то же самое, что его отсутствие: отдаём всю ленту,
+    // а не 400. Клиент, потерявший курсор, должен уметь начать заново.
+    const parsed = Number(since);
+    const cursor = Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+    return this.service.readRoomChat(roomName, cursor, actor);
   }
 
   // ─── E2EE ───
