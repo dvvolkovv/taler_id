@@ -1080,6 +1080,11 @@
         if (res.status === 403) {
           btn.disabled = false;
           btn.textContent = 'Войти в комнату';
+          // Поле могло быть скрыто (requiresPassword не пришёл — например,
+          // пароль поставили на комнату уже после того, как гость открыл
+          // страницу): без этого 403 был бы единственным тупиком, откуда
+          // нельзя выйти самому — есть куда вводить нечего.
+          document.getElementById('password-wrap').style.display = '';
           document.getElementById('join-error').textContent = 'Неверный пароль';
           return;
         }
@@ -2108,6 +2113,9 @@
     }
 
     document.getElementById('guest-name').addEventListener('keydown', e => {
+      if (e.key === 'Enter') joinRoom();
+    });
+    document.getElementById('room-password').addEventListener('keydown', e => {
       if (e.key === 'Enter') joinRoom();
     });
 
