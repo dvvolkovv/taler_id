@@ -151,12 +151,12 @@ export class AppController {
     // баннер на то, чего нет. Каждая платформа объявляется только после того,
     // как её артефакт реально на месте.
     const latestAndroid = {
-      version: env.APP_LATEST_VERSION || '1.1.29',
-      build: parseInt(env.APP_LATEST_BUILD || '230', 10),
+      version: env.APP_LATEST_VERSION || '1.1.30',
+      build: parseInt(env.APP_LATEST_BUILD || '231', 10),
     };
     const latestIos = {
-      version: env.APP_LATEST_IOS_VERSION || '1.1.29',
-      build: parseInt(env.APP_LATEST_IOS_BUILD || '230', 10),
+      version: env.APP_LATEST_IOS_VERSION || '1.1.30',
+      build: parseInt(env.APP_LATEST_IOS_BUILD || '231', 10),
     };
     const androidUrl =
       env.APP_UPDATE_URL_ANDROID ||
