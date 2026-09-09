@@ -663,6 +663,9 @@
       <div class="input-wrap">
         <input type="text" id="guest-name" placeholder="Ваше имя" maxlength="40" autocomplete="name">
       </div>
+      <div class="input-wrap" id="password-wrap" style="display:none">
+        <input type="password" id="room-password" placeholder="Пароль встречи" maxlength="64" autocomplete="off">
+      </div>
       <button class="btn btn-primary" id="btn-join" onclick="joinRoom()">Войти в комнату</button>
       <div class="error-msg" id="join-error"></div>
     </div>
@@ -985,6 +988,11 @@
         document.getElementById('room-title-text').textContent = roomTitle;
         document.getElementById('call-room-name').textContent = roomTitle;
 
+        // Сервер сам сообщает, нужен ли пароль, — гадать по отказу не нужно.
+        if (data.requiresPassword) {
+          document.getElementById('password-wrap').style.display = '';
+        }
+
         // Show creator info if available
         const cName = data.creatorName;
         let cAvatar = data.creatorAvatar;
@@ -1048,6 +1056,13 @@
         document.getElementById('join-error').textContent = 'Введите имя';
         return;
       }
+      const pwdWrap = document.getElementById('password-wrap');
+      const needsPassword = pwdWrap.style.display !== 'none';
+      const password = document.getElementById('room-password').value.trim();
+      if (needsPassword && !password) {
+        document.getElementById('join-error').textContent = 'Введите пароль встречи';
+        return;
+      }
       const btn = document.getElementById('btn-join');
       btn.disabled = true;
       btn.textContent = 'Подключение...';
@@ -1057,8 +1072,22 @@
         const res = await fetch(`${API_BASE}/voice/rooms/public/${roomCode}/join`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name }),
+          body: JSON.stringify(needsPassword ? { name, password } : { name }),
         });
+        // 403 — это неверный пароль, и только он. Показывать здесь «проверьте
+        // соединение» нельзя: человек будет жать кнопку бесконечно, потому что
+        // сообщение говорит о связи, а исправить надо пароль.
+        if (res.status === 403) {
+          btn.disabled = false;
+          btn.textContent = 'Войти в комнату';
+          // Поле могло быть скрыто (requiresPassword не пришёл — например,
+          // пароль поставили на комнату уже после того, как гость открыл
+          // страницу): без этого 403 был бы единственным тупиком, откуда
+          // нельзя выйти самому — есть куда вводить нечего.
+          document.getElementById('password-wrap').style.display = '';
+          document.getElementById('join-error').textContent = 'Неверный пароль';
+          return;
+        }
         if (!res.ok) throw new Error('join failed');
         const data = await res.json();
         await connectToRoom(data.token);
@@ -2084,6 +2113,9 @@
     }
 
     document.getElementById('guest-name').addEventListener('keydown', e => {
+      if (e.key === 'Enter') joinRoom();
+    });
+    document.getElementById('room-password').addEventListener('keydown', e => {
       if (e.key === 'Enter') joinRoom();
     });
 

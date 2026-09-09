@@ -864,7 +864,57 @@ export class VoiceService {
     return { code, link: `${BASE_URL}/room/${code}` };
   }
 
+  /**
+   * Нормализует пароль встречи перед хешированием — единая точка для
+   * `createTemporaryRoom`/`createPublicRoom`, а не логика, продублированная
+   * в каждом из них по отдельности (два места легко разойтись молча).
+   *
+   * Нормализация была односторонней: пароль задают три клиента (веб,
+   * мобилка, чужие вызовы API), и раньше инвариант «в хеше нет краевых
+   * пробелов» держали только те из них, что сами обрезают ввод перед
+   * отправкой (веб — при входе, мобилка — при создании), а бэкенд при
+   * СОЗДАНИИ хешировал ровно то, что пришло. Пароль `" секрет "`, заданный
+   * через API напрямую, был затем НАВСЕГДА недостижим из веба: веб на входе
+   * шлёт `секрет`, сверка с хешем пробела не сходится, и человек видит
+   * «Неверный пароль» — сообщение, которое в этом случае врёт (пароль
+   * верный, просто клиент и сервер по-разному считали его границы).
+   * Обрезка вынесена на сторону создания (а не входа) намеренно: клиентов
+   * три, а точка создания хеша — одна, и инвариант должен держаться для
+   * всех, а не только для тех, кто не забыл обрезать перед отправкой.
+   *
+   * Обрезка — до хеширования, а не после: хешируется то же значение, что
+   * потом сверяется при входе (входные пути уже получают обрезанный текст
+   * от клиентов, которые обрезают сами).
+   *
+   * Пустое после обрезки — то же самое, что «пароль не задан», а не пароль
+   * из одних пробелов: такой пароль на входе стал бы пустой строкой (веб
+   * обрезает перед отправкой и вовсе не шлёт пустое поле) и был бы НЕВВОДИМ
+   * ничем, при этом бэкенд без этой нормализации считал бы его настоящим и
+   * хешировал. Возвращаем `undefined`, а не пустую строку: вызывающие
+   * методы не хешируют `undefined` (та же ветка `normalizedPassword ? ... :
+   * null`, что была раньше с сырым `password`), и `passwordHash` не
+   * попадает в запись вовсе — гостю или чужому не нужно вводить пароль от
+   * комнаты, где владелец фактически пароль не задал.
+   *
+   * 64 символа — тот же предел, что `maxlength="64"` в веб-форме и в
+   * диалоге мобилки; раньше он жил только в клиентах, и пароль длиннее
+   * можно было создать через API и потом не набрать в браузере ничем.
+   * Проверка — после обрезки, не до: считается длина того, что реально
+   * придётся набрать при входе, а не число отправленных байт (иначе пароль
+   * из пробелов и шести значащих символов отклонялся бы напрасно).
+   */
+  private normalizeRoomPassword(password?: string): string | undefined {
+    if (!password) return undefined;
+    const trimmed = password.trim();
+    if (!trimmed) return undefined;
+    if (trimmed.length > 64) {
+      throw new BadRequestException('password is longer than 64 characters');
+    }
+    return trimmed;
+  }
+
   async createTemporaryRoom(userId: string, title?: string, password?: string) {
+    const normalizedPassword = this.normalizeRoomPassword(password);
     const roomName = 'tmp-' + uuidv4();
     const code = crypto.randomBytes(4).toString('hex');
     await this.rooms.createRoom({
@@ -873,7 +923,9 @@ export class VoiceService {
       departureTimeout: 60,
       maxParticipants: 20,
     });
-    const passwordHash = password ? await bcrypt.hash(password, 10) : null;
+    const passwordHash = normalizedPassword
+      ? await bcrypt.hash(normalizedPassword, 10)
+      : null;
     await this.prisma.publicRoom.create({
       data: {
         code,
@@ -900,6 +952,7 @@ export class VoiceService {
   }
 
   async createPublicRoom(userId?: string, title?: string, password?: string) {
+    const normalizedPassword = this.normalizeRoomPassword(password);
     const roomName = 'pub-' + uuidv4();
     const code = crypto.randomBytes(4).toString('hex');
     await this.rooms.createRoom({
@@ -908,7 +961,9 @@ export class VoiceService {
       departureTimeout: 120,
       maxParticipants: 20,
     });
-    const passwordHash = password ? await bcrypt.hash(password, 10) : null;
+    const passwordHash = normalizedPassword
+      ? await bcrypt.hash(normalizedPassword, 10)
+      : null;
     await this.prisma.publicRoom.create({
       data: {
         code,
@@ -1003,7 +1058,13 @@ export class VoiceService {
       });
       throw new NotFoundException('Room has expired');
     }
-    if (room.passwordHash) {
+    // Создатель не вводит собственный пароль: он его и придумал, а входит
+    // по своей же ссылке той же веткой, что и посторонний с кодом.
+    // Приглашённые участники звонка сюда не попадают вовсе — они входят
+    // через joinRoom, где пароля нет: пароль защищает вход ПО КОДУ комнаты,
+    // а не участие в звонке, на который позвали поимённо.
+    const isCreator = !!room.creatorId && room.creatorId === userId;
+    if (room.passwordHash && !isCreator) {
       if (!password || !(await bcrypt.compare(password, room.passwordHash))) {
         throw new ForbiddenException('Invalid room password');
       }
