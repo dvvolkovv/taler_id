@@ -1003,7 +1003,13 @@ export class VoiceService {
       });
       throw new NotFoundException('Room has expired');
     }
-    if (room.passwordHash) {
+    // Создатель не вводит собственный пароль: он его и придумал, а входит
+    // по своей же ссылке той же веткой, что и посторонний с кодом.
+    // Приглашённые участники звонка сюда не попадают вовсе — они входят
+    // через joinRoom, где пароля нет: пароль защищает вход ПО КОДУ комнаты,
+    // а не участие в звонке, на который позвали поимённо.
+    const isCreator = !!room.creatorId && room.creatorId === userId;
+    if (room.passwordHash && !isCreator) {
       if (!password || !(await bcrypt.compare(password, room.passwordHash))) {
         throw new ForbiddenException('Invalid room password');
       }
