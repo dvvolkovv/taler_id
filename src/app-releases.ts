@@ -11,6 +11,36 @@ export interface AppRelease {
 // Keep notes user-facing (no internal jargon, no commit hashes).
 export const APP_RELEASES: AppRelease[] = [
   {
+    version: '1.1.30',
+    build: 231,
+    date: '2026-09-09',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.30 — пароль на встречу.\n\n' +
+      '🔒 При создании встречи можно задать пароль — и в быстрой комнате, и в ' +
+      'запланированной из календаря. Поле необязательное: оставили пустым — всё ' +
+      'работает как раньше.\n' +
+      '📋 Пароль показывается рядом со ссылкой и копируется отдельной кнопкой. ' +
+      'Это сделано намеренно: отправите ссылку и пароль одним сообщением — ' +
+      'защита перестанет что-либо значить.\n' +
+      '🌐 Гость по ссылке вводит пароль прямо в браузере. Раньше войти в ' +
+      'защищённую комнату из браузера было нельзя вовсе.\n' +
+      '🙋 Себя пароль не спрашивает: создатель входит в свою комнату сразу, ' +
+      'а приглашённые участники звонка — как и прежде, без пароля.',
+    notes_en:
+      'Release 1.1.30 — meeting passwords.\n\n' +
+      '🔒 You can set a password when creating a meeting — both for a quick room ' +
+      'and for one scheduled from the calendar. The field is optional: leave it ' +
+      'empty and everything works as before.\n' +
+      '📋 The password is shown next to the link and copied with its own button. ' +
+      'That is deliberate: send the link and the password in one message and the ' +
+      'protection stops meaning anything.\n' +
+      '🌐 A guest following the link enters the password right in the browser. ' +
+      'Until now joining a protected room from a browser was impossible.\n' +
+      '🙋 You are never asked for your own password: the creator walks straight ' +
+      'into their room, and invited participants join without one, as before.',
+  },
+  {
     version: '1.1.29',
     build: 230,
     date: '2026-09-08',
