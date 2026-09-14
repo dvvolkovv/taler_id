@@ -1004,7 +1004,17 @@ export class VoiceService {
     };
   }
 
-  async joinPublicRoom(code: string, guestName: string, password?: string) {
+  /**
+   * @param isBot вход ассистента, а не человека. Ставит участнику атрибут
+   *   `bot=1`, по которому веб-комната не спрашивает у него согласия на
+   *   запись (см. makeGuestToken).
+   */
+  async joinPublicRoom(
+    code: string,
+    guestName: string,
+    password?: string,
+    isBot = false,
+  ) {
     const room = await this.prisma.publicRoom.findUnique({ where: { code } });
     if (!room || !room.isActive) throw new NotFoundException('Room not found');
     if (
@@ -1034,7 +1044,7 @@ export class VoiceService {
     } catch (_) {}
     await this.clearChatIfNewMeeting(room.roomName);
     return {
-      token: await this.makeGuestToken(room.roomName, guestName),
+      token: await this.makeGuestToken(room.roomName, guestName, isBot),
       roomName: room.roomName,
     };
   }
@@ -1166,11 +1176,33 @@ export class VoiceService {
     }
   }
 
-  private async makeGuestToken(room: string, displayName: string) {
+  /**
+   * Токен гостя публичной комнаты.
+   *
+   * @param isBot ассистент партнёра, а не человек. Личность и права остаются
+   *   гостевыми — меняется только атрибут `bot=1`, по которому комната
+   *   понимает, у кого не надо спрашивать согласия на запись: бот его дать не
+   *   может, и диалог висит до конца встречи (живой случай 14.09.2026).
+   *
+   *   Атрибут ставит СЕРВЕР и кладёт в подписанный токен — участник не может
+   *   назначить его себе сам, уже сидя в комнате.
+   *
+   *   Флаг приходит из тела публичного `join`, то есть на слово вызывающего.
+   *   Человек, собравший запрос руками, так может не попасть в список
+   *   согласия — он при этом остаётся видимым участником комнаты, и записи
+   *   это не отменяет. Понадобится строгость — флаг закрывается ключом
+   *   партнёра, но держать ради этого ключ в двух продах сейчас дороже.
+   */
+  private async makeGuestToken(
+    room: string,
+    displayName: string,
+    isBot = false,
+  ) {
     const identity = 'guest-' + crypto.randomBytes(4).toString('hex');
     const at = new AccessToken(LK_API_KEY, LK_API_SECRET, {
       identity,
       name: displayName,
+      ...(isBot ? { attributes: { bot: '1' } } : {}),
     });
     at.addGrant({ roomJoin: true, room, canPublish: true, canSubscribe: true });
     return await at.toJwt();

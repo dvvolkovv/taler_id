@@ -391,6 +391,10 @@
       align-self: flex-start; background: var(--surface); color: var(--text);
       border-bottom-left-radius: 4px; border: 1px solid var(--border-s);
     }
+    /* Ссылка в сообщении. В чужом пузыре — фирменный синий, в своём он на
+       синей заливке нечитаем, поэтому там белый с подчёркиванием. */
+    .chat-msg a { color: var(--primary); text-decoration: underline; word-break: break-all; }
+    .chat-msg.own a { color: #fff; }
     .chat-msg-name { font-size: 11px; font-weight: 600; color: var(--primary); margin-bottom: 2px; }
     .chat-msg.own .chat-msg-name { color: rgba(255,255,255,0.7); }
     .chat-msg-time { font-size: 10px; color: var(--text-2); margin-top: 2px; text-align: right; }
@@ -898,6 +902,27 @@
     let camEnabled = true;
     let screenEnabled = false;
     let pinnedTileId = null;
+    /**
+     * Бот в комнате, а не человек.
+     *
+     * Согласия на запись у ботов не спрашивают: ответить они не могут, а
+     * диалог ждёт ответа от каждого. 14.09.2026 на встрече из-за этого не
+     * началась запись на сервер — ассистент Linkeon («Роман · ассистент
+     * Дмитрия») входит обычным публичным join и получает такую же личность
+     * `guest-<hex>`, как человек, поэтому закрытый список личностей ниже его
+     * не ловил.
+     *
+     * Отсюда второй признак — атрибут `bot`, который ставит НАШ сервер в
+     * подписанный токен гостя (makeGuestToken). Свои боты по-прежнему
+     * опознаются по личности: у них токен выдаётся другим путём.
+     */
+    function isBotParticipant(p) {
+      if (!p) return false;
+      const id = p.identity;
+      if (id === 'meeting-recorder' || id === 'ai-assistant' || id === 'voice-translator') return true;
+      return !!(p.attributes && p.attributes.bot === '1');
+    }
+
     // ── Recording consent state ──
     let recordingInitiatorId = null;    // identity of who initiated recording
     let recordingInitiatorName = '';
@@ -1189,7 +1214,7 @@
           setTimeout(() => renderParticipant(participant), 500);
           if (isRecording) broadcastRecordingStatus(true);
           const pid = participant.identity;
-          const isHuman = pid !== 'meeting-recorder' && pid !== 'ai-assistant' && pid !== 'voice-translator';
+          const isHuman = !isBotParticipant(participant);
           if (isHuman) {
             // Consent still pending — add to tracking and notify
             if (consentPending && recordingInitiatorId === localIdentity) {
@@ -2207,7 +2232,7 @@
       if (!room || consentPending || isRecording) return;
 
       const participants = Array.from(room.remoteParticipants.values())
-        .filter(p => p.identity !== 'meeting-recorder' && p.identity !== 'voice-translator');
+        .filter(p => !isBotParticipant(p));
 
       // If no other participants, start recording directly
       if (participants.length === 0) {
@@ -2243,7 +2268,7 @@
 
     function sendConsentRequestTo(participant) {
       if (!room) return;
-      if (participant.identity === 'meeting-recorder' || participant.identity === 'voice-translator') return;
+      if (isBotParticipant(participant)) return;
 
       // Add to tracking if consent is pending
       if (consentPending && !consentResponses.has(participant.identity)) {
@@ -2491,7 +2516,7 @@
       if (!room || srvRecConsentPending || srvRecActive) return;
 
       const participants = Array.from(room.remoteParticipants.values())
-        .filter(p => p.identity !== 'meeting-recorder' && p.identity !== 'voice-translator' && p.identity !== 'ai-assistant');
+        .filter(p => !isBotParticipant(p));
 
       srvRecInitiatorId = localIdentity;
       srvRecInitiatorName = getDisplayName(room.localParticipant);
@@ -3654,6 +3679,55 @@
       await doSendChat(clientMsgId, pending.text, pending.name, pending.el);
     }
 
+    /** Адрес внутри сообщения: с протоколом или начинающийся с www.
+     *  Хвостовая пунктуация в адрес не входит — её отрезает fillChatText. */
+    const CHAT_URL_RE = /(https?:\/\/[^\s]+|www\.[^\s]+)/gi;
+
+    /** Закрывающая скобка входит в адрес, только если в нём есть открывающая:
+     *  «(см. https://ru.wikipedia.org/wiki/Кот)» против «…/wiki/Кот_(животное)». */
+    function trimUrlTail(url) {
+      let end = url.length;
+      while (end > 0) {
+        const ch = url[end - 1];
+        if ('.,;:!?»"\''.includes(ch)) { end--; continue; }
+        if (ch === ')' && (url.slice(0, end).match(/\(/g) || []).length < (url.slice(0, end).match(/\)/g) || []).length) { end--; continue; }
+        break;
+      }
+      return url.slice(0, end);
+    }
+
+    /** Кладёт текст сообщения в узел, превращая адреса в ссылки.
+     *
+     *  Собирается узлами DOM, а не строкой в innerHTML: текст приходит от
+     *  других участников, и любая склейка разметки здесь — дыра. Раньше тут
+     *  стоял голый textContent, и присланную ссылку нельзя было открыть —
+     *  только выделить и скопировать (замечание владельца 14.09.2026). */
+    function fillChatText(el, text) {
+      const src = String(text == null ? '' : text);
+      // split с группой захвата оставляет разделители в массиве: чётные
+      // элементы — обычный текст, нечётные — найденные адреса.
+      const parts = src.split(CHAT_URL_RE);
+      parts.forEach((part, i) => {
+        if (!part) return;
+        if (i % 2 === 0) { el.appendChild(document.createTextNode(part)); return; }
+        const url = trimUrlTail(part);
+        if (!url) { el.appendChild(document.createTextNode(part)); return; }
+        const a = document.createElement('a');
+        // href всегда с протоколом: без него браузер считает адрес
+        // относительным и уводит на /www.example.com внутри комнаты.
+        a.href = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+        a.target = '_blank';
+        // noopener обязателен: открытая вкладка иначе получает window.opener
+        // и может увести встречу на свою страницу.
+        a.rel = 'noopener noreferrer';
+        a.textContent = url;
+        el.appendChild(a);
+        if (part.length > url.length) {
+          el.appendChild(document.createTextNode(part.slice(url.length)));
+        }
+      });
+    }
+
     /** Строит DOM-узел одного сообщения, никуда его не вставляя. Общая часть
      *  для appendChatMessage (сразу в живую ленту) и loadChatHistory (пачкой
      *  во фрагмент — см. её комментарий, почему не сюда же). Запасные
@@ -3671,7 +3745,7 @@
       div.appendChild(nameEl);
 
       const textEl = document.createElement('div');
-      textEl.textContent = text;
+      fillChatText(textEl, text);
       div.appendChild(textEl);
 
       const timeEl = document.createElement('div');

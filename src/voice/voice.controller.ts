@@ -200,8 +200,16 @@ export class VoiceController {
     @Param('code') code: string,
     @Body('name') name: string,
     @Body('password') password: string | undefined,
+    // Вход ассистента (Linkeon и прочие интеграторы), а не человека. Комната
+    // не спрашивает у него согласия на запись — см. makeGuestToken.
+    @Body('bot') bot: boolean | undefined,
   ) {
-    return this.service.joinPublicRoom(code, name || 'Guest', password);
+    return this.service.joinPublicRoom(
+      code,
+      name || 'Guest',
+      password,
+      bot === true,
+    );
   }
 
   @Post('rooms/public/:code/join-auth')
