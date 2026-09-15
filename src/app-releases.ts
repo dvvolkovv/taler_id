@@ -11,6 +11,38 @@ export interface AppRelease {
 // Keep notes user-facing (no internal jargon, no commit hashes).
 export const APP_RELEASES: AppRelease[] = [
   {
+    version: '1.1.31',
+    build: 232,
+    date: '2026-09-15',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.31 — протокол встречи собирается в фоне.\n\n' +
+      '📝 Кнопка создания протокола больше не показывает ошибку. Приложение ждало ' +
+      'ответа 30 секунд, а сборка протокола на часовой записи занимает несколько ' +
+      'минут — появлялась красная ошибка, хотя протокол спокойно дособирался и ' +
+      'возникал сам при следующем открытии экрана.\n' +
+      '⏱ Теперь приложение сразу говорит, что протокол собирается, и обновляет ' +
+      'встречу само, пока он не будет готов. Повторное нажатие ничего не запускает ' +
+      'заново и второй раз не списывает.\n' +
+      '📼 У встреч длиннее 50 минут протокол не собирался вовсе — упирались в ' +
+      'ограничение сервиса распознавания речи. Теперь длительность не мешает.\n' +
+      '📅 В календаре снова появляется кнопка сохранения при редактировании ' +
+      'существующего события — до этого изменить уже созданную встречу было нельзя.',
+    notes_en:
+      'Release 1.1.31 — meeting transcripts are built in the background.\n\n' +
+      '📝 The transcript button no longer shows an error. The app waited 30 seconds ' +
+      'for an answer while building a transcript of an hour-long recording takes ' +
+      'minutes, so you got a red error even though the transcript finished fine and ' +
+      'showed up on its own next time you opened the screen.\n' +
+      '⏱ The app now tells you the transcript is being built and refreshes the ' +
+      'meeting by itself until it is ready. Tapping again starts nothing over and ' +
+      'does not charge twice.\n' +
+      '📼 Meetings longer than 50 minutes produced no transcript at all — they hit a ' +
+      'limit in the speech recognition service. Length is no longer a problem.\n' +
+      '📅 Calendar: the save button is back when editing an existing event — until ' +
+      'now an already-created meeting could not be changed.',
+  },
+  {
     version: '1.1.30',
     build: 231,
     date: '2026-09-09',
