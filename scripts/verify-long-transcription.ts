@@ -21,7 +21,10 @@
  *     --email integration_test@taler-test.com --password 'IntegrationTest123!'
  *
  * Необязательные ключи:
- *   --minutes 53     желаемая длительность (по умолчанию 53 — чуть за потолком)
+ *   --minutes N      задать длительность вручную; по умолчанию она считается от
+ *                    битрейта донора так, чтобы гарантированно перешагнуть
+ *                    потолок — у разных записей битрейт разный, и фиксированное
+ *                    число минут то перешагивает его, то нет
  *   --seed <s3-key>  короткая запись-донор; по умолчанию берётся самая свежая
  *   --keep           не удалять встречу и файл (для разбора)
  */
@@ -55,8 +58,10 @@ const BASE_URL = (process.env.BASE_URL ?? 'http://localhost:3000').replace(
 );
 const EMAIL = arg('email');
 const PASSWORD = arg('password');
-const MINUTES = Number(arg('minutes', '53'));
+const MINUTES = arg('minutes') ? Number(arg('minutes')) : null;
 const KEEP = has('keep');
+/** Запас над потолком, чтобы проверка не зависела от точности склейки. */
+const OVERSHOOT = 1.15;
 
 const bucket = process.env.S3_FILES_BUCKET ?? 'taler-id-files';
 const s3 = new S3Client({
@@ -132,7 +137,12 @@ async function main() {
       '-of', 'default=nw=1:nk=1', seedPath,
     ]);
     const seedSec = Number.parseFloat(stdout.trim());
-    const repeats = Math.ceil((MINUTES * 60) / seedSec);
+    // Считаем по байтам донора, а не по минутам: битрейт у записей разный, и
+    // «53 минуты» у одной уверенно перешагивают потолок, а у другой не дотягивают.
+    const repeats = MINUTES
+      ? Math.ceil((MINUTES * 60) / seedSec)
+      : Math.ceil((WHISPER_CAP * OVERSHOOT) / seed.length);
+    const plannedMin = Math.round((repeats * seedSec) / 60);
     await fs.promises.writeFile(
       listPath,
       Array.from({ length: repeats }, () => `file '${seedPath}'`).join('\n'),
@@ -147,7 +157,7 @@ async function main() {
     );
     const long = await fs.promises.readFile(longPath);
     check(
-      `склеена запись на ~${MINUTES} мин, ${long.length} Б`,
+      `склеена запись на ~${plannedMin} мин, ${long.length} Б`,
       long.length > WHISPER_CAP,
       long.length > WHISPER_CAP
         ? `на ${long.length - WHISPER_CAP} Б за потолком Whisper`
