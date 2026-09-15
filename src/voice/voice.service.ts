@@ -14,6 +14,7 @@ import {
   RoomServiceClient,
   DataPacket_Kind,
 } from 'livekit-server-sdk';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { v4 as uuidv4 } from 'uuid';
 import * as crypto from 'crypto';
 import * as bcrypt from 'bcrypt';
@@ -83,6 +84,11 @@ const WHISPER_MAX_PARALLEL_CHUNKS = 4;
 // in ~200 s on one run took over 300 s on the next — close enough to the limit
 // that guessing a chunk size to stay under it is not a strategy.
 const WHISPER_REQUEST_TIMEOUT_MS = 15 * 60 * 1000;
+// После какого простоя попытка расшифровки считается брошенной. Потолок сверху
+// задаёт сама работа: куски идут по четыре, на каждый до 15 минут, так что у
+// трёхчасовой записи набирается около 45. Час — заведомо больше любого честного
+// прогона и при этом не заставляет пользователя ждать до следующего деплоя.
+const ABANDONED_TRANSCRIPTION_MS = 60 * 60 * 1000;
 
 type WhisperSegment = { start: number; end: number; text: string };
 const BASE_URL = process.env.BASE_URL || 'https://id.taler.tirol';
@@ -1705,32 +1711,73 @@ export class VoiceService implements OnModuleInit {
   }
 
   /** Transcription outlives the request that started it, but not the process
-   *  running it: a restart mid-way leaves the meeting on "processing" forever,
-   *  and the screen keeps promising a protocol that nobody is working on. Four
-   *  meetings have been sitting like that since March.
-   *
-   *  This only clears the obviously-abandoned ones. There is no column recording
-   *  when an attempt began, so "abandoned" has to be inferred from the meeting's
-   *  own age — a day is far longer than any transcription takes, and it keeps the
-   *  sweep from touching a job the *other* app node may be running right now.
-   *  Picking up where a restart left off needs that timestamp and is the next
-   *  step; this just stops the UI lying in the meantime.
-   */
+   *  running it. A restart mid-way used to leave the meeting on "processing"
+   *  forever and the money for it taken — four meetings sat like that from March
+   *  to September. */
   async onModuleInit() {
+    await this.sweepAbandonedTranscriptions();
+  }
+
+  /** Runs on a timer as well as at startup: a crash that doesn't restart the
+   *  process (an unhandled rejection killing the job, say) leaves the same
+   *  wreckage, and waiting for the next deploy to clear it is too long. */
+  @Cron(CronExpression.EVERY_10_MINUTES)
+  async sweepAbandonedTranscriptions() {
     try {
-      const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      const swept = await this.prisma.meetingSummary.updateMany({
-        where: { status: 'processing', createdAt: { lt: cutoff } },
-        data: { status: 'failed' },
+      const cutoff = new Date(Date.now() - ABANDONED_TRANSCRIPTION_MS);
+      const abandoned = await this.prisma.meetingSummary.findMany({
+        // Rows with no timestamp are left alone on purpose: they predate this
+        // column, and closing a job we were never told the start of would be
+        // guessing. They are also, by now, the only ones that can't be dated.
+        where: {
+          status: 'processing',
+          transcriptionStartedAt: { not: null, lt: cutoff },
+        },
+        select: { id: true },
       });
-      if (swept.count > 0) {
-        this.log.warn(
-          `[whisper] ${swept.count} встреч(и) висели в processing дольше суток — помечены failed`,
-        );
+      if (abandoned.length === 0) return;
+
+      for (const { id } of abandoned) {
+        // Give the money back before closing the meeting. The pre-debit is found
+        // by meeting id rather than kept in a column — the ledger already records
+        // it, and a SPEND that hasn't been reversed is exactly the orphan.
+        const orphanDebits = await this.prisma.billingTransaction.findMany({
+          where: {
+            type: 'SPEND',
+            status: { not: 'REVERSED' },
+            featureKey: FEATURE_KEYS.WHISPER_TRANSCRIBE,
+            metadata: { path: ['meetingId'], equals: id },
+          },
+          select: { id: true },
+        });
+        for (const tx of orphanDebits) {
+          // Both app nodes may sweep at once; refund() locks the row and throws
+          // on an already-reversed one, so the loser of the race just moves on.
+          await this.ledger
+            .refund(tx.id, `transcription abandoned (meeting ${id})`)
+            .catch((e) =>
+              this.log.warn(
+                `[whisper] возврат за брошенную расшифровку ${id} не прошёл: ${String(e)}`,
+              ),
+            );
+        }
+        await this.prisma.meetingSummary
+          .updateMany({
+            // Re-check the status: by now the other node may have finished it.
+            where: { id, status: 'processing' },
+            data: { status: 'failed' },
+          })
+          .catch(() => {});
       }
+
+      this.log.warn(
+        `[whisper] брошенных расшифровок: ${abandoned.length} — закрыты, предоплата возвращена`,
+      );
     } catch (err) {
       // A sweep that can't run must not stop the service from starting.
-      this.log.error(`[whisper] не удалось разобрать зависшие встречи: ${String(err)}`);
+      this.log.error(
+        `[whisper] не удалось разобрать брошенные расшифровки: ${String(err)}`,
+      );
     }
   }
 
@@ -2125,7 +2172,7 @@ export class VoiceService implements OnModuleInit {
 
     await this.prisma.meetingSummary.update({
       where: { id: meetingId },
-      data: { status: 'processing' },
+      data: { status: 'processing', transcriptionStartedAt: new Date() },
     });
 
     // Deliberately not awaited: the work runs for minutes and nothing upstream

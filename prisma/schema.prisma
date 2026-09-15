@@ -515,9 +515,17 @@ model MeetingSummary {
   // The mixed recording has no speaker information of its own, so this is what
   // puts names on the transcript without transcribing each participant apart.
   speakerTimeline   Json?
+  // When the current transcription attempt began. The work is detached from the
+  // request and outlives it, but not the process running it — without this there
+  // is no way to tell a run abandoned by a restart from one the other app node
+  // is doing right now, and the meeting sits on "processing" forever.
+  transcriptionStartedAt DateTime?
   createdAt         DateTime @default(now())
 
   callLog CallLog? @relation(fields: [callLogId], references: [id])
+
+  // Уборщик брошенных расшифровок ходит именно по этой паре.
+  @@index([status, transcriptionStartedAt])
 }
 
 model MessageHidden {

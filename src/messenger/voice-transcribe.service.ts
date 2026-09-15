@@ -5,6 +5,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import axios from 'axios';
 import { Readable } from 'stream';
 import { PrismaService } from '../prisma/prisma.service';
 import { FileStorageService } from '../common/file-storage.service';
@@ -24,6 +25,16 @@ const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
  * округление всегда вверх.
  */
 const BYTES_PER_SECOND_ESTIMATE = 4000;
+
+/**
+ * Потолок на сам запрос к Whisper. У встроенного в Node fetch зашит таймаут
+ * ожидания заголовков в 300 секунд, и задать его на вызов нельзя, а Whisper
+ * тратит примерно 6 секунд на минуту звука. Голосовое обычно короткое, но
+ * MAX_AUDIO_BYTES пропускает до 25 МБ — при ~4 КБ/с это больше часа записи,
+ * то есть пересланный длинный аудиофайл упирался бы в тот же предел и падал
+ * голым «TypeError: fetch failed». Запрос идёт через axios, где таймаут наш.
+ */
+const WHISPER_REQUEST_TIMEOUT_MS = 15 * 60 * 1000;
 
 @Injectable()
 export class VoiceTranscribeService {
@@ -174,15 +185,23 @@ export class VoiceTranscribeService {
     // Голосовое короткое — разбивка по сегментам и тайм-коды тут ни к чему.
     form.append('response_format', 'json');
 
-    const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${key}` },
-      body: form,
-    });
-    if (!res.ok) {
-      throw new Error(`Whisper ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    const res = await axios.post(
+      'https://api.openai.com/v1/audio/transcriptions',
+      form,
+      {
+        headers: { Authorization: `Bearer ${key}` },
+        timeout: WHISPER_REQUEST_TIMEOUT_MS,
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity,
+        validateStatus: () => true,
+      },
+    );
+    if (res.status < 200 || res.status >= 300) {
+      const body =
+        typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+      throw new Error(`Whisper ${res.status}: ${body.slice(0, 200)}`);
     }
-    const data = (await res.json()) as any;
+    const data = res.data as any;
     return typeof data.text === 'string' ? data.text : '';
   }
 }

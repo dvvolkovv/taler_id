@@ -37,6 +37,9 @@ const mockPrisma = {
     findMany: jest.fn(),
     findUnique: jest.fn(),
   },
+  billingTransaction: {
+    findMany: jest.fn(),
+  },
   conversationParticipant: {
     findMany: jest.fn(),
   },
@@ -173,27 +176,81 @@ describe("VoiceService", () => {
       ).rejects.toThrow("Not a participant of this meeting");
     });
 
-    it("clears meetings abandoned mid-transcription by a restart", async () => {
-      mockPrisma.meetingSummary.updateMany.mockResolvedValue({ count: 2 });
+    it("closes meetings abandoned mid-transcription and gives the money back", async () => {
+      mockPrisma.meetingSummary.findMany.mockResolvedValue([{ id: "m-old" }]);
+      mockPrisma.billingTransaction.findMany.mockResolvedValue([
+        { id: "tx-orphan" },
+      ]);
+      mockPrisma.meetingSummary.updateMany.mockResolvedValue({ count: 1 });
 
-      await service.onModuleInit();
+      await service.sweepAbandonedTranscriptions();
 
-      const [arg] = mockPrisma.meetingSummary.updateMany.mock.calls[0] as any[];
-      expect(arg.data).toEqual({ status: "failed" });
-      expect(arg.where.status).toBe("processing");
-      // Only the long-abandoned ones: without an age bound this would also kill
-      // whatever the other app node is transcribing at this very moment.
-      const cutoff: Date = arg.where.createdAt.lt;
-      const hoursBack = (Date.now() - cutoff.getTime()) / 3_600_000;
-      expect(hoursBack).toBeGreaterThanOrEqual(23);
+      // Refund first, then close — a meeting marked failed with the pre-debit
+      // still taken is the exact state four March meetings were left in.
+      expect(mockLedger.refund).toHaveBeenCalledWith(
+        "tx-orphan",
+        expect.stringContaining("m-old"),
+      );
+      const [closed] = mockPrisma.meetingSummary.updateMany.mock
+        .calls[0] as any[];
+      expect(closed.data).toEqual({ status: "failed" });
+      // Status is re-checked on the way out: the other node may have finished it
+      // while we were refunding.
+      expect(closed.where).toMatchObject({ id: "m-old", status: "processing" });
+    });
+
+    it("leaves a run that only just started alone", async () => {
+      mockPrisma.meetingSummary.findMany.mockResolvedValue([]);
+
+      await service.sweepAbandonedTranscriptions();
+
+      const [query] = mockPrisma.meetingSummary.findMany.mock.calls[0] as any[];
+      expect(query.where.status).toBe("processing");
+      // An age bound is the whole point: without it the sweep would kill
+      // whatever the other app node is transcribing right now.
+      const cutoff: Date = query.where.transcriptionStartedAt.lt;
+      const minutesBack = (Date.now() - cutoff.getTime()) / 60_000;
+      expect(minutesBack).toBeGreaterThanOrEqual(30);
+      // Rows predating the column carry no timestamp and must not be guessed at.
+      expect(query.where.transcriptionStartedAt.not).toBeNull();
+      expect(mockLedger.refund).not.toHaveBeenCalled();
+    });
+
+    it("survives a refund that loses the race to the other node", async () => {
+      mockPrisma.meetingSummary.findMany.mockResolvedValue([{ id: "m-old" }]);
+      mockPrisma.billingTransaction.findMany.mockResolvedValue([
+        { id: "tx-orphan" },
+      ]);
+      mockPrisma.meetingSummary.updateMany.mockResolvedValue({ count: 1 });
+      mockLedger.refund.mockRejectedValue(
+        new Error("transaction tx-orphan already reversed"),
+      );
+
+      await expect(
+        service.sweepAbandonedTranscriptions(),
+      ).resolves.toBeUndefined();
+      // The meeting still gets closed — losing the refund race means someone
+      // else already paid it back, not that the row should stay stuck.
+      expect(mockPrisma.meetingSummary.updateMany).toHaveBeenCalled();
     });
 
     it("starts even if the sweep fails", async () => {
-      mockPrisma.meetingSummary.updateMany.mockRejectedValue(
+      mockPrisma.meetingSummary.findMany.mockRejectedValue(
         new Error("db is having a moment"),
       );
 
       await expect(service.onModuleInit()).resolves.toBeUndefined();
+    });
+
+    it("stamps the start of the attempt so the sweep can date it", async () => {
+      mockPrisma.meetingSummary.findUnique.mockResolvedValue(meeting());
+
+      await service.transcribeExistingRecording(OWNER_ID, "m-1");
+
+      const stamped = mockPrisma.meetingSummary.update.mock.calls
+        .map(([arg]: any) => arg.data)
+        .find((d: any) => d.status === "processing");
+      expect(stamped.transcriptionStartedAt).toBeInstanceOf(Date);
     });
 
     it("refuses to start a second pass, and a second charge, while one runs", async () => {

@@ -1,4 +1,14 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+
+// Расшифровка идёт через axios, а не через глобальный fetch: у встроенного в
+// Node fetch таймаут ожидания заголовков зашит в 300 секунд и на вызов не
+// задаётся, а MAX_AUDIO_BYTES пропускает больше часа звука.
+const axiosPost = jest.fn();
+jest.mock('axios', () => ({
+  __esModule: true,
+  default: { post: (...args: any[]) => axiosPost(...args) },
+}));
+
 import { VoiceTranscribeService } from './voice-transcribe.service';
 
 describe('VoiceTranscribeService', () => {
@@ -8,7 +18,6 @@ describe('VoiceTranscribeService', () => {
   let gating: any;
   let ledger: any;
   let pricing: any;
-  let fetchMock: jest.Mock;
 
   const voiceMessage = (over: any = {}) => ({
     id: 'm-1',
@@ -48,11 +57,11 @@ describe('VoiceTranscribeService', () => {
 
     service = new VoiceTranscribeService(prisma, storage, gating, ledger, pricing);
     process.env.OPENAI_API_KEY = 'test-key';
-    fetchMock = jest.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ text: 'привет из голосового' }),
+    axiosPost.mockReset();
+    axiosPost.mockResolvedValue({
+      status: 200,
+      data: { text: 'привет из голосового' },
     });
-    (global as any).fetch = fetchMock;
   });
 
   it('transcribes and stores the text on the message', async () => {
@@ -77,7 +86,7 @@ describe('VoiceTranscribeService', () => {
 
     expect(out).toEqual({ transcript: 'уже расшифровано', cached: true });
     expect(ledger.debit).not.toHaveBeenCalled();
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(axiosPost).not.toHaveBeenCalled();
   });
 
   it('refuses a non-participant', async () => {
@@ -123,7 +132,7 @@ describe('VoiceTranscribeService', () => {
   });
 
   it('refunds when Whisper fails', async () => {
-    fetchMock.mockResolvedValue({ ok: false, status: 500, text: async () => 'boom' });
+    axiosPost.mockResolvedValue({ status: 500, data: 'boom' });
 
     await expect(service.transcribeMessage('m-1', 'u-1')).rejects.toThrow(BadRequestException);
     expect(ledger.refund).toHaveBeenCalledWith('tx-1', expect.stringContaining('Whisper 500'));
@@ -134,14 +143,14 @@ describe('VoiceTranscribeService', () => {
     ledger.debit.mockRejectedValue(new Error('insufficient funds'));
 
     await expect(service.transcribeMessage('m-1', 'u-1')).rejects.toThrow('insufficient funds');
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(axiosPost).not.toHaveBeenCalled();
     expect(gating.endSession).toHaveBeenCalledWith('sess-1', 'failed');
   });
 
   it('stores an empty transcript for a silent recording', async () => {
     // Тишина — это ответ, а не ошибка: иначе кнопка предлагала бы
     // расшифровать снова и снова, списывая каждый раз.
-    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ text: '   ' }) });
+    axiosPost.mockResolvedValue({ status: 200, data: { text: '   ' } });
 
     const out = await service.transcribeMessage('m-1', 'u-1');
 
