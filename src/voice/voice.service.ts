@@ -1531,6 +1531,27 @@ export class VoiceService {
       if (log) callLogId = log.id;
     } catch (_) {}
 
+    // A recording that captured nobody (`failed_no_audio`) arrives with no
+    // participants at all, and `getMeetingSummaries` matches on participation or
+    // on a `personal-<owner>` room name — so in a temporary room the row would
+    // belong to no one and nobody would ever learn the recording failed. Whoever
+    // opened the room is on PublicRoom, which any app node can read.
+    let participantIds = data.participantIds ?? [];
+    if (participantIds.length === 0) {
+      try {
+        const room = await this.prisma.publicRoom.findFirst({
+          where: { roomName: data.roomName },
+          select: { creatorId: true },
+        });
+        if (room?.creatorId) participantIds = [room.creatorId];
+      } catch (err) {
+        // Losing the attribution beats losing the row.
+        this.log.warn(
+          `saveMeetingSummary: could not resolve room creator for ${data.roomName}: ${String(err)}`,
+        );
+      }
+    }
+
     const summary = await this.prisma.meetingSummary.create({
       data: {
         roomName: data.roomName,
@@ -1541,7 +1562,7 @@ export class VoiceService {
         actionItems: data.actionItems,
         decisions: data.decisions,
         participants: data.participants,
-        participantIds: data.participantIds ?? [],
+        participantIds,
         durationSec: data.durationSec ?? null,
         recordingUrl: data.recordingUrl ?? null,
         status: data.status ?? 'done',
