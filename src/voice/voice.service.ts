@@ -67,6 +67,10 @@ const WHISPER_SHRINK_BITRATE = '32k';
 // races somewhere around 50 minutes of audio, well before the re-encoded file
 // would outgrow the byte cap. 15 minutes a chunk keeps each call near 100 s.
 const WHISPER_CHUNK_SECONDS = 900;
+// Chunks are independent, so they go out concurrently — sequentially, a 53-minute
+// meeting took ~10 minutes of wall clock, four at a time it takes ~2.5. Bounded
+// so a three-hour recording doesn't open a dozen uploads at once.
+const WHISPER_MAX_PARALLEL_CHUNKS = 4;
 
 type WhisperSegment = { start: number; end: number; text: string };
 const BASE_URL = process.env.BASE_URL || 'https://id.taler.tirol';
@@ -1925,22 +1929,36 @@ export class VoiceService {
         `${durationSec === null ? 'duration unknown' : `${Math.round(durationSec)} s`}`,
     );
     const parts = await this.splitAudioForWhisper(payload, label);
-    const all: WhisperSegment[] = [];
-    for (let i = 0; i < parts.length; i++) {
-      const { segments, text } = await this.callWhisper(
-        parts[i].buffer,
-        `part-${i}-${uploadName}`,
-        uploadMime,
-      );
-      for (const s of this.normalizeWhisperSegments(segments, text)) {
-        all.push({
-          start: s.start + parts[i].offsetSec,
-          end: s.end + parts[i].offsetSec,
-          text: s.text,
-        });
-      }
-    }
-    return all;
+
+    // Each chunk knows its own offset before anything is sent, so the calls can
+    // overlap; results are collected by index and only then flattened, which
+    // keeps the transcript in meeting order regardless of which call lands first.
+    const perChunk: WhisperSegment[][] = new Array(parts.length);
+    let nextIndex = 0;
+    const workers = Array.from(
+      { length: Math.min(WHISPER_MAX_PARALLEL_CHUNKS, parts.length) },
+      async () => {
+        for (;;) {
+          const i = nextIndex++;
+          if (i >= parts.length) return;
+          const { segments, text } = await this.callWhisper(
+            parts[i].buffer,
+            `part-${i}-${uploadName}`,
+            uploadMime,
+          );
+          perChunk[i] = this.normalizeWhisperSegments(segments, text).map(
+            (s) => ({
+              start: s.start + parts[i].offsetSec,
+              end: s.end + parts[i].offsetSec,
+              text: s.text,
+            }),
+          );
+        }
+      },
+    );
+    await Promise.all(workers);
+
+    return perChunk.flat();
   }
 
   async transcribeExistingRecording(userId: string, meetingId: string) {

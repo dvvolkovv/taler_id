@@ -16,6 +16,8 @@ import * as path from 'path';
 
 /** What the mocked ffprobe reports; individual tests set it. */
 let probeDuration = 60;
+/** How many chunk files the mocked segmenter emits; individual tests set it. */
+let chunkCount = 3;
 const execFileMock = jest.fn();
 
 jest.mock('child_process', () => ({
@@ -32,12 +34,12 @@ jest.mock('child_process', () => ({
 
     const out = argv[argv.length - 1];
     if (argv.includes('segment')) {
-      // Stand in for `-f segment`: emit three chunk files next to the pattern.
+      // Stand in for `-f segment`: emit chunk files next to the pattern.
       const dir = path.dirname(out);
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < chunkCount; i++) {
         fs.writeFileSync(
-          path.join(dir, `part-00${i}.mp3`),
-          Buffer.alloc(1024 * 1024, i + 1),
+          path.join(dir, `part-${String(i).padStart(3, '0')}.mp3`),
+          Buffer.alloc(64 * 1024, i + 1),
         );
       }
       return cb(null, { stdout: '', stderr: '' });
@@ -91,6 +93,9 @@ const ffmpegCalls = () =>
 describe('transcribeExistingRecording — Whisper size and duration limits', () => {
   let service: VoiceService;
   let fetchMock: jest.Mock;
+  /** Peak number of overlapping transcription requests during one run. */
+  let maxInFlight = 0;
+  let inFlight = 0;
 
   const meeting = (over: Record<string, unknown> = {}) => ({
     id: 'm-1',
@@ -107,6 +112,9 @@ describe('transcribeExistingRecording — Whisper size and duration limits', () 
     jest.clearAllMocks();
     execFileMock.mockClear();
     probeDuration = 60;
+    chunkCount = 3;
+    maxInFlight = 0;
+    inFlight = 0;
 
     mockPrisma.meetingSummary.findUnique.mockResolvedValue(meeting());
     mockPrisma.meetingSummary.update.mockResolvedValue({ id: 'm-1' });
@@ -129,6 +137,12 @@ describe('transcribeExistingRecording — Whisper size and duration limits', () 
               `{"error":{"message":"413: Maximum content size limit (${WHISPER_CAP}) exceeded (${uploaded} bytes read)","type":"server_error"}}`,
           };
         }
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        // Yield so concurrent calls actually overlap rather than resolving
+        // one-by-one on the microtask queue.
+        await new Promise((r) => setTimeout(r, 5));
+        inFlight -= 1;
         return {
           ok: true,
           json: async () => ({
@@ -243,5 +257,28 @@ describe('transcribeExistingRecording — Whisper size and duration limits', () 
       .filter(Boolean)[0] as string;
     const stamps = transcript.split('\n').map((l) => l.slice(0, 7));
     expect(stamps).toEqual(['[00:00]', '[16:40]', '[33:20]']);
+  });
+
+  it('transcribes chunks concurrently but no more than four at a time', async () => {
+    probeDuration = CHUNK_SECONDS + 100;
+    chunkCount = 9;
+    stubDownload(12_724_209);
+
+    await service.transcribeExistingRecording(OWNER_ID, 'm-1');
+
+    expect(whisperUploadSizes(fetchMock)).toHaveLength(9);
+    expect(maxInFlight).toBeGreaterThan(1);
+    expect(maxInFlight).toBeLessThanOrEqual(4);
+
+    // Order must survive the overlap: nine chunks, each one probeDuration apart.
+    const transcript = mockPrisma.meetingSummary.update.mock.calls
+      .map(([arg]: any) => arg.data.transcript)
+      .filter(Boolean)[0] as string;
+    const starts = transcript
+      .split('\n')
+      .map((l) => l.match(/^\[(\d+):(\d+)\]/)!)
+      .map((m) => Number(m[1]) * 60 + Number(m[2]));
+    expect(starts).toEqual([...starts].sort((a, b) => a - b));
+    expect(starts).toHaveLength(9);
   });
 });
