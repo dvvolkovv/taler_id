@@ -2127,6 +2127,25 @@ export class VoiceService {
         FEATURE_KEYS.MEETING_SUMMARY,
       );
 
+      // Who was in the room is known exactly — LiveKit identities, saved by the
+      // recorder. The transcript knows nothing of the sort: the mixed recording
+      // carries no speaker labels, so the only names in it are the ones people
+      // said out loud, third parties included. Without the roster GPT-4o fills
+      // the gap from vocatives and hands action items to people who were merely
+      // discussed (meeting 4bb0e777: "приняли участие Володя, Илья, Дим",
+      // assignee "Серега" — Илья and Серёга were never in the call).
+      const roster = (meeting.participants ?? []).filter(
+        (name) => typeof name === 'string' && name.trim().length > 0,
+      );
+      const rosterBlock = roster.length
+        ? `Участники встречи (полный список, взят из системы звонков, а не из речи): ${roster.join(', ')}.
+Любое другое имя, прозвучавшее в транскрипте, принадлежит человеку, которого на встрече не было — его только упоминали. Не записывай таких людей в участники и не назначай их ответственными за задачи; если задача касается отсутствующего, пиши его как "упомянут: <имя>".
+В речи участников зовут уменьшительно, по имени или по отчеству — сопоставляй такие обращения со списком выше сам. Если сопоставить не удалось, оставляй assignee пустым, а не угадывай.
+
+Транскрипт встречи:
+`
+        : '';
+
       try {
         const gptRes = await fetch(
           'https://api.openai.com/v1/chat/completions',
@@ -2149,7 +2168,7 @@ export class VoiceService {
 - "decisions": массив принятых решений (строки). Включай только явно согласованные решения, а не предложения или обсуждения.
 Пиши резюме на том же языке, на котором проходила встреча. Если есть спикеры — указывай кто что сказал/предложил/решил.`,
                 },
-                { role: 'user', content: transcript },
+                { role: 'user', content: rosterBlock + transcript },
               ],
               max_tokens: 4096,
             }),
