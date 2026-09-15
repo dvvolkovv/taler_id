@@ -510,6 +510,11 @@ model MeetingSummary {
   durationSec       Int?
   status            String   @default("done")
   participantTracks Json     @default("{}")
+  // Per-participant speech intervals on the meeting clock, written by the
+  // recorder: [{ identity, name, intervals: [[startSec, endSec], ...] }].
+  // The mixed recording has no speaker information of its own, so this is what
+  // puts names on the transcript without transcribing each participant apart.
+  speakerTimeline   Json?
   createdAt         DateTime @default(now())
 
   callLog CallLog? @relation(fields: [callLogId], references: [id])

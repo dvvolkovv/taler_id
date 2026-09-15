@@ -38,6 +38,11 @@ import {
 
 const LK_HOST = process.env.LIVEKIT_HOST || 'http://localhost:7880';
 import { LK_API_KEY, LK_API_SECRET } from '../common/livekit-credentials';
+import {
+  labelSegments,
+  formatTranscript,
+  readSpeakerTimeline,
+} from './speaker-labeling';
 const LK_WS_URL = process.env.LIVEKIT_WS_URL || 'ws://localhost:7880';
 // Region-routed second SFU: CIS calls run on the Selectel SFU (box1), EU calls
 // on the DO media SFU. Both share the LiveKit API key, so a token is valid on
@@ -1487,6 +1492,7 @@ export class VoiceService {
     recordingUrl?: string;
     status?: string;
     participantTracks?: any;
+    speakerTimeline?: any;
   }) {
     // If id provided — update existing record (pending → done)
     if (data.id) {
@@ -1508,6 +1514,9 @@ export class VoiceService {
             }),
           ...(data.participantTracks && {
             participantTracks: data.participantTracks,
+          }),
+          ...(data.speakerTimeline && {
+            speakerTimeline: data.speakerTimeline,
           }),
         },
       });
@@ -1538,6 +1547,9 @@ export class VoiceService {
         status: data.status ?? 'done',
         ...(data.participantTracks && {
           participantTracks: data.participantTracks,
+        }),
+        ...(data.speakerTimeline && {
+          speakerTimeline: data.speakerTimeline,
         }),
       },
     });
@@ -2150,20 +2162,19 @@ export class VoiceService {
           })
           .join('\n');
       } else {
-        // Single mixed recording - transcribe without speaker info
+        // Single mixed recording. Whisper hears one stream and returns no
+        // speakers, but the recorder wrote down who was making sound when —
+        // overlapping the two names the lines for the price of one pass.
+        // Meetings recorded before that shipped have no timeline and stay
+        // unlabelled rather than guessed at.
         const segments = await this.transcribeAudioBuffer(
           audioBuffer,
           `meeting ${meetingId}`,
           'audio/mpeg',
           'recording.mp3',
         );
-        transcript = segments
-          .map((s) => {
-            const mm = String(Math.floor(s.start / 60)).padStart(2, '0');
-            const ss = String(Math.floor(s.start % 60)).padStart(2, '0');
-            return `[${mm}:${ss}] ${s.text}`;
-          })
-          .join('\n');
+        const timeline = readSpeakerTimeline((meeting as any).speakerTimeline);
+        transcript = formatTranscript(labelSegments(segments, timeline));
       }
       await this.gating.endSession(whisperSession.id, 'completed');
     } catch (err) {

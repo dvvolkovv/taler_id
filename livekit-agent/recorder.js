@@ -26,6 +26,8 @@ const BACKEND_URL = process.env.BACKEND_URL || 'https://id.taler.tirol';
 const RECORDER_SECRET = process.env.RECORDER_SHARED_SECRET || '';
 const RECORDINGS_DIR = process.env.RECORDINGS_DIR || '/var/www/recordings';
 
+const { TrackEnergy, mergeIntervals } = require('./speaker-timeline');
+
 const SAMPLE_RATE = 48000; // LiveKit default
 const CHANNELS = 1;
 const BYTES_PER_SAMPLE = 2; // Int16
@@ -130,6 +132,14 @@ async function startRecording(roomName, withAi = true) {
         const audioStream = new AudioStream(track, SAMPLE_RATE, CHANNELS);
         for await (const frame of audioStream) {
           if (session.stopping) break;
+          // The PCM file starts at the FIRST FRAME, not at subscription, so that
+          // is the origin both the mixdown delay and the speech timeline use.
+          // Get it wrong and a late joiner's words land on somebody else's.
+          if (!entry.energy) {
+            entry.offsetMs = Math.max(0, Date.now() - startTime);
+            entry.energy = new TrackEnergy({ sampleRate: SAMPLE_RATE, offsetMs: entry.offsetMs });
+          }
+          entry.energy.push(frame.data);
           const buf = Buffer.from(frame.data.buffer, frame.data.byteOffset, frame.data.byteLength);
           entry.writeStream.write(buf);
           entry.bytesWritten += buf.length;
@@ -368,7 +378,7 @@ async function processAndSave(session) {
           console.log('[RECORDER]', name, ': 1 track,', pcmSizeMB, 'MB PCM (timeout:', Math.round(timeout/1000), 's)');
 
           const oggPath = path.join(tmpDir, `${identity}.ogg`);
-          await ffmpegConvert(entry.pcmPath, oggPath, SAMPLE_RATE, CHANNELS, timeout);
+          await ffmpegConvert(entry.pcmPath, oggPath, SAMPLE_RATE, CHANNELS, timeout, entry.offsetMs);
           const oggSize = fs.statSync(oggPath).size;
           console.log('[RECORDER]', name, ':', (oggSize / 1024 / 1024).toFixed(1), 'MB OGG');
           audioFiles.push({ identity, name, oggPath, oggSize });
@@ -386,7 +396,7 @@ async function processAndSave(session) {
             console.log('[RECORDER]   track', i, ':', pcmSizeMB, 'MB PCM (timeout:', Math.round(timeout/1000), 's)');
 
             const trackOgg = path.join(tmpDir, `${identity}_t${i}.ogg`);
-            await ffmpegConvert(entry.pcmPath, trackOgg, SAMPLE_RATE, CHANNELS, timeout);
+            await ffmpegConvert(entry.pcmPath, trackOgg, SAMPLE_RATE, CHANNELS, timeout, entry.offsetMs);
             trackOggs.push(trackOgg);
 
             // Delete PCM only after successful conversion
@@ -413,6 +423,25 @@ async function processAndSave(session) {
         // Do NOT delete PCM files for this participant — leave for manual recovery
       }
     }
+
+    // Speech timeline: who was making sound when, on the meeting clock. The one
+    // mixed recording we upload carries no speaker information, so this is what
+    // lets the backend put names on Whisper's segments — one transcription pass
+    // instead of one per participant. Only participants whose audio actually
+    // made it into the mix are listed: intervals for a voice Whisper never heard
+    // would steal labels from the people it did hear.
+    const speakerTimeline = audioFiles
+      .map(({ identity, name }) => ({
+        identity,
+        name,
+        intervals: mergeIntervals(
+          (byIdentity.get(identity) || [])
+            .filter((t) => t.energy)
+            .map((t) => t.energy.intervals()),
+        ),
+      }))
+      .filter((s) => s.intervals.length > 0);
+    console.log('[RECORDER] Speech timeline:', speakerTimeline.map(s => `${s.name}:${s.intervals.length}`).join(' ') || '(empty)');
 
     // 2. Mix all successfully converted participant audio into a single MP3, upload to S3
     let recordingUrl = null;
@@ -499,6 +528,7 @@ async function processAndSave(session) {
       decisions: [],
       participants: participants0,
       participantIds: participantIds0,
+      speakerTimeline,
       durationSec,
       recordingUrl,
     };
@@ -548,11 +578,18 @@ async function processAndSave(session) {
 
 // ─── Helpers ──────────────────────────────────────────────
 
-function ffmpegConvert(pcmPath, oggPath, sampleRate, channels, timeout) {
+function ffmpegConvert(pcmPath, oggPath, sampleRate, channels, timeout, delayMs) {
+  // A participant's PCM starts when THEY started publishing, so converting it
+  // as-is and amix-ing puts a latecomer's first word at second zero of the
+  // recording. Padding by the join offset keeps the mixdown on the meeting's
+  // own clock — the same clock the speech timeline and Whisper timestamps use.
+  const delay = Math.round(delayMs || 0);
+  const pad = delay > 0 ? ['-af', `adelay=${delay}:all=1`] : [];
   return new Promise((resolve, reject) => {
     execFile('ffmpeg', [
       '-y', '-f', 's16le', '-ar', String(sampleRate), '-ac', String(channels),
       '-i', pcmPath,
+      ...pad,
       '-c:a', 'libopus', '-b:a', '48k',
       oggPath,
     ], { timeout: timeout || 120000 }, (err, stdout, stderr) => {

@@ -1,0 +1,11 @@
+-- Per-participant speech intervals for a recorded meeting, written by the
+-- recorder as [{ identity, name, intervals: [[startSec, endSec], ...] }].
+--
+-- The recording we transcribe is a single mix and carries no speaker
+-- information, so until now the transcript could not say who said what. This
+-- column is what lets the backend label Whisper's segments from one
+-- transcription pass instead of paying for one pass per participant.
+--
+-- Nullable on purpose: every meeting recorded before this exists keeps working
+-- and simply stays unlabelled.
+ALTER TABLE "MeetingSummary" ADD COLUMN "speakerTimeline" JSONB;
