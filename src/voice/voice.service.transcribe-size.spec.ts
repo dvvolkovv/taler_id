@@ -1,32 +1,48 @@
-// Regression cover for the 25 MiB Whisper upload cap.
+// Regression cover for the two limits a meeting recording runs into on its way
+// to Whisper. Both were found the hard way on a 56-minute meeting:
 //
-// LiveKit writes the mixed meeting recording at ~70 kbps, so a meeting crosses
-// OpenAI's 26 214 400-byte limit at roughly 50 minutes. Before this was fixed,
-// transcribeExistingRecording streamed the raw buffer straight to Whisper and a
-// 56-minute meeting came back as `Whisper error 413` → 500 in the mobile app.
+//   1. OpenAI refuses uploads over 25 MiB (26 214 400 bytes) with a 413. LiveKit
+//      writes the mixed recording at ~70 kbps, so a meeting crosses that line at
+//      roughly 50 minutes and the mobile app got a 500.
+//   2. Once the upload was small enough, a single Whisper call on an hour of
+//      audio ran past the 300 s headers timeout baked into Node's global fetch
+//      and died as a bare "TypeError: fetch failed" (UND_ERR_HEADERS_TIMEOUT).
 //
-// These tests pin the two behaviours that keep that from happening again:
-//   1. an oversized recording is re-encoded before upload, and what actually
-//      goes to OpenAI is under the cap;
-//   2. a recording that already fits is uploaded untouched (no pointless ffmpeg).
+// So size decides whether we re-encode, and duration decides whether we split.
 process.env.LIVEKIT_WS_URL = 'wss://test.example.com/livekit';
 
 import * as fs from 'fs';
+import * as path from 'path';
 
+/** What the mocked ffprobe reports; individual tests set it. */
+let probeDuration = 60;
 const execFileMock = jest.fn();
+
 jest.mock('child_process', () => ({
   ...jest.requireActual('child_process'),
   execFile: (...args: any[]) => {
     const cb = args[args.length - 1];
-    execFileMock(args[0], args[1]);
     const bin = args[0] as string;
     const argv = args[1] as string[];
+    execFileMock(bin, argv);
+
     if (bin === 'ffprobe') {
-      return cb(null, { stdout: '600.0\n', stderr: '' });
+      return cb(null, { stdout: `${probeDuration}\n`, stderr: '' });
     }
-    // Stand in for ffmpeg: emit an output file a fraction of the input's size,
-    // which is what a 70 kbps → 32 kbps 16 kHz mono re-encode actually does.
+
     const out = argv[argv.length - 1];
+    if (argv.includes('segment')) {
+      // Stand in for `-f segment`: emit three chunk files next to the pattern.
+      const dir = path.dirname(out);
+      for (let i = 0; i < 3; i++) {
+        fs.writeFileSync(
+          path.join(dir, `part-00${i}.mp3`),
+          Buffer.alloc(1024 * 1024, i + 1),
+        );
+      }
+      return cb(null, { stdout: '', stderr: '' });
+    }
+    // Stand in for the 16 kHz mono re-encode: a fraction of the input's size.
     fs.writeFileSync(out, Buffer.alloc(3 * 1024 * 1024, 1));
     return cb(null, { stdout: '', stderr: '' });
   },
@@ -43,6 +59,8 @@ import { PricingService } from '../billing/services/pricing.service';
 import { RoomChatBufferService } from './room-chat-buffer.service';
 
 const WHISPER_CAP = 26_214_400;
+/** Mirrors WHISPER_CHUNK_SECONDS in the service. */
+const CHUNK_SECONDS = 900;
 const OWNER_ID = 'c79530ed-5ba8-44e3-b7d4-4a591c7c1db6';
 
 const mockPrisma = {
@@ -64,14 +82,13 @@ const mockChatBuffer = {
 function whisperUploadSizes(fetchMock: jest.Mock): number[] {
   return fetchMock.mock.calls
     .filter(([url]) => String(url).includes('/audio/transcriptions'))
-    .map(([, init]) => {
-      const form = (init as any).body as FormData;
-      const file = form.get('file') as Blob;
-      return file.size;
-    });
+    .map(([, init]) => ((init as any).body.get('file') as Blob).size);
 }
 
-describe('transcribeExistingRecording — Whisper upload cap', () => {
+const ffmpegCalls = () =>
+  execFileMock.mock.calls.filter(([bin]) => bin === 'ffmpeg');
+
+describe('transcribeExistingRecording — Whisper size and duration limits', () => {
   let service: VoiceService;
   let fetchMock: jest.Mock;
 
@@ -80,6 +97,7 @@ describe('transcribeExistingRecording — Whisper upload cap', () => {
     roomName: 'personal-c79530ed-36fc367a',
     recordingUrl: 'https://x/messenger/files/download?key=recordings%2Fa.mp3',
     participantIds: [OWNER_ID],
+    participants: ['Tester'],
     participantTracks: {},
     durationSec: 3341,
     ...over,
@@ -88,6 +106,7 @@ describe('transcribeExistingRecording — Whisper upload cap', () => {
   beforeEach(async () => {
     jest.clearAllMocks();
     execFileMock.mockClear();
+    probeDuration = 60;
 
     mockPrisma.meetingSummary.findUnique.mockResolvedValue(meeting());
     mockPrisma.meetingSummary.update.mockResolvedValue({ id: 'm-1' });
@@ -99,9 +118,9 @@ describe('transcribeExistingRecording — Whisper upload cap', () => {
 
     fetchMock = jest.fn(async (url: any, init: any) => {
       if (String(url).includes('/audio/transcriptions')) {
-        // Behave like the real endpoint: anything over 25 MiB is refused with a
-        // 413 before a single byte is transcribed.
-        const uploaded = ((init.body as FormData).get('file') as Blob).size;
+        // Behave like the real endpoint: over 25 MiB is refused with a 413
+        // before a single byte is transcribed.
+        const uploaded = (init.body.get('file') as Blob).size;
         if (uploaded > WHISPER_CAP) {
           return {
             ok: false,
@@ -118,7 +137,6 @@ describe('transcribeExistingRecording — Whisper upload cap', () => {
           }),
         };
       }
-      // GPT-4o summary
       return {
         ok: true,
         json: async () => ({
@@ -166,6 +184,11 @@ describe('transcribeExistingRecording — Whisper upload cap', () => {
     });
   };
 
+  const statuses = () =>
+    mockPrisma.meetingSummary.update.mock.calls.map(
+      ([arg]: any) => arg.data.status,
+    );
+
   it('re-encodes a recording that exceeds the cap and uploads under it', async () => {
     // 27.5 MiB — the size of the 56-minute meeting that produced the 413.
     stubDownload(28_853_685);
@@ -174,30 +197,51 @@ describe('transcribeExistingRecording — Whisper upload cap', () => {
 
     const sizes = whisperUploadSizes(fetchMock);
     expect(sizes.length).toBeGreaterThan(0);
-    for (const size of sizes) {
-      expect(size).toBeLessThan(WHISPER_CAP);
-    }
-    expect(execFileMock).toHaveBeenCalledWith('ffmpeg', expect.any(Array));
+    for (const size of sizes) expect(size).toBeLessThan(WHISPER_CAP);
+    expect(ffmpegCalls().length).toBeGreaterThan(0);
+    expect(statuses()).toContain('done');
+    expect(statuses()).not.toContain('failed');
   });
 
-  it('leaves a recording that already fits alone', async () => {
+  it('uploads a short recording untouched, without re-encoding it', async () => {
     stubDownload(5 * 1024 * 1024);
 
     await service.transcribeExistingRecording(OWNER_ID, 'm-1');
 
     expect(whisperUploadSizes(fetchMock)).toEqual([5 * 1024 * 1024]);
-    expect(execFileMock).not.toHaveBeenCalled();
+    expect(ffmpegCalls()).toHaveLength(0);
   });
 
-  it('marks the meeting done rather than failed for an oversized recording', async () => {
-    stubDownload(28_853_685);
+  it('splits a recording that fits the cap but is too long for one call', async () => {
+    // The case that died as UND_ERR_HEADERS_TIMEOUT: comfortably under 25 MiB,
+    // but nearly an hour of audio behind it.
+    probeDuration = CHUNK_SECONDS + 100;
+    stubDownload(12_724_209);
 
     await service.transcribeExistingRecording(OWNER_ID, 'm-1');
 
-    const statuses = mockPrisma.meetingSummary.update.mock.calls.map(
-      ([arg]: any) => arg.data.status,
-    );
-    expect(statuses).toContain('done');
-    expect(statuses).not.toContain('failed');
+    // Three chunks from the mocked segmenter → three separate Whisper calls.
+    expect(whisperUploadSizes(fetchMock)).toHaveLength(3);
+    expect(
+      ffmpegCalls().some(([, argv]) => argv.includes('segment')),
+    ).toBe(true);
+    expect(statuses()).toContain('done');
+    expect(statuses()).not.toContain('failed');
+  });
+
+  it('shifts segment timestamps of later chunks onto the meeting clock', async () => {
+    probeDuration = CHUNK_SECONDS + 100;
+    stubDownload(12_724_209);
+
+    await service.transcribeExistingRecording(OWNER_ID, 'm-1');
+
+    // Every chunk's mocked segment starts at 0; only the offsets distinguish
+    // them, so a transcript with three identical [00:00] lines would mean the
+    // stitching silently collapsed the recording onto its first chunk.
+    const transcript = mockPrisma.meetingSummary.update.mock.calls
+      .map(([arg]: any) => arg.data.transcript)
+      .filter(Boolean)[0] as string;
+    const stamps = transcript.split('\n').map((l) => l.slice(0, 7));
+    expect(stamps).toEqual(['[00:00]', '[16:40]', '[33:20]']);
   });
 });

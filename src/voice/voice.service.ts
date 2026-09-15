@@ -60,9 +60,13 @@ const WHISPER_MAX_UPLOAD_BYTES = 24 * 1024 * 1024;
 // before upload costs nothing in recognition accuracy while turning an hour of
 // meeting from ~30 MB into ~14 MB.
 const WHISPER_SHRINK_BITRATE = '32k';
-// Even re-encoded audio outgrows the cap somewhere past 1.7 hours, so anything
-// still too big is cut into chunks and stitched back together afterwards.
-const WHISPER_CHUNK_SECONDS = 1500;
+// Two separate reasons to cut a recording into chunks, and duration is the
+// binding one. Node's global fetch aborts a request whose response headers take
+// longer than 300 s (UND_ERR_HEADERS_TIMEOUT, not configurable per-call), while
+// whisper-1 needs roughly 6 s per audio-minute — so a single call starts losing
+// races somewhere around 50 minutes of audio, well before the re-encoded file
+// would outgrow the byte cap. 15 minutes a chunk keeps each call near 100 s.
+const WHISPER_CHUNK_SECONDS = 900;
 
 type WhisperSegment = { start: number; end: number; text: string };
 const BASE_URL = process.env.BASE_URL || 'https://id.taler.tirol';
@@ -1838,8 +1842,41 @@ export class VoiceService {
     }
   }
 
-  /** Transcribe one audio buffer of any length, keeping every upload under
-   *  OpenAI's cap: re-encode first, and split only if that still isn't enough. */
+  /** Duration of an in-memory clip, or null when ffprobe can't be asked. Null is
+   *  a real answer here — it means "decide on size alone", which is what hosts
+   *  without ffmpeg have to do. */
+  private async probeBufferDurationSec(audio: Buffer): Promise<number | null> {
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'whisper-dur-'));
+    const file = path.join(dir, 'probe');
+    try {
+      await fs.promises.writeFile(file, audio);
+      const { stdout } = await execFileAsync(
+        'ffprobe',
+        [
+          '-v',
+          'error',
+          '-show_entries',
+          'format=duration',
+          '-of',
+          'default=nw=1:nk=1',
+          file,
+        ],
+        { timeout: 30000 },
+      );
+      const parsed = Number.parseFloat(stdout.trim());
+      return Number.isFinite(parsed) ? parsed : null;
+    } catch {
+      return null;
+    } finally {
+      await fs.promises
+        .rm(dir, { recursive: true, force: true })
+        .catch(() => {});
+    }
+  }
+
+  /** Transcribe one audio buffer of any length, keeping every Whisper call both
+   *  under OpenAI's upload cap and short enough to answer before Node's fetch
+   *  gives up: re-encode when too big, split when too long. */
   private async transcribeAudioBuffer(
     audio: Buffer,
     label: string,
@@ -1866,7 +1903,15 @@ export class VoiceService {
       }
     }
 
-    if (payload.length <= WHISPER_MAX_UPLOAD_BYTES) {
+    // Size alone is not enough to decide. A re-encoded hour of meeting is only
+    // ~14 MB — comfortably under the cap — yet one Whisper call on it runs past
+    // the 300 s headers timeout baked into Node's fetch and dies as a bare
+    // "TypeError: fetch failed". Ask how long the audio is and split on that too.
+    const durationSec = await this.probeBufferDurationSec(payload);
+    const tooLong = durationSec !== null && durationSec > WHISPER_CHUNK_SECONDS;
+    const tooBig = payload.length > WHISPER_MAX_UPLOAD_BYTES;
+
+    if (!tooLong && !tooBig) {
       const { segments, text } = await this.callWhisper(
         payload,
         uploadName,
@@ -1875,6 +1920,10 @@ export class VoiceService {
       return this.normalizeWhisperSegments(segments, text);
     }
 
+    this.log.log(
+      `[whisper] ${label}: splitting — ${payload.length} B, ` +
+        `${durationSec === null ? 'duration unknown' : `${Math.round(durationSec)} s`}`,
+    );
     const parts = await this.splitAudioForWhisper(payload, label);
     const all: WhisperSegment[] = [];
     for (let i = 0; i < parts.length; i++) {
