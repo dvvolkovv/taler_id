@@ -1,14 +1,20 @@
-// Regression cover for the two limits a meeting recording runs into on its way
-// to Whisper. Both were found the hard way on a 56-minute meeting:
+// Regression cover for the three limits a meeting recording runs into on its way
+// to Whisper. All three were found on one 56-minute meeting, each hiding behind
+// the previous one:
 //
 //   1. OpenAI refuses uploads over 25 MiB (26 214 400 bytes) with a 413. LiveKit
 //      writes the mixed recording at ~70 kbps, so a meeting crosses that line at
 //      roughly 50 minutes and the mobile app got a 500.
 //   2. Once the upload was small enough, a single Whisper call on an hour of
 //      audio ran past the 300 s headers timeout baked into Node's global fetch
-//      and died as a bare "TypeError: fetch failed" (UND_ERR_HEADERS_TIMEOUT).
+//      and died as a bare "TypeError: fetch failed".
+//   3. Splitting helped but did not settle it: four concurrent chunks get queued
+//      on OpenAI's side, and the same 13-minute chunk that answered in ~200 s on
+//      DEV took over 300 s on PROD. Hence axios with an explicit timeout — the
+//      transcription request must not inherit an unsettable one.
 //
-// So size decides whether we re-encode, and duration decides whether we split.
+// So: size decides whether we re-encode, duration decides whether we split, and
+// the timeout is stated outright rather than inherited.
 process.env.LIVEKIT_WS_URL = 'wss://test.example.com/livekit';
 
 import * as fs from 'fs';
@@ -50,6 +56,13 @@ jest.mock('child_process', () => ({
   },
 }));
 
+/** Transcription requests go through axios; the summary still goes through fetch. */
+const axiosPost = jest.fn();
+jest.mock('axios', () => ({
+  __esModule: true,
+  default: { post: (...args: any[]) => axiosPost(...args) },
+}));
+
 import { Test, TestingModule } from '@nestjs/testing';
 import { VoiceService } from './voice.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -80,19 +93,20 @@ const mockChatBuffer = {
   read: jest.fn(),
 };
 
-/** Byte length of each multipart body handed to the transcriptions endpoint. */
-function whisperUploadSizes(fetchMock: jest.Mock): number[] {
-  return fetchMock.mock.calls
-    .filter(([url]) => String(url).includes('/audio/transcriptions'))
-    .map(([, init]) => ((init as any).body.get('file') as Blob).size);
-}
+const transcribeCalls = () =>
+  axiosPost.mock.calls.filter(([url]) =>
+    String(url).includes('/audio/transcriptions'),
+  );
+
+/** Byte length of the audio part in each transcription request. */
+const whisperUploadSizes = () =>
+  transcribeCalls().map(([, form]) => (form.get('file') as Blob).size);
 
 const ffmpegCalls = () =>
   execFileMock.mock.calls.filter(([bin]) => bin === 'ffmpeg');
 
-describe('transcribeExistingRecording — Whisper size and duration limits', () => {
+describe('transcribeExistingRecording — Whisper size, duration and timeout', () => {
   let service: VoiceService;
-  let fetchMock: jest.Mock;
   /** Peak number of overlapping transcription requests during one run. */
   let maxInFlight = 0;
   let inFlight = 0;
@@ -111,6 +125,7 @@ describe('transcribeExistingRecording — Whisper size and duration limits', () 
   beforeEach(async () => {
     jest.clearAllMocks();
     execFileMock.mockClear();
+    axiosPost.mockReset();
     probeDuration = 60;
     chunkCount = 3;
     maxInFlight = 0;
@@ -124,53 +139,55 @@ describe('transcribeExistingRecording — Whisper size and duration limits', () 
     mockLedger.debit.mockResolvedValue({ id: 'tx-1' });
     mockLedger.refund.mockResolvedValue(undefined);
 
-    fetchMock = jest.fn(async (url: any, init: any) => {
-      if (String(url).includes('/audio/transcriptions')) {
-        // Behave like the real endpoint: over 25 MiB is refused with a 413
-        // before a single byte is transcribed.
-        const uploaded = (init.body.get('file') as Blob).size;
-        if (uploaded > WHISPER_CAP) {
-          return {
-            ok: false,
-            status: 413,
-            text: async () =>
-              `{"error":{"message":"413: Maximum content size limit (${WHISPER_CAP}) exceeded (${uploaded} bytes read)","type":"server_error"}}`,
-          };
-        }
-        inFlight += 1;
-        maxInFlight = Math.max(maxInFlight, inFlight);
-        // Yield so concurrent calls actually overlap rather than resolving
-        // one-by-one on the microtask queue.
-        await new Promise((r) => setTimeout(r, 5));
-        inFlight -= 1;
+    axiosPost.mockImplementation(async (_url: string, form: any) => {
+      // Behave like the real endpoint: over 25 MiB is refused with a 413 before
+      // a single byte is transcribed.
+      const uploaded = (form.get('file') as Blob).size;
+      if (uploaded > WHISPER_CAP) {
         return {
-          ok: true,
-          json: async () => ({
-            segments: [{ start: 0, end: 5, text: 'привет' }],
-            text: 'привет',
-          }),
+          status: 413,
+          data: {
+            error: {
+              message: `413: Maximum content size limit (${WHISPER_CAP}) exceeded (${uploaded} bytes read)`,
+              type: 'server_error',
+            },
+          },
         };
       }
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      // Yield so concurrent calls actually overlap rather than resolving
+      // one-by-one on the microtask queue.
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight -= 1;
       return {
-        ok: true,
-        json: async () => ({
-          usage: { total_tokens: 100 },
-          choices: [
-            {
-              message: {
-                content: JSON.stringify({
-                  summary: 's',
-                  keyPoints: [],
-                  actionItems: [],
-                  decisions: [],
-                }),
-              },
-            },
-          ],
-        }),
+        status: 200,
+        data: {
+          segments: [{ start: 0, end: 5, text: 'привет' }],
+          text: 'привет',
+        },
       };
     });
-    (global as any).fetch = fetchMock;
+
+    // GPT-4o summary still goes over fetch.
+    (global as any).fetch = jest.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        usage: { total_tokens: 100 },
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                summary: 's',
+                keyPoints: [],
+                actionItems: [],
+                decisions: [],
+              }),
+            },
+          },
+        ],
+      }),
+    }));
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -203,13 +220,30 @@ describe('transcribeExistingRecording — Whisper size and duration limits', () 
       ([arg]: any) => arg.data.status,
     );
 
+  const savedTranscript = () =>
+    mockPrisma.meetingSummary.update.mock.calls
+      .map(([arg]: any) => arg.data.transcript)
+      .filter((t: unknown) => typeof t === 'string')[0] as string;
+
+  it('states a timeout on the transcription request instead of inheriting one', async () => {
+    stubDownload(5 * 1024 * 1024);
+
+    await service.transcribeExistingRecording(OWNER_ID, 'm-1');
+
+    const [, , config] = transcribeCalls()[0];
+    // Without this the call rides Node's unsettable 300 s fetch timeout, which
+    // is what killed the 53-minute run on PROD.
+    expect(config.timeout).toBeGreaterThanOrEqual(10 * 60 * 1000);
+    expect(config.maxBodyLength).toBe(Infinity);
+  });
+
   it('re-encodes a recording that exceeds the cap and uploads under it', async () => {
     // 27.5 MiB — the size of the 56-minute meeting that produced the 413.
     stubDownload(28_853_685);
 
     await service.transcribeExistingRecording(OWNER_ID, 'm-1');
 
-    const sizes = whisperUploadSizes(fetchMock);
+    const sizes = whisperUploadSizes();
     expect(sizes.length).toBeGreaterThan(0);
     for (const size of sizes) expect(size).toBeLessThan(WHISPER_CAP);
     expect(ffmpegCalls().length).toBeGreaterThan(0);
@@ -222,23 +256,20 @@ describe('transcribeExistingRecording — Whisper size and duration limits', () 
 
     await service.transcribeExistingRecording(OWNER_ID, 'm-1');
 
-    expect(whisperUploadSizes(fetchMock)).toEqual([5 * 1024 * 1024]);
+    expect(whisperUploadSizes()).toEqual([5 * 1024 * 1024]);
     expect(ffmpegCalls()).toHaveLength(0);
   });
 
   it('splits a recording that fits the cap but is too long for one call', async () => {
-    // The case that died as UND_ERR_HEADERS_TIMEOUT: comfortably under 25 MiB,
-    // but nearly an hour of audio behind it.
     probeDuration = CHUNK_SECONDS + 100;
     stubDownload(12_724_209);
 
     await service.transcribeExistingRecording(OWNER_ID, 'm-1');
 
-    // Three chunks from the mocked segmenter → three separate Whisper calls.
-    expect(whisperUploadSizes(fetchMock)).toHaveLength(3);
-    expect(
-      ffmpegCalls().some(([, argv]) => argv.includes('segment')),
-    ).toBe(true);
+    expect(whisperUploadSizes()).toHaveLength(3);
+    expect(ffmpegCalls().some(([, argv]) => argv.includes('segment'))).toBe(
+      true,
+    );
     expect(statuses()).toContain('done');
     expect(statuses()).not.toContain('failed');
   });
@@ -252,10 +283,9 @@ describe('transcribeExistingRecording — Whisper size and duration limits', () 
     // Every chunk's mocked segment starts at 0; only the offsets distinguish
     // them, so a transcript with three identical [00:00] lines would mean the
     // stitching silently collapsed the recording onto its first chunk.
-    const transcript = mockPrisma.meetingSummary.update.mock.calls
-      .map(([arg]: any) => arg.data.transcript)
-      .filter(Boolean)[0] as string;
-    const stamps = transcript.split('\n').map((l) => l.slice(0, 7));
+    const stamps = savedTranscript()
+      .split('\n')
+      .map((l) => l.match(/\[\d+:\d+\]/)![0]);
     expect(stamps).toEqual(['[00:00]', '[16:40]', '[33:20]']);
   });
 
@@ -266,19 +296,31 @@ describe('transcribeExistingRecording — Whisper size and duration limits', () 
 
     await service.transcribeExistingRecording(OWNER_ID, 'm-1');
 
-    expect(whisperUploadSizes(fetchMock)).toHaveLength(9);
+    expect(whisperUploadSizes()).toHaveLength(9);
     expect(maxInFlight).toBeGreaterThan(1);
     expect(maxInFlight).toBeLessThanOrEqual(4);
 
-    // Order must survive the overlap: nine chunks, each one probeDuration apart.
-    const transcript = mockPrisma.meetingSummary.update.mock.calls
-      .map(([arg]: any) => arg.data.transcript)
-      .filter(Boolean)[0] as string;
-    const starts = transcript
+    // Order must survive the overlap.
+    const starts = savedTranscript()
       .split('\n')
-      .map((l) => l.match(/^\[(\d+):(\d+)\]/)!)
+      .map((l) => l.match(/\[(\d+):(\d+)\]/)!)
       .map((m) => Number(m[1]) * 60 + Number(m[2]));
     expect(starts).toEqual([...starts].sort((a, b) => a - b));
     expect(starts).toHaveLength(9);
+  });
+
+  it('marks the meeting failed and refunds when Whisper rejects the upload', async () => {
+    axiosPost.mockResolvedValue({
+      status: 413,
+      data: { error: { message: 'too big' } },
+    });
+    stubDownload(5 * 1024 * 1024);
+
+    await expect(
+      service.transcribeExistingRecording(OWNER_ID, 'm-1'),
+    ).rejects.toThrow(/Whisper error 413/);
+
+    expect(statuses()).toContain('failed');
+    expect(mockLedger.refund).toHaveBeenCalled();
   });
 });

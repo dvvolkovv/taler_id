@@ -5,6 +5,15 @@
 // `participantTracks`, so that branch has never run in production).
 process.env.LIVEKIT_WS_URL = 'wss://test.example.com/livekit';
 
+// Transcription goes over axios rather than the global fetch: Node's fetch
+// carries a 300 s headers timeout that cannot be set per call, and Whisper on a
+// long chunk runs past it. The summary call still uses fetch.
+const axiosPost = jest.fn();
+jest.mock('axios', () => ({
+  __esModule: true,
+  default: { post: (...args: any[]) => axiosPost(...args) },
+}));
+
 import { Test, TestingModule } from '@nestjs/testing';
 import { VoiceService } from './voice.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -86,19 +95,18 @@ describe('transcribeExistingRecording — speaker labels from the recorder timel
       contentType: 'audio/mpeg',
     });
 
-    (global as any).fetch = jest.fn(async (url: any) => {
-      if (String(url).includes('/audio/transcriptions')) {
-        return {
-          ok: true,
-          json: async () => ({
-            segments: [
-              { start: 1, end: 5, text: 'первый' },
-              { start: 13, end: 18, text: 'второй' },
-            ],
-            text: 'первый второй',
-          }),
-        };
-      }
+    axiosPost.mockResolvedValue({
+      status: 200,
+      data: {
+        segments: [
+          { start: 1, end: 5, text: 'первый' },
+          { start: 13, end: 18, text: 'второй' },
+        ],
+        text: 'первый второй',
+      },
+    });
+
+    (global as any).fetch = jest.fn(async () => {
       return {
         ok: true,
         json: async () => ({

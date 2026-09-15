@@ -16,6 +16,7 @@ import {
 import { v4 as uuidv4 } from 'uuid';
 import * as crypto from 'crypto';
 import * as bcrypt from 'bcrypt';
+import axios from 'axios';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs';
@@ -76,6 +77,11 @@ const WHISPER_CHUNK_SECONDS = 900;
 // meeting took ~10 minutes of wall clock, four at a time it takes ~2.5. Bounded
 // so a three-hour recording doesn't open a dozen uploads at once.
 const WHISPER_MAX_PARALLEL_CHUNKS = 4;
+// Generous ceiling for one transcription request. Four concurrent uploads get
+// queued somewhere on OpenAI's side, so the same 13-minute chunk that answered
+// in ~200 s on one run took over 300 s on the next — close enough to the limit
+// that guessing a chunk size to stay under it is not a strategy.
+const WHISPER_REQUEST_TIMEOUT_MS = 15 * 60 * 1000;
 
 type WhisperSegment = { start: number; end: number; text: string };
 const BASE_URL = process.env.BASE_URL || 'https://id.taler.tirol';
@@ -1722,18 +1728,31 @@ export class VoiceService {
     form.append('response_format', 'verbose_json');
     form.append('timestamp_granularities[]', 'segment');
 
-    const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
-      body: form,
-    });
+    // Deliberately axios rather than the global fetch. Node's fetch carries a
+    // 300 s headers timeout that cannot be set per call, and Whisper on a long
+    // chunk runs past it — the request then dies as a bare "TypeError: fetch
+    // failed" with UND_ERR_HEADERS_TIMEOUT underneath, which reads like a
+    // network fault rather than the timeout it is. axios runs on Node's http
+    // stack, where the ceiling is ours to pick.
+    const res = await axios.post(
+      'https://api.openai.com/v1/audio/transcriptions',
+      form,
+      {
+        headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
+        timeout: WHISPER_REQUEST_TIMEOUT_MS,
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity,
+        validateStatus: () => true,
+      },
+    );
 
-    if (!res.ok) {
-      const errText = await res.text();
+    if (res.status < 200 || res.status >= 300) {
+      const errText =
+        typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
       throw new Error(`Whisper error ${res.status}: ${errText}`);
     }
 
-    const data = (await res.json()) as any;
+    const data = res.data as any;
     return { segments: data.segments ?? [], text: data.text ?? '' };
   }
 
