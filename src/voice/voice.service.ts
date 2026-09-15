@@ -16,6 +16,11 @@ import {
 import { v4 as uuidv4 } from 'uuid';
 import * as crypto from 'crypto';
 import * as bcrypt from 'bcrypt';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { makeParticipantIdentity } from '../common/participant-identity';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -41,6 +46,25 @@ const LK_HOST_RU = process.env.LIVEKIT_HOST_RU || LK_HOST;
 const LK_WS_URL_RU = process.env.LIVEKIT_WS_URL_RU || LK_WS_URL;
 const AI_AGENT_URL = process.env.AI_AGENT_URL || 'http://localhost:3100';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
+
+const execFileAsync = promisify(execFile);
+
+// OpenAI's /v1/audio/transcriptions refuses any upload over 25 MiB (26 214 400
+// bytes) with a 413, before transcribing a single byte. LiveKit writes the mixed
+// meeting recording at ~70 kbps, so a meeting crosses that line at roughly 50
+// minutes — which is how a 56-minute call came back as "Whisper error 413"
+// instead of a protocol. Cap ourselves below it, leaving room for the multipart
+// envelope that OpenAI counts alongside the audio.
+const WHISPER_MAX_UPLOAD_BYTES = 24 * 1024 * 1024;
+// Whisper resamples its input to 16 kHz mono internally, so re-encoding to that
+// before upload costs nothing in recognition accuracy while turning an hour of
+// meeting from ~30 MB into ~14 MB.
+const WHISPER_SHRINK_BITRATE = '32k';
+// Even re-encoded audio outgrows the cap somewhere past 1.7 hours, so anything
+// still too big is cut into chunks and stitched back together afterwards.
+const WHISPER_CHUNK_SECONDS = 1500;
+
+type WhisperSegment = { start: number; end: number; text: string };
 const BASE_URL = process.env.BASE_URL || 'https://id.taler.tirol';
 
 /** Формат допустимого клиентского id сообщения чата: непустая строка не
@@ -1640,6 +1664,236 @@ export class VoiceService {
     return summary;
   }
 
+  /** One upload to Whisper. Callers must have already ensured `audio` fits under
+   *  WHISPER_MAX_UPLOAD_BYTES — see transcribeAudioBuffer. */
+  private async callWhisper(
+    audio: Buffer,
+    filename: string,
+    mime: string,
+  ): Promise<{ segments: any[]; text: string }> {
+    const form = new FormData();
+    form.append(
+      'file',
+      new Blob([new Uint8Array(audio)], { type: mime }),
+      filename,
+    );
+    form.append('model', 'whisper-1');
+    form.append('response_format', 'verbose_json');
+    form.append('timestamp_granularities[]', 'segment');
+
+    const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
+      body: form,
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Whisper error ${res.status}: ${errText}`);
+    }
+
+    const data = (await res.json()) as any;
+    return { segments: data.segments ?? [], text: data.text ?? '' };
+  }
+
+  /** Whisper returns per-segment timings for most audio, but falls back to a bare
+   *  `text` on very short or single-utterance clips. Normalise both into segments
+   *  so downstream formatting has one shape to deal with. */
+  private normalizeWhisperSegments(
+    segments: any[],
+    text: string,
+  ): WhisperSegment[] {
+    if (segments.length > 0) {
+      return segments.map((s) => ({
+        start: s.start,
+        end: s.end,
+        text: String(s.text ?? '').trim(),
+      }));
+    }
+    const whole = (text ?? '').trim();
+    return whole ? [{ start: 0, end: 0, text: whole }] : [];
+  }
+
+  /** Re-encode to 16 kHz mono at a low bitrate so long meetings fit the cap. */
+  private async shrinkAudioForWhisper(
+    audio: Buffer,
+    label: string,
+  ): Promise<Buffer> {
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'whisper-'));
+    const input = path.join(dir, 'in');
+    const output = path.join(dir, 'out.mp3');
+    try {
+      await fs.promises.writeFile(input, audio);
+      await execFileAsync(
+        'ffmpeg',
+        [
+          '-hide_banner',
+          '-loglevel',
+          'error',
+          '-y',
+          '-i',
+          input,
+          '-vn',
+          '-ac',
+          '1',
+          '-ar',
+          '16000',
+          '-c:a',
+          'libmp3lame',
+          '-b:a',
+          WHISPER_SHRINK_BITRATE,
+          output,
+        ],
+        { timeout: 900000 },
+      );
+      const shrunk = await fs.promises.readFile(output);
+      this.log.log(
+        `[whisper] ${label}: ${audio.length} B -> ${shrunk.length} B after 16 kHz mono re-encode`,
+      );
+      return shrunk;
+    } finally {
+      await fs.promises
+        .rm(dir, { recursive: true, force: true })
+        .catch(() => {});
+    }
+  }
+
+  /** Cut audio into ~WHISPER_CHUNK_SECONDS pieces, each tagged with the offset it
+   *  starts at so segment timings can be put back on the meeting's own clock.
+   *  Offsets come from probing each piece rather than assuming an exact split —
+   *  `-c copy` lands on frame boundaries, not on the requested second. */
+  private async splitAudioForWhisper(
+    audio: Buffer,
+    label: string,
+  ): Promise<{ buffer: Buffer; offsetSec: number }[]> {
+    const dir = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'whisper-split-'),
+    );
+    const input = path.join(dir, 'in.mp3');
+    try {
+      await fs.promises.writeFile(input, audio);
+      await execFileAsync(
+        'ffmpeg',
+        [
+          '-hide_banner',
+          '-loglevel',
+          'error',
+          '-y',
+          '-i',
+          input,
+          '-f',
+          'segment',
+          '-segment_time',
+          String(WHISPER_CHUNK_SECONDS),
+          '-c',
+          'copy',
+          path.join(dir, 'part-%03d.mp3'),
+        ],
+        { timeout: 900000 },
+      );
+
+      const names = (await fs.promises.readdir(dir))
+        .filter((n) => n.startsWith('part-'))
+        .sort();
+      const parts: { buffer: Buffer; offsetSec: number }[] = [];
+      let offsetSec = 0;
+      for (const name of names) {
+        const full = path.join(dir, name);
+        parts.push({
+          buffer: await fs.promises.readFile(full),
+          offsetSec,
+        });
+        offsetSec += await this.probeDurationSec(full);
+      }
+      this.log.log(`[whisper] ${label}: split into ${parts.length} chunks`);
+      return parts;
+    } finally {
+      await fs.promises
+        .rm(dir, { recursive: true, force: true })
+        .catch(() => {});
+    }
+  }
+
+  private async probeDurationSec(file: string): Promise<number> {
+    try {
+      const { stdout } = await execFileAsync(
+        'ffprobe',
+        [
+          '-v',
+          'error',
+          '-show_entries',
+          'format=duration',
+          '-of',
+          'default=nw=1:nk=1',
+          file,
+        ],
+        { timeout: 30000 },
+      );
+      const parsed = Number.parseFloat(stdout.trim());
+      return Number.isFinite(parsed) ? parsed : WHISPER_CHUNK_SECONDS;
+    } catch {
+      // Falling back to the nominal chunk length keeps timestamps approximately
+      // right rather than collapsing every later chunk onto offset 0.
+      return WHISPER_CHUNK_SECONDS;
+    }
+  }
+
+  /** Transcribe one audio buffer of any length, keeping every upload under
+   *  OpenAI's cap: re-encode first, and split only if that still isn't enough. */
+  private async transcribeAudioBuffer(
+    audio: Buffer,
+    label: string,
+    mime: string,
+    filename: string,
+  ): Promise<WhisperSegment[]> {
+    let payload = audio;
+    let uploadMime = mime;
+    let uploadName = filename;
+
+    if (payload.length > WHISPER_MAX_UPLOAD_BYTES) {
+      try {
+        payload = await this.shrinkAudioForWhisper(payload, label);
+        uploadMime = 'audio/mpeg';
+        uploadName = 'recording.mp3';
+      } catch (err) {
+        // ffmpeg missing or failing is worth saying plainly — the alternative is
+        // a bare 413 from OpenAI that reads like an outage rather than a missing
+        // binary on the host.
+        throw new Error(
+          `recording too large for Whisper (${audio.length} bytes, cap ${WHISPER_MAX_UPLOAD_BYTES}) ` +
+            `and re-encoding failed: ${(err as Error).message}`,
+        );
+      }
+    }
+
+    if (payload.length <= WHISPER_MAX_UPLOAD_BYTES) {
+      const { segments, text } = await this.callWhisper(
+        payload,
+        uploadName,
+        uploadMime,
+      );
+      return this.normalizeWhisperSegments(segments, text);
+    }
+
+    const parts = await this.splitAudioForWhisper(payload, label);
+    const all: WhisperSegment[] = [];
+    for (let i = 0; i < parts.length; i++) {
+      const { segments, text } = await this.callWhisper(
+        parts[i].buffer,
+        `part-${i}-${uploadName}`,
+        uploadMime,
+      );
+      for (const s of this.normalizeWhisperSegments(segments, text)) {
+        all.push({
+          start: s.start + parts[i].offsetSec,
+          end: s.end + parts[i].offsetSec,
+          text: s.text,
+        });
+      }
+    }
+    return all;
+  }
+
   async transcribeExistingRecording(userId: string, meetingId: string) {
     const meeting = await this.prisma.meetingSummary.findUnique({
       where: { id: meetingId },
@@ -1782,50 +2036,20 @@ export class VoiceService {
               trackBuffer = Buffer.from(await trackRes.arrayBuffer());
             }
 
-            // Transcribe this track
-            const trackForm = new FormData();
-            const trackBlob = new Blob([new Uint8Array(trackBuffer)], {
-              type: 'audio/ogg',
-            });
-            trackForm.append('file', trackBlob, speakerName + '.ogg');
-            trackForm.append('model', 'whisper-1');
-            trackForm.append('response_format', 'verbose_json');
-            trackForm.append('timestamp_granularities[]', 'segment');
-
-            const trackWhisperRes = await fetch(
-              'https://api.openai.com/v1/audio/transcriptions',
-              {
-                method: 'POST',
-                headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
-                body: trackForm,
-              },
+            // Transcribe this track. Each track runs the full length of the
+            // meeting, so it hits the upload cap on exactly the same meetings the
+            // mixed path does — hence the same size handling here.
+            const segs = await this.transcribeAudioBuffer(
+              trackBuffer,
+              `track ${speakerName} of meeting ${meetingId}`,
+              'audio/ogg',
+              speakerName + '.ogg',
             );
-
-            if (!trackWhisperRes.ok) {
-              console.warn(
-                '[VOICE] Whisper error for track',
-                speakerName,
-                ':',
-                trackWhisperRes.status,
-              );
-              continue;
-            }
-
-            const trackData = (await trackWhisperRes.json()) as any;
-            const segs = trackData.segments ?? [];
             for (const s of segs) {
               allSegments.push({
                 start: s.start,
                 end: s.end,
-                text: s.text.trim(),
-                speaker: speakerName,
-              });
-            }
-            if (segs.length === 0 && trackData.text) {
-              allSegments.push({
-                start: 0,
-                end: 0,
-                text: trackData.text.trim(),
+                text: s.text,
                 speaker: speakerName,
               });
             }
@@ -1860,41 +2084,19 @@ export class VoiceService {
           .join('\n');
       } else {
         // Single mixed recording - transcribe without speaker info
-        const formData = new FormData();
-        const blob = new Blob([new Uint8Array(audioBuffer)], {
-          type: 'audio/mpeg',
-        });
-        formData.append('file', blob, 'recording.mp3');
-        formData.append('model', 'whisper-1');
-        formData.append('response_format', 'verbose_json');
-        formData.append('timestamp_granularities[]', 'segment');
-
-        const whisperRes = await fetch(
-          'https://api.openai.com/v1/audio/transcriptions',
-          {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
-            body: formData,
-          },
+        const segments = await this.transcribeAudioBuffer(
+          audioBuffer,
+          `meeting ${meetingId}`,
+          'audio/mpeg',
+          'recording.mp3',
         );
-
-        if (!whisperRes.ok) {
-          const errText = await whisperRes.text();
-          throw new Error(`Whisper error ${whisperRes.status}: ${errText}`);
-        }
-
-        const whisperData = (await whisperRes.json()) as any;
-        const segments = whisperData.segments ?? [];
-        transcript =
-          segments.length > 0
-            ? segments
-                .map((s: any) => {
-                  const mm = String(Math.floor(s.start / 60)).padStart(2, '0');
-                  const ss = String(Math.floor(s.start % 60)).padStart(2, '0');
-                  return `[${mm}:${ss}] ${s.text.trim()}`;
-                })
-                .join('\n')
-            : (whisperData.text?.trim() ?? '');
+        transcript = segments
+          .map((s) => {
+            const mm = String(Math.floor(s.start / 60)).padStart(2, '0');
+            const ss = String(Math.floor(s.start % 60)).padStart(2, '0');
+            return `[${mm}:${ss}] ${s.text}`;
+          })
+          .join('\n');
       }
       await this.gating.endSession(whisperSession.id, 'completed');
     } catch (err) {
