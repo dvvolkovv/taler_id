@@ -105,6 +105,17 @@ const whisperUploadSizes = () =>
 const ffmpegCalls = () =>
   execFileMock.mock.calls.filter(([bin]) => bin === 'ffmpeg');
 
+/** The request no longer waits for transcription — it returns `processing` and
+ *  the work runs detached. Tests have to wait for it themselves. */
+async function settled(check: () => boolean, ms = 3000) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (check()) return;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  throw new Error('detached transcription did not finish in time');
+}
+
 describe('transcribeExistingRecording — Whisper size, duration and timeout', () => {
   let service: VoiceService;
   /** Peak number of overlapping transcription requests during one run. */
@@ -220,6 +231,13 @@ describe('transcribeExistingRecording — Whisper size, duration and timeout', (
       ([arg]: any) => arg.data.status,
     );
 
+  /** Start transcription and wait for the detached half to reach a verdict. */
+  const runToCompletion = async () => {
+    const accepted = await service.transcribeExistingRecording(OWNER_ID, 'm-1');
+    expect(accepted).toMatchObject({ status: 'processing' });
+    await settled(() => statuses().some((s) => s === 'done' || s === 'failed'));
+  };
+
   const savedTranscript = () =>
     mockPrisma.meetingSummary.update.mock.calls
       .map(([arg]: any) => arg.data.transcript)
@@ -228,7 +246,7 @@ describe('transcribeExistingRecording — Whisper size, duration and timeout', (
   it('states a timeout on the transcription request instead of inheriting one', async () => {
     stubDownload(5 * 1024 * 1024);
 
-    await service.transcribeExistingRecording(OWNER_ID, 'm-1');
+    await runToCompletion();
 
     const [, , config] = transcribeCalls()[0];
     // Without this the call rides Node's unsettable 300 s fetch timeout, which
@@ -241,7 +259,7 @@ describe('transcribeExistingRecording — Whisper size, duration and timeout', (
     // 27.5 MiB — the size of the 56-minute meeting that produced the 413.
     stubDownload(28_853_685);
 
-    await service.transcribeExistingRecording(OWNER_ID, 'm-1');
+    await runToCompletion();
 
     const sizes = whisperUploadSizes();
     expect(sizes.length).toBeGreaterThan(0);
@@ -254,7 +272,7 @@ describe('transcribeExistingRecording — Whisper size, duration and timeout', (
   it('uploads a short recording untouched, without re-encoding it', async () => {
     stubDownload(5 * 1024 * 1024);
 
-    await service.transcribeExistingRecording(OWNER_ID, 'm-1');
+    await runToCompletion();
 
     expect(whisperUploadSizes()).toEqual([5 * 1024 * 1024]);
     expect(ffmpegCalls()).toHaveLength(0);
@@ -264,7 +282,7 @@ describe('transcribeExistingRecording — Whisper size, duration and timeout', (
     probeDuration = CHUNK_SECONDS + 100;
     stubDownload(12_724_209);
 
-    await service.transcribeExistingRecording(OWNER_ID, 'm-1');
+    await runToCompletion();
 
     expect(whisperUploadSizes()).toHaveLength(3);
     expect(ffmpegCalls().some(([, argv]) => argv.includes('segment'))).toBe(
@@ -278,7 +296,7 @@ describe('transcribeExistingRecording — Whisper size, duration and timeout', (
     probeDuration = CHUNK_SECONDS + 100;
     stubDownload(12_724_209);
 
-    await service.transcribeExistingRecording(OWNER_ID, 'm-1');
+    await runToCompletion();
 
     // Every chunk's mocked segment starts at 0; only the offsets distinguish
     // them, so a transcript with three identical [00:00] lines would mean the
@@ -294,7 +312,7 @@ describe('transcribeExistingRecording — Whisper size, duration and timeout', (
     chunkCount = 9;
     stubDownload(12_724_209);
 
-    await service.transcribeExistingRecording(OWNER_ID, 'm-1');
+    await runToCompletion();
 
     expect(whisperUploadSizes()).toHaveLength(9);
     expect(maxInFlight).toBeGreaterThan(1);
@@ -316,11 +334,29 @@ describe('transcribeExistingRecording — Whisper size, duration and timeout', (
     });
     stubDownload(5 * 1024 * 1024);
 
+    // The caller is told "processing" and walks away — a Whisper refusal can no
+    // longer come back as an HTTP error, so the meeting's own status and the
+    // refund are the only things that report it.
     await expect(
       service.transcribeExistingRecording(OWNER_ID, 'm-1'),
-    ).rejects.toThrow(/Whisper error 413/);
+    ).resolves.toMatchObject({ status: 'processing' });
+
+    await settled(() => statuses().includes('failed'));
+    expect(statuses()).not.toContain('done');
+    expect(mockLedger.refund).toHaveBeenCalled();
+  });
+
+  it('reports insufficient funds to the caller instead of failing in the background', async () => {
+    mockLedger.debit.mockRejectedValue(new Error('insufficient funds'));
+    stubDownload(5 * 1024 * 1024);
+
+    // Billing stays on the request's side of the line precisely so this is an
+    // error the user sees at once, not a meeting that quietly turns failed.
+    await expect(
+      service.transcribeExistingRecording(OWNER_ID, 'm-1'),
+    ).rejects.toThrow(/insufficient funds/);
 
     expect(statuses()).toContain('failed');
-    expect(mockLedger.refund).toHaveBeenCalled();
+    expect(transcribeCalls()).toHaveLength(0);
   });
 });

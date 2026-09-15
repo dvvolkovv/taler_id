@@ -68,6 +68,27 @@ function promptText(fetchMock: jest.Mock): string {
     .join('\n');
 }
 
+/** Transcription is detached from the request now: it returns `processing` and
+ *  the work lands later. Tests have to wait for it themselves. */
+async function settled(check: () => boolean, ms = 3000) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (check()) return;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  throw new Error('detached transcription did not finish in time');
+}
+
+/** Start transcription and wait for the meeting to reach a verdict. */
+async function runToCompletion(service: any, userId: string, id: string) {
+  await service.transcribeExistingRecording(userId, id);
+  await settled(() =>
+    mockPrisma.meetingSummary.update.mock.calls.some(
+      ([arg]: any) => arg.data.status === 'done' || arg.data.status === 'failed',
+    ),
+  );
+}
+
 describe('transcribeExistingRecording — participant roster in the summary prompt', () => {
   let service: VoiceService;
   let fetchMock: jest.Mock;
@@ -153,7 +174,7 @@ describe('transcribeExistingRecording — participant roster in the summary prom
   });
 
   it('shows the model who was actually in the room', async () => {
-    await service.transcribeExistingRecording(OWNER_ID, 'm-1');
+    await runToCompletion(service, OWNER_ID, 'm-1');
 
     const prompt = promptText(fetchMock);
     for (const name of [
@@ -167,7 +188,7 @@ describe('transcribeExistingRecording — participant roster in the summary prom
   });
 
   it('tells the model that names outside the roster are not participants', async () => {
-    await service.transcribeExistingRecording(OWNER_ID, 'm-1');
+    await runToCompletion(service, OWNER_ID, 'm-1');
 
     // Whatever the wording, the roster has to be framed as exhaustive — otherwise
     // the model reads it as a hint and keeps recruiting whoever gets mentioned.
@@ -177,7 +198,7 @@ describe('transcribeExistingRecording — participant roster in the summary prom
   });
 
   it('still sends the transcript itself', async () => {
-    await service.transcribeExistingRecording(OWNER_ID, 'm-1');
+    await runToCompletion(service, OWNER_ID, 'm-1');
 
     expect(promptText(fetchMock)).toContain(TRANSCRIPT_LINE.slice(8));
   });
@@ -189,7 +210,7 @@ describe('transcribeExistingRecording — participant roster in the summary prom
       meeting({ participants: [] }),
     );
 
-    await service.transcribeExistingRecording(OWNER_ID, 'm-1');
+    await runToCompletion(service, OWNER_ID, 'm-1');
 
     expect(promptText(fetchMock)).not.toMatch(/Участники встречи/i);
   });

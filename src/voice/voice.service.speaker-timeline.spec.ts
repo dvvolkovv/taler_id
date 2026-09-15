@@ -60,6 +60,27 @@ function savedTranscript(): string {
   return call.data.transcript;
 }
 
+/** Transcription is detached from the request now: it returns `processing` and
+ *  the work lands later. Tests have to wait for it themselves. */
+async function settled(check: () => boolean, ms = 3000) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (check()) return;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  throw new Error('detached transcription did not finish in time');
+}
+
+/** Start transcription and wait for the meeting to reach a verdict. */
+async function runToCompletion(service: any, userId: string, id: string) {
+  await service.transcribeExistingRecording(userId, id);
+  await settled(() =>
+    mockPrisma.meetingSummary.update.mock.calls.some(
+      ([arg]: any) => arg.data.status === 'done' || arg.data.status === 'failed',
+    ),
+  );
+}
+
 describe('transcribeExistingRecording — speaker labels from the recorder timeline', () => {
   let service: VoiceService;
 
@@ -144,7 +165,7 @@ describe('transcribeExistingRecording — speaker labels from the recorder timel
   });
 
   it('names each transcript line after whoever was speaking then', async () => {
-    await service.transcribeExistingRecording(OWNER_ID, 'm-1');
+    await runToCompletion(service, OWNER_ID, 'm-1');
 
     expect(savedTranscript()).toBe(
       '[00:01] Dmitry Volkov: первый\n[00:13] Vladimir: второй',
@@ -157,7 +178,7 @@ describe('transcribeExistingRecording — speaker labels from the recorder timel
       meeting({ speakerTimeline: null }),
     );
 
-    await service.transcribeExistingRecording(OWNER_ID, 'm-1');
+    await runToCompletion(service, OWNER_ID, 'm-1');
 
     expect(savedTranscript()).toBe('[00:01] первый\n[00:13] второй');
   });

@@ -7,6 +7,7 @@ import {
   HttpException,
   HttpStatus,
   ServiceUnavailableException,
+  OnModuleInit,
 } from '@nestjs/common';
 import {
   AccessToken,
@@ -161,7 +162,7 @@ export function buildChatMsgId(
 }
 
 @Injectable()
-export class VoiceService {
+export class VoiceService implements OnModuleInit {
   private readonly log = new Logger(VoiceService.name);
   private rooms = new RoomServiceClient(LK_HOST, LK_API_KEY, LK_API_SECRET);
   private ruRooms = new RoomServiceClient(
@@ -1703,6 +1704,36 @@ export class VoiceService {
     );
   }
 
+  /** Transcription outlives the request that started it, but not the process
+   *  running it: a restart mid-way leaves the meeting on "processing" forever,
+   *  and the screen keeps promising a protocol that nobody is working on. Four
+   *  meetings have been sitting like that since March.
+   *
+   *  This only clears the obviously-abandoned ones. There is no column recording
+   *  when an attempt began, so "abandoned" has to be inferred from the meeting's
+   *  own age — a day is far longer than any transcription takes, and it keeps the
+   *  sweep from touching a job the *other* app node may be running right now.
+   *  Picking up where a restart left off needs that timestamp and is the next
+   *  step; this just stops the UI lying in the meantime.
+   */
+  async onModuleInit() {
+    try {
+      const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const swept = await this.prisma.meetingSummary.updateMany({
+        where: { status: 'processing', createdAt: { lt: cutoff } },
+        data: { status: 'failed' },
+      });
+      if (swept.count > 0) {
+        this.log.warn(
+          `[whisper] ${swept.count} встреч(и) висели в processing дольше суток — помечены failed`,
+        );
+      }
+    } catch (err) {
+      // A sweep that can't run must not stop the service from starting.
+      this.log.error(`[whisper] не удалось разобрать зависшие встречи: ${String(err)}`);
+    }
+  }
+
   async getMeetingSummary(id: string) {
     const summary = await this.prisma.meetingSummary.findUnique({
       where: { id },
@@ -2037,29 +2068,11 @@ export class VoiceService {
       throw new ForbiddenException('Not a participant of this meeting');
     }
 
-    // Mark as processing
-    await this.prisma.meetingSummary.update({
-      where: { id: meetingId },
-      data: { status: 'processing' },
-    });
-
-    // Download recording
-    let audioBuffer: Buffer;
-    const url = meeting.recordingUrl;
-
-    if (url.includes('/messenger/files/download?key=')) {
-      // S3 stored — read via FileStorageService
-      const key = decodeURIComponent(url.split('key=')[1]);
-      const { stream } = await this.fileStorage.getObject(key);
-      const chunks: Buffer[] = [];
-      for await (const chunk of stream) chunks.push(Buffer.from(chunk));
-      audioBuffer = Buffer.concat(chunks);
-    } else {
-      // External URL — fetch
-      const res = await fetch(url);
-      if (!res.ok)
-        throw new Error(`Failed to download recording: ${res.status}`);
-      audioBuffer = Buffer.from(await res.arrayBuffer());
+    // Already running — don't start a second pass over the same recording, and
+    // above all don't charge for it twice. Returning the current state makes a
+    // repeated tap on "протокол" harmless.
+    if (meeting.status === 'processing') {
+      return { id: meeting.id, status: 'processing', alreadyRunning: true };
     }
 
     // Check if we have per-participant tracks for speaker diarization
@@ -2110,9 +2123,77 @@ export class VoiceService {
       throw err;
     }
 
+    await this.prisma.meetingSummary.update({
+      where: { id: meetingId },
+      data: { status: 'processing' },
+    });
+
+    // Deliberately not awaited: the work runs for minutes and nothing upstream
+    // will wait that long. The caller polls GET /voice/meetings/:id instead.
+    void this.runTranscription(
+      userId,
+      meeting,
+      whisperSession.id,
+      whisperTx.id,
+    ).catch(async (err) => {
+      // Last line of defence. runTranscription handles its own failures, but a
+      // throw from the summary half (a post-call debit that can't be covered)
+      // used to surface as a 500 to whoever was waiting. Nobody is waiting now,
+      // so an unhandled escape would leave the meeting stuck on "processing"
+      // forever — exactly the state four March meetings are still in.
+      this.log.error(
+        `[whisper] transcription of meeting ${meetingId} failed: ${String(err)}`,
+      );
+      await this.prisma.meetingSummary
+        .update({ where: { id: meetingId }, data: { status: 'failed' } })
+        .catch(() => {});
+    });
+
+    return { id: meetingId, status: 'processing' };
+  }
+
+  /** The long half of transcription: download, Whisper, summary, save. Runs
+   *  detached from the request that started it, so it owns the meeting's status
+   *  and the refund on failure — nobody is left to catch an exception here. */
+  private async runTranscription(
+    userId: string,
+    meeting: any,
+    whisperSessionId: string,
+    whisperTxId: string,
+  ) {
+    const meetingId = meeting.id as string;
+
+    const participantTracks = meeting.participantTracks as Record<
+      string,
+      string
+    > | null;
+    const hasMultipleTracks =
+      participantTracks &&
+      typeof participantTracks === 'object' &&
+      Object.keys(participantTracks).length > 1;
+
     let transcript = '';
 
     try {
+      // Download recording
+      let audioBuffer: Buffer;
+      const url = meeting.recordingUrl as string;
+
+      if (url.includes('/messenger/files/download?key=')) {
+        // S3 stored — read via FileStorageService
+        const key = decodeURIComponent(url.split('key=')[1]);
+        const { stream } = await this.fileStorage.getObject(key);
+        const chunks: Buffer[] = [];
+        for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+        audioBuffer = Buffer.concat(chunks);
+      } else {
+        // External URL — fetch
+        const res = await fetch(url);
+        if (!res.ok)
+          throw new Error(`Failed to download recording: ${res.status}`);
+        audioBuffer = Buffer.from(await res.arrayBuffer());
+      }
+
       if (hasMultipleTracks) {
         // Speaker diarization: transcribe each participant track separately and merge by timestamp
         console.log(
@@ -2216,19 +2297,19 @@ export class VoiceService {
         const timeline = readSpeakerTimeline((meeting as any).speakerTimeline);
         transcript = formatTranscript(labelSegments(segments, timeline));
       }
-      await this.gating.endSession(whisperSession.id, 'completed');
+      await this.gating.endSession(whisperSessionId, 'completed');
     } catch (err) {
-      // Transcription failed — covers both the single-mixed path (Whisper HTTP error)
-      // and the diarization path (all tracks failed → we throw above). Mark the
-      // meeting as failed so UI stops showing "processing", refund the pre-debit,
-      // and close the gating session.
+      // Transcription failed — covers the download, the single-mixed path
+      // (Whisper HTTP error) and the diarization path (all tracks failed → we
+      // throw above). Mark the meeting as failed so UI stops showing
+      // "processing", refund the pre-debit, and close the gating session.
       await this.prisma.meetingSummary
         .update({ where: { id: meetingId }, data: { status: 'failed' } })
         .catch(() => {});
       await this.ledger
-        .refund(whisperTx.id, `whisper error: ${String(err).slice(0, 200)}`)
+        .refund(whisperTxId, `whisper error: ${String(err).slice(0, 200)}`)
         .catch(() => {});
-      await this.gating.endSession(whisperSession.id, 'failed').catch(() => {});
+      await this.gating.endSession(whisperSessionId, 'failed').catch(() => {});
       throw err;
     }
 
@@ -2253,7 +2334,7 @@ export class VoiceService {
       // discussed (meeting 4bb0e777: "приняли участие Володя, Илья, Дим",
       // assignee "Серега" — Илья and Серёга were never in the call).
       const roster = (meeting.participants ?? []).filter(
-        (name) => typeof name === 'string' && name.trim().length > 0,
+        (name: unknown) => typeof name === 'string' && name.trim().length > 0,
       );
       const rosterBlock = roster.length
         ? `Участники встречи (полный список, взят из системы звонков, а не из речи): ${roster.join(', ')}.

@@ -581,7 +581,14 @@ export class VoiceController {
 
   // ─── Post-hoc Transcription ───
 
+  /** Accepts the job and returns at once — transcribing an hour of meeting takes
+   *  minutes, and nothing in the chain waits that long: the mobile client gives
+   *  up after 30 s, the DO load balancer cuts the connection at 60 s. Callers
+   *  poll GET /voice/meetings/:id and watch `status`.
+   *  Refusals that are knowable up front — no such meeting, not a participant,
+   *  not enough funds — still come back as HTTP errors from this call. */
   @Post('recordings/:id/transcribe')
+  @HttpCode(HttpStatus.ACCEPTED)
   @UseGuards(JwtAuthGuard)
   @UseFilters(BillingExceptionFilter)
   async transcribeRecording(@Param('id') id: string, @CurrentUser() user: any) {

@@ -33,6 +33,7 @@ const mockPrisma = {
   meetingSummary: {
     create: jest.fn(),
     update: jest.fn(),
+    updateMany: jest.fn(),
     findMany: jest.fn(),
     findUnique: jest.fn(),
   },
@@ -119,9 +120,10 @@ describe("VoiceService", () => {
   });
 
   describe("transcribeExistingRecording — ownership check", () => {
-    // Sentinel thrown by fileStorage.getObject: reaching it proves the
-    // ownership check passed (download happens right after the check).
-    const SENTINEL = "SENTINEL_DOWNLOAD_REACHED";
+    // Acceptance is the marker now: the call returns `processing` and the work
+    // runs detached. (It used to be proven by a sentinel thrown from the
+    // download, which sat right after the check — the download has since moved
+    // into the background half, where nothing the caller sees can reach it.)
     const OWNER_ID = "c79530ed-5ba8-44e3-b7d4-4a591c7c1db6";
 
     const meeting = (over: Record<string, unknown> = {}) => ({
@@ -130,19 +132,27 @@ describe("VoiceService", () => {
       recordingUrl: "https://x/messenger/files/download?key=recordings%2Fa.ogg",
       participantIds: ["guest-1a941683", "guest-50507c35"],
       durationSec: 60,
+      status: "done",
       ...over,
     });
 
     beforeEach(() => {
       mockPrisma.meetingSummary.update.mockResolvedValue({});
-      mockFileStorage.getObject.mockRejectedValue(new Error(SENTINEL));
+      mockGating.startSession.mockResolvedValue({ id: "s-1" });
+      mockGating.endSession.mockResolvedValue(undefined);
+      mockPricing.calculatePlanckCost.mockResolvedValue(1n);
+      mockLedger.debit.mockResolvedValue({ id: "tx-1" });
+      mockLedger.refund.mockResolvedValue(undefined);
+      // The detached half is not under test here; let its download fail so it
+      // settles at once instead of reaching for anything real.
+      mockFileStorage.getObject.mockRejectedValue(new Error("no download in tests"));
     });
 
     it("allows the personal-room owner even when participantIds contains only guests", async () => {
       mockPrisma.meetingSummary.findUnique.mockResolvedValue(meeting());
       await expect(
         service.transcribeExistingRecording(OWNER_ID, "m-1"),
-      ).rejects.toThrow(SENTINEL);
+      ).resolves.toMatchObject({ status: "processing" });
     });
 
     it("allows a listed participant", async () => {
@@ -151,7 +161,7 @@ describe("VoiceService", () => {
       );
       await expect(
         service.transcribeExistingRecording("user-abc", "m-1"),
-      ).rejects.toThrow(SENTINEL);
+      ).resolves.toMatchObject({ status: "processing" });
     });
 
     it("rejects a stranger (not participant, not room owner) with 403", async () => {
@@ -161,6 +171,39 @@ describe("VoiceService", () => {
       await expect(
         service.transcribeExistingRecording(OWNER_ID, "m-1"),
       ).rejects.toThrow("Not a participant of this meeting");
+    });
+
+    it("clears meetings abandoned mid-transcription by a restart", async () => {
+      mockPrisma.meetingSummary.updateMany.mockResolvedValue({ count: 2 });
+
+      await service.onModuleInit();
+
+      const [arg] = mockPrisma.meetingSummary.updateMany.mock.calls[0] as any[];
+      expect(arg.data).toEqual({ status: "failed" });
+      expect(arg.where.status).toBe("processing");
+      // Only the long-abandoned ones: without an age bound this would also kill
+      // whatever the other app node is transcribing at this very moment.
+      const cutoff: Date = arg.where.createdAt.lt;
+      const hoursBack = (Date.now() - cutoff.getTime()) / 3_600_000;
+      expect(hoursBack).toBeGreaterThanOrEqual(23);
+    });
+
+    it("starts even if the sweep fails", async () => {
+      mockPrisma.meetingSummary.updateMany.mockRejectedValue(
+        new Error("db is having a moment"),
+      );
+
+      await expect(service.onModuleInit()).resolves.toBeUndefined();
+    });
+
+    it("refuses to start a second pass, and a second charge, while one runs", async () => {
+      mockPrisma.meetingSummary.findUnique.mockResolvedValue(
+        meeting({ status: "processing" }),
+      );
+      await expect(
+        service.transcribeExistingRecording(OWNER_ID, "m-1"),
+      ).resolves.toMatchObject({ status: "processing", alreadyRunning: true });
+      expect(mockLedger.debit).not.toHaveBeenCalled();
     });
   });
 });
