@@ -302,7 +302,7 @@ async function processAndSave(session) {
       'или в комнате не было ни одного участника, публикующего звук. ' +
       'Попробуй начать запись ещё раз.';
     try {
-      const r = await fetch(`${BACKEND_URL}/api/voice/meetings/save`, {
+      const r = await fetch(`${BACKEND_URL}/voice/meetings/save`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-recorder-secret': RECORDER_SECRET },
         body: JSON.stringify({
