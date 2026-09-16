@@ -92,6 +92,45 @@ describe('saveMeetingSummary — a recording that captured nobody', () => {
     expect(mockPrisma.publicRoom.findFirst).not.toHaveBeenCalled();
   });
 
+  // participantIds is an access-control list, matched against a bare userId by
+  // the listings and by the transcription guard. The recorder reports LiveKit
+  // identities, which carry a per-device hash for app participants — keeping it
+  // locks the participant out of their own recording.
+  it('strips the device hash off the identities the recorder reports', async () => {
+    await service.saveMeetingSummary({
+      ...emptyRecording,
+      participants: ['Дмитрий Волков', 'Aleksandr Shevchenko'],
+      participantIds: [
+        'fc7d449b-84ac-4048-b3c5-7e6d49a091e7#1d5589ab',
+        '51a2323d-7080-4ba5-a084-688815053699#89455dbf',
+      ],
+      status: 'done',
+    });
+
+    expect(createdData().participantIds).toEqual([
+      'fc7d449b-84ac-4048-b3c5-7e6d49a091e7',
+      '51a2323d-7080-4ba5-a084-688815053699',
+    ]);
+  });
+
+  // The same person on a phone and a laptop is two LiveKit identities but one
+  // entry in an ACL.
+  it('collapses the same person joining from two devices', async () => {
+    await service.saveMeetingSummary({
+      ...emptyRecording,
+      participants: ['Дмитрий Волков', 'Дмитрий Волков'],
+      participantIds: [
+        'fc7d449b-84ac-4048-b3c5-7e6d49a091e7#1d5589ab',
+        'fc7d449b-84ac-4048-b3c5-7e6d49a091e7#9f0c2ab4',
+      ],
+      status: 'done',
+    });
+
+    expect(createdData().participantIds).toEqual([
+      'fc7d449b-84ac-4048-b3c5-7e6d49a091e7',
+    ]);
+  });
+
   it('still saves when the room has no creator on record', async () => {
     // Rooms created before creatorId was populated, and personal rooms, which
     // have no PublicRoom row at all — the owner clause in the list covers those.

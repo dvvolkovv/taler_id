@@ -24,7 +24,10 @@ import { promisify } from 'util';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { makeParticipantIdentity } from '../common/participant-identity';
+import {
+  makeParticipantIdentity,
+  parseUserId,
+} from '../common/participant-identity';
 import { PrismaService } from '../prisma/prisma.service';
 
 import { FileStorageService } from '../common/file-storage.service';
@@ -1507,6 +1510,18 @@ export class VoiceService implements OnModuleInit {
     participantTracks?: any;
     speakerTimeline?: any;
   }) {
+    // The recorder reports raw LiveKit identities, and since 4cb6870 an app
+    // participant's identity is `<userId>#<deviceHash>`. This column is read
+    // only as an access-control list — matched against a bare userId both by
+    // the listings and by transcribeExistingRecording — so the hash has to come
+    // off here. Guest/agent identities have no `#` and pass through unchanged;
+    // two devices of the same person collapse into one entry, which is what an
+    // ACL wants. Display names live in `participants`, tracks and the speaker
+    // timeline keep their own identity-keyed maps, so nothing else is affected.
+    const normalizedParticipantIds = data.participantIds
+      ? [...new Set(data.participantIds.map(parseUserId))]
+      : undefined;
+
     // If id provided — update existing record (pending → done)
     if (data.id) {
       const updated = await this.prisma.meetingSummary.update({
@@ -1521,9 +1536,9 @@ export class VoiceService implements OnModuleInit {
           durationSec: data.durationSec ?? null,
           status: data.status ?? 'done',
           ...(data.participants && { participants: data.participants }),
-          ...(data.participantIds &&
-            data.participantIds.length > 0 && {
-              participantIds: data.participantIds,
+          ...(normalizedParticipantIds &&
+            normalizedParticipantIds.length > 0 && {
+              participantIds: normalizedParticipantIds,
             }),
           ...(data.participantTracks && {
             participantTracks: data.participantTracks,
@@ -1549,7 +1564,7 @@ export class VoiceService implements OnModuleInit {
     // on a `personal-<owner>` room name — so in a temporary room the row would
     // belong to no one and nobody would ever learn the recording failed. Whoever
     // opened the room is on PublicRoom, which any app node can read.
-    let participantIds = data.participantIds ?? [];
+    let participantIds = normalizedParticipantIds ?? [];
     if (participantIds.length === 0) {
       try {
         const room = await this.prisma.publicRoom.findFirst({
@@ -2107,9 +2122,13 @@ export class VoiceService implements OnModuleInit {
     const isPersonalRoomOwner = meeting.roomName.startsWith(
       `personal-${userId.substring(0, 8)}`,
     );
+    // Rows are written with bare user ids (see saveMeetingSummary), but every
+    // meeting recorded between 2026-06-18 and that change holds raw LiveKit
+    // identities — `<userId>#<deviceHash>` for app participants. Compare through
+    // parseUserId so those rows stay reachable without a data migration.
     if (
       meeting.participantIds.length > 0 &&
-      !meeting.participantIds.includes(userId) &&
+      !meeting.participantIds.map(parseUserId).includes(userId) &&
       !isPersonalRoomOwner
     ) {
       throw new ForbiddenException('Not a participant of this meeting');
