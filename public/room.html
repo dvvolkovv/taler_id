@@ -1232,7 +1232,7 @@
             }
             // Server recording active — ask late joiner for consent
             if (srvRecActive && srvRecInitiatorId === localIdentity) {
-              setTimeout(() => sendDataTo(pid, {
+              setTimeout(() => sendSrvRecDataTo(pid, {
                 type: 'srv_rec_consent_request',
                 initiatorId: localIdentity,
                 initiatorName: srvRecInitiatorName,
@@ -2098,7 +2098,7 @@
       }
       if (srvRecInitiatorId === localIdentity) {
         if (srvRecActive) stopServerRecording();
-        broadcastData({ type: 'srv_rec_ended', initiatorId: localIdentity });
+        broadcastSrvRecData({ type: 'srv_rec_ended', initiatorId: localIdentity });
       }
       resetRecordingState();
       removeSrvRecConsentDialog();
@@ -2285,6 +2285,10 @@
     }
 
     function handleConsentRequest(participant, msg) {
+      // Дублёр запроса на серверную запись — он адресован мобилкам; у веба
+      // для него есть handleSrvRecConsentRequest, и без этой проверки
+      // участник получил бы два диалога на одно согласие.
+      if (msg.srvRec) return;
       if (msg.initiatorId === localIdentity) return;
       // Regular request while already recording from same initiator — skip (dedup)
       if (isRecording && recordingInitiatorId === msg.initiatorId && !msg.recordingActive) return;
@@ -2299,6 +2303,24 @@
     }
 
     function handleConsentResponse(participant, msg) {
+      // На дублёр запроса мобилка отвечает обычным recording_consent_response —
+      // отдельного srv_rec-ответа у неё нет. Если мы сейчас собираем согласие
+      // на запись НА СЕРВЕР и этот участник в нём числится, ответ принадлежит
+      // той сессии. Локальная запись имеет приоритет: одновременно два сбора
+      // интерфейс начать не даёт, а при неоднозначности безопаснее не уводить
+      // ответ в чужую сессию.
+      const responderId = participant.identity;
+      const answeringLocalRec = consentPending
+        && recordingInitiatorId === localIdentity
+        && consentResponses.has(responderId);
+      if (!answeringLocalRec
+          && srvRecConsentPending
+          && srvRecInitiatorId === localIdentity
+          && srvRecConsentResponses.has(responderId)) {
+        handleSrvRecConsentResponse(participant, msg);
+        return;
+      }
+
       // Only the initiator processes responses
       if (recordingInitiatorId !== localIdentity) return;
       if (!consentPending) return;
@@ -2349,6 +2371,7 @@
     }
 
     function handleRecordingApproved(msg) {
+      if (msg.srvRec) return; // дублёр для мобилок, у веба свой handleSrvRecApproved
       recordingInitiatorId = msg.initiatorId;
       recordingInitiatorName = msg.initiatorName;
       recordingApproved = true;
@@ -2360,6 +2383,7 @@
     }
 
     function handleRecordingDenied(msg) {
+      if (msg.srvRec) return; // дублёр для мобилок, у веба свой handleSrvRecDenied
       // Someone declined — close dialog
       removeConsentDialog();
       resetRecordingState();
@@ -2369,6 +2393,7 @@
     }
 
     function handleRecordingEnded(msg) {
+      if (msg.srvRec) return; // дублёр для мобилок, у веба свой handleSrvRecEnded
       removeConsentDialog();
       if (isRecording && recordingInitiatorId === localIdentity) {
         stopRecording(true);
@@ -2525,7 +2550,7 @@
       if (participants.length === 0) {
         srvRecApproved = true;
         startServerRecording();
-        broadcastData({ type: 'srv_rec_approved', initiatorId: localIdentity, initiatorName: srvRecInitiatorName });
+        broadcastSrvRecData({ type: 'srv_rec_approved', initiatorId: localIdentity, initiatorName: srvRecInitiatorName });
         return;
       }
 
@@ -2534,14 +2559,14 @@
         srvRecConsentResponses.set(p.identity, { name: getDisplayName(p), accepted: null });
       });
 
-      broadcastData({ type: 'srv_rec_consent_request', initiatorId: localIdentity, initiatorName: srvRecInitiatorName });
+      broadcastSrvRecData({ type: 'srv_rec_consent_request', initiatorId: localIdentity, initiatorName: srvRecInitiatorName });
       showSrvRecConsentStatusUI();
       updateControlButtons();
 
       [2000, 4000, 7000].forEach(delay => {
         setTimeout(() => {
           if (!srvRecConsentPending) return;
-          broadcastData({ type: 'srv_rec_consent_request', initiatorId: localIdentity, initiatorName: srvRecInitiatorName });
+          broadcastSrvRecData({ type: 'srv_rec_consent_request', initiatorId: localIdentity, initiatorName: srvRecInitiatorName });
         }, delay);
       });
     }
@@ -2597,7 +2622,7 @@
       if (!msg.accepted) {
         srvRecConsentPending = false;
         removeSrvRecConsentStatusUI();
-        broadcastData({ type: 'srv_rec_denied', initiatorId: localIdentity, declinedBy: msg.responderName });
+        broadcastSrvRecData({ type: 'srv_rec_denied', initiatorId: localIdentity, declinedBy: msg.responderName });
         showNotification(`${msg.responderName} отклонил запись на сервер`, 'error');
         resetSrvRecState();
         return;
@@ -2615,7 +2640,7 @@
         srvRecApproved = true;
         removeSrvRecConsentStatusUI();
         startServerRecording();
-        broadcastData({ type: 'srv_rec_approved', initiatorId: localIdentity, initiatorName: srvRecInitiatorName });
+        broadcastSrvRecData({ type: 'srv_rec_approved', initiatorId: localIdentity, initiatorName: srvRecInitiatorName });
         showNotification('Все согласились. Запись на сервер началась.', 'success');
       }
     }
@@ -2659,7 +2684,7 @@
       if (srvRecInitiatorId !== localIdentity) return;
       if (srvRecActive) stopServerRecording();
       if (srvRecConsentPending) removeSrvRecConsentStatusUI();
-      broadcastData({ type: 'srv_rec_ended', initiatorId: localIdentity });
+      broadcastSrvRecData({ type: 'srv_rec_ended', initiatorId: localIdentity });
       resetSrvRecState();
     }
 
@@ -2811,6 +2836,50 @@
         console.warn('[DATA] Failed to broadcast:', e);
         return false;
       }
+    }
+
+    /* Мобильное приложение не знает семейства srv_rec_*: его разбор входящих
+     * пакетов (voice_call_screen.dart) — switch без ветки по умолчанию, и он
+     * понимает только recording_*. Незнакомый тип выбрасывается молча, поэтому
+     * запись на сервер, начатая из веба, до сих пор не доходила до телефона:
+     * диалог согласия не появлялся, а инициатор ждал ответа вечно — повторы
+     * рассылки есть, таймаута нет.
+     *
+     * Пока в ходу сборки без srv_rec_*, каждый пакет серверной записи уходит в
+     * двух диалектах: родной srv_rec_* для веба и дублёр recording_* с
+     * пометкой srvRec для мобилок. Веб узнаёт свои дублёры по этой пометке и
+     * пропускает их — иначе участник получил бы два диалога на одно согласие.
+     *
+     * Ответ приходит только один и в мобильном диалекте
+     * (recording_consent_response), его разводит handleConsentResponse.
+     *
+     * Когда srv_rec_* появится во всех живых сборках, дублёры и пометку можно
+     * снять — протокол вернётся к одному диалекту. */
+    const SRV_REC_LEGACY_TYPE = {
+      srv_rec_consent_request: 'recording_consent_request',
+      srv_rec_approved: 'recording_approved',
+      srv_rec_denied: 'recording_denied',
+      srv_rec_ended: 'recording_ended',
+    };
+
+    /* Дублёр собирается ДО отправки оригинала: broadcastData/sendDataTo
+     * проставляют msgId прямо в переданный объект, и копия, снятая после,
+     * унесла бы тот же msgId — приёмная сторона отбросила бы её как повтор. */
+    function srvRecTwin(msg) {
+      const legacy = SRV_REC_LEGACY_TYPE[msg.type];
+      return legacy ? Object.assign({}, msg, { type: legacy, srvRec: true }) : null;
+    }
+
+    function broadcastSrvRecData(msg) {
+      const twin = srvRecTwin(msg);
+      broadcastData(msg);
+      if (twin) broadcastData(twin);
+    }
+
+    function sendSrvRecDataTo(identity, msg) {
+      const twin = srvRecTwin(msg);
+      sendDataTo(identity, msg);
+      if (twin) sendDataTo(identity, twin);
     }
 
     function sendDataTo(identity, msg) {
