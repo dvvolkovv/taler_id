@@ -52,6 +52,13 @@ export default () => ({
       process.env.SUMSUB_BASE_URL || 'https://mockss-test.up.railway.app',
     levelName: process.env.SUMSUB_LEVEL_NAME || 'trientes-kyc-level',
     kybLevelName: process.env.SUMSUB_KYB_LEVEL_NAME || 'basic-kyb-level',
+    // welID tenant attribution (exchange/common #823): the SDK sends a bare
+    // levelName, so welID falls back to its DEFAULT_PROJECT ("trientes") and our
+    // applicants masquerade as trientes in the admin dashboard. Passing projectId
+    // in the accessTokens/sdk body is the welID-supported legacy fallback (its
+    // resolve_project_source precedence #2) that stamps project_id_captured="taler"
+    // without changing levelName resolution. Slug must be lowercase "taler".
+    projectId: process.env.SUMSUB_PROJECT_ID || 'taler',
     ttlInSecs: parseInt(process.env.SUMSUB_TTL_SECS || '600', 10) || 600,
     webhookSecret: process.env.SUMSUB_WEBHOOK_SECRET || '',
   },

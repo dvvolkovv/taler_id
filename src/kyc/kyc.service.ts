@@ -43,6 +43,13 @@ export class KycService {
     return process.env.SUMSUB_LEVEL_NAME || 'trientes-kyc-level';
   }
 
+  // welID tenant attribution (exchange/common #823). Sent in the accessTokens/sdk
+  // body so welID stamps project_id_captured="taler" instead of falling back to its
+  // DEFAULT_PROJECT ("trientes"). Kept as its own getter to mirror levelName.
+  private get projectId(): string {
+    return process.env.SUMSUB_PROJECT_ID || 'taler';
+  }
+
   private get ttlInSecs(): number {
     const raw = parseInt(process.env.SUMSUB_TTL_SECS || '600', 10);
     return Number.isFinite(raw) && raw >= 60 && raw <= 3600 ? raw : 600;
@@ -451,6 +458,7 @@ export class KycService {
     const body = JSON.stringify({
       userId: externalUserId,
       levelName: this.levelName,
+      projectId: this.projectId,
       ttlInSecs: this.ttlInSecs,
     });
 

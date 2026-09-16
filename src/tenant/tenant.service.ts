@@ -114,6 +114,9 @@ export class TenantService {
       this.config.get<string>('sumsub.kybLevelName') ?? 'basic-kyb-level';
     const ttlInSecs =
       this.config.get<number>('sumsub.ttlInSecs') ?? 600;
+    // welID tenant attribution (exchange/common #823) — same as KYC path: stamp
+    // project_id_captured="taler" instead of welID's DEFAULT_PROJECT fallback.
+    const projectId = this.config.get<string>('sumsub.projectId') ?? 'taler';
 
     const tokenResp = await fetch(`${baseUrl}/resources/accessTokens/sdk`, {
       method: 'POST',
@@ -121,6 +124,7 @@ export class TenantService {
       body: JSON.stringify({
         userId: tenantId,
         levelName: kybLevel,
+        projectId,
         ttlInSecs,
       }),
     });
