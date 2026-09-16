@@ -11,6 +11,39 @@ export interface AppRelease {
 // Keep notes user-facing (no internal jargon, no commit hashes).
 export const APP_RELEASES: AppRelease[] = [
   {
+    version: '1.1.32',
+    build: 233,
+    date: '2026-09-16',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.32 — встречи доступны голосом, запись на сервер доходит до всех.\n\n' +
+      '🎙 Спросите ассистента: «какие были встречи», «что решили на вчерашней ' +
+      'встрече», «кто за что отвечает» — он найдёт встречу и прочитает резюме с ' +
+      'решениями и задачами.\n' +
+      '⏳ Можно попросить разобрать запись, у которой ещё нет резюме. Разбор идёт ' +
+      'в фоне: ждать не нужно, результат забирается позже.\n' +
+      '📼 Карточка встречи в истории звонков теперь честно показывает, что запись ' +
+      'не удалась, вместо пустого резюме.\n' +
+      '🔴 Запись встречи на сервер, начатая из веб-комнаты, теперь доходит до ' +
+      'участника в приложении — появляется запрос согласия. Раньше запрос не ' +
+      'показывался вовсе, а тот, кто начинал запись, ждал ответа впустую.\n' +
+      '👀 Индикатор записи виден всем участникам, а не только тому, кто её начал.',
+    notes_en:
+      'Release 1.1.32 — meetings by voice, server recording reaches everyone.\n\n' +
+      '🎙 Ask the assistant what meetings you had, what was decided and who owns ' +
+      'what — it finds the meeting and reads back the summary with decisions and ' +
+      'tasks.\n' +
+      '⏳ You can ask it to process a recording that has no summary yet. The work ' +
+      'runs in the background, so there is nothing to wait for.\n' +
+      '📼 A meeting card in call history now says plainly that the recording ' +
+      'failed instead of showing an empty summary.\n' +
+      '🔴 Server-side recording started from the web room now reaches a ' +
+      'participant on the phone: the consent request finally shows up. Before, it ' +
+      'never appeared and whoever started the recording waited for nothing.\n' +
+      '👀 The recording indicator is now visible to every participant, not only to ' +
+      'the person who started it.',
+  },
+  {
     version: '1.1.31',
     build: 232,
     date: '2026-09-15',
