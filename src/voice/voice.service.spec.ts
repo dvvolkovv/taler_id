@@ -167,6 +167,46 @@ describe("VoiceService", () => {
       ).resolves.toMatchObject({ status: "processing" });
     });
 
+    // What LiveKit actually stores for an app participant since
+    // 4cb6870 (device-unique identity): `<userId>#<deviceHash>`. The recorder
+    // hands those identities to /voice/meetings/save verbatim, so every real
+    // call recorded from the phone lands with hashed ids in participantIds —
+    // while the caller asking for a protocol is identified by a bare userId.
+    // The meeting still shows up in the cabinet (that listing matches on
+    // CallLog.participantIds, which are bare), so it reads as "I see my own
+    // recording but cannot transcribe it".
+    it("allows a participant whose id is stored as a device-scoped LiveKit identity", async () => {
+      mockPrisma.meetingSummary.findUnique.mockResolvedValue(
+        meeting({
+          roomName: "call-b55fe6f9-f053-4010-ad3e-bc34cc4efc98",
+          participantIds: [
+            "fc7d449b-84ac-4048-b3c5-7e6d49a091e7#1d5589ab",
+            "51a2323d-7080-4ba5-a084-688815053699#89455dbf",
+          ],
+        }),
+      );
+      await expect(
+        service.transcribeExistingRecording(
+          "fc7d449b-84ac-4048-b3c5-7e6d49a091e7",
+          "m-1",
+        ),
+      ).resolves.toMatchObject({ status: "processing" });
+    });
+
+    // The suffix must not become a way in: matching has to be on the whole
+    // userId, not a prefix of it.
+    it("rejects a stranger whose id merely prefixes a participant identity", async () => {
+      mockPrisma.meetingSummary.findUnique.mockResolvedValue(
+        meeting({
+          roomName: "tmp-room",
+          participantIds: ["fc7d449b-84ac-4048-b3c5-7e6d49a091e7#1d5589ab"],
+        }),
+      );
+      await expect(
+        service.transcribeExistingRecording("fc7d449b", "m-1"),
+      ).rejects.toThrow("Not a participant of this meeting");
+    });
+
     it("rejects a stranger (not participant, not room owner) with 403", async () => {
       mockPrisma.meetingSummary.findUnique.mockResolvedValue(
         meeting({ roomName: "personal-51ed7d1a-38e454fb" }),
