@@ -475,5 +475,71 @@ describe('KycService', () => {
       await service.startKyc('user-4');
       expect(fetchMock).toHaveBeenCalled();
     });
+
+    // exchange/common #823: welID stamps project_id_captured from the SDK token
+    // body; without projectId it falls back to DEFAULT_PROJECT ("trientes") and
+    // our applicants masquerade as trientes in the admin dashboard.
+    it('sends projectId="taler" in the accessTokens/sdk body by default', async () => {
+      delete process.env.SUMSUB_PROJECT_ID;
+      mockPrisma.user.findUnique.mockResolvedValue({
+        id: 'user-5',
+        email: 'p@q.r',
+        phone: null,
+      });
+      mockPrisma.kycRecord.upsert.mockResolvedValue({});
+      let tokenBody: any;
+      const fetchMock = jest.fn().mockImplementation((async (
+        _url: string,
+        init?: RequestInit,
+      ) => {
+        if (init?.method === 'POST') {
+          tokenBody = JSON.parse(init.body as string);
+          return {
+            ok: true,
+            json: async () => ({ token: 't', userId: 'user-5' }),
+          };
+        }
+        return {
+          ok: true,
+          json: async () => ({ id: 'app-5', externalUserId: 'user-5' }),
+        };
+      }) as any);
+      (global as any).fetch = fetchMock;
+
+      await service.startKyc('user-5');
+      expect(tokenBody.projectId).toBe('taler');
+    });
+
+    it('honours SUMSUB_PROJECT_ID override in the accessTokens/sdk body', async () => {
+      process.env.SUMSUB_PROJECT_ID = 'taler-staging';
+      mockPrisma.user.findUnique.mockResolvedValue({
+        id: 'user-6',
+        email: 's@t.u',
+        phone: null,
+      });
+      mockPrisma.kycRecord.upsert.mockResolvedValue({});
+      let tokenBody: any;
+      const fetchMock = jest.fn().mockImplementation((async (
+        _url: string,
+        init?: RequestInit,
+      ) => {
+        if (init?.method === 'POST') {
+          tokenBody = JSON.parse(init.body as string);
+          return {
+            ok: true,
+            json: async () => ({ token: 't', userId: 'user-6' }),
+          };
+        }
+        return {
+          ok: true,
+          json: async () => ({ id: 'app-6', externalUserId: 'user-6' }),
+        };
+      }) as any);
+      (global as any).fetch = fetchMock;
+
+      await service.startKyc('user-6');
+      expect(tokenBody.projectId).toBe('taler-staging');
+      delete process.env.SUMSUB_PROJECT_ID;
+    });
   });
 });
