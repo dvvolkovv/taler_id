@@ -11,6 +11,45 @@ export interface AppRelease {
 // Keep notes user-facing (no internal jargon, no commit hashes).
 export const APP_RELEASES: AppRelease[] = [
   {
+    version: '1.1.33',
+    build: 234,
+    date: '2026-09-17',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.33 — слышно всех, перевод в обе стороны, громкость под вашим контролем.\n\n' +
+      '🔊 Громкость собеседника теперь можно поднять выше системного предела — ' +
+      'ползунок там же, где выбор динамика. Настройка запоминается между звонками.\n' +
+      '📢 Кнопка выбора динамика переехала в начало ряда. Раньше она стояла ' +
+      'четвёртой и на телефоне уезжала за край экрана — её просто не находили.\n' +
+      '🌍 Перевод включается голосом: скажите ассистенту «переводи с русского на ' +
+      'немецкий» — и заработают сразу обе стороны. Настраивать что-то собеседнику ' +
+      'не нужно.\n' +
+      '🗣 Речь того, кто включил перевод, больше не пропадает. Раньше переводился ' +
+      'только собеседник, а сам включивший — никуда.\n' +
+      '✂️ Перевод перестал терять текст. Раньше сказанное, пока звучал предыдущий ' +
+      'перевод, склеивалось в один кусок, и до собеседника доезжала лишь его часть.\n' +
+      '🤖 Ассистент в звонке слышит всех участников, а не только одного.\n' +
+      '📞 Входящий звонок на телефон больше не выбивает разговор: проходит сигнал, ' +
+      'а беседа продолжается.',
+    notes_en:
+      'Release 1.1.33 — everyone is audible, translation both ways, volume in your hands.\n\n' +
+      '🔊 Caller volume can now go past the system ceiling — the slider sits with ' +
+      'the speaker choice, and the setting is remembered between calls.\n' +
+      '📢 The audio output button moved to the front of the row. It used to sit ' +
+      'fourth and slid off the edge of a phone screen, so people never found it.\n' +
+      '🌍 Translation turns on by voice: tell the assistant to translate between ' +
+      'Russian and German and both directions start working. The other side does ' +
+      'not have to set anything up.\n' +
+      '🗣 The speech of whoever switched translation on no longer disappears. Only ' +
+      'the other party used to be translated.\n' +
+      '✂️ Translation stopped losing text. Anything said while the previous ' +
+      'translation was playing used to be merged into one lump, of which only a ' +
+      'fragment came out.\n' +
+      '🤖 The in-call assistant hears every participant, not just one of them.\n' +
+      '📞 An incoming phone call no longer knocks the conversation out: the signal ' +
+      'passes through and the call carries on.',
+  },
+  {
     version: '1.1.32',
     build: 233,
     date: '2026-09-16',
