@@ -470,9 +470,19 @@ export class VoiceController {
     @Param('roomName') roomName: string,
     @Body('lang') lang: string,
     @Body('sourceLang') sourceLang: string,
+    // Optional second half of a pair: "render MY speech into this". Without it
+    // a caller only says what they want to hear, which leaves their own speech
+    // untranslated until the other side declares a language too.
+    @Body('speakTo') speakTo: string | undefined,
     @CurrentUser() user: any,
   ) {
-    return this.service.setTranslatorLang(roomName, user.sub, lang, sourceLang);
+    return this.service.setTranslatorLang(
+      roomName,
+      user.sub,
+      lang,
+      sourceLang,
+      speakTo,
+    );
   }
 
   @Get('rooms/:roomName/translator/status')
