@@ -155,8 +155,8 @@ export class AppController {
       build: parseInt(env.APP_LATEST_BUILD || '234', 10),
     };
     const latestIos = {
-      version: env.APP_LATEST_IOS_VERSION || '1.1.32',
-      build: parseInt(env.APP_LATEST_IOS_BUILD || '233', 10),
+      version: env.APP_LATEST_IOS_VERSION || '1.1.33',
+      build: parseInt(env.APP_LATEST_IOS_BUILD || '234', 10),
     };
     const androidUrl =
       env.APP_UPDATE_URL_ANDROID ||
