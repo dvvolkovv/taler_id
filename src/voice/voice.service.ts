@@ -1375,6 +1375,7 @@ export class VoiceService implements OnModuleInit {
     userId: string,
     lang: string,
     sourceLang?: string,
+    speakTo?: string,
   ) {
     // Also set LiveKit participant metadata so translator can read lang from existing participants
     try {
@@ -1396,6 +1397,7 @@ export class VoiceService implements OnModuleInit {
           userId,
           lang,
           sourceLang: sourceLang || lang,
+          ...(speakTo ? { speakTo } : {}),
         }),
       });
       return await res.json();

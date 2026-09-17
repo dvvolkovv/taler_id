@@ -123,9 +123,9 @@ app.post('/translator/stop', async (req, res) => {
 });
 
 app.post('/translator/set-lang', async (req, res) => {
-  const { roomName, userId, lang } = req.body;
+  const { roomName, userId, lang, speakTo } = req.body;
   if (!roomName || !userId || !lang) return res.status(400).json({ error: 'roomName, userId, lang required' });
-  const result = await updateParticipantLang(roomName, userId, lang);
+  const result = await updateParticipantLang(roomName, userId, lang, speakTo);
   res.json(result);
 });
 

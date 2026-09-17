@@ -10,6 +10,7 @@
 const { AccessToken } = require('livekit-server-sdk');
 const WebSocket = require('ws');
 const { createTurnTaker } = require('./translator-turns');
+const { baseIdentity, translationTargets } = require('./translator-targets');
 
 const LK_URL = process.env.LIVEKIT_WS_URL || 'ws://localhost:7880';
 const { readLivekitCredentials } = require('./livekit-credentials');
@@ -331,13 +332,11 @@ function parseLangFromMetadata(metadata) {
 // Returns languages chosen by OTHER participants who have enabled translation.
 // A speaker's own lang (if set) is excluded — no need to translate into their own language.
 function getTargetLangs(session, speakerIdentity) {
-  const targets = new Set();
-  for (const [id, lang] of session.speakerLang) {
-    if (id !== speakerIdentity) {
-      targets.add(lang);
-    }
-  }
-  return targets;
+  return translationTargets(
+    session.speakerLang,
+    session.speakTo,
+    speakerIdentity,
+  );
 }
 
 // Ensure audio source + track exist for a language, publish if needed
@@ -514,6 +513,9 @@ async function startTranslator(roomName) {
     langSources,
     langTracks,
     speakerLang: new Map(),
+    // identity → language this person's OWN speech is rendered into, set when
+    // someone names a pair instead of just what they want to hear.
+    speakTo: new Map(),
     speakerSessions: new Map(),
     stopping: false,
   };
@@ -523,8 +525,8 @@ async function startTranslator(roomName) {
     console.log(`[TRANSLATOR] registerParticipant: ${p.identity} metadata=${JSON.stringify(p.metadata)}`);
     const lang = parseLangFromMetadata(p.metadata);
     if (lang) {
-      const oldLang = session.speakerLang.get(p.identity);
-      session.speakerLang.set(p.identity, lang);
+      const oldLang = session.speakerLang.get(baseIdentity(p.identity));
+      session.speakerLang.set(baseIdentity(p.identity), lang);
       console.log(`[TRANSLATOR] ${p.identity} → lang=${lang} (from metadata)`);
       if (oldLang && oldLang !== lang) {
         closeSpeakerSessions(session, p.identity);
@@ -544,8 +546,8 @@ async function startTranslator(roomName) {
   room.on(RoomEvent.ParticipantMetadataChanged, async (metadata, p) => {
     const lang = parseLangFromMetadata(metadata);
     if (lang) {
-      const oldLang = session.speakerLang.get(p.identity);
-      session.speakerLang.set(p.identity, lang);
+      const oldLang = session.speakerLang.get(baseIdentity(p.identity));
+      session.speakerLang.set(baseIdentity(p.identity), lang);
       console.log(`[TRANSLATOR] ${p.identity} metadata lang → ${lang}`);
       if (oldLang !== lang) {
         // Lang changed — must recreate ALL speakers' sessions (targets changed)
@@ -617,16 +619,29 @@ async function stopTranslator(roomName) {
   return { status: 'stopped' };
 }
 
-async function updateParticipantLang(roomName, userId, lang) {
+async function updateParticipantLang(roomName, userId, lang, speakTo) {
   const session = translatorSessions.get(roomName);
   if (!session) return { ok: false, reason: 'no session' };
   if (!SUPPORTED_LANGS.includes(lang)) return { ok: false, reason: 'unsupported lang' };
+  if (speakTo != null && !SUPPORTED_LANGS.includes(speakTo)) {
+    return { ok: false, reason: 'unsupported speakTo lang' };
+  }
 
-  const oldLang = session.speakerLang.get(userId);
-  session.speakerLang.set(userId, lang);
-  console.log(`[TRANSLATOR] Updated ${userId} → lang=${lang} (was ${oldLang || 'not set'}) in room ${roomName}`);
+  // Keyed by the person, not the device — this call carries a bare userId while
+  // the room metadata path carries `userId#device`, and the two must land on
+  // the same entry. See translator-targets.js.
+  const key = baseIdentity(userId);
+  const oldLang = session.speakerLang.get(key);
+  const oldSpeakTo = session.speakTo.get(key);
+  session.speakerLang.set(key, lang);
+  if (speakTo != null) session.speakTo.set(key, speakTo);
+  console.log(
+    `[TRANSLATOR] Updated ${key} → lang=${lang} (was ${oldLang || 'not set'})` +
+    (speakTo != null ? ` speakTo=${speakTo} (was ${oldSpeakTo || 'not set'})` : '') +
+    ` in room ${roomName}`,
+  );
 
-  if (oldLang !== lang) {
+  if (oldLang !== lang || (speakTo != null && oldSpeakTo !== speakTo)) {
     // Block audio loop from recreating sessions during language switch
     session._langSwitching = true;
 
@@ -656,6 +671,7 @@ function getTranslatorStatus(roomName) {
   return {
     running: true,
     speakers: Object.fromEntries(session.speakerLang),
+    speakTo: Object.fromEntries(session.speakTo),
     activeSessions: session.speakerSessions.size,
   };
 }
