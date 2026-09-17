@@ -9,6 +9,7 @@
 
 const { AccessToken } = require('livekit-server-sdk');
 const WebSocket = require('ws');
+const { createTurnTaker } = require('./translator-turns');
 
 const LK_URL = process.env.LIVEKIT_WS_URL || 'ws://localhost:7880';
 const { readLivekitCredentials } = require('./livekit-credentials');
@@ -97,6 +98,9 @@ function getFrameRMS(base64Audio) {
 const SPEECH_RMS_THRESHOLD = 400;  // RMS threshold to consider frame as speech (0–32768)
 const SILENCE_COMMIT_MS = 600;     // commit after 600ms of silence
 const FORCE_COMMIT_MS = 7000;      // force-commit after 7s of continuous speech
+// Turns allowed to wait while the model speaks. Past this the translation is
+// no longer live, so the overflow is dropped with a log line instead.
+const DEFAULT_MAX_QUEUED_TURNS = 2;
 
 function createRealtimeSession(sourceLang, targetLang, onAudioDelta, onError) {
   const tag = `${sourceLang}→${targetLang}`;
@@ -183,7 +187,7 @@ function createRealtimeSession(sourceLang, targetLang, onAudioDelta, onError) {
       }
 
       if (event.type === 'response.created') {
-        ws._responding = true;
+        ws._turns.responseCreated();
       }
 
       if (event.type === 'response.output_audio.delta' && event.delta) {
@@ -201,12 +205,9 @@ function createRealtimeSession(sourceLang, targetLang, onAudioDelta, onError) {
       if (event.type === 'response.done') {
         const status = event.response?.status;
         console.log(`[TRANSLATOR] [${tag}] response.done status=${status}`);
-        ws._responding = false;
-        // If speech accumulated while we were responding, commit it now
-        if (ws._pendingCommit) {
-          ws._pendingCommit = false;
-          ws._doCommit('post-response');
-        }
+        // Turns cut while this one was speaking are already committed; this
+        // hands the next of them over.
+        ws._turns.responseDone();
       }
 
       if (event.type === 'conversation.item.input_audio_transcription.completed' && event.transcript) {
@@ -232,22 +233,32 @@ function createRealtimeSession(sourceLang, targetLang, onAudioDelta, onError) {
 
   ws.on('close', (code) => {
     console.log(`[TRANSLATOR] WS closed (${tag}), code=${code}`);
-    if (ws._silenceTimer) { clearTimeout(ws._silenceTimer); ws._silenceTimer = null; }
+    ws._turns.reset();
   });
 
-  // Commit current buffer and request translation
-  ws._doCommit = (reason) => {
-    if (ws.readyState !== WebSocket.OPEN) return;
-    if (ws._responding) {
-      // Don't interrupt ongoing response — set flag to commit after it finishes
-      ws._pendingCommit = true;
-      return;
-    }
-    console.log(`[TRANSLATOR] [${tag}] Committing (${reason})`);
-    ws._speechStartMs = null;
-    ws.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
-    ws.send(JSON.stringify({ type: 'response.create' }));
-  };
+  // Where speech is cut into turns, and when each turn is asked to be spoken.
+  // See translator-turns.js — in short, the cut never waits on the model, only
+  // the request to speak does.
+  ws._turns = createTurnTaker({
+    silenceMs: SILENCE_COMMIT_MS,
+    forceMs: FORCE_COMMIT_MS,
+    maxQueued: DEFAULT_MAX_QUEUED_TURNS,
+    onCommit: (reason) => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      console.log(`[TRANSLATOR] [${tag}] Committing (${reason})`);
+      ws.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
+    },
+    onRespond: () => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type: 'response.create' }));
+    },
+    onDrop: (reason) => {
+      console.warn(
+        `[TRANSLATOR] [${tag}] Dropped a turn (${reason}) — translation is more than ` +
+        `${DEFAULT_MAX_QUEUED_TURNS} turns behind the speaker`,
+      );
+    },
+  });
 
   ws.sendAudio = (base64Audio) => {
     const msg = JSON.stringify({ type: 'input_audio_buffer.append', audio: base64Audio });
@@ -262,31 +273,7 @@ function createRealtimeSession(sourceLang, targetLang, onAudioDelta, onError) {
 
     // Amplitude-based speech/silence detection (replaces server_vad)
     const rms = getFrameRMS(base64Audio);
-    const isSpeech = rms >= SPEECH_RMS_THRESHOLD;
-    const now = Date.now();
-
-    if (isSpeech) {
-      if (!ws._hasSpeech) {
-        ws._hasSpeech = true;
-        ws._speechStartMs = now;
-      }
-      // Cancel pending silence timer
-      if (ws._silenceTimer) { clearTimeout(ws._silenceTimer); ws._silenceTimer = null; }
-      // Force-commit if speech has been going on too long
-      if (ws._speechStartMs && (now - ws._speechStartMs) >= FORCE_COMMIT_MS) {
-        ws._speechStartMs = now;
-        ws._doCommit('force-7s');
-      }
-    } else if (ws._hasSpeech && !ws._silenceTimer) {
-      // Speech just ended — start silence timer
-      ws._silenceTimer = setTimeout(() => {
-        ws._silenceTimer = null;
-        if (ws._hasSpeech) {
-          ws._hasSpeech = false;
-          ws._doCommit('silence');
-        }
-      }, SILENCE_COMMIT_MS);
-    }
+    ws._turns.feed(rms >= SPEECH_RMS_THRESHOLD, Date.now());
   };
 
   return ws;
