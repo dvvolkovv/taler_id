@@ -5,6 +5,7 @@ const WebSocket = require('ws');
 const { startRecording, stopRecording, getRecordingStatus } = require('./recorder');
 const { startTranslator, stopTranslator, updateParticipantLang, getTranslatorStatus, getTranslatorLanguages, selftest: translatorSelftest } = require('./translator');
 const { startHoldMusic, stopHoldMusic, getHoldMusicStatus } = require('./hold-music');
+const { createAudioMixer } = require('./audio-mixer');
 
 let livekitRtc = null;
 try {
@@ -23,6 +24,8 @@ const OPENAI_KEY = process.env.OPENAI_API_KEY;
 const BACKEND_URL = process.env.BACKEND_URL || 'https://id.taler.tirol';
 const BACKEND_WS_URL = (process.env.BACKEND_URL || 'https://id.taler.tirol').replace(/^http/, 'ws');
 const USE_REALTIME_PROXY = process.env.USE_REALTIME_PROXY === 'true';
+// How often the participant mix is handed to OpenAI. Also the mixer's frame.
+const MIX_FRAME_MS = 20;
 
 const app = express();
 app.use(express.json());
@@ -46,6 +49,9 @@ app.post('/leave', (req, res) => {
   const { roomName } = req.body;
   const session = sessions.get(roomName);
   if (session) {
+    // Disconnected fires later and clears this too, but only if the room
+    // actually raises it — an explicit leave must not leave a 20 ms tick behind.
+    clearInterval(session.mixTimer);
     try { if (session.openaiWs) session.openaiWs.close(); } catch(e) {}
     try { if (session.room) session.room.disconnect(); } catch(e) {}
     sessions.delete(roomName);
@@ -213,6 +219,25 @@ async function joinRoom(roomName, userId, userToken) {
   const audioSource = new AudioSource(24000, 1);
   session.audioSource = audioSource;
 
+  // Everyone in the room has to reach OpenAI as ONE stream — see audio-mixer.js
+  // for why appending each track as it arrives left the model hearing only one
+  // of two people. The mixer sums the tracks; the tick below is its clock.
+  const mixer = createAudioMixer({ sampleRate: 24000, frameMs: MIX_FRAME_MS });
+
+  session.mixTimer = setInterval(() => {
+    const s = sessions.get(roomName);
+    if (!s || s.openaiWs.readyState !== WebSocket.OPEN) return;
+    // Nobody subscribed yet — don't feed the model silence it never asked for.
+    if (mixer.size === 0) return;
+    const frame = mixer.take();
+    const b64 = Buffer.from(
+      frame.buffer,
+      frame.byteOffset,
+      frame.byteLength,
+    ).toString('base64');
+    s.openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: b64 }));
+  }, MIX_FRAME_MS);
+
   openaiWs.on('message', async (raw) => {
     try {
       const event = JSON.parse(raw.toString());
@@ -269,17 +294,22 @@ async function joinRoom(roomName, userId, userToken) {
 
   room.on(RoomEvent.TrackSubscribed, async (track, publication, participant) => {
     if (track.kind !== TrackKind.KIND_AUDIO) return;
-    console.log('Subscribed to audio from:', participant.identity, 'in room:', roomName);
+    const identity = participant.identity;
+    console.log('Subscribed to audio from:', identity, 'in room:', roomName);
+    // Registering the backlog here, not on first frame, is what starts the
+    // mixer: a participant who joins and stays quiet still holds a lane.
+    mixer.add(identity);
     try {
       const audioStream = new AudioStream(track, 24000, 1);
       for await (const frame of audioStream) {
         const s = sessions.get(roomName);
         if (!s || s.openaiWs.readyState !== WebSocket.OPEN) break;
-        const b64 = Buffer.from(frame.data.buffer, frame.data.byteOffset, frame.data.byteLength).toString('base64');
-        s.openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: b64 }));
+        mixer.push(identity, frame.data);
       }
     } catch (e) {
-      console.log('Audio stream ended for participant:', participant.identity, e.message);
+      console.log('Audio stream ended for participant:', identity, e.message);
+    } finally {
+      mixer.remove(identity);
     }
   });
 
@@ -290,6 +320,8 @@ async function joinRoom(roomName, userId, userToken) {
     if (humanParticipants.length === 0) {
       console.log('No more participants in room:', roomName, '- AI leaving');
       session.audioSource = null;
+      clearInterval(session.mixTimer);
+      mixer.clear();
       try { openaiWs.close(); } catch(e) {}
       try { room.disconnect(); } catch(e) {}
       sessions.delete(roomName);
@@ -299,6 +331,8 @@ async function joinRoom(roomName, userId, userToken) {
   room.on(RoomEvent.Disconnected, () => {
     console.log('Room disconnected:', roomName);
     session.audioSource = null;
+    clearInterval(session.mixTimer);
+    mixer.clear();
     try { openaiWs.close(); } catch(e) {}
     sessions.delete(roomName);
   });
