@@ -10,6 +10,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import * as crypto from 'crypto';
 import { verifyWebhookSignature } from './webhook-signature.util';
+import { prefixLevel } from './level-name.util';
 import { EmailService } from '../email/email.service';
 
 export interface StartKycResponse {
@@ -39,8 +40,14 @@ export class KycService {
     ).replace(/\/$/, '');
   }
 
+  // welID resolves an unprefixed level inside its DEFAULT_PROJECT, which is the
+  // foreign tenant "trientes" — so the default here must never be a bare slug of
+  // theirs. Emitted prefix-wire (#823); see projectId below.
   private get levelName(): string {
-    return process.env.SUMSUB_LEVEL_NAME || 'trientes-kyc-level';
+    return prefixLevel(
+      process.env.SUMSUB_LEVEL_NAME || 'talerID',
+      this.projectId,
+    );
   }
 
   // welID tenant attribution (exchange/common #823). Sent in the accessTokens/sdk
