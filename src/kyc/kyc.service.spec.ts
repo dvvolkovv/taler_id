@@ -459,7 +459,7 @@ describe('KycService', () => {
       ) => {
         if (init?.method === 'POST') {
           const body = JSON.parse(init.body as string);
-          expect(body.levelName).toBe('enhanced-kyc-level');
+          expect(body.levelName).toBe('prj:taler/enhanced-kyc-level');
           return {
             ok: true,
             json: async () => ({ token: 't', userId: 'user-4' }),
@@ -540,6 +540,73 @@ describe('KycService', () => {
       await service.startKyc('user-6');
       expect(tokenBody.projectId).toBe('taler-staging');
       delete process.env.SUMSUB_PROJECT_ID;
+    });
+
+    // welID prefix-wire (#823). projectId in the body is welID's *legacy*
+    // fallback — their dashboard badges it "Legacy sdk_meta.projectId fallback"
+    // and asks integrators to move the project into levelName itself. Without
+    // either signal applicants land in welID's DEFAULT_PROJECT, which is the
+    // foreign tenant "trientes".
+    async function captureTokenBody(userId: string): Promise<any> {
+      mockPrisma.user.findUnique.mockResolvedValue({
+        id: userId,
+        email: `${userId}@example.com`,
+        phone: null,
+      });
+      mockPrisma.kycRecord.upsert.mockResolvedValue({});
+      let tokenBody: any;
+      (global as any).fetch = jest.fn().mockImplementation((async (
+        _url: string,
+        init?: RequestInit,
+      ) => {
+        if (init?.method === 'POST') {
+          tokenBody = JSON.parse(init.body as string);
+          return { ok: true, json: async () => ({ token: 't', userId }) };
+        }
+        return {
+          ok: true,
+          json: async () => ({ id: `app-${userId}`, externalUserId: userId }),
+        };
+      }) as any);
+      await service.startKyc(userId);
+      return tokenBody;
+    }
+
+    it('sends the level prefixed with the project', async () => {
+      process.env.SUMSUB_LEVEL_NAME = 'talerID';
+      delete process.env.SUMSUB_PROJECT_ID;
+
+      const body = await captureTokenBody('user-7');
+
+      expect(body.levelName).toBe('prj:taler/talerID');
+    });
+
+    it('prefixes with SUMSUB_PROJECT_ID when overridden', async () => {
+      process.env.SUMSUB_LEVEL_NAME = 'talerID';
+      process.env.SUMSUB_PROJECT_ID = 'taler-staging';
+
+      const body = await captureTokenBody('user-8');
+
+      expect(body.levelName).toBe('prj:taler-staging/talerID');
+      delete process.env.SUMSUB_PROJECT_ID;
+    });
+
+    it('does not prefix twice when SUMSUB_LEVEL_NAME already carries one', async () => {
+      process.env.SUMSUB_LEVEL_NAME = 'prj:taler/talerID';
+      delete process.env.SUMSUB_PROJECT_ID;
+
+      const body = await captureTokenBody('user-9');
+
+      expect(body.levelName).toBe('prj:taler/talerID');
+    });
+
+    it('falls back to our own level, never the foreign trientes one', async () => {
+      delete process.env.SUMSUB_LEVEL_NAME;
+      delete process.env.SUMSUB_PROJECT_ID;
+
+      const body = await captureTokenBody('user-10');
+
+      expect(body.levelName).toBe('prj:taler/talerID');
     });
   });
 });

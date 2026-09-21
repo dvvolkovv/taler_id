@@ -16,6 +16,7 @@ import {
 } from './dto/create-tenant.dto';
 import { EmailService } from '../email/email.service';
 import { v4 as uuidv4 } from 'uuid';
+import { prefixLevel } from '../kyc/level-name.util';
 
 @Injectable()
 export class TenantService {
@@ -110,8 +111,12 @@ export class TenantService {
       this.config.get<string>('sumsub.baseUrl') ??
       'https://mockss-test.up.railway.app'
     ).replace(/\/$/, '');
-    const kybLevel =
-      this.config.get<string>('sumsub.kybLevelName') ?? 'basic-kyb-level';
+    // Prefix-wire, same rule as the KYC path — an unprefixed level resolves
+    // inside welID's DEFAULT_PROJECT, which is the foreign tenant "trientes".
+    const kybLevel = prefixLevel(
+      this.config.get<string>('sumsub.kybLevelName') ?? 'kyb-level',
+      this.config.get<string>('sumsub.projectId') ?? 'taler',
+    );
     const ttlInSecs =
       this.config.get<number>('sumsub.ttlInSecs') ?? 600;
     // welID tenant attribution (exchange/common #823) — same as KYC path: stamp

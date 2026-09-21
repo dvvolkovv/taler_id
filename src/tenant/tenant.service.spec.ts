@@ -9,6 +9,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { TenantRole, KycStatus } from '@prisma/client';
+import { EmailService } from '../email/email.service';
 
 const mockPrisma = {
   tenant: {
@@ -35,15 +36,22 @@ const mockPrisma = {
   },
 };
 
+const configValues = (key: string) => {
+  const cfg: Record<string, any> = {
+    'sumsub.appToken': 'test_token',
+    'sumsub.secretKey': 'test_secret',
+    'sumsub.baseUrl': 'https://api.sumsub.com',
+    'sumsub.kybLevelName': 'kyb-level',
+  };
+  return cfg[key];
+};
+
 const mockConfig = {
-  get: jest.fn((key: string) => {
-    const cfg: Record<string, any> = {
-      'sumsub.appToken': 'test_token',
-      'sumsub.secretKey': 'test_secret',
-      'sumsub.baseUrl': 'https://api.sumsub.com',
-    };
-    return cfg[key];
-  }),
+  get: jest.fn(configValues),
+};
+
+const mockEmail = {
+  sendInvite: jest.fn().mockResolvedValue(undefined),
 };
 
 const TENANT_ID = 'tenant-1';
@@ -77,6 +85,7 @@ describe('TenantService', () => {
         TenantService,
         { provide: PrismaService, useValue: mockPrisma },
         { provide: ConfigService, useValue: mockConfig },
+        { provide: EmailService, useValue: mockEmail },
       ],
     }).compile();
     service = module.get<TenantService>(TenantService);
@@ -250,7 +259,16 @@ describe('TenantService', () => {
 
   // -----------------------------------------------------------------------
   describe('startKyb', () => {
-    it('returns mock applicantId in mock mode (test_token)', async () => {
+    let originalFetch: typeof global.fetch;
+    let tokenBody: any;
+
+    beforeEach(() => {
+      originalFetch = global.fetch;
+      tokenBody = undefined;
+      (global as any).fetch = jest.fn(async (_url: string, init?: any) => {
+        tokenBody = JSON.parse(init.body as string);
+        return { ok: true, json: async () => ({ token: 'kyb-token' }) };
+      });
       mockPrisma.tenantMember.findFirst.mockResolvedValue(
         makeMember(OWNER_ID, TenantRole.OWNER),
       );
@@ -259,28 +277,45 @@ describe('TenantService', () => {
         ...TENANT,
         kybStatus: KycStatus.PENDING,
       });
+    });
 
+    afterEach(() => {
+      global.fetch = originalFetch;
+      mockConfig.get.mockImplementation(configValues);
+    });
+
+    it('returns an sdk token and the web sdk url', async () => {
       const result = await service.startKyb(TENANT_ID, OWNER_ID);
-      expect(result.applicantId).toBe('mock_company_' + TENANT_ID);
-      expect(result.sdkToken).toMatch(/^mock_kyb_sdk_token_/);
+
+      expect(result.sdkToken).toBe('kyb-token');
+      expect(result.webSdkUrl).toContain('accessToken=kyb-token');
     });
 
     it('sets kybStatus to PENDING in the database', async () => {
-      mockPrisma.tenantMember.findFirst.mockResolvedValue(
-        makeMember(OWNER_ID, TenantRole.OWNER),
-      );
-      mockPrisma.tenant.findUnique.mockResolvedValue({ ...TENANT });
-      mockPrisma.tenant.update.mockResolvedValue({
-        ...TENANT,
-        kybStatus: KycStatus.PENDING,
-      });
-
       await service.startKyb(TENANT_ID, OWNER_ID);
       expect(mockPrisma.tenant.update).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({ kybStatus: KycStatus.PENDING }),
         }),
       );
+    });
+
+    // Same welID prefix-wire rule as the KYC path (#823): an unprefixed level
+    // resolves inside welID's DEFAULT_PROJECT, the foreign tenant "trientes".
+    it('sends the KYB level prefixed with the project', async () => {
+      await service.startKyb(TENANT_ID, OWNER_ID);
+
+      expect(tokenBody.levelName).toBe('prj:taler/kyb-level');
+    });
+
+    it('falls back to our own KYB level, never a foreign default', async () => {
+      mockConfig.get.mockImplementation((key: string) =>
+        key === 'sumsub.baseUrl' ? 'https://welid.example' : undefined,
+      );
+
+      await service.startKyb(TENANT_ID, OWNER_ID);
+
+      expect(tokenBody.levelName).toBe('prj:taler/kyb-level');
     });
 
     it('throws ForbiddenException when user is not OWNER', async () => {
