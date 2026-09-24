@@ -292,6 +292,21 @@ export class VoiceService implements OnModuleInit {
       throw new ForbiddenException('Not invited to this room');
     }
 
+    // An invited callee asks for a token only after accepting, and can't
+    // talk without one — so this HTTP call is the reliable "answered" signal.
+    // The socket `call_answered` alone was lost when the call was accepted
+    // from the lock screen before the socket came up, and the call landed in
+    // history as missed. Conditional write: first answer wins, and a late
+    // join into an ended call doesn't turn a missed call into an answered one.
+    if (log && userId !== log.initiatorId && !log.answeredAt) {
+      try {
+        await this.prisma.callLog.updateMany({
+          where: { roomName, answeredAt: null, endedAt: null },
+          data: { answeredAt: new Date() },
+        });
+      } catch (_) {}
+    }
+
     await this.clearChatIfNewMeeting(roomName);
     return {
       token: await this.makeToken(roomName, userId, sessionId),

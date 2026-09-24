@@ -37,7 +37,11 @@ describe('VoiceService.joinRoom entitlement', () => {
 
   beforeEach(() => {
     prisma = {
-      callLog: { findUnique: jest.fn(), update: jest.fn() },
+      callLog: {
+        findUnique: jest.fn(),
+        update: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
       user: {
         findUnique: jest.fn().mockResolvedValue({
           id: 'user-1',
@@ -94,6 +98,7 @@ describe('VoiceService.joinRoom entitlement', () => {
     // Self-legitimising was half the problem: an intruder must not end up
     // looking like a participant in call history.
     expect(prisma.callLog.update).not.toHaveBeenCalled();
+    expect(prisma.callLog.updateMany).not.toHaveBeenCalled();
   });
 
   it('refuses when no call log exists for the room', async () => {
@@ -132,6 +137,91 @@ describe('VoiceService.joinRoom entitlement', () => {
     await expect(
       service.joinRoom('personal-abcdef12-deadbeef', 'stranger-uuid-here'),
     ).rejects.toThrow(ForbiddenException);
+  });
+});
+
+// Инцидент 2026-09-23: звонок, принятый с экрана блокировки, лёг в историю
+// «Пропущенным». answeredAt ставил только сокетный call_answered, а сокет в
+// момент ответа ещё не поднят — событие терялось. Токен на вход в комнату
+// телефон берёт этой HTTP-ручкой только при принятии звонка, и без неё
+// разговор невозможен, поэтому она и есть надёжный признак ответа.
+describe('VoiceService.joinRoom — отметка ответа на звонок', () => {
+  let service: VoiceService;
+  let prisma: any;
+
+  const LOG = {
+    roomName: 'call-1',
+    initiatorId: 'caller',
+    participantIds: ['caller', 'callee'],
+    answeredAt: null,
+    endedAt: null,
+  };
+
+  beforeEach(() => {
+    prisma = {
+      callLog: {
+        findUnique: jest.fn().mockResolvedValue(LOG),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      user: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'callee',
+          username: 'callee',
+          profile: { firstName: 'A', lastName: 'B' },
+        }),
+      },
+    };
+    service = new VoiceService(
+      prisma,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      { clearFeed: jest.fn().mockResolvedValue(undefined) } as any,
+    );
+    (service as any).participantsCheckRooms = {
+      listParticipants: jest.fn().mockResolvedValue([]),
+    };
+  });
+
+  it('вход приглашённого отмечает звонок отвеченным', async () => {
+    await service.joinRoom('call-1', 'callee');
+
+    expect(prisma.callLog.updateMany).toHaveBeenCalledTimes(1);
+    const arg = prisma.callLog.updateMany.mock.calls[0][0];
+    expect(arg.data.answeredAt).toBeInstanceOf(Date);
+    // Условная запись: первый ответ выигрывает, и поздний вход в уже
+    // завершённый звонок не превращает пропущенный в отвеченный.
+    expect(arg.where).toEqual({
+      roomName: 'call-1',
+      answeredAt: null,
+      endedAt: null,
+    });
+  });
+
+  it('повторный вход звонящего (переподключение) звонок не отмечает', async () => {
+    await service.joinRoom('call-1', 'caller');
+
+    expect(prisma.callLog.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('владелец личной комнаты без записи звонка ничего не пишет', async () => {
+    prisma.callLog.findUnique.mockResolvedValue(null);
+    const owner = 'abcdef12-3456-7890-abcd-ef1234567890';
+
+    await service.joinRoom(`personal-${owner.substring(0, 8)}-x`, owner);
+
+    expect(prisma.callLog.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('сбой записи не мешает получить токен', async () => {
+    prisma.callLog.updateMany.mockRejectedValue(new Error('db down'));
+
+    const res = await service.joinRoom('call-1', 'callee');
+
+    expect(typeof res.token).toBe('string');
+    expect(res.token.length).toBeGreaterThan(0);
   });
 });
 
