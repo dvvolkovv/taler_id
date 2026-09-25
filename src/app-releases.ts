@@ -11,6 +11,34 @@ export interface AppRelease {
 // Keep notes user-facing (no internal jargon, no commit hashes).
 export const APP_RELEASES: AppRelease[] = [
   {
+    version: '1.1.34',
+    build: 235,
+    date: '2026-09-25',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.34 — звонок в WhatsApp или по телефону больше не обрывает разговор на iPhone.\n\n' +
+      '📞 Если во время разговора в Taler ID звонят в WhatsApp или по сотовой, iPhone ' +
+      'показывает второй вызов как обычно. «Отклонить» — разговор идёт дальше без пауз. ' +
+      '«Удержать и ответить» — разговор ждёт, пока вы говорите по второй линии.\n' +
+      '⏸ На удержании собеседник видит, что ваш микрофон выключен, а на экране звонка — ' +
+      'плашка «Разговор на удержании». Когда второй звонок закончится, разговор вернётся сам.\n' +
+      '🔒 Разговор всё время виден на экране блокировки и в Dynamic Island: оттуда можно ' +
+      'выключить микрофон и завершить звонок.\n' +
+      '✅ Звонок, принятый прямо в приложении, защищён так же, как принятый с экрана блокировки.\n' +
+      '🔕 Отмена второго входящего больше не задевает идущий разговор.',
+    notes_en:
+      'Release 1.1.34 — a WhatsApp or phone call no longer cuts off your iPhone conversation.\n\n' +
+      '📞 When WhatsApp or a cellular call rings during a Taler ID conversation, the iPhone ' +
+      'shows it as a second call. Decline, and the conversation goes on without a gap. ' +
+      'Hold & Accept, and it waits while you take the other call.\n' +
+      '⏸ While on hold, the other side sees your microphone muted and the call screen shows ' +
+      '"Call on hold". When the other call ends, the conversation comes back by itself.\n' +
+      '🔒 The conversation stays on the lock screen and in the Dynamic Island for its whole ' +
+      'length: mute and hang up right from there.\n' +
+      '✅ A call answered inside the app is protected the same way as one answered from the lock screen.\n' +
+      '🔕 A cancelled second incoming call no longer touches the conversation in progress.',
+  },
+  {
     version: '1.1.33',
     build: 234,
     date: '2026-09-17',
