@@ -1,5 +1,6 @@
 import { HttpException } from '@nestjs/common';
 import {
+  countInWindow,
   currentMinute,
   incrementCounter,
   PARTNER_COUNTER_TIMEOUT_MS,
@@ -101,5 +102,48 @@ describe('throwTooManyRequests', () => {
     expect(caught).toBeInstanceOf(HttpException);
     expect(caught.getStatus()).toBe(429);
     expect(caught.getResponse()).toEqual({ message: 'rate_limited', retryAfter: 45 });
+  });
+});
+
+describe('countInWindow', () => {
+  /** multi().set().incr().ttl().exec() с управляемым результатом exec(). */
+  function fakeWindowRedis(exec: () => Promise<any>) {
+    const chain: any = {};
+    chain.set = jest.fn(() => chain);
+    chain.incr = jest.fn(() => chain);
+    chain.ttl = jest.fn(() => chain);
+    chain.exec = exec;
+    return { redis: { getClient: () => ({ multi: () => chain }) } as any, chain };
+  }
+
+  it('opens the window with SET NX EX, counts with INCR and reports the time left', async () => {
+    const { redis, chain } = fakeWindowRedis(() =>
+      Promise.resolve([
+        [null, null], // окно уже открыто — SET NX ничего не сделал
+        [null, 3],
+        [null, 1795],
+      ]),
+    );
+    await expect(countInWindow(redis, 'w', 3600)).resolves.toEqual({ count: 3, retryAfter: 1795 });
+    expect(chain.set).toHaveBeenCalledWith('w', '0', 'EX', 3600, 'NX');
+    expect(chain.incr).toHaveBeenCalledWith('w');
+    expect(chain.ttl).toHaveBeenCalledWith('w');
+  });
+
+  it('returns null when a queued command failed, exec() rejected or Redis did not answer', async () => {
+    const failed = fakeWindowRedis(() =>
+      Promise.resolve([
+        [null, 'OK'],
+        [new Error('ERR value is not an integer or out of range'), null],
+        [null, 60],
+      ]),
+    );
+    await expect(countInWindow(failed.redis, 'w', 60)).resolves.toBeNull();
+    const rejected = fakeWindowRedis(() =>
+      Promise.reject(new Error('EXECABORT Transaction discarded because of previous errors.')),
+    );
+    await expect(countInWindow(rejected.redis, 'w', 60)).resolves.toBeNull();
+    const hung = fakeWindowRedis(() => new Promise(() => {}));
+    await expect(countInWindow(hung.redis, 'w', 60, 5)).resolves.toBeNull();
   });
 });

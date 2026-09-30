@@ -16,6 +16,25 @@ export function currentMinute(nowMs: number = Date.now()): { minute: number; ret
 }
 
 /**
+ * Запрос к Redis с потолком ожидания. Никогда не бросает: таймаут, отказ
+ * Redis и синхронная ошибка клиента — это null, а что делать без ответа,
+ * решает вызывающий.
+ */
+async function bounded<T>(run: () => Promise<T | null>, timeoutMs: number): Promise<T | null> {
+  let timer!: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), timeoutMs);
+  });
+  try {
+    return await Promise.race([run().catch((): null => null), timeout]);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Атомарный INCR+EXPIRE — тот же приём, что у лимитера DCR-регистрации в
  * main.ts (~строка 600): multi() гарантирует, что процесс не умрёт между
  * INCR и EXPIRE, оставив ключ без TTL навечно. Гонка со своим таймаутом:
@@ -25,39 +44,43 @@ export function currentMinute(nowMs: number = Date.now()): { minute: number; ret
  * исключение: любая проблема с Redis — это null, а открывать шлюз или не
  * открывать при null решает вызывающий код.
  */
-export async function incrementCounter(
+export function incrementCounter(
   redis: RedisService,
   key: string,
   ttlSeconds: number,
   timeoutMs: number = PARTNER_COUNTER_TIMEOUT_MS,
 ): Promise<number | null> {
-  let timer!: ReturnType<typeof setTimeout>;
-  const timeout = new Promise<null>((resolve) => {
-    timer = setTimeout(() => resolve(null), timeoutMs);
-  });
-  try {
-    // Строим цепочку и запускаем гонку внутри try: если сам клиент бросает
-    // синхронно (например redis.getClient() до готовности соединения), это
-    // исключение не должно улететь мимо finally и мимо контракта «никогда
-    // не бросает».
-    const exec = redis
+  return bounded(async () => {
+    const results = await redis.getClient().multi().incr(key).expire(key, ttlSeconds).exec();
+    if (!results) return null;
+    const [err, value] = results[0];
+    return err ? null : Number(value);
+  }, timeoutMs);
+}
+
+/**
+ * Счётчик в окне, которое открывает первый запрос: SET NX EX создаёт ключ
+ * сразу со сроком, INCR срок не трогает. Одна транзакция — срок не потеряется
+ * между командами, а отказы внутри окна его не продлевают. retryAfter —
+ * сколько окну осталось жить. null — Redis не ответил за timeoutMs.
+ */
+export function countInWindow(
+  redis: RedisService,
+  key: string,
+  windowSeconds: number,
+  timeoutMs: number = PARTNER_COUNTER_TIMEOUT_MS,
+): Promise<{ count: number; retryAfter: number } | null> {
+  return bounded(async () => {
+    const results = await redis
       .getClient()
       .multi()
+      .set(key, '0', 'EX', windowSeconds, 'NX')
       .incr(key)
-      .expire(key, ttlSeconds)
-      .exec()
-      .then((results): number | null => {
-        if (!results) return null;
-        const [err, value] = results[0];
-        return err ? null : Number(value);
-      })
-      .catch((): null => null);
-    return await Promise.race([exec, timeout]);
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
+      .ttl(key)
+      .exec();
+    if (!results || results.some(([err]) => err)) return null;
+    return { count: Number(results[1][1]), retryAfter: Math.max(1, Number(results[2][1])) };
+  }, timeoutMs);
 }
 
 /** Ставит Retry-After и бросает 429 с тем же телом, что видит клиент партнёра. */
