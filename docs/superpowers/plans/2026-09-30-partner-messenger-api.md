@@ -2846,23 +2846,38 @@ describe('PartnerLinkCodeService.send', () => {
 });
 
 describe('PartnerLinkCodeService.verify', () => {
-  it('spends an attempt atomically before comparing, then activates on the right code', async () => {
-    const { service, prisma } = make(withCode());
+  it('spends an attempt on this very code before comparing, then activates on the right code', async () => {
+    const link = withCode();
+    const { service, prisma } = make(link);
     await expect(service.verify(partner, 'm-1', '123456')).resolves.toEqual({ status: 'active', talerUserId: 'u1' });
-    expect(prisma.partnerLink.updateMany).toHaveBeenCalledWith({
+    expect(prisma.partnerLink.updateMany).toHaveBeenNthCalledWith(1, {
       where: {
         id: 'l1',
         status: 'PENDING',
-        codeHash: { not: null },
+        codeHash: link.codeHash,
         codeExpiresAt: { gt: expect.any(Date) },
         codeAttempts: { lt: 5 },
       },
       data: { codeAttempts: { increment: 1 } },
     });
-    expect(prisma.partnerLink.update).toHaveBeenCalledWith({
-      where: { id: 'l1' },
+    expect(prisma.partnerLink.updateMany).toHaveBeenLastCalledWith({
+      where: { id: 'l1', status: 'PENDING', codeHash: link.codeHash },
       data: expect.objectContaining({ status: 'ACTIVE', codeHash: null, codeAttempts: 0 }),
     });
+  });
+
+  it('does not spend an attempt when no code was ever sent', async () => {
+    const { service, prisma } = make(pending);
+    const err = await service.verify(partner, 'm-1', '123456').catch((e) => e);
+    expect(err.getStatus()).toBe(410);
+    expect(prisma.partnerLink.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('does not revive the link when its code changed meanwhile', async () => {
+    const { service, prisma } = make(withCode());
+    prisma.partnerLink.updateMany.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 0 });
+    const err = await service.verify(partner, 'm-1', '123456').catch((e) => e);
+    expect(err.getStatus()).toBe(410);
   });
 
   it('answers 400 with attemptsLeft on a wrong code', async () => {
@@ -2873,21 +2888,23 @@ describe('PartnerLinkCodeService.verify', () => {
   });
 
   it('burns the code on the fifth wrong attempt', async () => {
-    const { service, prisma } = make(withCode({ codeAttempts: 4 }));
+    const link = withCode({ codeAttempts: 4 });
+    const { service, prisma } = make(link);
     const err = await service.verify(partner, 'm-1', '000000').catch((e) => e);
     expect(err.getStatus()).toBe(410);
-    expect(prisma.partnerLink.update).toHaveBeenLastCalledWith({
-      where: { id: 'l1' },
+    expect(prisma.partnerLink.updateMany).toHaveBeenLastCalledWith({
+      where: { id: 'l1', status: 'PENDING', codeHash: link.codeHash },
       data: { codeHash: null, codeExpiresAt: null },
     });
   });
 
-  it('answers 410 without comparing when no attempt can be spent (expired, burned, never sent)', async () => {
+  it('answers 410 without comparing when no attempt can be spent (expired or burned)', async () => {
     const { service, prisma } = make(withCode());
     prisma.partnerLink.updateMany.mockResolvedValue({ count: 0 });
+    // Верный код: если бы сравнение всё же случилось, связка ожила бы.
     const err = await service.verify(partner, 'm-1', '123456').catch((e) => e);
     expect(err.getStatus()).toBe(410);
-    expect(prisma.partnerLink.update).not.toHaveBeenCalled();
+    expect(prisma.partnerLink.updateMany).toHaveBeenCalledTimes(1);
   });
 });
 ```
@@ -2984,39 +3001,46 @@ export class PartnerLinkCodeService {
     ip?: string,
   ): Promise<{ status: 'active'; talerUserId: string }> {
     const link = await this.pendingLink(partner.id, externalId);
-    // Попытку списываем ДО сравнения и одним условным UPDATE. Иначе
-    // параллельные запросы успевали бы сравнить десятки кодов, пока счётчик
-    // ещё не вырос, — а подбирать код может как раз партнёр, от которого этот
-    // код защищает чужой аккаунт.
+    // Кода не отправляли — и попытку тратить не на что.
+    if (!link.codeHash) throw new GoneException('code_expired');
+    const codeHash = link.codeHash;
+    // Попытку списываем ДО сравнения и одним условным UPDATE, привязанным к
+    // этому самому коду. Иначе параллельные запросы успевали бы сравнить
+    // десятки кодов, пока счётчик ещё не вырос, — а подбирать код может как
+    // раз партнёр, от которого этот код защищает чужой аккаунт.
     const spent = await this.prisma.partnerLink.updateMany({
       where: {
         id: link.id,
         status: 'PENDING',
-        codeHash: { not: null },
+        codeHash,
         codeExpiresAt: { gt: new Date() },
         codeAttempts: { lt: CODE_MAX_ATTEMPTS },
       },
       data: { codeAttempts: { increment: 1 } },
     });
-    if (spent.count === 0 || !link.codeHash) throw new GoneException('code_expired');
-    if (!linkCodeMatches(link.id, code, link.codeHash)) {
+    if (spent.count === 0) throw new GoneException('code_expired');
+    // Дальше пишем только пока код тот же: гонка с повторной отправкой не
+    // сотрёт свежий код, а гонка с отзывом не оживит отозванную связку.
+    const sameCode = { id: link.id, status: 'PENDING' as const, codeHash };
+    if (!linkCodeMatches(link.id, code, codeHash)) {
       const { codeAttempts } = await this.prisma.partnerLink.findUniqueOrThrow({
         where: { id: link.id },
         select: { codeAttempts: true },
       });
       if (codeAttempts >= CODE_MAX_ATTEMPTS) {
-        await this.prisma.partnerLink.update({
-          where: { id: link.id },
+        await this.prisma.partnerLink.updateMany({
+          where: sameCode,
           data: { codeHash: null, codeExpiresAt: null },
         });
         throw new GoneException('code_expired');
       }
       throw new BadRequestException({ message: 'invalid_code', attemptsLeft: CODE_MAX_ATTEMPTS - codeAttempts });
     }
-    await this.prisma.partnerLink.update({
-      where: { id: link.id },
+    const activated = await this.prisma.partnerLink.updateMany({
+      where: sameCode,
       data: { status: 'ACTIVE', activatedAt: new Date(), codeHash: null, codeExpiresAt: null, codeAttempts: 0 },
     });
+    if (activated.count === 0) throw new GoneException('code_expired');
     await this.audit.log(partner, 'LINK_CONFIRMED', { externalId, userId: link.userId, ip });
     return { status: 'active', talerUserId: link.userId };
   }
@@ -3046,7 +3070,7 @@ export class PartnerLinkCodeService {
 - [ ] **Step 4: Тест проходит**
 
 Run: `npx jest src/partner-api/partner-link-code.service.spec.ts`
-Expected: PASS, 10 тестов.
+Expected: PASS, 12 тестов.
 
 - [ ] **Step 5: Commit**
 
