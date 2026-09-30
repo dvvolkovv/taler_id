@@ -53,6 +53,23 @@
 
 Не взяты, отдельными задачами на потом: allow-list вместо deny-list для scope в DCR и `scopes_supported` в discovery (сейчас `messenger` там виден, но получить его через DCR нельзя); проверка связок партнёра в слиянии дубликатов Linkeon.
 
+### Правки по ревью задач 9–13 — код отличается от блоков ниже
+
+Источник правды для задач 9–13 — файлы в ветке:
+- счётчики лимитов — `partner-counter.util.ts`: `INCR`+`EXPIRE` одной транзакцией и ожидание Redis не дольше 250 мс (без этого мёртвый Redis вешал каждый запрос партнёра на ~10 с и отдавал 500). Лимит партнёра без Redis пропускает запрос с предупреждением в лог — так же, как лимит регистрации клиентов в `main.ts`;
+- `PartnerKeyGuard` считает свои отказы по IP клиента: после 30 за минуту — `429 too_many_auth_failures`. Глобальные лимиты по IP с этих ручек сняты, а фильтр ошибок пишет строку в лог на каждый 401/403 (на 429 — нет);
+- у обоих 429 есть заголовок `Retry-After`; лимит без `req.partner` падает с 500, а не пропускает молча;
+- декоратор `@PartnerApi()` (`partner-api.decorator.ts`) задаёт порядок guard'ов и снимает именованные глобальные лимиты — контроллеры ставят его вместо пары `@SkipThrottle`/`@UseGuards`;
+- `externalId` из одних точек отклоняется: по URL до него не достучаться;
+- поля `partner`/`externalId` в `meta` аудита вызывающий не перетрёт; действия типизированы `PartnerAuditAction`;
+- у каждого валидатора DTO — код ошибки. Английской фразой остаётся только лишнее поле (`property X should not exist`): эту ошибку выдаёт глобальный `ValidationPipe`.
+
+Код из письма остался в теме письма, как у `sendOtp`: угроза «код продиктуют злоумышленнику» от места кода в письме не зависит, а e2e читает его оттуда.
+
+Под это переписаны задачи 18 (`@PartnerApi()`), 20 (скрипт отвергает неизвестные флаги и проверяет адреса, `set-ips` требует `--ips` или `--clear`), 37 (ошибки и заголовки в документации), 41–43 (проверка `TRUST_PROXY` и подделки `X-Forwarded-For`).
+
+Замечено попутно, вне этой ветки: guard Linkeon (`src/partner/partner-secret.guard.ts`) берёт первый адрес из `X-Forwarded-For`, который задаёт сам клиент, — его белый список IP подделывается; в `email.service.ts` имя организации, имя пригласившего и причина отказа KYC попадают в HTML без экранирования.
+
 ## Структура файлов
 
 **Создать — `src/partner-core/`** (без HTTP; им пользуются мессенджер, профиль и партнёрский API):
@@ -3420,7 +3437,10 @@ git commit -m "feat(partner): контакты TalerID по дружбе пар�
 
 ```ts
 import { BadRequestException } from '@nestjs/common';
+import { GUARDS_METADATA } from '@nestjs/common/constants';
 import { PartnerApiController } from './partner-api.controller';
+import { PartnerKeyGuard } from './partner-key.guard';
+import { PartnerRateLimitGuard } from './partner-rate-limit.guard';
 
 describe('PartnerApiController', () => {
   const partner: any = { id: 'p1', slug: 'nadi' };
@@ -3450,7 +3470,11 @@ describe('PartnerApiController', () => {
     expect(codes.verify).toHaveBeenCalledWith(partner, 'm-1', '123456', '1.2.3.4');
   });
 
-  it('turns off the global per-IP throttler for every named limit', () => {
+  it('is guarded by the partner key and limit instead of the global per-IP throttler', () => {
+    expect(Reflect.getMetadata(GUARDS_METADATA, PartnerApiController)).toEqual([
+      PartnerKeyGuard,
+      PartnerRateLimitGuard,
+    ]);
     for (const name of ['short', 'medium', 'long']) {
       expect(Reflect.getMetadata(`THROTTLER:SKIP${name}`, PartnerApiController)).toBe(true);
     }
@@ -3480,18 +3504,16 @@ import {
   Put,
   Query,
   Req,
-  UseGuards,
 } from '@nestjs/common';
-import { SkipThrottle } from '@nestjs/throttler';
 import type { PartnerRecord } from '../partner-core/partner-registry.service';
 import { PatchUserDto } from './dto/patch-user.dto';
 import { ProvisionUserDto } from './dto/provision-user.dto';
 import { VerifyLinkCodeDto } from './dto/verify-link-code.dto';
 import { assertExternalId } from './external-id.util';
+import { PartnerApi } from './partner-api.decorator';
 import { PartnerContactsService } from './partner-contacts.service';
-import { PartnerKeyGuard } from './partner-key.guard';
 import { PartnerLinkCodeService } from './partner-link-code.service';
-import { PartnerRateBucket, PartnerRateLimitGuard } from './partner-rate-limit.guard';
+import { PartnerRateBucket } from './partner-rate-limit.guard';
 import { PartnerUsersService } from './partner-users.service';
 
 interface PartnerRequest {
@@ -3501,13 +3523,12 @@ interface PartnerRequest {
 
 /**
  * Партнёрский API мессенджера. Зовёт только сервер партнёра с ключом.
- * Глобальные лимиты по IP сняты: весь партнёр ходит с одного адреса, лимит
- * считается по партнёру (PartnerRateLimitGuard).
+ * @PartnerApi(): проверка ключа, лимит по партнёру вместо глобальных лимитов
+ * по IP (весь партнёр ходит с одного адреса) — см. partner-api.decorator.ts.
  * Документация для партнёров: docs/partner-messenger-api.md
  */
 @Controller('partner/v1')
-@SkipThrottle({ short: true, medium: true, long: true })
-@UseGuards(PartnerKeyGuard, PartnerRateLimitGuard)
+@PartnerApi()
 export class PartnerApiController {
   constructor(
     private readonly users: PartnerUsersService,
@@ -3747,6 +3768,7 @@ git commit -m "feat(profile): удаление аккаунта отзывает
 import { PrismaClient } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import * as fs from 'fs';
+import { isIP } from 'net';
 import { generatePartnerKey, hashPartnerKey, isValidPartnerSlug } from '../src/partner-core/partner-key.util';
 import { encryptWebhookSecret, generateWebhookSecret } from '../src/partner-core/partner-secrets.util';
 import { MESSENGER_SCOPE } from '../src/partner-core/partner.constants';
@@ -3760,21 +3782,27 @@ const USAGE = `Использование: npx ts-node -r dotenv/config scripts/
   rotate-key    --slug <slug> [--out файл [--var ИМЯ]]
   set-webhook   --slug <slug> --url https://… [--out файл [--var ИМЯ]]
   clear-webhook --slug <slug>
-  set-ips       --slug <slug> --ips a,b        (пусто — без ограничения)
+  set-ips       --slug <slug> --ips a,b | --clear   (точные адреса, без CIDR; --clear — без ограничения)
   enable | disable --slug <slug>
   show          --slug <slug>`;
 
-function parseFlags(argv: string[]): Flags {
+/**
+ * Флаги команды. Незнакомый флаг — ошибка: опечатка `--ip` вместо `--ips`
+ * иначе молча сняла бы белый список партнёра на PROD.
+ */
+function parseFlags(argv: string[], allowed: readonly string[]): Flags {
   const flags: Flags = {};
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (!arg.startsWith('--')) throw new Error(`непонятный аргумент: ${arg}`);
+    const name = arg.slice(2);
+    if (!allowed.includes(name)) throw new Error(`флаг --${name} этой команде неизвестен`);
     const next = argv[i + 1];
     if (next !== undefined && !next.startsWith('--')) {
-      flags[arg.slice(2)] = next;
+      flags[name] = next;
       i++;
     } else {
-      flags[arg.slice(2)] = '';
+      flags[name] = '';
     }
   }
   return flags;
@@ -3786,11 +3814,22 @@ function slugOf(flags: Flags): string {
   return slug;
 }
 
-function ipsOf(flags: Flags): string[] {
-  return (flags.ips ?? '')
+/**
+ * Белый список — только точные адреса, как их видит бэкенд (IPv4 без ::ffff:).
+ * Маски guard не понимает: запись с CIDR никогда бы не совпала.
+ */
+function ipsOf(value: string): string[] {
+  const ips = value
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
+  if (ips.length === 0) throw new Error('--ips без адресов; снять ограничение — set-ips --clear');
+  for (const ip of ips) {
+    if (isIP(ip) === 0 || /^::ffff:/i.test(ip)) {
+      throw new Error(`не IP-адрес: ${ip} (нужен точный IPv4 или IPv6, без маски и без ::ffff:)`);
+    }
+  }
+  return ips;
 }
 
 /** Секрет — в файл с правами 600, либо на экран, если файл не указан. */
@@ -3815,6 +3854,7 @@ async function create(flags: Flags): Promise<void> {
   const slug = slugOf(flags);
   const name = flags.name;
   if (!name) throw new Error('--name обязателен: так партнёр называется в письмах людям');
+  const ips = flags.ips === undefined ? [] : ipsOf(flags.ips);
   if (await prisma.partner.findUnique({ where: { slug } })) {
     throw new Error(`партнёр ${slug} уже есть — для нового ключа rotate-key`);
   }
@@ -3842,7 +3882,7 @@ async function create(flags: Flags): Promise<void> {
       },
     }),
     prisma.partner.create({
-      data: { slug, name, keyHash: hashPartnerKey(key), ipAllowlist: ipsOf(flags), oauthClientId: clientId },
+      data: { slug, name, keyHash: hashPartnerKey(key), ipAllowlist: ips, oauthClientId: clientId },
     }),
   ]);
   console.log(`Партнёр ${slug} создан (OAuth-клиент ${clientId}).`);
@@ -3885,8 +3925,13 @@ async function clearWebhook(flags: Flags): Promise<void> {
 
 async function setIps(flags: Flags): Promise<void> {
   const slug = slugOf(flags);
+  // Снять ограничение — только явно: пустой список пускает партнёра с любого адреса.
+  if ((flags.ips === undefined) === (flags.clear === undefined)) {
+    throw new Error('нужен ровно один из флагов: --ips a,b или --clear');
+  }
+  if (flags.clear) throw new Error('--clear пишется без значения');
+  const ips = flags.clear !== undefined ? [] : ipsOf(flags.ips);
   await partnerOrFail(slug);
-  const ips = ipsOf(flags);
   await prisma.partner.update({ where: { slug }, data: { ipAllowlist: ips } });
   console.log(`IP ${slug}: ${ips.length ? ips.join(', ') : 'без ограничения'}`);
 }
@@ -3917,26 +3962,28 @@ async function show(flags: Flags): Promise<void> {
   });
 }
 
-const COMMANDS: Record<string, (flags: Flags) => Promise<void>> = {
-  create,
-  'rotate-key': rotateKey,
-  'set-webhook': setWebhook,
-  'clear-webhook': clearWebhook,
-  'set-ips': setIps,
-  enable: (flags) => setEnabled(flags, true),
-  disable: (flags) => setEnabled(flags, false),
-  show,
+const OUT = ['out', 'var'];
+const COMMANDS: Record<string, { flags: readonly string[]; run: (flags: Flags) => Promise<void> }> = {
+  create: { flags: ['slug', 'name', 'ips', ...OUT], run: create },
+  'rotate-key': { flags: ['slug', ...OUT], run: rotateKey },
+  'set-webhook': { flags: ['slug', 'url', ...OUT], run: setWebhook },
+  'clear-webhook': { flags: ['slug'], run: clearWebhook },
+  'set-ips': { flags: ['slug', 'ips', 'clear'], run: setIps },
+  enable: { flags: ['slug'], run: (flags) => setEnabled(flags, true) },
+  disable: { flags: ['slug'], run: (flags) => setEnabled(flags, false) },
+  show: { flags: ['slug'], run: show },
 };
 
 async function main(): Promise<void> {
   const [command, ...rest] = process.argv.slice(2);
-  const run = command ? COMMANDS[command] : undefined;
-  if (!run) {
+  const entry =
+    command && Object.prototype.hasOwnProperty.call(COMMANDS, command) ? COMMANDS[command] : undefined;
+  if (!entry) {
     console.log(USAGE);
     process.exitCode = command && command !== 'help' ? 1 : 0;
     return;
   }
-  await run(parseFlags(rest));
+  await entry.run(parseFlags(rest, entry.flags));
 }
 
 main()
@@ -3953,9 +4000,12 @@ main()
 npx ts-node scripts/partner-admin.ts help; echo "exit=$?"
 npx ts-node scripts/partner-admin.ts create --name Nadi; echo "exit=$?"
 PARTNER_SECRETS_KEY= npx ts-node scripts/partner-admin.ts set-webhook --slug Bad_Slug; echo "exit=$?"
+npx ts-node scripts/partner-admin.ts set-ips --slug nadi --ip 1.2.3.4; echo "exit=$?"
+npx ts-node scripts/partner-admin.ts set-ips --slug nadi; echo "exit=$?"
+npx ts-node scripts/partner-admin.ts create --slug nadi --name Nadi --ips 10.0.0.0/8; echo "exit=$?"
 ```
 
-Expected: 1) справка и `exit=0`; 2) `Ошибка: --slug обязателен…` и `exit=1`; 3) `Ошибка: --slug обязателен…` и `exit=1`. До БД ни одна команда не дошла — проверки аргументов идут раньше.
+Expected: 1) справка и `exit=0`; 2) `Ошибка: --slug обязателен…` и `exit=1`; 3) `Ошибка: --slug обязателен…` и `exit=1`; 4) `Ошибка: флаг --ip этой команде неизвестен` и `exit=1`; 5) `Ошибка: нужен ровно один из флагов…` и `exit=1`; 6) `Ошибка: не IP-адрес: 10.0.0.0/8…` и `exit=1`. До БД ни одна команда не дошла — проверки аргументов идут раньше.
 
 - [ ] **Step 3: Commit**
 
@@ -6823,12 +6873,15 @@ git commit -m "docs(env): переменные партнёрского API" -m 
 | Ответ | Когда |
 |---|---|
 | `401 invalid_partner_key` | ключа нет, формат не тот или ключ не подходит |
-| `401 ip_not_allowed` | запрос не с разрешённого IP |
+| `401 ip_not_allowed` | запрос не с разрешённого IP (список — точные адреса, без масок) |
 | `403 partner_disabled` | партнёр выключен |
 | `403 partner_api_disabled` | партнёрский API выключен на этом окружении |
 | `429 rate_limited` + `retryAfter` | больше 600 выдач токена или 120 прочих запросов в минуту |
+| `429 too_many_auth_failures` + `retryAfter` | больше 30 отказов из строк выше с одного адреса за минуту |
 
-Формат ошибок общий для Taler ID: машинный код в поле `message`, рядом дополнительные поля (`attemptsLeft`, `retryAfter`, `userIds`). Ошибки проверки тела запроса — `400` с массивом кодов в `message`, например `["invalid_email"]`. Лишних полей в тело не кладите: неизвестное поле — тоже `400`.
+У обоих `429` есть заголовок `Retry-After` — столько же секунд, сколько в `retryAfter`.
+
+Формат ошибок общий для Taler ID: машинный код в поле `message`, рядом дополнительные поля (`attemptsLeft`, `retryAfter`, `userIds`). Ошибки проверки тела запроса — `400` с массивом кодов в `message`, например `["invalid_email"]`; коды полей: `invalid_external_id`, `invalid_email`, `invalid_first_name`, `invalid_last_name`, `invalid_locale`, `invalid_code`. Лишних полей в тело не кладите: неизвестное поле — тоже `400`, но в массиве будет фраза `property <имя> should not exist`, а не код.
 
 ## Люди
 
@@ -7073,7 +7126,8 @@ export async function POST(req: Request) {
 
 ## Лимиты
 
-- Партнёрский API: 600 выдач токена и 120 прочих запросов в минуту на партнёра.
+- Партнёрский API: 600 выдач токена и 120 прочих запросов в минуту на партнёра; ответ сверх лимита — `429` с `retryAfter` и заголовком `Retry-After`.
+- Отказы по ключу (`401`/`403` из раздела «Ключ партнёра»): после 30 за минуту с одного адреса — `429 too_many_auth_failures`. Верный ключ этот счётчик не блокирует.
 - Мессенджер по токену человека — как у приложения Taler ID: считается по IP устройства.
 - Файл — до 100 МБ одним запросом, больше — загрузкой по частям.
 
@@ -7660,10 +7714,10 @@ ssh dvolkov@89.169.55.217 'cd ~/taler-id && cp .env .env.bak-partner-$(date +%Y%
   (grep -q "^PARTNER_SECRETS_KEY=" .env || echo "PARTNER_SECRETS_KEY=$(openssl rand -hex 32)" >> .env) && \
   (grep -q "^PARTNER_API_ENABLED=" .env || echo "PARTNER_API_ENABLED=true" >> .env) && \
   (grep -q "^PARTNER_WEBHOOK_SINK=" .env || echo "PARTNER_WEBHOOK_SINK=true" >> .env) && \
-  grep -c "^PARTNER_" .env'
+  grep -c "^PARTNER_" .env; grep -c "^TRUST_PROXY=" .env || true'
 ```
 
-Expected: `3`. Значения не печатаются.
+Expected: `3`, затем `0`. Значения не печатаются. `TRUST_PROXY` в `.env` быть не должно: Express доверяет только loopback (`main.ts`), а с другим значением белый список IP партнёра обходится заголовком `X-Forwarded-For`. Если строка есть — разобраться до продолжения.
 
 - [ ] **Step 4: Рестарт и проверка старта**
 
@@ -7770,12 +7824,12 @@ ssh dvolkov@138.124.61.221 'cd ~/taler-id && cp .env .env.bak-partner-$(date +%Y
   (grep -q "^PARTNER_SECRETS_KEY=" .env || echo "PARTNER_SECRETS_KEY=$(openssl rand -hex 32)" >> .env) && \
   (grep -q "^PARTNER_API_ENABLED=" .env || echo "PARTNER_API_ENABLED=true" >> .env) && \
   (grep -q "^PARTNER_WEBHOOK_SINK=" .env || echo "PARTNER_WEBHOOK_SINK=true" >> .env) && \
-  grep -c "^PARTNER_" .env && pm2 restart taler-id --update-env && sleep 10 && \
+  grep -c "^PARTNER_" .env && (grep -c "^TRUST_PROXY=" .env || true) && pm2 restart taler-id --update-env && sleep 10 && \
   pm2 logs taler-id --lines 120 --nostream | grep -E "successfully started|resolve dependencies|key fingerprint" | tail -4'
 curl -s -o /dev/null -w "health:%{http_code}\n" https://id.taler.tirol/health
 ```
 
-Expected: `3`, `successfully started`, строка `partner secrets key fingerprint: …`, `health:200`.
+Expected: `3`, `0`, `successfully started`, строка `partner secrets key fingerprint: …`, `health:200`. `TRUST_PROXY` в `.env` быть не должно: Express доверяет только loopback (`main.ts`), а с другим значением белый список IP партнёра обходится заголовком `X-Forwarded-For`. Если строка есть — разобраться до продолжения.
 
 - [ ] **Step 5: Только тестовый партнёр**
 
@@ -7831,13 +7885,13 @@ for n in do-app-1 do-app-2; do
   ssh $n "cd /opt/taler-id && cp .env .env.bak-partner-\$(date +%Y%m%d%H%M) && \
     (grep -q '^PARTNER_SECRETS_KEY=' .env || echo 'PARTNER_SECRETS_KEY=$KEY' >> .env) && \
     (grep -q '^PARTNER_API_ENABLED=' .env || echo 'PARTNER_API_ENABLED=true' >> .env) && \
-    grep -c '^PARTNER_' .env"
+    grep -c '^PARTNER_' .env; grep -c '^TRUST_PROXY=' .env || true"
 done
 unset KEY
 for n in do-app-1 do-app-2; do ssh $n "grep '^PARTNER_SECRETS_KEY=' /opt/taler-id/.env | sha256sum"; done
 ```
 
-Expected: `2` на каждой ноде; два одинаковых хэша. `PARTNER_WEBHOOK_SINK` на PROD не задаётся.
+Expected: `2` и `0` на каждой ноде; два одинаковых хэша. `PARTNER_WEBHOOK_SINK` на PROD не задаётся. `TRUST_PROXY` в `.env` быть не должно: Express доверяет только loopback (`main.ts`), а с другим значением белый список IP партнёра обходится заголовком `X-Forwarded-For`. Если строка есть — разобраться до продолжения.
 
 - [ ] **Step 4: Поочерёдный рестарт**
 
@@ -7913,10 +7967,22 @@ curl -s -o /dev/null -w "from-mac:%{http_code}\n" -H "Authorization: Bearer $(gr
 
 Expected: `from-bot:404` (ключ и IP приняты, такого `externalId` просто нет), `from-mac:401` (`ip_not_allowed`). Если и с бота 401 — Express видит адрес прокси: разбираться с `TRUST_PROXY` и `real_ip` в nginx до того, как nadi начнёт ходить на PROD.
 
+Там же, с мака — подделка адреса. Заголовок с адресом бота не должен открывать белый список ни через балансировщик, ни через RU-edge (`ru.talerid.io` проксирует на DO с `Host: api.talerid.io`):
+
+```bash
+K="$(grep '^PARTNER_E2E_KEY=' ~/Downloads/taler_id_tests/.env.talerid | cut -d= -f2-)"
+for h in api.talerid.io ru.talerid.io; do
+  curl -s -o /dev/null -w "spoof-$h:%{http_code}\n" -H "Authorization: Bearer $K" -H "X-Forwarded-For: 77.73.131.137" "https://$h/partner/v1/users/ip-probe"
+done
+unset K
+```
+
+Expected: `spoof-api.talerid.io:401` и `spoof-ru.talerid.io:401`. `404` хоть на одном — поддельный заголовок дошёл до `req.ip`: nadi на PROD не пускать, пока не исправлен nginx (на edge — `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for`, на app-нодах — `real_ip_recursive on` с доверием только LB и edge).
+
 Вернуть тестового партнёра без ограничения (на бот-сервере):
 
 ```bash
-ssh do-app-1 "cd /opt/taler-id && npx ts-node -r dotenv/config scripts/partner-admin.ts set-ips --slug e2e --ips ''"
+ssh do-app-1 "cd /opt/taler-id && npx ts-node -r dotenv/config scripts/partner-admin.ts set-ips --slug e2e --clear"
 ```
 
 ---
