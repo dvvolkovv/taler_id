@@ -25,6 +25,9 @@
  *      Плюс отзыв, попавший между чтением гранта и записью токена.
  *   4. Redis падает внутри отзыва: раньше строка уже была REVOKED с
  *      grantId = null, токен жил, а повтор ничего не делал.
+ *   5. грант, которому осталось меньше минуты, заменяется новым, пока токен
+ *      старого ещё жив: не уничтожь выпуск старый грант — связка на это время
+ *      держала бы два живых гранта, и отзыв гасил бы только новый.
  *
  * Запуск из корня репозитория (нужен только node_modules, ни базы, ни Redis):
  *   node scripts/verify-partner-tokens.cjs [--verbose]
@@ -441,6 +444,38 @@ async function main() {
         await assertAllRejected([t.accessToken]);
         assertRevokedClean('l4', mark);
         assert.equal(await revoker.revokeAllForUser('u4'), 0, 'finished link is picked up again');
+      },
+    ],
+    [
+      '5. грант с остатком меньше минуты заменён при живом токене — старый уничтожен сразу, отзыв гасит все',
+      async () => {
+        const mark = redis.writes.length;
+        newLink('l5', 'u5');
+        const first = await issue(snapshot('l5'));
+        const g1 = await provider.Grant.find(first.grantId);
+        // Гранту осталось 100 с: он ещё годится, токен по нему урезается до его остатка
+        skewMs += (g1.exp - epoch() - 100) * 1000;
+        const old = await issue(snapshot('l5'));
+        assert.equal(old.grantId, first.grantId, 'a grant with 100 s left should be reused');
+        // Прошло 50 с: гранту меньше минуты, а токен по нему ещё жив
+        skewMs += 50 * 1000;
+        assert.ok(await accepted(old.accessToken), 'the old token should still be alive here');
+
+        const fresh = await issue(snapshot('l5'));
+        assert.notEqual(fresh.grantId, first.grantId, 'a grant with less than a minute left was not replaced');
+        assert.equal(row('l5').grantId, fresh.grantId, 'link does not hold the new grant');
+        assert.deepEqual(
+          grantsWrittenSince(mark).filter((k) => redis.has(k)),
+          [grantKey(fresh.grantId)],
+          'the link holds two live grants after the replacement',
+        );
+        // Цена: токен старого гранта гаснет раньше своего срока — клиент на 401 просит новый
+        assert.equal(await accepted(old.accessToken), false, 'token of the replaced grant is still accepted');
+        assert.ok(await accepted(fresh.accessToken), 'the new token is not accepted');
+
+        await revoker.revokeLink({ id: 'l5' });
+        await assertAllRejected([old.accessToken, fresh.accessToken]);
+        assertRevokedClean('l5', mark);
       },
     ],
   ];

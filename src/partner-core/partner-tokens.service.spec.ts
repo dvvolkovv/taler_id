@@ -102,10 +102,9 @@ describe('PartnerTokensService', () => {
         data: { grantId: 'grant-new' },
       });
       expect(provider.AccessToken).toHaveBeenCalledWith(expect.objectContaining({ grantId: 'grant-new' }));
-      expect(provider.Grant.adapter.destroy).not.toHaveBeenCalled();
     });
 
-    it('creates a grant for a link that never had one', async () => {
+    it('creates a grant for a link that never had one, destroying nothing', async () => {
       const res = await service.issueAccessToken({ id: 'l1', userId: 'u1', grantId: null }, partner);
       expect(provider.Grant.find).not.toHaveBeenCalled();
       expect(prisma.partnerLink.updateMany).toHaveBeenCalledWith({
@@ -113,6 +112,36 @@ describe('PartnerTokensService', () => {
         data: { grantId: 'grant-new' },
       });
       expect(res.grantId).toBe('grant-new');
+      expect(provider.Grant.adapter.destroy).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['vanished', undefined],
+      ['nearly expired', liveGrant({ exp: NOW + 30 })],
+      ["another user's", liveGrant({ accountId: 'u2' })],
+      ["another client's", liveGrant({ clientId: 'acme-partner' })],
+    ])('destroys the replaced %s grant once the swap succeeded', async (_name: string, found: any) => {
+      provider.Grant.find.mockResolvedValue(found);
+      const res = await service.issueAccessToken({ id: 'l1', userId: 'u1', grantId: 'grant-1' }, partner);
+      expect(res.grantId).toBe('grant-new');
+      expect(provider.Grant.adapter.destroy.mock.calls).toEqual([['grant-1']]);
+      expect(prisma.partnerLink.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
+        provider.Grant.adapter.destroy.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('leaves the old grant alone when the swap is lost: it is up to the winner', async () => {
+      provider.Grant.find
+        .mockResolvedValueOnce(liveGrant({ exp: NOW + 30 })) // grant-1: меньше минуты — меняем
+        .mockResolvedValueOnce(liveGrant({ jti: 'grant-2' })); // победитель уже поставил grant-2
+      prisma.partnerLink.updateMany.mockResolvedValueOnce({ count: 0 });
+      prisma.partnerLink.findUnique.mockResolvedValue({ userId: 'u1', grantId: 'grant-2', status: 'ACTIVE' });
+
+      const res = await service.issueAccessToken({ id: 'l1', userId: 'u1', grantId: 'grant-1' }, partner);
+
+      expect(res.grantId).toBe('grant-2');
+      // уничтожен только свой свежий грант — ни grant-1, ни grant-2 победителя
+      expect(provider.Grant.adapter.destroy.mock.calls).toEqual([['grant-new']]);
     });
 
     it.each([
@@ -213,16 +242,18 @@ describe('PartnerTokensService', () => {
       ['revoked', { userId: 'u1', grantId: null, status: 'REVOKED' }],
       ['gone', null],
     ])('answers 409 link_not_active when the link is %s by the time of the swap', async (_name, current) => {
+      provider.Grant.find.mockResolvedValue(liveGrant({ exp: NOW + 30 }));
       prisma.partnerLink.updateMany.mockResolvedValue({ count: 0 });
       prisma.partnerLink.findUnique.mockResolvedValue(current);
 
       const err = await service
-        .issueAccessToken({ id: 'l1', userId: 'u1', grantId: null }, partner)
+        .issueAccessToken({ id: 'l1', userId: 'u1', grantId: 'grant-1' }, partner)
         .catch((e: unknown) => e);
 
       expect(err).toBeInstanceOf(ConflictException);
       expect((err as ConflictException).message).toBe('link_not_active');
-      expect(provider.Grant.adapter.destroy).toHaveBeenCalledWith('grant-new');
+      // grant-1 гасит сам отзыв; выпуск уничтожает только свой свежий грант
+      expect(provider.Grant.adapter.destroy.mock.calls).toEqual([['grant-new']]);
       expect(provider.AccessToken).not.toHaveBeenCalled();
     });
   });
