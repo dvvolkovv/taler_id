@@ -34,7 +34,11 @@ export const PARTNER_AUTH_FAILURES_PER_MINUTE = 30;
  *   3. партнёр выключен → 403;
  *   4. IP не из белого списка партнёра (если список задан) → 401.
  * req.ip берётся с доверием только к loopback (main.ts, trust proxy), поэтому
- * подделать его заголовком X-Forwarded-For снаружи нельзя.
+ * подделать его заголовком X-Forwarded-For снаружи нельзя — но это верно
+ * только пока nginx сам переписывает X-Forwarded-For своим реальным адресом
+ * клиента, а не слепо пропускает входящее значение дальше. План проверяет
+ * это на PROD живыми пробами с подделанным заголовком через балансировщик и
+ * RU-edge (Task 43, Step 7).
  */
 @Injectable()
 export class PartnerKeyGuard implements CanActivate {

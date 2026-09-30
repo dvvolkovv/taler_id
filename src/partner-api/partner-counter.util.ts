@@ -35,20 +35,26 @@ export async function incrementCounter(
   const timeout = new Promise<null>((resolve) => {
     timer = setTimeout(() => resolve(null), timeoutMs);
   });
-  const exec = redis
-    .getClient()
-    .multi()
-    .incr(key)
-    .expire(key, ttlSeconds)
-    .exec()
-    .then((results): number | null => {
-      if (!results) return null;
-      const [err, value] = results[0];
-      return err ? null : Number(value);
-    })
-    .catch((): null => null);
   try {
+    // Строим цепочку и запускаем гонку внутри try: если сам клиент бросает
+    // синхронно (например redis.getClient() до готовности соединения), это
+    // исключение не должно улететь мимо finally и мимо контракта «никогда
+    // не бросает».
+    const exec = redis
+      .getClient()
+      .multi()
+      .incr(key)
+      .expire(key, ttlSeconds)
+      .exec()
+      .then((results): number | null => {
+        if (!results) return null;
+        const [err, value] = results[0];
+        return err ? null : Number(value);
+      })
+      .catch((): null => null);
     return await Promise.race([exec, timeout]);
+  } catch {
+    return null;
   } finally {
     clearTimeout(timer);
   }

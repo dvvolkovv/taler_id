@@ -7,12 +7,12 @@ import {
 } from './partner-counter.util';
 
 /** Имитация ioredis multi().incr().expire().exec() с управляемым результатом exec(). */
-function fakeRedis(exec: () => Promise<any>): any {
+function fakeRedis(exec: () => Promise<any>) {
   const chain: any = {};
   chain.incr = jest.fn(() => chain);
   chain.expire = jest.fn(() => chain);
   chain.exec = exec;
-  return { getClient: () => ({ multi: () => chain }) };
+  return { redis: { getClient: () => ({ multi: () => chain }) } as any, incr: chain.incr, expire: chain.expire };
 }
 
 describe('currentMinute', () => {
@@ -23,43 +23,68 @@ describe('currentMinute', () => {
 });
 
 describe('incrementCounter', () => {
-  it('returns the INCR value on a healthy Redis', async () => {
-    const redis = fakeRedis(() =>
+  afterEach(() => jest.useRealTimers());
+
+  it('returns the INCR value and queues EXPIRE with the given TTL on a healthy Redis', async () => {
+    const { redis, expire } = fakeRedis(() =>
       Promise.resolve([
         [null, 5],
         [null, 'OK'],
       ]),
     );
     await expect(incrementCounter(redis, 'k', 60)).resolves.toBe(5);
+    expect(expire).toHaveBeenCalledWith('k', 60);
   });
 
-  it('returns null when Redis rejects', async () => {
-    const redis = fakeRedis(() => Promise.reject(new Error('ECONNREFUSED')));
+  it('returns null when exec() rejects (e.g. EXECABORT against a read-only replica right after failover)', async () => {
+    const { redis } = fakeRedis(() =>
+      Promise.reject(new Error('EXECABORT Transaction discarded because of previous errors.')),
+    );
     await expect(incrementCounter(redis, 'k', 60)).resolves.toBeNull();
   });
 
   it('returns null when the command times out (dead Redis hangs ~10.5s by default)', async () => {
-    const redis = fakeRedis(() => new Promise(() => {})); // never resolves
+    const { redis } = fakeRedis(() => new Promise(() => {})); // never resolves
     await expect(incrementCounter(redis, 'k', 60, 5)).resolves.toBeNull();
   });
 
   it('returns null when exec() itself resolves to null', async () => {
-    const redis = fakeRedis(() => Promise.resolve(null));
+    const { redis } = fakeRedis(() => Promise.resolve(null));
     await expect(incrementCounter(redis, 'k', 60)).resolves.toBeNull();
   });
 
-  it('returns null when the INCR entry carries an error (e.g. READONLY right after failover)', async () => {
-    const redis = fakeRedis(() =>
+  it('returns null when a queued command carries its own error (e.g. INCR against a non-numeric value)', async () => {
+    const { redis } = fakeRedis(() =>
       Promise.resolve([
-        [new Error('READONLY'), null],
+        [new Error('ERR value is not an integer or out of range'), null],
         [null, 'OK'],
       ]),
     );
     await expect(incrementCounter(redis, 'k', 60)).resolves.toBeNull();
   });
 
-  it('defaults the timeout to PARTNER_COUNTER_TIMEOUT_MS', () => {
-    expect(PARTNER_COUNTER_TIMEOUT_MS).toBe(250);
+  it('never throws even when the Redis client itself throws synchronously', async () => {
+    const redis: any = {
+      getClient: () => {
+        throw new Error('client not ready');
+      },
+    };
+    await expect(incrementCounter(redis, 'k', 60)).resolves.toBeNull();
+  });
+
+  it('without an explicit timeoutMs, stays pending at 249ms and resolves null at 250ms (PARTNER_COUNTER_TIMEOUT_MS)', async () => {
+    jest.useFakeTimers();
+    const { redis } = fakeRedis(() => new Promise(() => {})); // never resolves
+    let settled = false;
+    const promise = incrementCounter(redis, 'k', 60).then((value) => {
+      settled = true;
+      return value;
+    });
+    await jest.advanceTimersByTimeAsync(PARTNER_COUNTER_TIMEOUT_MS - 1);
+    expect(settled).toBe(false);
+    await jest.advanceTimersByTimeAsync(1);
+    await expect(promise).resolves.toBeNull();
+    expect(settled).toBe(true);
   });
 });
 

@@ -1,4 +1,4 @@
-import { HttpException, ServiceUnavailableException } from '@nestjs/common';
+import { HttpException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { generatePartnerKey, hashPartnerKey } from '../partner-core/partner-key.util';
 import { PARTNER_AUTH_FAILURES_PER_MINUTE, PartnerKeyGuard } from './partner-key.guard';
 
@@ -68,6 +68,7 @@ describe('PartnerKeyGuard', () => {
     if (saved === undefined) delete process.env.PARTNER_API_ENABLED;
     else process.env.PARTNER_API_ENABLED = saved;
   });
+  afterEach(() => jest.useRealTimers());
 
   it('attaches the partner for a valid key and never touches Redis on success', async () => {
     const req: any = request();
@@ -81,6 +82,16 @@ describe('PartnerKeyGuard', () => {
     process.env.PARTNER_API_ENABLED = 'false';
     await expect(guard.canActivate(ctx(request()))).rejects.toThrow('partner_api_disabled');
     expect(registry.findBySlug).not.toHaveBeenCalled();
+  });
+
+  it('403 partner_api_disabled when the switch is unset entirely, not just falsy', async () => {
+    delete process.env.PARTNER_API_ENABLED;
+    try {
+      await expect(guard.canActivate(ctx(request()))).rejects.toThrow('partner_api_disabled');
+      expect(registry.findBySlug).not.toHaveBeenCalled();
+    } finally {
+      process.env.PARTNER_API_ENABLED = 'true';
+    }
   });
 
   it.each([undefined, 'Bearer', `Basic ${key}`, `Bearer tidp_nadi_${'x'.repeat(43)}`])(
@@ -124,20 +135,25 @@ describe('PartnerKeyGuard', () => {
     ).rejects.toThrow('invalid_partner_key');
   });
 
-  it(`the ${PARTNER_AUTH_FAILURES_PER_MINUTE + 1}th auth failure from the same IP in a minute becomes 429`, async () => {
+  it(`pins the threshold exactly: the ${PARTNER_AUTH_FAILURES_PER_MINUTE}th auth failure from the same IP is still 401, the ${PARTNER_AUTH_FAILURES_PER_MINUTE + 1}th becomes 429`, async () => {
     const now = new Date('2026-10-01T10:00:15Z');
     jest.useFakeTimers({ now });
     registry.findBySlug.mockResolvedValue(null);
     const res = { setHeader: jest.fn() };
-    let lastError: any;
-    for (let i = 0; i < PARTNER_AUTH_FAILURES_PER_MINUTE + 1; i++) {
-      lastError = await guard.canActivate(ctx(request(), res)).catch((e: unknown) => e);
+    for (let i = 0; i < PARTNER_AUTH_FAILURES_PER_MINUTE - 1; i++) {
+      await guard.canActivate(ctx(request(), res)).catch((e: unknown) => e);
     }
-    expect(lastError).toBeInstanceOf(HttpException);
-    expect(lastError.getStatus()).toBe(429);
-    expect(lastError.getResponse()).toEqual({ message: 'too_many_auth_failures', retryAfter: 45 });
+    // count is now 30: `>` must still let this one through as the original 401, not 429 (a `>=` bug would flip it).
+    const thirtieth = await guard.canActivate(ctx(request(), res)).catch((e: unknown) => e);
+    expect(thirtieth).toBeInstanceOf(UnauthorizedException);
+    expect(thirtieth.message).toBe('invalid_partner_key');
+
+    // count is now 31: the first request over the threshold.
+    const thirtyFirst = await guard.canActivate(ctx(request(), res)).catch((e: unknown) => e);
+    expect(thirtyFirst).toBeInstanceOf(HttpException);
+    expect(thirtyFirst.getStatus()).toBe(429);
+    expect(thirtyFirst.getResponse()).toEqual({ message: 'too_many_auth_failures', retryAfter: 45 });
     expect(res.setHeader).toHaveBeenCalledWith('Retry-After', '45');
-    jest.useRealTimers();
   });
 
   it('falls back to the original 401 when the auth-failure counter is unavailable', async () => {

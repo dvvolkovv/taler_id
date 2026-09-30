@@ -94,27 +94,38 @@ describe('PartnerRateLimitGuard', () => {
     expect(incr).toHaveBeenCalledWith(`partner:rl:p1:default:${minute}`);
   });
 
-  it('answers 429 with rate_limited and sets Retry-After once the bucket is exceeded', async () => {
-    const redis: any = {
-      getClient: () => ({
-        multi: () => {
-          const chain: any = {
-            incr: () => chain,
-            expire: () => chain,
-            exec: () =>
-              Promise.resolve([
-                [null, 121],
-                [null, 'OK'],
-              ]),
-          };
-          return chain;
-        },
-      }),
-    };
-    const res = { setHeader: jest.fn() };
+  it('token bucket: the 600th request passes, the 601st is rejected', async () => {
+    const { redis } = fakeRedis();
     const guard = new PartnerRateLimitGuard(new Reflector(), redis);
+    const req = { partner: { id: 'p1' } };
+    for (let i = 0; i < 599; i++) {
+      await guard.canActivate(ctx(req, { setHeader: jest.fn() }, DummyController.prototype.tokenMethod));
+    }
+    await expect(
+      guard.canActivate(ctx(req, { setHeader: jest.fn() }, DummyController.prototype.tokenMethod)),
+    ).resolves.toBe(true);
+    const res = { setHeader: jest.fn() };
     const err = await guard
-      .canActivate(ctx({ partner: { id: 'p1' } }, res, DummyController.prototype.plainMethod))
+      .canActivate(ctx(req, res, DummyController.prototype.tokenMethod))
+      .catch((e) => e);
+    expect(err.getStatus()).toBe(429);
+    expect(err.getResponse()).toEqual({ message: 'rate_limited', retryAfter: 45 });
+    expect(res.setHeader).toHaveBeenCalledWith('Retry-After', '45');
+  });
+
+  it('default bucket: the 120th request passes, the 121st is rejected', async () => {
+    const { redis } = fakeRedis();
+    const guard = new PartnerRateLimitGuard(new Reflector(), redis);
+    const req = { partner: { id: 'p1' } };
+    for (let i = 0; i < 119; i++) {
+      await guard.canActivate(ctx(req, { setHeader: jest.fn() }, DummyController.prototype.plainMethod));
+    }
+    await expect(
+      guard.canActivate(ctx(req, { setHeader: jest.fn() }, DummyController.prototype.plainMethod)),
+    ).resolves.toBe(true);
+    const res = { setHeader: jest.fn() };
+    const err = await guard
+      .canActivate(ctx(req, res, DummyController.prototype.plainMethod))
       .catch((e) => e);
     expect(err.getStatus()).toBe(429);
     expect(err.getResponse()).toEqual({ message: 'rate_limited', retryAfter: 45 });
