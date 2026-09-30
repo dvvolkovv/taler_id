@@ -12,6 +12,7 @@ import {
   Req,
 } from '@nestjs/common';
 import type { PartnerRecord } from '../partner-core/partner-registry.service';
+import { DeleteUserQueryDto } from './dto/delete-user-query.dto';
 import { PatchUserDto } from './dto/patch-user.dto';
 import { ProvisionUserDto } from './dto/provision-user.dto';
 import { VerifyLinkCodeDto } from './dto/verify-link-code.dto';
@@ -67,9 +68,9 @@ export class PartnerApiController {
   async deleteUser(
     @Req() req: PartnerRequest,
     @Param('externalId') externalId: string,
-    @Query('deleteAccount') deleteAccount?: string,
+    @Query() query: DeleteUserQueryDto,
   ): Promise<void> {
-    await this.users.deleteUser(req.partner, assertExternalId(externalId), deleteAccount === 'true', req.ip);
+    await this.users.deleteUser(req.partner, assertExternalId(externalId), query.deleteAccount === 'true', req.ip);
   }
 
   @Post('users/:externalId/link-code')

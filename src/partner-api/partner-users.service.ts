@@ -36,6 +36,7 @@ interface LinkWithUser {
   status: LinkStatus;
   grantId: string | null;
   activatedAt: Date | null;
+  revokedAt: Date | null;
   user: AccountState & { id: string; email: string | null };
 }
 
@@ -182,22 +183,43 @@ export class PartnerUsersService {
     externalId: string,
   ): Promise<{ accessToken: string; tokenType: 'Bearer'; expiresIn: number; talerUserId: string }> {
     const link = await this.findLink(partner.id, externalId);
-    if (!link || link.status === 'REVOKED') throw new NotFoundException('not_linked');
+    if (!link) throw new NotFoundException('not_linked');
     if (link.user.deletedAt) {
-      await this.revoke(link);
-      // О судьбе аккаунта, доступа к которому партнёр не получал, не сообщаем.
-      if (link.status === 'PENDING') throw new NotFoundException('not_linked');
-      throw new GoneException('account_deleted');
+      // Связку мог уже отозвать Task 19 при удалении аккаунта — проверка
+      // REVOKED ниже не должна перехватить это раньше: иначе партнёр видит
+      // обычный 404 и может молча завести человеку новый аккаунт вместо того,
+      // чтобы узнать об удалении. REVOKED с недоотозванным грантом (сбой
+      // Redis) — доделываем и здесь, а не только отвечаем по старому статусу.
+      if (link.status !== 'REVOKED' || link.grantId) await this.revoke(link);
+      // Партнёру сообщаем об удалении только если он был допущен к аккаунту
+      // (связка подтверждалась кодом) и сам не отвязал её ещё до удаления —
+      // иначе он узнал бы то, чего не знал даже до собственного отказа от связки.
+      throw this.knowsAboutDeletion(link)
+        ? new GoneException('account_deleted')
+        : new NotFoundException('not_linked');
     }
+    if (link.status === 'REVOKED') throw new NotFoundException('not_linked');
     if (link.status === 'PENDING') throw new ConflictException('confirmation_required');
     const { accessToken, expiresIn } = await this.tokens.issueAccessToken(link, partner);
     return { accessToken, tokenType: 'Bearer', expiresIn, talerUserId: link.userId };
   }
 
+  /**
+   * Сообщать ли партнёру, что аккаунт удалён: только если он был к аккаунту
+   * допущен (связка подтверждалась) и не отвязал его сам ещё до удаления.
+   */
+  private knowsAboutDeletion(link: LinkWithUser): boolean {
+    if (!link.user.deletedAt || !link.activatedAt) return false;
+    return !(link.status === 'REVOKED' && link.revokedAt && link.revokedAt < link.user.deletedAt);
+  }
+
   async getUser(partner: PartnerRecord, externalId: string) {
     const link = await this.findLink(partner.id, externalId);
-    // PENDING удалённого аккаунта — как будто связки нет (см. issueToken).
-    if (!link || (link.status === 'PENDING' && link.user.deletedAt)) throw new NotFoundException('not_linked');
+    // Удалённый аккаунт без ведома партнёра (не было согласия, или партнёр сам
+    // отвязал его ещё до удаления) — как будто связки нет вовсе (см. issueToken).
+    if (!link || (link.user.deletedAt && !this.knowsAboutDeletion(link))) {
+      throw new NotFoundException('not_linked');
+    }
     const status =
       link.status === 'REVOKED' || link.user.deletedAt
         ? 'revoked'

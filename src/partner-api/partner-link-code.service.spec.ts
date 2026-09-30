@@ -139,12 +139,15 @@ describe('PartnerLinkCodeService.send', () => {
     await expect(service.send(partner, 'm-1')).rejects.toThrow('not_linked');
   });
 
-  it('frees the cooldown and the daily slot, then answers 503, when mail fails', async () => {
+  it('frees the cooldown, the hour window, and the daily slot, then answers 503, when mail fails', async () => {
     const { service, redis, email, decr } = make(pending);
     email.sendPartnerLinkCode.mockRejectedValue(new Error('smtp down'));
     const err = await service.send(partner, 'm-1').catch((e) => e);
     expect(err.getStatus()).toBe(503);
     expect(redis.del).toHaveBeenCalledWith('partner:linkcode:cd:p1:u1');
+    // Иначе пять ретраев за время SMTP-аутажа заперли бы человека на час:
+    // письма не доходят, а часовое окно всё равно тратится.
+    expect(decr).toHaveBeenCalledWith('partner:linkcode:h:p1:u1');
     expect(decr).toHaveBeenCalledWith('partner:linkcode:day:p1');
   });
 });

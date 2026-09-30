@@ -56,6 +56,15 @@ export class HttpExceptionFilter implements ExceptionFilter {
       );
     }
 
+    // Не все источники 429 сами ставят заголовок (partner-link-code.service.ts's
+    // tooManyRequests() кладёт retryAfter только в тело) — филтр гарантирует его
+    // для любого 429 с числовым retryAfter. Повторная установка тем же значением
+    // для guard'ов, что уже вызвали throwTooManyRequests(), безвредна.
+    const retryAfter = (exceptionResponse as any)?.retryAfter;
+    if (status === 429 && typeof retryAfter === 'number') {
+      response.setHeader('Retry-After', String(retryAfter));
+    }
+
     response.status(status).json(errorBody);
   }
 }

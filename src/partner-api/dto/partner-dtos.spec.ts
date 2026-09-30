@@ -1,5 +1,6 @@
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
+import { DeleteUserQueryDto } from './delete-user-query.dto';
 import { PatchUserDto } from './patch-user.dto';
 import { ProvisionUserDto } from './provision-user.dto';
 import { VerifyLinkCodeDto } from './verify-link-code.dto';
@@ -85,5 +86,20 @@ describe('partner API DTOs — validation messages are codes, not English senten
       Object.values(codeError?.constraints ?? {}).every((m) => m === 'invalid_code'),
     ).toBe(true);
     expect(Object.values(codeError?.constraints ?? {}).length).toBeGreaterThan(0);
+  });
+
+  it('DeleteUserQueryDto: anything but the literal true/false → invalid_delete_account', async () => {
+    const dto = plainToInstance(DeleteUserQueryDto, { deleteAccount: '1' });
+    const errors = await validate(dto);
+    const error = errors.find((e) => e.property === 'deleteAccount');
+    expect(Object.values(error?.constraints ?? {})).toEqual(['invalid_delete_account']);
+  });
+
+  it('DeleteUserQueryDto: accepts the literal true/false strings, and omission', async () => {
+    for (const value of ['true', 'false', undefined]) {
+      const dto = plainToInstance(DeleteUserQueryDto, value === undefined ? {} : { deleteAccount: value });
+      const errors = await validate(dto);
+      expect(errors).toEqual([]);
+    }
   });
 });

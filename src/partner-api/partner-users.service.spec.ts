@@ -342,10 +342,49 @@ describe('PartnerUsersService token and lifecycle', () => {
 
   it('revokes and answers not_linked for a PENDING link whose account was deleted', async () => {
     const { service, prisma, revoker } = make();
-    const deadPending = { ...active, status: 'PENDING', user: { ...liveUser, deletedAt: new Date() } };
+    // activatedAt: null — a genuine PENDING link was never confirmed, so the
+    // partner was never let in and must not learn the account was deleted.
+    const deadPending = { ...active, status: 'PENDING', activatedAt: null, user: { ...liveUser, deletedAt: new Date() } };
     links(prisma, deadPending);
     await expect(service.issueToken(partner, 'm-1')).rejects.toThrow('not_linked');
     expect(revoker.revokeLink).toHaveBeenCalledWith(deadPending);
+  });
+
+  it('keeps answering 410 on repeat calls once the deletion-triggered revoke is complete', async () => {
+    const { service, prisma, revoker } = make();
+    // Task 19 revoked this link AFTER the account got deleted (revokedAt > deletedAt)
+    // and finished the job (grantId: null) — the partner had consent (activatedAt set).
+    const revokedByDeletion = {
+      ...active,
+      status: 'REVOKED',
+      grantId: null,
+      revokedAt: new Date('2026-10-01T11:00:00Z'),
+      user: { ...liveUser, deletedAt: new Date('2026-10-01T10:30:00Z') },
+    };
+    links(prisma, revokedByDeletion);
+    const first = await service.issueToken(partner, 'm-1').catch((e) => e);
+    expect(first.getStatus()).toBe(410);
+    const second = await service.issueToken(partner, 'm-1').catch((e) => e);
+    expect(second.getStatus()).toBe(410);
+    // Уже полностью отозвана — второй раз отзывать нечего.
+    expect(revoker.revokeLink).not.toHaveBeenCalled();
+  });
+
+  it('answers 404, not 410, when the partner had already let go before the account was deleted', async () => {
+    const { service, prisma, revoker } = make();
+    // The partner itself revoked this link BEFORE the account was deleted
+    // (revokedAt < deletedAt) — it must not learn about a deletion it has no
+    // business knowing about for a link it already let go of.
+    const revokedByPartner = {
+      ...active,
+      status: 'REVOKED',
+      grantId: null,
+      revokedAt: new Date('2026-10-01T09:00:00Z'),
+      user: { ...liveUser, deletedAt: new Date('2026-10-01T10:00:00Z') },
+    };
+    links(prisma, revokedByPartner);
+    await expect(service.issueToken(partner, 'm-1')).rejects.toThrow('not_linked');
+    expect(revoker.revokeLink).not.toHaveBeenCalled();
   });
 
   it('reports the status without leaking the id of a pending account', async () => {
@@ -375,7 +414,37 @@ describe('PartnerUsersService token and lifecycle', () => {
       managed: false,
       linkedAt: active.activatedAt.toISOString(),
     });
-    links(prisma, { ...active, status: 'PENDING', user: { ...liveUser, deletedAt: new Date() } });
+    // activatedAt: null — genuine PENDING, never confirmed by the partner.
+    links(prisma, { ...active, status: 'PENDING', activatedAt: null, user: { ...liveUser, deletedAt: new Date() } });
+    await expect(service.getUser(partner, 'm-1')).rejects.toThrow('not_linked');
+  });
+
+  it('reports revoked for a link Task 19 revoked after the account was deleted', async () => {
+    const { service, prisma } = make();
+    links(prisma, {
+      ...active,
+      status: 'REVOKED',
+      grantId: null,
+      revokedAt: new Date('2026-10-01T11:00:00Z'),
+      user: { ...liveUser, deletedAt: new Date('2026-10-01T10:30:00Z') },
+    });
+    await expect(service.getUser(partner, 'm-1')).resolves.toEqual({
+      status: 'revoked',
+      talerUserId: null,
+      managed: false,
+      linkedAt: active.activatedAt.toISOString(),
+    });
+  });
+
+  it('answers not_linked for a link the partner had already revoked before the account was deleted', async () => {
+    const { service, prisma } = make();
+    links(prisma, {
+      ...active,
+      status: 'REVOKED',
+      grantId: null,
+      revokedAt: new Date('2026-10-01T09:00:00Z'),
+      user: { ...liveUser, deletedAt: new Date('2026-10-01T10:00:00Z') },
+    });
     await expect(service.getUser(partner, 'm-1')).rejects.toThrow('not_linked');
   });
 

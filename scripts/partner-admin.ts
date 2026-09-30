@@ -61,13 +61,16 @@ function slugOf(flags: Flags): string {
 
 /**
  * Белый список — только точные адреса, как их видит бэкенд (IPv4 без ::ffff:).
- * Маски guard не понимает: запись с CIDR никогда бы не совпала.
+ * Маски guard не понимает: запись с CIDR никогда бы не совпала. IPv6 —
+ * канонизируем (2001:DB8::1 → 2001:db8::1): именно в таком виде адрес придёт
+ * от Node на бэкенде, и сравнение строк в guard'е иначе не совпадёт.
  */
 function ipsOf(value: string): string[] {
   const ips = value
     .split(',')
     .map((s) => s.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((ip) => (isIP(ip) === 6 ? new URL(`http://[${ip}]`).hostname.slice(1, -1) : ip));
   if (ips.length === 0) throw new Error('--ips без адресов; снять ограничение — set-ips --clear');
   for (const ip of ips) {
     if (isIP(ip) === 0 || /^::ffff:/i.test(ip)) {
@@ -77,16 +80,50 @@ function ipsOf(value: string): string[] {
   return ips;
 }
 
-/** Секрет — в файл с правами 600, либо на экран, если файл не указан. */
-function reveal(flags: Flags, defaultVar: string, value: string, what: string): void {
-  if (flags.out) {
-    const name = flags.var || defaultVar;
-    fs.appendFileSync(flags.out, `${name}=${value}\n`, { mode: 0o600 });
-    fs.chmodSync(flags.out, 0o600);
-    console.log(`${what} записан в ${flags.out} как ${name}`);
-  } else {
-    console.log(`${what} (показывается один раз, передавать вне чатов):\n${value}`);
+/**
+ * --out/--var — до любого обращения к базе: разбитый путь или опечатка в
+ * имени переменной не должны всплывать уже после того, как ключ перевыпущен
+ * или вебхук переписан, а секрет — потерян безвозвратно.
+ */
+function validateOutFlags(flags: Flags): void {
+  if ('out' in flags && !flags.out) throw new Error('--out без пути');
+  if ('var' in flags && !('out' in flags)) throw new Error('--var только вместе с --out');
+  if (flags.var && !/^[A-Z_][A-Z0-9_]*$/.test(flags.var)) {
+    throw new Error('--var должен быть ИМЕНЕМ_ПЕРЕМЕННОЙ: заглавные латинские буквы, цифры, подчёркивание');
   }
+}
+
+interface SecretSink {
+  write(value: string, what: string): void;
+}
+
+/**
+ * Открывает приёмник секрета ДО изменений в базе: битый путь у --out
+ * обнаруживается раньше, чем ключ перевыпущен или вебхук переписан — иначе
+ * секрет мог бы потеряться уже после того, как база изменилась (инцидент:
+ * rotate-key --out /nonexistent/x.env обновлял keyHash и затем падал —
+ * никто не получал новый ключ). С --out — обычный файл, правами 600
+ * (существующий 644 тоже чинится тут же, до первой записи). Без --out —
+ * печать на экран, и ровно один раз, уже после того как секрет появился.
+ */
+function openSecretSink(flags: Flags, defaultVar: string): SecretSink {
+  if (!flags.out) {
+    return {
+      write(value, what) {
+        console.log(`${what} (показывается один раз, передавать вне чатов):\n${value}`);
+      },
+    };
+  }
+  const name = flags.var || defaultVar;
+  const fd = fs.openSync(flags.out, 'a', 0o600);
+  fs.fchmodSync(fd, 0o600);
+  return {
+    write(value, what) {
+      fs.writeSync(fd, `${name}=${value}\n`);
+      fs.closeSync(fd);
+      console.log(`${what} записан в ${flags.out} как ${name}`);
+    },
+  };
 }
 
 async function partnerOrFail(slug: string) {
@@ -96,6 +133,7 @@ async function partnerOrFail(slug: string) {
 }
 
 async function create(flags: Flags): Promise<void> {
+  validateOutFlags(flags);
   const slug = slugOf(flags);
   const name = flags.name;
   if (!name) throw new Error('--name обязателен: так партнёр называется в письмах людям');
@@ -110,6 +148,7 @@ async function create(flags: Flags): Promise<void> {
   if (await prisma.oAuthClient.findUnique({ where: { clientId } })) {
     throw new Error(`OAuth-клиент ${clientId} уже существует — это не наш клиент, выберите другой slug`);
   }
+  const sink = openSecretSink(flags, 'TALERID_PARTNER_KEY');
   const key = generatePartnerKey(slug);
   // Токены выпускает сам бэкенд; в /oauth/token с этим клиентом никто не ходит,
   // поэтому секрет клиента случайный и нигде, кроме БД, не нужен. Клиент и
@@ -131,18 +170,26 @@ async function create(flags: Flags): Promise<void> {
     }),
   ]);
   console.log(`Партнёр ${slug} создан (OAuth-клиент ${clientId}).`);
-  reveal(flags, 'TALERID_PARTNER_KEY', key, 'Ключ партнёра');
+  console.log('Новый ключ заработает на каждой ноде окружения в течение 30 секунд.');
+  sink.write(key, 'Ключ партнёра');
 }
 
 async function rotateKey(flags: Flags): Promise<void> {
+  validateOutFlags(flags);
   const slug = slugOf(flags);
   await partnerOrFail(slug);
+  const sink = openSecretSink(flags, 'TALERID_PARTNER_KEY');
   const key = generatePartnerKey(slug);
   await prisma.partner.update({ where: { slug }, data: { keyHash: hashPartnerKey(key) } });
-  reveal(flags, 'TALERID_PARTNER_KEY', key, 'Новый ключ партнёра');
+  console.log(
+    `Новый ключ ${slug} заработает, а старый перестанет работать — на каждой ноде окружения в течение 30 ` +
+      'секунд. Переключать партнёра на новый ключ стоит с запасом в минуту, чтобы захватить оба.',
+  );
+  sink.write(key, 'Новый ключ партнёра');
 }
 
 async function setWebhook(flags: Flags): Promise<void> {
+  validateOutFlags(flags);
   const slug = slugOf(flags);
   await partnerOrFail(slug);
   let url: URL;
@@ -152,13 +199,14 @@ async function setWebhook(flags: Flags): Promise<void> {
     throw new Error('--url должен быть полным адресом https://…');
   }
   if (url.protocol !== 'https:') throw new Error('вебхук только по https');
+  const sink = openSecretSink(flags, 'TALERID_WEBHOOK_SECRET');
   const secret = generateWebhookSecret();
   await prisma.partner.update({
     where: { slug },
     data: { webhookUrl: url.toString(), webhookSecretEnc: encryptWebhookSecret(secret) },
   });
   console.log(`Вебхук ${slug} → ${url.toString()}`);
-  reveal(flags, 'TALERID_WEBHOOK_SECRET', secret, 'Секрет вебхука');
+  sink.write(secret, 'Секрет вебхука');
 }
 
 async function clearWebhook(flags: Flags): Promise<void> {

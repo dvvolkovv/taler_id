@@ -60,7 +60,8 @@ export class PartnerLinkCodeService {
     const cooldown = await countInWindow(this.redis, cooldownKey, SEND_COOLDOWN_SECONDS);
     if (!cooldown) throw new ServiceUnavailableException('rate_limiter_unavailable');
     if (cooldown.count > 1) throw tooManyRequests(cooldown.retryAfter);
-    const hour = await countInWindow(this.redis, `partner:linkcode:h:${partner.id}:${link.userId}`, 3600);
+    const hourKey = `partner:linkcode:h:${partner.id}:${link.userId}`;
+    const hour = await countInWindow(this.redis, hourKey, 3600);
     if (!hour) throw new ServiceUnavailableException('rate_limiter_unavailable');
     if (hour.count > SENDS_PER_HOUR) throw tooManyRequests(hour.retryAfter);
 
@@ -89,9 +90,13 @@ export class PartnerLinkCodeService {
       await this.email.sendPartnerLinkCode(to, code, partner.name, link.user.profile?.language ?? 'en');
     } catch (e) {
       // Письмо не ушло — человек не должен ждать минуту до следующей попытки,
-      // а выданный, но не доставленный код не должен списываться с суточного
-      // бюджета партнёра. Ответ про почту не держим ради Redis: без ожидания.
+      // а выданный, но не доставленный код не должен списываться ни с часового
+      // окна на человека, ни с суточного бюджета партнёра: иначе пять ретраев
+      // за время SMTP-аутажа (документированное «можно сразу повторить»)
+      // заперли бы человека на час, хотя письма не доходят не по его вине.
+      // Ответ про почту не держим ради Redis: без ожидания.
       this.redis.del(cooldownKey).catch(() => undefined);
+      this.redis.getClient().decr(hourKey).catch(() => undefined);
       this.redis.getClient().decr(dayKey).catch(() => undefined);
       this.logger.error(`link code mail failed for ${link.id}: ${(e as Error).message}`);
       throw new ServiceUnavailableException('email_send_failed');
