@@ -11,32 +11,52 @@ export class PartnerLinkRevokerService {
     private readonly realtime: PartnerRealtimeService,
   ) {}
 
-  /** Снимает связку: статус, все её токены, открытые сокеты. Аккаунт TalerID не трогает. */
-  async revokeLink(link: { id: string; grantId: string | null }): Promise<void> {
-    await this.prisma.partnerLink.update({
+  /**
+   * Снимает связку: статус, все её токены, открытые сокеты. Аккаунт TalerID не трогает.
+   * grantId обнуляется только ПОСЛЕ отзыва гранта: упади Redis посередине —
+   * связка останется REVOKED с grantId, и повторный вызов доделает отзыв
+   * (вызывающие считают такую связку незавершённой).
+   */
+  async revokeLink(link: { id: string }): Promise<void> {
+    // Грант берём из той же строки, что переводим в REVOKED, а не у вызывающего:
+    // его копия могла устареть, а параллельный выпуск токена после этой записи
+    // сменить грант уже не сможет — он меняет его только у ACTIVE-связки.
+    const row = await this.prisma.partnerLink.update({
       where: { id: link.id },
-      data: {
-        status: 'REVOKED',
-        revokedAt: new Date(),
-        grantId: null,
-        codeHash: null,
-        codeExpiresAt: null,
-        codeAttempts: 0,
-      },
+      data: { status: 'REVOKED', revokedAt: new Date(), codeHash: null, codeExpiresAt: null, codeAttempts: 0 },
+      select: { grantId: true, partnerId: true, userId: true },
     });
-    if (link.grantId) {
-      await this.tokens.revokeGrant(link.grantId);
-      await this.realtime.disconnectGrant(link.grantId);
+    if (row.grantId) {
+      await this.tokens.revokeGrant(row.grantId);
+      await this.prisma.partnerLink.updateMany({
+        where: { id: link.id, grantId: row.grantId },
+        data: { grantId: null },
+      });
     }
+    await this.realtime.disconnectLink(row.partnerId, row.userId);
   }
 
-  /** Все живые связки пользователя — когда он удаляет аккаунт в самом TalerID. */
+  /**
+   * Все связки пользователя — когда он удаляет аккаунт в самом TalerID: живые и
+   * недоотозванные (REVOKED, но грант ещё висит). Сбой одной связки не мешает
+   * остальным; обо всех сбоях сообщаем разом в конце.
+   */
   async revokeAllForUser(userId: string): Promise<number> {
     const links = await this.prisma.partnerLink.findMany({
-      where: { userId, status: { not: 'REVOKED' } },
-      select: { id: true, grantId: true },
+      where: { userId, OR: [{ status: { not: 'REVOKED' } }, { grantId: { not: null } }] },
+      select: { id: true },
     });
-    for (const link of links) await this.revokeLink(link);
+    const failures: string[] = [];
+    for (const link of links) {
+      try {
+        await this.revokeLink(link);
+      } catch (e) {
+        failures.push(`${link.id}: ${(e as Error).message}`);
+      }
+    }
+    if (failures.length > 0) {
+      throw new Error(`partner link revocation failed: ${failures.join('; ')}`);
+    }
     return links.length;
   }
 }

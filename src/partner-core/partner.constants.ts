@@ -23,9 +23,13 @@ export const PARTNER_WEBHOOK_QUEUE = 'partner-webhooks';
 /** Текст отказа, когда партнёрский токен пришёл туда, куда ему нельзя. */
 export const PARTNER_FORBIDDEN = 'not_available_for_partner';
 
-/** Комната Socket.IO со всеми сокетами одного гранта: так отзыв рвёт их разом. */
-export function partnerGrantRoom(grantId: string): string {
-  return `pgrant:${grantId}`;
+/** gty партнёрских токенов: verify() принимает только токены, выпущенные партнёрским API. */
+export const PARTNER_TOKEN_GTY = 'urn:talerid:partner';
+
+/** Комната Socket.IO со всеми сокетами одной связки: отзыв связки рвёт их разом.
+ *  По связке, а не по гранту: грант меняется раз в 30 дней, связка — никогда. */
+export function partnerLinkRoom(partnerId: string, userId: string): string {
+  return `plink:${partnerId}:${userId}`;
 }
 
 /** Кто стоит за партнёрским токеном. */
