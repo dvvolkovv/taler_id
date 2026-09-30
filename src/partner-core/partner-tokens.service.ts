@@ -1,9 +1,9 @@
 import {
-  ConflictException,
   Inject,
   Injectable,
   InternalServerErrorException,
   Logger,
+  NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { OIDC_PROVIDER } from '../oidc/oidc.service';
@@ -41,6 +41,11 @@ export class PartnerTokensService {
    * уничтожение гасит сразу все токены, когда связку снимают. Гранты в Redis
    * живут 30 дней, поэтому истёкший (или чужой) грант заменяется здесь же,
    * а заменённый уничтожается.
+   *
+   * Если связку поменяли, пока шёл выпуск: 404 not_linked — её отозвали, удалили
+   * или отдали другому аккаунту (то же ответит и следующий /token); 503 link_busy —
+   * обмен проигран дважды, это гонка, и повтор поможет. 409 отсюда не бросаем:
+   * в контракте /token он занят под confirmation_required.
    */
   async issueAccessToken(
     link: { id: string; userId: string; grantId: string | null },
@@ -63,24 +68,31 @@ export class PartnerTokensService {
       const grant = new this.provider.Grant({ accountId: link.userId, clientId: partner.oauthClientId });
       grant.addOIDCScope(MESSENGER_SCOPE);
       const fresh: string = await grant.save();
-      // Сравнение с обменом: грант меняем, только если связка всё ещё ACTIVE и на
-      // ней тот грант, что мы видели. Параллельный выпуск или отзыв не должны
-      // оставить живой грант, о котором связка не знает: его токены было бы
-      // нечем отозвать.
+      // Сравнение с обменом: грант меняем, только если связка всё ещё ACTIVE, за тем
+      // же человеком и на ней тот грант, что мы видели. Параллельный выпуск или отзыв
+      // не должны оставить живой грант, о котором связка не знает: его токены было бы
+      // нечем отозвать. А /token, начатый до удаления аккаунта, не должен повесить
+      // грант удалённого на ту же строку, заново привязанную к новому аккаунту
+      // (перепривязка той же externalId обнуляет grantId).
       const { count } = await this.prisma.partnerLink.updateMany({
-        where: { id: link.id, status: 'ACTIVE', grantId: link.grantId },
+        where: { id: link.id, status: 'ACTIVE', grantId: link.grantId, userId: link.userId },
         data: { grantId: fresh },
       });
       if (count === 0) {
         await this.provider.Grant.adapter.destroy(fresh);
-        if (retried) throw new ConflictException('link_changed');
+        // Второй проигрыш подряд — связку прямо сейчас меняют: гонка, повтор поможет.
+        if (retried) throw new ServiceUnavailableException('link_busy');
         const current = await this.prisma.partnerLink.findUnique({
           where: { id: link.id },
           select: { userId: true, grantId: true, status: true },
         });
-        if (!current || current.status !== 'ACTIVE') throw new ConflictException('link_not_active');
+        // Отозвана, удалена или уже за другим человеком — для этого пользователя
+        // связки больше нет.
+        if (!current || current.status !== 'ACTIVE' || current.userId !== link.userId) {
+          throw new NotFoundException('not_linked');
+        }
         return this.issueAccessToken(
-          { id: link.id, userId: current.userId, grantId: current.grantId },
+          { id: link.id, userId: link.userId, grantId: current.grantId },
           partner,
           true,
         );

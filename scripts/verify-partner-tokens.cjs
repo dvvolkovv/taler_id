@@ -28,6 +28,10 @@
  *   5. грант, которому осталось меньше минуты, заменяется новым, пока токен
  *      старого ещё жив: не уничтожь выпуск старый грант — связка на это время
  *      держала бы два живых гранта, и отзыв гасил бы только новый.
+ *   6. /token старого человека прочитал связку, тот удалил аккаунт, а ту же
+ *      externalId привязали к новому аккаунту (строка та же, grantId обнулён):
+ *      без сверки пользователя в обмене грант удалённого повис бы на строке
+ *      нового, и токен удалённого аккаунта принимался бы.
  *
  * Запуск из корня репозитория (нужен только node_modules, ни базы, ни Redis):
  *   node scripts/verify-partner-tokens.cjs [--verbose]
@@ -47,7 +51,7 @@ require('ts-node').register({
 });
 require('reflect-metadata');
 
-const { Logger, ConflictException, ServiceUnavailableException } = require('@nestjs/common');
+const { Logger, NotFoundException, ServiceUnavailableException } = require('@nestjs/common');
 const src = (rel) => require(path.join(ROOT, 'src', rel));
 const { RedisOidcAdapter } = src('oidc/adapters/redis-adapter.ts');
 const { PartnerTokensService } = src('partner-core/partner-tokens.service.ts');
@@ -390,8 +394,8 @@ async function main() {
           () => null,
           (e) => e,
         );
-        assert.ok(err instanceof ConflictException, `expected ConflictException, got ${err}`);
-        assert.equal(err.message, 'link_not_active');
+        assert.ok(err instanceof NotFoundException, `expected NotFoundException, got ${err}`);
+        assert.equal(err.message, 'not_linked');
         await assertAllRejected([t.accessToken]);
         assertRevokedClean('l3', mark);
 
@@ -476,6 +480,40 @@ async function main() {
         await revoker.revokeLink({ id: 'l5' });
         await assertAllRejected([old.accessToken, fresh.accessToken]);
         assertRevokedClean('l5', mark);
+      },
+    ],
+    [
+      '6. аккаунт удалён и перепривязан, пока шёл /token старого — грант удалённого не попадает на строку нового',
+      async () => {
+        const mark = redis.writes.length;
+        newLink('l6', 'u6'); // токенов по связке ещё не выпускали — гранта нет
+        const inFlight = snapshot('l6'); // /token старого человека прочитал связку…
+        // …тут человек удалил аккаунт (его связки отозваны), а партнёр привязал ту же
+        // externalId заново: новый аккаунт, строка переиспользована, grantId обнулён
+        assert.equal(await revoker.revokeAllForUser('u6'), 1);
+        Object.assign(row('l6'), { userId: 'u6-new', status: 'ACTIVE', revokedAt: null, grantId: null });
+
+        const err = await issue(inFlight).then(
+          () => null,
+          (e) => e,
+        );
+        assert.ok(err instanceof NotFoundException, `expected NotFoundException, got ${err}`);
+        assert.equal(err.message, 'not_linked');
+        assert.equal(row('l6').grantId, null, "the deleted account's grant landed on the new account's link");
+        assert.deepEqual(
+          grantsWrittenSince(mark).filter((k) => redis.has(k)),
+          [],
+          'the grant of the failed in-flight issue is left alive',
+        );
+
+        // Новый человек получает токен как обычно — на свой грант
+        const t = await issue(snapshot('l6'));
+        assert.equal((await tokens.verify(t.accessToken))?.userId, 'u6-new', 'token is not for the new account');
+        assert.equal((await provider.Grant.find(t.grantId)).accountId, 'u6-new', 'grant is not for the new account');
+
+        await revoker.revokeLink({ id: 'l6' });
+        await assertAllRejected([t.accessToken]);
+        assertRevokedClean('l6', mark);
       },
     ],
   ];

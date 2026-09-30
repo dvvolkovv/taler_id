@@ -1,4 +1,4 @@
-import { ConflictException, ServiceUnavailableException } from '@nestjs/common';
+import { NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { PartnerTokensService } from './partner-tokens.service';
 import { PARTNER_TOKEN_GTY } from './partner.constants';
 
@@ -98,7 +98,7 @@ describe('PartnerTokensService', () => {
       expect(grants[0].args).toEqual({ accountId: 'u1', clientId: 'nadi-partner' });
       expect(grants[0].addOIDCScope).toHaveBeenCalledWith('messenger');
       expect(prisma.partnerLink.updateMany).toHaveBeenCalledWith({
-        where: { id: 'l1', status: 'ACTIVE', grantId: 'grant-old' },
+        where: { id: 'l1', status: 'ACTIVE', grantId: 'grant-old', userId: 'u1' },
         data: { grantId: 'grant-new' },
       });
       expect(provider.AccessToken).toHaveBeenCalledWith(expect.objectContaining({ grantId: 'grant-new' }));
@@ -108,7 +108,7 @@ describe('PartnerTokensService', () => {
       const res = await service.issueAccessToken({ id: 'l1', userId: 'u1', grantId: null }, partner);
       expect(provider.Grant.find).not.toHaveBeenCalled();
       expect(prisma.partnerLink.updateMany).toHaveBeenCalledWith({
-        where: { id: 'l1', status: 'ACTIVE', grantId: null },
+        where: { id: 'l1', status: 'ACTIVE', grantId: null, userId: 'u1' },
         data: { grantId: 'grant-new' },
       });
       expect(res.grantId).toBe('grant-new');
@@ -153,7 +153,7 @@ describe('PartnerTokensService', () => {
       expect(res.grantId).toBe('grant-new');
       expect(grants[0].args).toEqual({ accountId: 'u1', clientId: 'nadi-partner' });
       expect(prisma.partnerLink.updateMany).toHaveBeenCalledWith({
-        where: { id: 'l1', status: 'ACTIVE', grantId: 'grant-1' },
+        where: { id: 'l1', status: 'ACTIVE', grantId: 'grant-1', userId: 'u1' },
         data: { grantId: 'grant-new' },
       });
       expect(provider.AccessToken).toHaveBeenCalledWith(
@@ -181,7 +181,7 @@ describe('PartnerTokensService', () => {
       const res = await service.issueAccessToken({ id: 'l1', userId: 'u1', grantId: 'grant-1' }, partner);
       expect(res).toEqual({ accessToken: 'at-opaque', expiresIn: 900, grantId: 'grant-new' });
       expect(prisma.partnerLink.updateMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { id: 'l1', status: 'ACTIVE', grantId: 'grant-1' } }),
+        expect.objectContaining({ where: { id: 'l1', status: 'ACTIVE', grantId: 'grant-1', userId: 'u1' } }),
       );
     });
 
@@ -218,7 +218,7 @@ describe('PartnerTokensService', () => {
       expect(res).toEqual({ accessToken: 'at-opaque', expiresIn: 900, grantId: 'grant-2' });
     });
 
-    it('gives up with 409 link_changed when the compare-and-swap is lost twice', async () => {
+    it('answers a retryable 503 link_busy when the compare-and-swap is lost twice', async () => {
       // третья попытка выиграла бы — но её быть не должно
       prisma.partnerLink.updateMany
         .mockResolvedValueOnce({ count: 0 })
@@ -231,8 +231,12 @@ describe('PartnerTokensService', () => {
         .issueAccessToken({ id: 'l1', userId: 'u1', grantId: null }, partner)
         .catch((e: unknown) => e);
 
-      expect(err).toBeInstanceOf(ConflictException);
-      expect((err as ConflictException).message).toBe('link_changed');
+      expect(err).toBeInstanceOf(ServiceUnavailableException);
+      expect((err as ServiceUnavailableException).message).toBe('link_busy');
+      expect(prisma.partnerLink.updateMany.mock.calls.map(([args]: any[]) => args.where)).toEqual([
+        { id: 'l1', status: 'ACTIVE', grantId: null, userId: 'u1' },
+        { id: 'l1', status: 'ACTIVE', grantId: 'grant-2', userId: 'u1' },
+      ]);
       expect(provider.Grant.adapter.destroy.mock.calls).toEqual([['grant-new'], ['grant-new-2']]);
       expect(prisma.partnerLink.findUnique).toHaveBeenCalledTimes(1);
       expect(provider.AccessToken).not.toHaveBeenCalled();
@@ -241,7 +245,9 @@ describe('PartnerTokensService', () => {
     it.each([
       ['revoked', { userId: 'u1', grantId: null, status: 'REVOKED' }],
       ['gone', null],
-    ])('answers 409 link_not_active when the link is %s by the time of the swap', async (_name, current) => {
+      // удалили аккаунт и ту же externalId привязали к новому: строка та же, человек другой
+      ['re-linked to another user', { userId: 'u2', grantId: null, status: 'ACTIVE' }],
+    ])('answers 404 not_linked when the link is %s by the time of the swap', async (_name, current) => {
       provider.Grant.find.mockResolvedValue(liveGrant({ exp: NOW + 30 }));
       prisma.partnerLink.updateMany.mockResolvedValue({ count: 0 });
       prisma.partnerLink.findUnique.mockResolvedValue(current);
@@ -250,8 +256,14 @@ describe('PartnerTokensService', () => {
         .issueAccessToken({ id: 'l1', userId: 'u1', grantId: 'grant-1' }, partner)
         .catch((e: unknown) => e);
 
-      expect(err).toBeInstanceOf(ConflictException);
-      expect((err as ConflictException).message).toBe('link_not_active');
+      expect(err).toBeInstanceOf(NotFoundException);
+      expect((err as NotFoundException).message).toBe('not_linked');
+      // обмен был только за тем же человеком, и повторной попытки не было
+      expect(prisma.partnerLink.updateMany).toHaveBeenCalledTimes(1);
+      expect(prisma.partnerLink.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'l1', status: 'ACTIVE', grantId: 'grant-1', userId: 'u1' } }),
+      );
+      expect(provider.Grant).toHaveBeenCalledTimes(1);
       // grant-1 гасит сам отзыв; выпуск уничтожает только свой свежий грант
       expect(provider.Grant.adapter.destroy.mock.calls).toEqual([['grant-new']]);
       expect(provider.AccessToken).not.toHaveBeenCalled();

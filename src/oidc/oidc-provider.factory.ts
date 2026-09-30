@@ -96,6 +96,8 @@ export async function createOidcProvider(config: OidcProviderConfig) {
 
     responseTypes: ['code'],
 
+    // Партнёрские токены узнаются по виду «43 символа base64url»: формат access-токенов (formats)
+    // не менять без PARTNER_TOKEN_FORMAT в src/partner-core/partner-tokens.service.ts.
     ttl: {
       AccessToken: 900,
       AuthorizationCode: 60,
