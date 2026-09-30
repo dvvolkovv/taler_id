@@ -11,6 +11,36 @@ export interface AppRelease {
 // Keep notes user-facing (no internal jargon, no commit hashes).
 export const APP_RELEASES: AppRelease[] = [
   {
+    version: '1.1.35',
+    build: 236,
+    date: '2026-09-30',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.35 — ассистента хорошо слышно, переводчик понимает язык с первого раза.\n\n' +
+      '🔊 Голос ассистента теперь идёт через громкий динамик на громкости медиа, а не звонка. ' +
+      'Громкость — обычными кнопками; наушники и Bluetooth по-прежнему в приоритете.\n' +
+      '🔔 Громкий сигнал, когда ассистент готов вас слушать, и отдельный — когда включился переводчик ' +
+      'или сменился язык перевода.\n' +
+      '🌐 Переводчик: скажите «переводи на словацкий», «выбери язык немецкий» или просто «словацкий» — ' +
+      'язык выбирается с первого раза и меняется голосом прямо в режиме перевода. Если язык не назван, ' +
+      'ассистент сначала спросит, на какой переводить.\n' +
+      '🗣 Перевод идёт в обе стороны и целиком, а речь собеседника больше не обрезается.\n' +
+      '✏️ Задачи в календаре можно редактировать: название, срок, дедлайн, заметку и повтор.\n' +
+      '✅ Удаление и отметка выполнения задачи доходят до сервера надёжно, даже при плохой сети.',
+    notes_en:
+      'Release 1.1.35 — the assistant is loud and clear, and the translator gets the language right the first time.\n\n' +
+      '🔊 The assistant now speaks through the loudspeaker at media volume instead of call volume. ' +
+      'Use the regular volume buttons; headphones and Bluetooth still take priority.\n' +
+      '🔔 A loud chime when the assistant is ready to listen, and a different one when the translator ' +
+      'turns on or the translation language changes.\n' +
+      '🌐 Translator: say "translate into Slovak", "choose German" or just the name of a language — it is picked ' +
+      'the first time and can be changed by voice right inside translator mode. If you don\'t name one, ' +
+      'the assistant asks which language to translate into.\n' +
+      '🗣 Translation works both ways and covers the whole phrase, and the other person\'s speech is no longer cut off.\n' +
+      '✏️ Calendar tasks are editable: title, due date, deadline, note and repeat.\n' +
+      '✅ Deleting a task or marking it done reliably reaches the server, even on a bad connection.',
+  },
+  {
     version: '1.1.34',
     build: 235,
     date: '2026-09-25',
