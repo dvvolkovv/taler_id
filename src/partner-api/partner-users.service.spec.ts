@@ -198,3 +198,119 @@ describe('profileLanguage', () => {
     expect(profileLanguage(input)).toBe(out);
   });
 });
+
+describe('PartnerUsersService token and lifecycle', () => {
+  const active = {
+    id: 'l1',
+    userId: 'u1',
+    status: 'ACTIVE',
+    createdAccount: true,
+    grantId: 'g1',
+    activatedAt: new Date('2026-10-01T10:00:00Z'),
+    user: liveUser,
+  };
+
+  it('issues a messenger token for an ACTIVE link', async () => {
+    const { service, prisma, tokens } = make();
+    links(prisma, active);
+    tokens.issueAccessToken.mockResolvedValue({ accessToken: 'at', expiresIn: 900, grantId: 'g1' });
+    await expect(service.issueToken(partner, 'm-1')).resolves.toEqual({
+      accessToken: 'at',
+      tokenType: 'Bearer',
+      expiresIn: 900,
+      talerUserId: 'u1',
+    });
+    expect(tokens.issueAccessToken).toHaveBeenCalledWith(active, partner);
+  });
+
+  it.each([
+    [null, 'not_linked'],
+    [{ ...active, status: 'REVOKED' }, 'not_linked'],
+    [{ ...active, status: 'PENDING' }, 'confirmation_required'],
+  ])('refuses a token for link %#', async (link: any, message: string) => {
+    const { service, prisma } = make();
+    links(prisma, link);
+    await expect(service.issueToken(partner, 'm-1')).rejects.toThrow(message);
+  });
+
+  it('revokes the link and answers 410 when the account was deleted in TalerID', async () => {
+    const { service, prisma, revoker } = make();
+    const dead = { ...active, user: { ...liveUser, deletedAt: new Date() } };
+    links(prisma, dead);
+    const err = await service.issueToken(partner, 'm-1').catch((e) => e);
+    expect(err.getStatus()).toBe(410);
+    expect(revoker.revokeLink).toHaveBeenCalledWith(dead);
+  });
+
+  it('reports the status without leaking the id of a pending account', async () => {
+    const { service, prisma } = make();
+    links(prisma, { ...active, status: 'PENDING', createdAccount: false, activatedAt: null });
+    await expect(service.getUser(partner, 'm-1')).resolves.toEqual({
+      status: 'confirmation_required',
+      talerUserId: null,
+      managed: false,
+      linkedAt: null,
+    });
+    links(prisma, active);
+    await expect(service.getUser(partner, 'm-1')).resolves.toEqual({
+      status: 'active',
+      talerUserId: 'u1',
+      managed: true,
+      linkedAt: '2026-10-01T10:00:00.000Z',
+    });
+  });
+
+  it('renames only managed accounts', async () => {
+    const { service, prisma } = make();
+    links(prisma, active);
+    await expect(service.patchUser(partner, 'm-1', { firstName: ' Олена ' })).resolves.toEqual({ ok: true });
+    expect(prisma.profile.upsert).toHaveBeenCalledWith({
+      where: { userId: 'u1' },
+      update: { firstName: 'Олена' },
+      create: { userId: 'u1', firstName: 'Олена' },
+    });
+    links(prisma, { ...active, createdAccount: false });
+    await expect(service.patchUser(partner, 'm-1', { firstName: 'X' })).rejects.toThrow('profile_not_managed');
+  });
+
+  it('revokes the link and keeps the account by default', async () => {
+    const { service, prisma, revoker, profiles } = make();
+    links(prisma, active);
+    await service.deleteUser(partner, 'm-1', false);
+    expect(revoker.revokeLink).toHaveBeenCalledWith(active);
+    expect(profiles.deleteAccount).not.toHaveBeenCalled();
+  });
+
+  it('deletes a managed account and its channel subscriptions on request', async () => {
+    const { service, prisma, profiles } = make();
+    links(prisma, active);
+    await service.deleteUser(partner, 'm-1', true);
+    expect(profiles.deleteAccount).toHaveBeenCalledWith('u1');
+    expect(prisma.conversationParticipant.deleteMany).toHaveBeenCalledWith({
+      where: { userId: 'u1', conversation: { type: 'CHANNEL' } },
+    });
+  });
+
+  it('refuses to delete an account it does not manage, and changes nothing', async () => {
+    const { service, prisma, revoker, profiles } = make();
+    links(prisma, { ...active, createdAccount: false });
+    await expect(service.deleteUser(partner, 'm-1', true)).rejects.toThrow('account_not_managed');
+    expect(revoker.revokeLink).not.toHaveBeenCalled();
+    expect(profiles.deleteAccount).not.toHaveBeenCalled();
+  });
+
+  it('is idempotent for an already revoked link', async () => {
+    const { service, prisma, revoker } = make();
+    links(prisma, { ...active, status: 'REVOKED', grantId: null });
+    await service.deleteUser(partner, 'm-1', false);
+    expect(revoker.revokeLink).not.toHaveBeenCalled();
+  });
+
+  it('finishes a revocation that was interrupted (REVOKED with a grant left)', async () => {
+    const { service, prisma, revoker } = make();
+    const unfinished = { ...active, status: 'REVOKED' };
+    links(prisma, unfinished);
+    await service.deleteUser(partner, 'm-1', false);
+    expect(revoker.revokeLink).toHaveBeenCalledWith(unfinished);
+  });
+});

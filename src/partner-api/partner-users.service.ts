@@ -204,4 +204,75 @@ export class PartnerUsersService {
       include: { user: { select: { id: true, deletedAt: true, passwordHash: true } } },
     });
   }
+
+  async issueToken(
+    partner: PartnerRecord,
+    externalId: string,
+  ): Promise<{ accessToken: string; tokenType: 'Bearer'; expiresIn: number; talerUserId: string }> {
+    const link = await this.findLink(partner.id, externalId);
+    if (!link || link.status === 'REVOKED') throw new NotFoundException('not_linked');
+    if (link.status === 'PENDING') throw new ConflictException('confirmation_required');
+    if (link.user.deletedAt) {
+      await this.revoker.revokeLink(link);
+      throw new GoneException('account_deleted');
+    }
+    const { accessToken, expiresIn } = await this.tokens.issueAccessToken(link, partner);
+    return { accessToken, tokenType: 'Bearer', expiresIn, talerUserId: link.userId };
+  }
+
+  async getUser(partner: PartnerRecord, externalId: string) {
+    const link = await this.findLink(partner.id, externalId);
+    if (!link) throw new NotFoundException('not_linked');
+    const status =
+      link.status === 'ACTIVE' ? 'active' : link.status === 'PENDING' ? 'confirmation_required' : 'revoked';
+    return {
+      status,
+      // Пока человек не подтвердил привязку кодом, id его аккаунта партнёру не положен.
+      talerUserId: link.status === 'ACTIVE' ? link.userId : null,
+      managed: isManaged(link),
+      linkedAt: link.activatedAt ? link.activatedAt.toISOString() : null,
+    };
+  }
+
+  async patchUser(partner: PartnerRecord, externalId: string, dto: PatchUserDto, ip?: string) {
+    const link = await this.findLink(partner.id, externalId);
+    if (!link || link.status !== 'ACTIVE') throw new NotFoundException('not_linked');
+    if (!isManaged(link)) throw new ConflictException('profile_not_managed');
+    const data: { firstName?: string | null; lastName?: string | null } = {};
+    if (dto.firstName !== undefined) data.firstName = dto.firstName.trim() || null;
+    if (dto.lastName !== undefined) data.lastName = dto.lastName.trim() || null;
+    await this.prisma.profile.upsert({
+      where: { userId: link.userId },
+      update: data,
+      create: { userId: link.userId, ...data },
+    });
+    await this.audit.log(partner, 'PROFILE_UPDATED', { externalId, userId: link.userId, ip });
+    return { ok: true };
+  }
+
+  /**
+   * Снимает связку. С deleteAccount — ещё и удаляет аккаунт штатной процедурой
+   * TalerID, но только управляемый: человек удалился у партнёра и просит
+   * стереть данные. Неуправляемый аккаунт — 409, и ничего не меняется.
+   */
+  async deleteUser(partner: PartnerRecord, externalId: string, deleteAccount: boolean, ip?: string): Promise<void> {
+    const link = await this.findLink(partner.id, externalId);
+    if (!link) throw new NotFoundException('not_linked');
+    if (deleteAccount && !isManaged(link)) throw new ConflictException('account_not_managed');
+    // REVOKED с грантом — прошлый отзыв не доделан (сбой Redis): доделываем.
+    if (link.status !== 'REVOKED' || link.grantId) await this.revoker.revokeLink(link);
+    if (deleteAccount) {
+      await this.profiles.deleteAccount(link.userId);
+      // Подписки на каналы удалённому ни к чему, а тестовые прогоны иначе
+      // копили бы их в системном канале.
+      await this.prisma.conversationParticipant.deleteMany({
+        where: { userId: link.userId, conversation: { type: 'CHANNEL' } },
+      });
+    }
+    await this.audit.log(partner, deleteAccount ? 'ACCOUNT_DELETED' : 'LINK_REVOKED', {
+      externalId,
+      userId: link.userId,
+      ip,
+    });
+  }
 }
