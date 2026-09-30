@@ -76,6 +76,40 @@ export class EmailService {
     this.logger.log(`OTP sent to ${to}`);
   }
 
+  /**
+   * Код, которым человек подтверждает, что сам подключает приложение-партнёра
+   * (nadi) к своему существующему аккаунту. Без кода партнёр не получает
+   * доступ к его чатам. Язык — из профиля TalerID: ru или en.
+   */
+  async sendPartnerLinkCode(
+    to: string,
+    code: string,
+    partnerName: string,
+    language: string,
+  ): Promise<void> {
+    const name = escapeHtml(partnerName);
+    const ru = language === 'ru';
+    await this.transporter.sendMail({
+      from: `"Taler ID" <${this.config.get('email.smtp.user')}>`,
+      to,
+      subject: ru
+        ? `Код для подключения ${partnerName} к Taler ID: ${code}`
+        : `Code to connect ${partnerName} to Taler ID: ${code}`,
+      html: ru
+        ? `<h2>Подключение ${name} к вашему аккаунту Taler ID</h2>
+<p>Приложение <strong>${name}</strong> просит доступ к вашим чатам Taler ID: оно сможет показывать ваши личные чаты и группы и писать в них от вашего имени.</p>
+<p>Если это вы — введите код в приложении ${name}:</p>
+<p style="font-size:32px;letter-spacing:8px;font-weight:bold;">${code}</p>
+<p style="color:#888;font-size:12px;">Код действителен 10 минут. Если вы ничего не подключали — просто проигнорируйте письмо: без кода доступ не откроется.</p>`
+        : `<h2>Connecting ${name} to your Taler ID account</h2>
+<p>The <strong>${name}</strong> app asks for access to your Taler ID chats: it will be able to show your direct chats and groups and write to them on your behalf.</p>
+<p>If this is you, enter the code in the ${name} app:</p>
+<p style="font-size:32px;letter-spacing:8px;font-weight:bold;">${code}</p>
+<p style="color:#888;font-size:12px;">The code is valid for 10 minutes. If you did not connect anything, just ignore this email: without the code no access is granted.</p>`,
+    });
+    this.logger.log(`Partner link code sent to ${to} for ${partnerName}`);
+  }
+
   async sendKycStatusUpdate(
     to: string,
     status: 'VERIFIED' | 'REJECTED',
@@ -106,4 +140,9 @@ export class EmailService {
       return false;
     }
   }
+}
+
+function escapeHtml(value: string): string {
+  const map: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+  return value.replace(/[&<>"']/g, (ch) => map[ch]);
 }
