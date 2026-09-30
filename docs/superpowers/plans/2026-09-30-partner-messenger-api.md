@@ -40,6 +40,17 @@
 
 Задачи 6, 8, 16, 20 и шаги выкатки в этом плане уже переписаны по тому же ревью: реальный срок токена, отпечаток ключа секретов в логе, атомарное списание попытки кода, скрипт не трогает чужой OAuth-клиент.
 
+### Правки по ревью ядра (задачи 5–7) — код отличается от блоков ниже
+
+Ревью прогнало ядро на настоящей oidc-provider и нашло, что отзыв связки не всегда гасил её токены (параллельная выдача, смена гранта, гонка с отзывом, сбой Redis), а кэш партнёров рос без предела на неавторизованных запросах. Исправлено, источник правды — файлы в ветке:
+- `verify()` принимает токен, только пока жив его грант того же пользователя и клиента, только с `gty` партнёрского API и только формата 43 символа (прочие токены не ходят в Redis);
+- грант в связке меняется через compare-and-swap; токен не переживает свой грант; отзыв сначала уничтожает грант, а `grantId` в связке обнуляется только после этого — недоделанный отзыв (REVOKED с грантом) доделывают `revokeAllForUser`, `DELETE` связки и повторная привязка;
+- комната сокетов — по связке (`partnerLinkRoom(partnerId, userId)`), а не по гранту;
+- реестр партнёров — снимок всей таблицы раз в 30 с;
+- `scripts/verify-partner-tokens.cjs` проверяет отзыв на настоящей библиотеке.
+
+Задачи 14, 15, 19, 28, 40 и 44 в этом плане уже приведены в соответствие.
+
 Не взяты, отдельными задачами на потом: allow-list вместо deny-list для scope в DCR и `scopes_supported` в discovery (сейчас `messenger` там виден, но получить его через DCR нельзя); проверка связок партнёра в слиянии дубликатов Linkeon.
 
 ## Структура файлов
@@ -2268,6 +2279,25 @@ describe('PartnerUsersService.provision', () => {
     });
   });
 
+  it('finishes an unfinished revocation before reusing the link row', async () => {
+    const { service, prisma, revoker } = make();
+    const unfinished = { id: 'l1', userId: 'u1', externalId: 'm-1', status: 'REVOKED', createdAccount: true, grantId: 'g-old', user: liveUser };
+    links(prisma, unfinished, unfinished);
+    prisma.user.findFirst.mockResolvedValue({ id: 'u1', passwordHash: null });
+    await service.provision(partner, dto);
+    expect(revoker.revokeLink).toHaveBeenCalledWith(unfinished);
+  });
+
+  it('finishes the revocation of a stale link under another externalId before deleting it', async () => {
+    const { service, prisma, revoker } = make();
+    prisma.user.findFirst.mockResolvedValue({ id: 'u-existing', passwordHash: null });
+    const other = { id: 'l-other', userId: 'u-existing', externalId: 'm-0', status: 'REVOKED', createdAccount: true, grantId: 'g-old' };
+    links(prisma, null, other);
+    await service.provision(partner, dto);
+    expect(revoker.revokeLink).toHaveBeenCalledWith(other);
+    expect(prisma.partnerLink.delete).toHaveBeenCalledWith({ where: { id: 'l-other' } });
+  });
+
   it('retries once on a unique-constraint race', async () => {
     const { service, prisma } = make();
     prisma.user.create.mockRejectedValueOnce(Object.assign(new Error('dup'), { code: 'P2002' }));
@@ -2391,8 +2421,10 @@ export class PartnerUsersService {
       if (link.status === 'ACTIVE') return { status: 'active', talerUserId: link.userId, created: false };
       if (link.status === 'PENDING') return { status: 'confirmation_required', talerUserId: null };
     }
-    if (link && link.status !== 'REVOKED' && link.user.deletedAt) {
-      // Человек удалил аккаунт в TalerID: старую связку гасим и начинаем заново.
+    if (link && (link.status !== 'REVOKED' || link.grantId)) {
+      // Строку связки сейчас переиспользуем (аккаунт удалён или связка
+      // отозвана). Сначала гасим всё, что за ней числится: действующий доступ
+      // удалённого аккаунта или недоделанный прошлый отзыв (REVOKED с грантом).
       await this.revoker.revokeLink(link);
     }
 
@@ -2421,6 +2453,8 @@ export class PartnerUsersService {
       if (other.status !== 'REVOKED') throw new ConflictException('user_linked_to_other_external_id');
       // Отозванная связка того же человека под старым id больше ничего не
       // значит, а уникальный индекс (partnerId, userId) не даст завести новую.
+      // Если её отзыв не доделан (остался грант) — доделываем до удаления строки.
+      if (other.grantId) await this.revoker.revokeLink(other);
       await this.prisma.partnerLink.delete({ where: { id: other.id } });
     }
 
@@ -2507,7 +2541,7 @@ export class PartnerUsersService {
 - [ ] **Step 4: Тест проходит**
 
 Run: `npx jest src/partner-api/partner-users.service.spec.ts`
-Expected: PASS, 15 тестов.
+Expected: PASS, 17 тестов.
 
 - [ ] **Step 5: Commit**
 
@@ -2631,9 +2665,17 @@ describe('PartnerUsersService token and lifecycle', () => {
 
   it('is idempotent for an already revoked link', async () => {
     const { service, prisma, revoker } = make();
-    links(prisma, { ...active, status: 'REVOKED' });
+    links(prisma, { ...active, status: 'REVOKED', grantId: null });
     await service.deleteUser(partner, 'm-1', false);
     expect(revoker.revokeLink).not.toHaveBeenCalled();
+  });
+
+  it('finishes a revocation that was interrupted (REVOKED with a grant left)', async () => {
+    const { service, prisma, revoker } = make();
+    const unfinished = { ...active, status: 'REVOKED' };
+    links(prisma, unfinished);
+    await service.deleteUser(partner, 'm-1', false);
+    expect(revoker.revokeLink).toHaveBeenCalledWith(unfinished);
   });
 });
 ```
@@ -2702,7 +2744,8 @@ Expected: FAIL — `TypeError: service.issueToken is not a function` (и так 
     const link = await this.findLink(partner.id, externalId);
     if (!link) throw new NotFoundException('not_linked');
     if (deleteAccount && !isManaged(link)) throw new ConflictException('account_not_managed');
-    if (link.status !== 'REVOKED') await this.revoker.revokeLink(link);
+    // REVOKED с грантом — прошлый отзыв не доделан (сбой Redis): доделываем.
+    if (link.status !== 'REVOKED' || link.grantId) await this.revoker.revokeLink(link);
     if (deleteAccount) {
       await this.profiles.deleteAccount(link.userId);
       // Подписки на каналы удалённому ни к чему, а тестовые прогоны иначе
@@ -2722,7 +2765,7 @@ Expected: FAIL — `TypeError: service.issueToken is not a function` (и так 
 - [ ] **Step 4: Тесты проходят**
 
 Run: `npx jest src/partner-api/partner-users.service.spec.ts`
-Expected: PASS, 26 тестов.
+Expected: PASS, 29 тестов.
 
 - [ ] **Step 5: Commit**
 
@@ -3613,6 +3656,12 @@ git commit -m "feat(partner): ручки /partner/v1 и модуль партн�
     await service.deleteAccount('user-1');
     expect(mockPartnerLinks.revokeAllForUser).toHaveBeenCalledWith('user-1');
   });
+
+  it('still deletes the account when partner revocation fails', async () => {
+    mockPrisma.profile.findUnique.mockResolvedValue({ id: 'profile-1', userId: 'user-1' });
+    mockPartnerLinks.revokeAllForUser.mockRejectedValueOnce(new Error('redis down'));
+    await expect(service.deleteAccount('user-1')).resolves.toEqual({ success: true });
+  });
 ```
 
 В `src/profile/profile.service.spec.ts` добавить такой же импорт и в `providers` строку:
@@ -3644,9 +3693,18 @@ Expected: FAIL — новый тест: `expect(jest.fn()).toHaveBeenCalledWith(
 
 ```ts
     // Партнёры (nadi) теряют доступ сразу, а не когда истекут выданные токены:
-    // человек удалил аккаунт — его чатов не должен видеть никто.
-    await this.partnerLinks.revokeAllForUser(userId);
+    // человек удалил аккаунт — его чатов не должен видеть никто. Сбой отзыва
+    // не отменяет удаления: новых токенов партнёр уже не получит (аккаунт
+    // удалён), выданные доживут не дольше 15 минут, а недоделанный отзыв
+    // добьёт следующий DELETE связки партнёром.
+    try {
+      await this.partnerLinks.revokeAllForUser(userId);
+    } catch (e) {
+      this.logger.error(`partner links not fully revoked for ${userId}: ${(e as Error).message}`);
+    }
 ```
+
+и в класс — поле `private readonly logger = new Logger(ProfileService.name);` (добавить `Logger` в импорт из `@nestjs/common`, если его там нет).
 
 В `src/profile/profile.module.ts` добавить импорт `import { PartnerCoreModule } from '../partner-core/partner-core.module';` и в декоратор `@Module({ … })` строку `imports: [PartnerCoreModule],`.
 
@@ -5229,7 +5287,7 @@ describe('MessengerGateway connections', () => {
     expect(partnerTokens.verify).not.toHaveBeenCalled();
   });
 
-  it('accepts a partner token, joins the grant room and drops the socket when the token expires', async () => {
+  it('accepts a partner token, joins the link room and drops the socket when the token expires', async () => {
     jest.useFakeTimers({ now: new Date('2026-10-01T10:00:00Z') });
     const expiresAt = Math.floor(Date.parse('2026-10-01T10:15:00Z') / 1000);
     partnerTokens.verify.mockResolvedValue({ userId: 'u1', partnerId: 'p1', partnerSlug: 'nadi', grantId: 'g1', expiresAt });
@@ -5237,7 +5295,7 @@ describe('MessengerGateway connections', () => {
     await gateway.handleConnection(client as any);
     expect(client.data.partner).toMatchObject({ partnerId: 'p1', grantId: 'g1' });
     expect(client.join).toHaveBeenCalledWith('user:u1');
-    expect(client.join).toHaveBeenCalledWith('pgrant:g1');
+    expect(client.join).toHaveBeenCalledWith('plink:p1:u1');
     jest.advanceTimersByTime(15 * 60 * 1000 - 1);
     expect(client.disconnect).not.toHaveBeenCalled();
     jest.advanceTimersByTime(1);
@@ -5264,14 +5322,14 @@ describe('MessengerGateway connections', () => {
     expect(client.disconnect).not.toHaveBeenCalled();
   });
 
-  it('registers a disconnector that drops every socket of a grant', () => {
+  it('registers a disconnector that drops every socket of a link', () => {
     const disconnectSockets = jest.fn();
     const server = { in: jest.fn().mockReturnValue({ disconnectSockets }), to: jest.fn() };
     (gateway as any).server = server;
     gateway.onModuleInit();
     const [disconnector] = realtime.registerDisconnector.mock.calls[0];
-    disconnector('g1');
-    expect(server.in).toHaveBeenCalledWith('pgrant:g1');
+    disconnector('p1', 'u1');
+    expect(server.in).toHaveBeenCalledWith('plink:p1:u1');
     expect(disconnectSockets).toHaveBeenCalledWith(true);
   });
 });
@@ -5289,7 +5347,7 @@ Expected: FAIL — партнёрский токен приводит к `discon
 ```ts
 import { PartnerRealtimeService } from '../partner-core/partner-realtime.service';
 import { PartnerTokensService } from '../partner-core/partner-tokens.service';
-import { partnerGrantRoom } from '../partner-core/partner.constants';
+import { partnerLinkRoom } from '../partner-core/partner.constants';
 import { PartnerConversationScope } from './partner-conversation-scope.service';
 import { installSocketGate } from './socket-gate';
 ```
@@ -5308,8 +5366,8 @@ import { installSocketGate } from './socket-gate';
 
 ```ts
     // Отзыв партнёрской связки рвёт её сокеты на всех нодах (Redis-адаптер).
-    this.partnerRealtime.registerDisconnector((grantId) => {
-      this.server.in(partnerGrantRoom(grantId)).disconnectSockets(true);
+    this.partnerRealtime.registerDisconnector((partnerId, userId) => {
+      this.server.in(partnerLinkRoom(partnerId, userId)).disconnectSockets(true);
     });
 ```
 
@@ -5346,7 +5404,7 @@ import { installSocketGate } from './socket-gate';
       client.data.connectedAt = Date.now();
       client.data.partner = principal;
       client.join(`user:${principal.userId}`);
-      client.join(partnerGrantRoom(principal.grantId));
+      client.join(partnerLinkRoom(principal.partnerId, principal.userId));
       // Дальше клиент переподключается со свежим токеном, а отозванная связка
       // не держит открытым старое соединение.
       const timer = setTimeout(
@@ -7510,6 +7568,14 @@ diff <(grep '^FAIL' ../partner-baseline.txt) <(grep '^FAIL' ../partner-after.txt
 
 Expected: `no new failures`. Строки с `>` в выводе `diff` — новые падения: чинить до перехода дальше.
 
+- [ ] **Step 1a: Отзыв токенов на настоящей библиотеке**
+
+```bash
+node scripts/verify-partner-tokens.cjs
+```
+
+Expected: по строке `OK` на каждый из четырёх сценариев отзыва (две параллельные выдачи, смена гранта через 30 дней, выдача наперегонки с отзывом, сбой Redis посреди отзыва), код выхода 0. Моки в юнит-тестах такие ошибки не ловят — только этот прогон.
+
 - [ ] **Step 2: Сборка и линтер новых файлов**
 
 ```bash
@@ -7876,7 +7942,7 @@ cd ~/Downloads/taler_id_tests && npm run test:partner:talerid  # PROD, коро�
 
 - Код: `src/partner-core/` (токены, отзыв, вебхуки), `src/partner-api/` (`/partner/v1/*`), в мессенджере — `MessengerAuthGuard`, `@PartnerAllowed`, `socket-gate.ts`.
 - Env: `PARTNER_API_ENABLED` (выключатель), `PARTNER_SECRETS_KEY` (64 hex, **одинаковый на обеих нодах PROD**), `PARTNER_WEBHOOK_SINK=true` — только DEV/TEST.
-- Партнёры и ключи — только скриптом: `npx ts-node -r dotenv/config scripts/partner-admin.ts create|rotate-key|set-webhook|set-ips|enable|disable|show`. Секреты — через `--out` в файл 600, не на экран. Кэш партнёров в бэкенде — 30 с.
+- Партнёры и ключи — только скриптом: `npx ts-node -r dotenv/config scripts/partner-admin.ts create|rotate-key|set-webhook|set-ips|enable|disable|show`. Секреты — через `--out` в файл 600, не на экран. Каждая нода держит снимок партнёров до 30 с: после `rotate-key` новый ключ заработает, а старый перестанет, в пределах этого окна — партнёру менять ключ с запасом в минуту.
 - Где ключи: DEV `~/partner-keys/` на `89.169.55.217`, TEST — там же на `138.124.61.221`, PROD `/root/partner-keys/` на `do-app-1`.
 - Партнёры: DEV — `nadi`, `e2e`; TEST — только `e2e`; PROD — `nadi` (IP 165.227.141.149), `e2e`. Вебхук nadi заводится, когда команда nadi даст адрес: `set-webhook --slug nadi --url …`.
 - Отключить партнёра немедленно: `disable --slug nadi` (≤30 с) или `PARTNER_API_ENABLED=false` + рестарт — второе гасит и все партнёрские токены мессенджера.
