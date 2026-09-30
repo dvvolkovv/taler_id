@@ -28,6 +28,20 @@
 4. Блокировки, сделанные до выкатки, получат `hadContact=false`, и при их снятии контакт не восстановится. Для старых блокировок неизвестно, были ли люди контактами; безопасный выбор — не выдумывать контакт.
 5. Ветка берётся от `origin/main`, а на DEV попадает мёржем в `dev`. Ветки `dev` и `main` на 2026-09-30 отличаются двумя коммитами (переводчик, KYC), наших файлов они не касаются.
 
+### Правки по ревью, уже внесённые в код (задачи 1–4, коммит `d92bcd3`)
+
+Код задач 1–4 отличается от блоков ниже, источник правды — файлы в ветке:
+- у `PartnerLink.status` нет умолчания: `ACTIVE` открывает партнёру чаты, статус всегда задаётся явно;
+- удаление `Partner` — `Restrict`, а не каскад (удаления партнёров не бывает, выключатель — `enabled=false`);
+- у `PartnerContact` есть индекс `(userAId, userBId)`;
+- миграция начинается с `SET lock_timeout = '5s'`, а `ALTER` таблицы `BlockedUser` стоит последним;
+- `PARTNER_CONVERSATION_TYPES` типизирован через `satisfies readonly ConvType[]`;
+- добавлены тесты: неверный мастер-ключ, разные шифртексты одного секрета, границы длины slug, `allowedScopes` у DCR-клиента.
+
+Задачи 6, 8, 16, 20 и шаги выкатки в этом плане уже переписаны по тому же ревью: реальный срок токена, отпечаток ключа секретов в логе, атомарное списание попытки кода, скрипт не трогает чужой OAuth-клиент.
+
+Не взяты, отдельными задачами на потом: allow-list вместо deny-list для scope в DCR и `scopes_supported` в discovery (сейчас `messenger` там виден, но получить его через DCR нельзя); проверка связок партнёра в слиянии дубликатов Linkeon.
+
 ## Структура файлов
 
 **Создать — `src/partner-core/`** (без HTTP; им пользуются мессенджер, профиль и партнёрский API):
@@ -918,6 +932,17 @@ describe('PartnerTokensService', () => {
       expect(provider.Grant.find).not.toHaveBeenCalled();
       expect(res.grantId).toBe('grant-new');
     });
+
+    it('reports the TTL the provider actually gave the token', async () => {
+      provider.Grant.find.mockResolvedValue({ jti: 'grant-1' });
+      provider.AccessToken.mockImplementationOnce((args: any) => ({
+        args,
+        expiration: 600,
+        save: jest.fn().mockResolvedValue('at-short'),
+      }));
+      const res = await service.issueAccessToken({ id: 'l1', userId: 'u1', grantId: 'grant-1' }, partner);
+      expect(res).toEqual({ accessToken: 'at-short', expiresIn: 600, grantId: 'grant-1' });
+    });
   });
 
   describe('revokeGrant', () => {
@@ -1053,7 +1078,11 @@ export class PartnerTokensService {
       gty: 'authorization_code',
     });
     const accessToken: string = await at.save();
-    return { accessToken, expiresIn: PARTNER_ACCESS_TOKEN_TTL_SECONDS, grantId: grantId as string };
+    // Срок — из настроек провайдера (ttl.AccessToken), а не из своей копии:
+    // поменяют TTL глобально — партнёр получит правду, а не старые 900 секунд.
+    const expiresIn =
+      typeof at.expiration === 'number' ? at.expiration : PARTNER_ACCESS_TOKEN_TTL_SECONDS;
+    return { accessToken, expiresIn, grantId: grantId as string };
   }
 
   /** Гасит все токены гранта и сам грант. Повторный вызов безопасен. */
@@ -1096,7 +1125,7 @@ export class PartnerTokensService {
 - [ ] **Step 4: Тест проходит**
 
 Run: `npx jest src/partner-core/partner-tokens.service.spec.ts`
-Expected: PASS, 12 тестов.
+Expected: PASS, 13 тестов.
 
 - [ ] **Step 5: Commit**
 
@@ -1281,21 +1310,96 @@ git commit -m "feat(partner): отзыв связки гасит токены и
 
 ---
 
-## Task 8: Модуль `PartnerCoreModule` (без вебхуков)
+## Task 8: Модуль `PartnerCoreModule` (без вебхуков) и отпечаток ключа секретов
 
 **Files:**
+- Modify: `src/partner-core/partner-secrets.util.ts` (функции `partnerSecretsKeyFingerprint`, `reportPartnerSecretsKey`)
 - Create: `src/partner-core/partner-core.module.ts`
+- Test: `src/partner-core/partner-secrets.util.spec.ts`
 
-- [ ] **Step 1: Модуль**
+Зачем отпечаток: на PROD две ноды с `.env`, правленными руками. Разный `PARTNER_SECRETS_KEY` на них не виден ни по одной ошибке — код, отправленный с одной ноды, другая молча отвергнет как неверный и спишет попытку, а вебхуки начнут падать через раз. Отпечаток в логе при старте позволяет сравнить ключи, не показывая их.
+
+- [ ] **Step 1: Написать падающие тесты**
+
+В `src/partner-core/partner-secrets.util.spec.ts` добавить в импорт `partnerSecretsKeyFingerprint, reportPartnerSecretsKey`, под сохранённым `saved` добавить `const savedEnabled = process.env.PARTNER_API_ENABLED;`, в `afterAll` — такое же восстановление `PARTNER_API_ENABLED`, и в конец `describe` добавить:
+
+```ts
+  it('gives a short non-secret fingerprint that changes with the key', () => {
+    const first = partnerSecretsKeyFingerprint();
+    expect(first).toMatch(/^[0-9a-f]{8}$/);
+    process.env.PARTNER_SECRETS_KEY = 'b'.repeat(64);
+    expect(partnerSecretsKeyFingerprint()).not.toBe(first);
+  });
+
+  it('logs the fingerprint at startup, or shouts when the key is bad, without throwing', () => {
+    const logger = { log: jest.fn(), error: jest.fn() };
+    process.env.PARTNER_API_ENABLED = 'true';
+    reportPartnerSecretsKey(logger);
+    expect(logger.log).toHaveBeenCalledWith(`partner secrets key fingerprint: ${partnerSecretsKeyFingerprint()}`);
+    process.env.PARTNER_SECRETS_KEY = 'short';
+    expect(() => reportPartnerSecretsKey(logger)).not.toThrow();
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('PARTNER_SECRETS_KEY'));
+  });
+
+  it('stays silent at startup while the partner API is off', () => {
+    const logger = { log: jest.fn(), error: jest.fn() };
+    process.env.PARTNER_API_ENABLED = 'false';
+    reportPartnerSecretsKey(logger);
+    expect(logger.log).not.toHaveBeenCalled();
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+```
+
+- [ ] **Step 2: Убедиться, что тесты падают**
+
+Run: `npx jest src/partner-core/partner-secrets.util.spec.ts`
+Expected: FAIL — `partnerSecretsKeyFingerprint is not a function`.
+
+- [ ] **Step 3: Отпечаток и проверка при старте**
+
+В конец `src/partner-core/partner-secrets.util.ts` добавить:
+
+```ts
+/** Короткий отпечаток мастер-ключа: не секрет, его сравнивают глазами в логах нод. */
+export function partnerSecretsKeyFingerprint(): string {
+  return derive('key-fingerprint').subarray(0, 4).toString('hex');
+}
+
+/**
+ * Проверка при старте: при включённом партнёрском API пишет в лог отпечаток
+ * ключа (на обеих нодах PROD он обязан совпадать) или громко ругается, если
+ * ключа нет. Бэкенд при этом не падает: вход и чаты не должны страдать из-за
+ * настроек партнёров.
+ */
+export function reportPartnerSecretsKey(logger: {
+  log(message: string): void;
+  error(message: string): void;
+}): void {
+  if (process.env.PARTNER_API_ENABLED !== 'true') return;
+  try {
+    logger.log(`partner secrets key fingerprint: ${partnerSecretsKeyFingerprint()}`);
+  } catch (e) {
+    logger.error(
+      `PARTNER_API_ENABLED=true, но ${(e as Error).message} — коды привязки и вебхуки работать не будут`,
+    );
+  }
+}
+```
+
+Run: `npx jest src/partner-core/partner-secrets.util.spec.ts`
+Expected: PASS.
+
+- [ ] **Step 4: Модуль**
 
 Создать `src/partner-core/partner-core.module.ts`:
 
 ```ts
-import { Module } from '@nestjs/common';
+import { Logger, Module, OnModuleInit } from '@nestjs/common';
 import { OidcModule } from '../oidc/oidc.module';
 import { PartnerLinkRevokerService } from './partner-link-revoker.service';
 import { PartnerRealtimeService } from './partner-realtime.service';
 import { PartnerRegistryService } from './partner-registry.service';
+import { reportPartnerSecretsKey } from './partner-secrets.util';
 import { PartnerTokensService } from './partner-tokens.service';
 
 /**
@@ -1319,19 +1423,25 @@ import { PartnerTokensService } from './partner-tokens.service';
     PartnerLinkRevokerService,
   ],
 })
-export class PartnerCoreModule {}
+export class PartnerCoreModule implements OnModuleInit {
+  private readonly logger = new Logger('PartnerCore');
+
+  onModuleInit(): void {
+    reportPartnerSecretsKey(this.logger);
+  }
+}
 ```
 
-- [ ] **Step 2: Сборка**
+- [ ] **Step 5: Тесты ядра и сборка**
 
-Run: `npm run build`
-Expected: без ошибок.
+Run: `npx jest src/partner-core && npm run build`
+Expected: PASS; сборка без ошибок. Сам модуль в Jest не импортировать: он тянет `OidcModule` с ESM-пакетом `oidc-provider`. Поэтому проверка при старте вынесена в функцию и тестируется отдельно.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/partner-core/partner-core.module.ts
-git commit -m "feat(partner): модуль ядра партнёрского API" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+git add src/partner-core/partner-core.module.ts src/partner-core/partner-secrets.util.ts src/partner-core/partner-secrets.util.spec.ts
+git commit -m "feat(partner): модуль ядра партнёрского API и отпечаток ключа секретов в логе" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -2667,12 +2777,11 @@ function make(link: any) {
   const prisma: any = {
     partnerLink: {
       findUnique: jest.fn().mockResolvedValue(link),
-      update: jest.fn().mockImplementation(({ data }: any) =>
-        Promise.resolve({
-          codeAttempts:
-            typeof data.codeAttempts === 'object' ? (link?.codeAttempts ?? 0) + 1 : data.codeAttempts,
-        }),
-      ),
+      // Попытку списывает сама БД: условия «не истёк, не сожжён» — в where.
+      // Здесь попытка по умолчанию списалась; тест на истёкший код задаёт count: 0.
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      findUniqueOrThrow: jest.fn().mockResolvedValue({ codeAttempts: (link?.codeAttempts ?? 0) + 1 }),
+      update: jest.fn().mockResolvedValue({}),
     },
   };
   const client = { ttl: jest.fn().mockResolvedValue(42) };
@@ -2737,12 +2846,22 @@ describe('PartnerLinkCodeService.send', () => {
 });
 
 describe('PartnerLinkCodeService.verify', () => {
-  it('activates the link on the right code', async () => {
+  it('spends an attempt atomically before comparing, then activates on the right code', async () => {
     const { service, prisma } = make(withCode());
     await expect(service.verify(partner, 'm-1', '123456')).resolves.toEqual({ status: 'active', talerUserId: 'u1' });
+    expect(prisma.partnerLink.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'l1',
+        status: 'PENDING',
+        codeHash: { not: null },
+        codeExpiresAt: { gt: expect.any(Date) },
+        codeAttempts: { lt: 5 },
+      },
+      data: { codeAttempts: { increment: 1 } },
+    });
     expect(prisma.partnerLink.update).toHaveBeenCalledWith({
       where: { id: 'l1' },
-      data: expect.objectContaining({ status: 'ACTIVE', codeHash: null }),
+      data: expect.objectContaining({ status: 'ACTIVE', codeHash: null, codeAttempts: 0 }),
     });
   });
 
@@ -2763,14 +2882,12 @@ describe('PartnerLinkCodeService.verify', () => {
     });
   });
 
-  it.each([
-    ['expired', { codeExpiresAt: new Date(Date.now() - 1000) }],
-    ['never sent', { codeHash: null, codeExpiresAt: null }],
-    ['already burned', { codeAttempts: 5 }],
-  ])('answers 410 when the code is %s', async (_name: string, over: any) => {
-    const { service } = make(withCode(over));
+  it('answers 410 without comparing when no attempt can be spent (expired, burned, never sent)', async () => {
+    const { service, prisma } = make(withCode());
+    prisma.partnerLink.updateMany.mockResolvedValue({ count: 0 });
     const err = await service.verify(partner, 'm-1', '123456').catch((e) => e);
     expect(err.getStatus()).toBe(410);
+    expect(prisma.partnerLink.update).not.toHaveBeenCalled();
   });
 });
 ```
@@ -2867,18 +2984,24 @@ export class PartnerLinkCodeService {
     ip?: string,
   ): Promise<{ status: 'active'; talerUserId: string }> {
     const link = await this.pendingLink(partner.id, externalId);
-    if (
-      !link.codeHash ||
-      !link.codeExpiresAt ||
-      link.codeExpiresAt.getTime() < Date.now() ||
-      link.codeAttempts >= CODE_MAX_ATTEMPTS
-    ) {
-      throw new GoneException('code_expired');
-    }
+    // Попытку списываем ДО сравнения и одним условным UPDATE. Иначе
+    // параллельные запросы успевали бы сравнить десятки кодов, пока счётчик
+    // ещё не вырос, — а подбирать код может как раз партнёр, от которого этот
+    // код защищает чужой аккаунт.
+    const spent = await this.prisma.partnerLink.updateMany({
+      where: {
+        id: link.id,
+        status: 'PENDING',
+        codeHash: { not: null },
+        codeExpiresAt: { gt: new Date() },
+        codeAttempts: { lt: CODE_MAX_ATTEMPTS },
+      },
+      data: { codeAttempts: { increment: 1 } },
+    });
+    if (spent.count === 0 || !link.codeHash) throw new GoneException('code_expired');
     if (!linkCodeMatches(link.id, code, link.codeHash)) {
-      const { codeAttempts } = await this.prisma.partnerLink.update({
+      const { codeAttempts } = await this.prisma.partnerLink.findUniqueOrThrow({
         where: { id: link.id },
-        data: { codeAttempts: { increment: 1 } },
         select: { codeAttempts: true },
       });
       if (codeAttempts >= CODE_MAX_ATTEMPTS) {
@@ -2923,7 +3046,7 @@ export class PartnerLinkCodeService {
 - [ ] **Step 4: Тест проходит**
 
 Run: `npx jest src/partner-api/partner-link-code.service.spec.ts`
-Expected: PASS, 12 тестов.
+Expected: PASS, 10 тестов.
 
 - [ ] **Step 5: Commit**
 
@@ -3615,25 +3738,31 @@ async function create(flags: Flags): Promise<void> {
   }
   const clientId = `${slug}-partner`;
   const clientName = `${name} (partner messenger)`;
-  // Токены выпускает сам бэкенд; в /oauth/token с этим клиентом никто не ходит,
-  // поэтому секрет клиента случайный и нигде, кроме БД, не нужен.
-  await prisma.oAuthClient.upsert({
-    where: { clientId },
-    update: { verifiedPartner: true, isDynamic: false, allowedScopes: [MESSENGER_SCOPE], name: clientName },
-    create: {
-      clientId,
-      clientSecret: randomBytes(32).toString('hex'),
-      name: clientName,
-      redirectUris: [],
-      allowedScopes: [MESSENGER_SCOPE],
-      verifiedPartner: true,
-      isDynamic: false,
-    },
-  });
+  // Чужой клиент не трогаем: `--slug linkeon` иначе переписал бы живой клиент
+  // linkeon-partner и сломал бы Linkeon на PROD.
+  if (await prisma.oAuthClient.findUnique({ where: { clientId } })) {
+    throw new Error(`OAuth-клиент ${clientId} уже существует — это не наш клиент, выберите другой slug`);
+  }
   const key = generatePartnerKey(slug);
-  await prisma.partner.create({
-    data: { slug, name, keyHash: hashPartnerKey(key), ipAllowlist: ipsOf(flags), oauthClientId: clientId },
-  });
+  // Токены выпускает сам бэкенд; в /oauth/token с этим клиентом никто не ходит,
+  // поэтому секрет клиента случайный и нигде, кроме БД, не нужен. Клиент и
+  // партнёр — одной транзакцией: сбой не оставит клиента без партнёра.
+  await prisma.$transaction([
+    prisma.oAuthClient.create({
+      data: {
+        clientId,
+        clientSecret: randomBytes(32).toString('hex'),
+        name: clientName,
+        redirectUris: [],
+        allowedScopes: [MESSENGER_SCOPE],
+        verifiedPartner: true,
+        isDynamic: false,
+      },
+    }),
+    prisma.partner.create({
+      data: { slug, name, keyHash: hashPartnerKey(key), ipAllowlist: ipsOf(flags), oauthClientId: clientId },
+    }),
+  ]);
   console.log(`Партнёр ${slug} создан (OAuth-клиент ${clientId}).`);
   reveal(flags, 'TALERID_PARTNER_KEY', key, 'Ключ партнёра');
 }
@@ -6191,11 +6320,12 @@ Expected: FAIL — `planFanOut` не вызывается, `enqueue` не выз
 
 ```ts
 import { BullModule } from '@nestjs/bullmq';
-import { Module } from '@nestjs/common';
+import { Logger, Module, OnModuleInit } from '@nestjs/common';
 import { OidcModule } from '../oidc/oidc.module';
 import { PartnerLinkRevokerService } from './partner-link-revoker.service';
 import { PartnerRealtimeService } from './partner-realtime.service';
 import { PartnerRegistryService } from './partner-registry.service';
+import { reportPartnerSecretsKey } from './partner-secrets.util';
 import { PartnerTokensService } from './partner-tokens.service';
 import { PartnerWebhooksProcessor } from './partner-webhooks.processor';
 import { PartnerWebhooksService } from './partner-webhooks.service';
@@ -6225,7 +6355,13 @@ import { PARTNER_WEBHOOK_QUEUE } from './partner.constants';
     PartnerWebhooksService,
   ],
 })
-export class PartnerCoreModule {}
+export class PartnerCoreModule implements OnModuleInit {
+  private readonly logger = new Logger('PartnerCore');
+
+  onModuleInit(): void {
+    reportPartnerSecretsKey(this.logger);
+  }
+}
 ```
 
 - [ ] **Step 4: Шлюз ставит вебхук там же, где решает про пуш**
@@ -7365,7 +7501,9 @@ Expected: сборка без ошибок, eslint без ошибок.
 - партнёрский токен не проходит ни в одну ручку без `@PartnerAllowed`, ни в одно событие сокета вне `PARTNER_SOCKET_EVENTS`;
 - ключи, секреты и коды нигде не пишутся в лог;
 - `revokeLink` гасит токены до того, как рвёт сокеты;
-- у `fanOutToParticipants` не появилось запросов на каждого участника.
+- у `fanOutToParticipants` не появилось запросов на каждого участника;
+- попытка ввода кода списывается атомарно до сравнения (параллельные запросы не обходят лимит в 5 попыток);
+- скрипт администратора не может перезаписать чужой OAuth-клиент.
 
 Замечания по делу чинить через TDD, каждое отдельным коммитом.
 
@@ -7426,12 +7564,12 @@ Expected: `3`. Значения не печатаются.
 - [ ] **Step 4: Рестарт и проверка старта**
 
 ```bash
-ssh dvolkov@89.169.55.217 'pm2 restart taler-id-dev --update-env && sleep 10 && pm2 logs taler-id-dev --lines 120 --nostream | grep -E "successfully started|resolve dependencies|ERROR" | tail -5'
+ssh dvolkov@89.169.55.217 'pm2 restart taler-id-dev --update-env && sleep 10 && pm2 logs taler-id-dev --lines 120 --nostream | grep -E "successfully started|resolve dependencies|key fingerprint|ERROR" | tail -6'
 curl -s -o /dev/null -w "health:%{http_code}\n" https://staging.id.taler.tirol/health
 curl -s -o /dev/null -w "partner-no-key:%{http_code}\n" -X POST https://staging.id.taler.tirol/partner/v1/users
 ```
 
-Expected: `Nest application successfully started`, ни одного `can't resolve dependencies`; `health:200`; `partner-no-key:401`.
+Expected: `Nest application successfully started`; строка `partner secrets key fingerprint: <8 hex>` (а не ругань на `PARTNER_SECRETS_KEY`); ни одного `can't resolve dependencies`; `health:200`; `partner-no-key:401`.
 
 - [ ] **Step 5: Партнёры `e2e` и `nadi`**
 
@@ -7529,11 +7667,11 @@ ssh dvolkov@138.124.61.221 'cd ~/taler-id && cp .env .env.bak-partner-$(date +%Y
   (grep -q "^PARTNER_API_ENABLED=" .env || echo "PARTNER_API_ENABLED=true" >> .env) && \
   (grep -q "^PARTNER_WEBHOOK_SINK=" .env || echo "PARTNER_WEBHOOK_SINK=true" >> .env) && \
   grep -c "^PARTNER_" .env && pm2 restart taler-id --update-env && sleep 10 && \
-  pm2 logs taler-id --lines 120 --nostream | grep -E "successfully started|resolve dependencies" | tail -3'
+  pm2 logs taler-id --lines 120 --nostream | grep -E "successfully started|resolve dependencies|key fingerprint" | tail -4'
 curl -s -o /dev/null -w "health:%{http_code}\n" https://id.taler.tirol/health
 ```
 
-Expected: `3`, `successfully started`, `health:200`.
+Expected: `3`, `successfully started`, строка `partner secrets key fingerprint: …`, `health:200`.
 
 - [ ] **Step 5: Только тестовый партнёр**
 
@@ -7610,6 +7748,14 @@ ssh do-app-2 'cd /opt/taler-id && git fetch && git reset --hard origin/main && n
 ```
 
 Expected: `health:200` на обеих. Полный `npm ci`, а не `--omit=dev`: nest CLI живёт в devDependencies.
+
+Ключи секретов на нодах совпадают не только по файлу, но и в работающих процессах:
+
+```bash
+for n in do-app-1 do-app-2; do ssh $n "sudo pm2 logs taler-id --lines 400 --nostream | grep 'key fingerprint' | tail -1"; done
+```
+
+Expected: одинаковый отпечаток на обеих нодах. Разный — остановиться: коды привязки и вебхуки будут сбоить через раз.
 
 - [ ] **Step 5: Партнёры `e2e` и `nadi`**
 
