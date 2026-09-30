@@ -1,42 +1,42 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
+import type { Partner } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
-export interface PartnerRecord {
-  id: string;
-  slug: string;
-  name: string;
-  keyHash: string;
-  ipAllowlist: string[];
-  webhookUrl: string | null;
-  webhookSecretEnc: string | null;
-  oauthClientId: string;
-  enabled: boolean;
+export type PartnerRecord = Omit<Partner, 'createdAt' | 'updatedAt'>;
+
+/** Как часто перечитывать таблицу: за это время доходят выключение партнёра и смена ключа. */
+const SNAPSHOT_TTL_MS = 30_000;
+
+interface Snapshot {
+  at: number;
+  bySlug: Map<string, PartnerRecord>;
+  byClientId: Map<string, PartnerRecord>;
 }
-
-const CACHE_TTL_MS = 30_000;
-
-type Cache = Map<string, { at: number; value: PartnerRecord | null }>;
 
 /**
  * Партнёры читаются на каждый запрос партнёрского API и на каждый запрос
- * мессенджера по партнёрскому токену, а меняются раз в месяцы. Поэтому кэш на
- * 30 секунд: выключение партнёра или смена ключа доходят за это время.
+ * мессенджера по партнёрскому токену, а меняются раз в месяцы, и их единицы.
+ * Поэтому в памяти лежит снимок всей таблицы, и перечитывается он не чаще раза
+ * в 30 секунд — одним запросом на всех, кто пришёл в этот момент.
+ *
+ * Кэш по ключу здесь не годится: slug и clientId приходят от ещё не опознанного
+ * клиента, и каждый выдуманный ключ оставался бы в памяти навсегда. Снимок от
+ * чужих ключей не растёт, а промах по нему не стоит ни одного запроса в базу.
  */
 @Injectable()
 export class PartnerRegistryService {
-  private readonly bySlug: Cache = new Map();
-  private readonly byClient: Cache = new Map();
+  private readonly logger = new Logger(PartnerRegistryService.name);
+  private snapshot: Snapshot | null = null;
+  private loading: Promise<Snapshot> | null = null;
 
   constructor(private readonly prisma: PrismaService) {}
 
-  findBySlug(slug: string): Promise<PartnerRecord | null> {
-    return this.cached(this.bySlug, slug, () => this.prisma.partner.findUnique({ where: { slug } }));
+  async findBySlug(slug: string): Promise<PartnerRecord | null> {
+    return (await this.current()).bySlug.get(slug) ?? null;
   }
 
-  findByClientId(clientId: string): Promise<PartnerRecord | null> {
-    return this.cached(this.byClient, clientId, () =>
-      this.prisma.partner.findUnique({ where: { oauthClientId: clientId } }),
-    );
+  async findByClientId(clientId: string): Promise<PartnerRecord | null> {
+    return (await this.current()).byClientId.get(clientId) ?? null;
   }
 
   /** Без кэша: воркер вебхуков должен видеть свежий адрес и секрет. */
@@ -44,15 +44,41 @@ export class PartnerRegistryService {
     return this.prisma.partner.findUnique({ where: { id } });
   }
 
-  private async cached(
-    cache: Cache,
-    key: string,
-    load: () => Promise<PartnerRecord | null>,
-  ): Promise<PartnerRecord | null> {
-    const hit = cache.get(key);
-    if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value;
-    const value = (await load()) ?? null;
-    cache.set(key, { at: Date.now(), value });
-    return value;
+  private current(): Promise<Snapshot> {
+    const snapshot = this.snapshot;
+    if (snapshot && Date.now() - snapshot.at < SNAPSHOT_TTL_MS) return Promise.resolve(snapshot);
+    // Все, кто пришёл во время загрузки, ждут её же — второго запроса в базу нет.
+    this.loading ??= this.reload().finally(() => {
+      this.loading = null;
+    });
+    return this.loading;
+  }
+
+  /**
+   * Сбой перечитывания не должен ронять вход партнёров, пока есть снимок: лучше
+   * отвечать по данным минутной давности, чем отказывать всем. Без снимка
+   * отвечать нечем — 503.
+   */
+  private async reload(): Promise<Snapshot> {
+    try {
+      const rows: PartnerRecord[] = await this.prisma.partner.findMany();
+      const snapshot: Snapshot = {
+        at: Date.now(),
+        bySlug: new Map(rows.map((p) => [p.slug, p])),
+        byClientId: new Map(rows.map((p) => [p.oauthClientId, p])),
+      };
+      this.snapshot = snapshot;
+      return snapshot;
+    } catch (e) {
+      const stale = this.snapshot;
+      if (!stale) {
+        this.logger.warn(`partner registry load failed: ${(e as Error).message}`);
+        throw new ServiceUnavailableException('partner registry unavailable');
+      }
+      this.logger.warn(
+        `partner registry reload failed, serving snapshot from ${new Date(stale.at).toISOString()}: ${(e as Error).message}`,
+      );
+      return stale;
+    }
   }
 }
