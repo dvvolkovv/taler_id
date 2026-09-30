@@ -97,7 +97,7 @@ TalerID (NestJS, DEV / TEST / PROD)
 
 ### `POST /partner/v1/users/{externalId}/token`
 
-`200 {accessToken, tokenType:'Bearer', expiresIn:900, talerUserId}`. Ошибки: `404 not_linked`, `409 confirmation_required`, `410 account_deleted` (аккаунт удалён в TalerID; связка отзывается сама).
+`200 {accessToken, tokenType:'Bearer', expiresIn:900, talerUserId}`. Ошибки: `404 not_linked` (в том числе если связку отозвали прямо во время запроса), `409 confirmation_required`, `410 account_deleted` (аккаунт удалён в TalerID; связка отзывается сама), `503 link_busy` (редкая гонка параллельных запросов токена — повторить).
 
 ### `GET /partner/v1/users/{externalId}`
 
