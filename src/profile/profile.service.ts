@@ -1,19 +1,24 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   BadRequestException,
   ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { FileStorageService } from '../common/file-storage.service';
+import { PartnerLinkRevokerService } from '../partner-core/partner-link-revoker.service';
 import { resolveUserIdOrUsername } from '../common/utils/user-id.util';
 import { UpdateProfileDto, LinkWalletDto } from './dto/update-profile.dto';
 
 @Injectable()
 export class ProfileService {
+  private readonly logger = new Logger(ProfileService.name);
+
   constructor(
     private prisma: PrismaService,
     private fileStorage: FileStorageService,
+    private partnerLinks: PartnerLinkRevokerService,
   ) {}
 
   async getProfile(userIdOrUsername: string) {
@@ -251,6 +256,17 @@ export class ProfileService {
         },
       }),
     ]);
+
+    // Партнёры (nadi) теряют доступ сразу, а не когда истекут выданные токены:
+    // человек удалил аккаунт — его чатов не должен видеть никто. Сбой отзыва
+    // не отменяет удаления: новых токенов партнёр уже не получит (аккаунт
+    // удалён), выданные доживут не дольше 15 минут, а недоделанный отзыв
+    // добьёт следующий DELETE связки партнёром.
+    try {
+      await this.partnerLinks.revokeAllForUser(userId);
+    } catch (e) {
+      this.logger.error(`partner links not fully revoked for ${userId}: ${(e as Error).message}`);
+    }
 
     return { success: true };
   }
