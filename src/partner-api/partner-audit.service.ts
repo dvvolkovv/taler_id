@@ -6,6 +6,7 @@ export type PartnerAuditAction =
   | 'USER_RELINKED'
   | 'LINK_PENDING'
   | 'LINK_CODE_SENT'
+  | 'LINK_CODE_FAILED'
   | 'LINK_CONFIRMED'
   | 'LINK_REVOKED'
   | 'ACCOUNT_DELETED'

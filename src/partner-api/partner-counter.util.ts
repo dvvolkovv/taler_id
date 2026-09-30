@@ -79,7 +79,19 @@ export function countInWindow(
       .ttl(key)
       .exec();
     if (!results || results.some(([err]) => err)) return null;
-    return { count: Number(results[1][1]), retryAfter: Math.max(1, Number(results[2][1])) };
+    const count = Number(results[1][1]);
+    const ttl = Number(results[2][1]);
+    if (ttl < 0) {
+      // SET NX EX не мог родить ключ без срока, но кто-то мог позже
+      // переписать его вручную (голым SET) — чиним срок сами, а не блокируем
+      // окно навсегда.
+      redis
+        .getClient()
+        .expire(key, windowSeconds)
+        .catch(() => undefined);
+      return { count, retryAfter: windowSeconds };
+    }
+    return { count, retryAfter: Math.max(1, ttl) };
   }, timeoutMs);
 }
 

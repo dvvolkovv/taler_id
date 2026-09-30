@@ -113,7 +113,8 @@ describe('countInWindow', () => {
     chain.incr = jest.fn(() => chain);
     chain.ttl = jest.fn(() => chain);
     chain.exec = exec;
-    return { redis: { getClient: () => ({ multi: () => chain }) } as any, chain };
+    const expire = jest.fn().mockResolvedValue(1);
+    return { redis: { getClient: () => ({ multi: () => chain, expire }) } as any, chain, expire };
   }
 
   it('opens the window with SET NX EX, counts with INCR and reports the time left', async () => {
@@ -145,5 +146,17 @@ describe('countInWindow', () => {
     await expect(countInWindow(rejected.redis, 'w', 60)).resolves.toBeNull();
     const hung = fakeWindowRedis(() => new Promise(() => {}));
     await expect(countInWindow(hung.redis, 'w', 60, 5)).resolves.toBeNull();
+  });
+
+  it('self-heals a key that lost its TTL instead of blocking the window forever', async () => {
+    const { redis, expire } = fakeWindowRedis(() =>
+      Promise.resolve([
+        [null, 'OK'],
+        [null, 4],
+        [null, -1], // ключ жив, но без срока — вручную переписан мимо SET NX EX
+      ]),
+    );
+    await expect(countInWindow(redis, 'w', 3600)).resolves.toEqual({ count: 4, retryAfter: 3600 });
+    expect(expire).toHaveBeenCalledWith('w', 3600);
   });
 });

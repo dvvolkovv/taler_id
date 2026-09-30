@@ -22,6 +22,13 @@ const CODE_TTL_SECONDS = 600;
 const CODE_MAX_ATTEMPTS = 5;
 const SEND_COOLDOWN_SECONDS = 60;
 const SENDS_PER_HOUR = 5;
+/**
+ * Общий потолок партнёра в сутки: при утёкшем ключе перебор по тысячам чужих
+ * аккаунтов упрётся в него. Легитимный партнёр шлёт код только людям, у
+ * которых уже есть аккаунт TalerID.
+ */
+const SENDS_PER_PARTNER_PER_DAY = 1000;
+const VERIFIES_PER_PARTNER_PER_DAY = 3000;
 
 /**
  * Привязка существующего аккаунта TalerID к партнёру — только кодом, который
@@ -43,6 +50,12 @@ export class PartnerLinkCodeService {
     const link = await this.pendingLink(partner.id, externalId);
     const to = link.user.email;
     if (!to) throw new NotFoundException('not_linked');
+
+    // Общий потолок партнёра в сутки — первым: при утёкшем ключе перебор по
+    // тысячам чужих аккаунтов упрётся в него раньше, чем в per-link окна.
+    const day = await countInWindow(this.redis, `partner:linkcode:day:${partner.id}`, 86400);
+    if (!day) throw new ServiceUnavailableException('rate_limiter_unavailable');
+    if (day.count > SENDS_PER_PARTNER_PER_DAY) throw tooManyRequests(day.retryAfter);
 
     // Оба окна берегут почтовый ящик человека: без Redis — отказ (503), а не
     // пропуск, как у лимита запросов партнёра.
@@ -86,6 +99,11 @@ export class PartnerLinkCodeService {
     // Кода не отправляли — и попытку тратить не на что.
     if (!link.codeHash) throw new GoneException('code_expired');
     const codeHash = link.codeHash;
+    // Тот же общий потолок партнёра в сутки, что и у send: подбор кода по
+    // множеству чужих связок иначе вообще не встретил бы бюджета.
+    const verifyDay = await countInWindow(this.redis, `partner:linkcode:verify:${partner.id}`, 86400);
+    if (!verifyDay) throw new ServiceUnavailableException('rate_limiter_unavailable');
+    if (verifyDay.count > VERIFIES_PER_PARTNER_PER_DAY) throw tooManyRequests(verifyDay.retryAfter);
     // Попытку списываем ДО сравнения и одним условным UPDATE, привязанным к
     // этому самому коду. Иначе параллельные запросы успевали бы сравнить
     // десятки кодов, пока счётчик ещё не вырос, — а подбирать код может как
@@ -114,8 +132,20 @@ export class PartnerLinkCodeService {
           where: sameCode,
           data: { codeHash: null, codeExpiresAt: null },
         });
+        await this.audit.log(partner, 'LINK_CODE_FAILED', {
+          externalId,
+          userId: link.userId,
+          ip,
+          meta: { attemptsLeft: 0, burned: true },
+        });
         throw new GoneException('code_expired');
       }
+      await this.audit.log(partner, 'LINK_CODE_FAILED', {
+        externalId,
+        userId: link.userId,
+        ip,
+        meta: { attemptsLeft: CODE_MAX_ATTEMPTS - codeAttempts, burned: false },
+      });
       throw new BadRequestException({ message: 'invalid_code', attemptsLeft: CODE_MAX_ATTEMPTS - codeAttempts });
     }
     const activated = await this.prisma.partnerLink.updateMany({

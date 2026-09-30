@@ -55,15 +55,16 @@ function make(link: any) {
   const redis: any = { del: jest.fn().mockResolvedValue(undefined) };
   const email: any = { sendPartnerLinkCode: jest.fn().mockResolvedValue(undefined) };
   const audit: any = { log: jest.fn().mockResolvedValue(undefined) };
-  return { service: new PartnerLinkCodeService(prisma, redis, email, audit), prisma, redis, email };
+  return { service: new PartnerLinkCodeService(prisma, redis, email, audit), prisma, redis, email, audit };
 }
 
 describe('PartnerLinkCodeService.send', () => {
   it("stores only a hash and mails the code in the person's language", async () => {
     const { service, prisma, redis, email } = make(pending);
     await expect(service.send(partner, 'm-1')).resolves.toEqual({ sent: true, expiresIn: 600 });
-    expect(windowCount).toHaveBeenNthCalledWith(1, redis, 'partner:linkcode:cd:l1', 60);
-    expect(windowCount).toHaveBeenNthCalledWith(2, redis, 'partner:linkcode:h:l1', 3600);
+    expect(windowCount).toHaveBeenNthCalledWith(1, redis, 'partner:linkcode:day:p1', 86400);
+    expect(windowCount).toHaveBeenNthCalledWith(2, redis, 'partner:linkcode:cd:l1', 60);
+    expect(windowCount).toHaveBeenNthCalledWith(3, redis, 'partner:linkcode:h:l1', 3600);
     const [to, code, name, lang] = email.sendPartnerLinkCode.mock.calls[0];
     expect([to, name, lang]).toEqual(['ivan@example.com', 'Nadi', 'ru']);
     expect(code).toMatch(/^\d{6}$/);
@@ -75,22 +76,36 @@ describe('PartnerLinkCodeService.send', () => {
 
   it('answers 429 with retryAfter inside the one-minute cooldown', async () => {
     const { service, email } = make(pending);
-    windowCount.mockResolvedValueOnce({ count: 2, retryAfter: 42 });
+    windowCount
+      .mockResolvedValueOnce({ count: 1, retryAfter: 86400 }) // суточный потолок партнёра в норме
+      .mockResolvedValueOnce({ count: 2, retryAfter: 42 }); // минутный кулдаун сработал
     const err = await service.send(partner, 'm-1').catch((e) => e);
     expect(err.getStatus()).toBe(429);
     expect(err.getResponse()).toEqual({ message: 'too_many_requests', retryAfter: 42 });
-    expect(windowCount).toHaveBeenCalledTimes(1);
+    expect(windowCount).toHaveBeenCalledTimes(2);
     expect(email.sendPartnerLinkCode).not.toHaveBeenCalled();
   });
 
   it('answers 429 after five letters in an hour', async () => {
     const { service, email } = make(pending);
     windowCount
-      .mockResolvedValueOnce({ count: 1, retryAfter: 60 })
-      .mockResolvedValueOnce({ count: 6, retryAfter: 1800 });
+      .mockResolvedValueOnce({ count: 1, retryAfter: 86400 }) // суточный потолок партнёра в норме
+      .mockResolvedValueOnce({ count: 1, retryAfter: 60 }) // минутный кулдаун в норме
+      .mockResolvedValueOnce({ count: 6, retryAfter: 1800 }); // часовой лимит сработал
     const err = await service.send(partner, 'm-1').catch((e) => e);
     expect(err.getStatus()).toBe(429);
     expect(err.getResponse()).toEqual({ message: 'too_many_requests', retryAfter: 1800 });
+    expect(email.sendPartnerLinkCode).not.toHaveBeenCalled();
+  });
+
+  it('answers 429 over the daily send cap for the whole partner, without touching per-link windows', async () => {
+    const { service, email } = make(pending);
+    windowCount.mockResolvedValueOnce({ count: 1001, retryAfter: 3600 });
+    const err = await service.send(partner, 'm-1').catch((e) => e);
+    expect(err.getStatus()).toBe(429);
+    expect(err.getResponse()).toEqual({ message: 'too_many_requests', retryAfter: 3600 });
+    expect(windowCount).toHaveBeenCalledTimes(1);
+    expect(windowCount).toHaveBeenCalledWith(expect.anything(), 'partner:linkcode:day:p1', 86400);
     expect(email.sendPartnerLinkCode).not.toHaveBeenCalled();
   });
 
@@ -161,21 +176,33 @@ describe('PartnerLinkCodeService.verify', () => {
     expect(err.getStatus()).toBe(410);
   });
 
-  it('answers 400 with attemptsLeft on a wrong code', async () => {
-    const { service } = make(withCode());
+  it('answers 400 with attemptsLeft on a wrong code and audits the failure', async () => {
+    const { service, audit } = make(withCode());
     const err = await service.verify(partner, 'm-1', '000000').catch((e) => e);
     expect(err.getStatus()).toBe(400);
     expect(err.getResponse()).toEqual({ message: 'invalid_code', attemptsLeft: 4 });
+    expect(audit.log).toHaveBeenCalledWith(partner, 'LINK_CODE_FAILED', {
+      externalId: 'm-1',
+      userId: 'u1',
+      ip: undefined,
+      meta: { attemptsLeft: 4, burned: false },
+    });
   });
 
-  it('burns the code on the fifth wrong attempt', async () => {
+  it('burns the code on the fifth wrong attempt and audits it as burned', async () => {
     const link = withCode({ codeAttempts: 4 });
-    const { service, prisma } = make(link);
+    const { service, prisma, audit } = make(link);
     const err = await service.verify(partner, 'm-1', '000000').catch((e) => e);
     expect(err.getStatus()).toBe(410);
     expect(prisma.partnerLink.updateMany).toHaveBeenLastCalledWith({
       where: { id: 'l1', status: 'PENDING', codeHash: link.codeHash },
       data: { codeHash: null, codeExpiresAt: null },
+    });
+    expect(audit.log).toHaveBeenCalledWith(partner, 'LINK_CODE_FAILED', {
+      externalId: 'm-1',
+      userId: 'u1',
+      ip: undefined,
+      meta: { attemptsLeft: 0, burned: true },
     });
   });
 
@@ -186,5 +213,23 @@ describe('PartnerLinkCodeService.verify', () => {
     const err = await service.verify(partner, 'm-1', '123456').catch((e) => e);
     expect(err.getStatus()).toBe(410);
     expect(prisma.partnerLink.updateMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers 429 over the daily verify cap for the whole partner, before spending an attempt', async () => {
+    const { service, prisma } = make(withCode());
+    windowCount.mockResolvedValueOnce({ count: 3001, retryAfter: 1234 });
+    const err = await service.verify(partner, 'm-1', '123456').catch((e) => e);
+    expect(err.getStatus()).toBe(429);
+    expect(err.getResponse()).toEqual({ message: 'too_many_requests', retryAfter: 1234 });
+    expect(prisma.partnerLink.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('answers 503 when the daily verify cap cannot be counted', async () => {
+    const { service, prisma } = make(withCode());
+    windowCount.mockResolvedValueOnce(null);
+    const err = await service.verify(partner, 'm-1', '123456').catch((e) => e);
+    expect(err.getStatus()).toBe(503);
+    expect(err.message).toBe('rate_limiter_unavailable');
+    expect(prisma.partnerLink.updateMany).not.toHaveBeenCalled();
   });
 });

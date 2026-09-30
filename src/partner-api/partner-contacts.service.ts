@@ -1,9 +1,4 @@
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { PartnerRecord } from '../partner-core/partner-registry.service';
 import { assertExternalId } from './external-id.util';
@@ -13,6 +8,12 @@ import { PartnerAuditService } from './partner-audit.service';
  * «Друзья партнёра = контакты TalerID». Личный чат в TalerID возможен только
  * между контактами, и это правило проверяет сервер мессенджера; партнёр лишь
  * говорит, кто с кем дружит. Блокировок партнёр не снимает.
+ *
+ * Остаточное ограничение: если люди сами удалят заведённый партнёром контакт
+ * в TalerID и затем сами же снова подружатся, флаг createdContact останется
+ * true — и следующий DELETE партнёра снесёт уже их собственный контакт, а не
+ * тот, что заводил партнёр. Точный учёт потребовал бы хранить id конкретных
+ * строк ContactRequest; сознательно не делаем это ради простоты — случай редкий.
  */
 @Injectable()
 export class PartnerContactsService {
@@ -44,7 +45,7 @@ export class PartnerContactsService {
     extB: string,
     ip?: string,
   ): Promise<{ contact: true; created: boolean }> {
-    const [userAId, userBId] = await this.pair(partner, extA, extB, true);
+    const [userAId, userBId] = await this.pair(partner, extA, extB);
     const blocked = await this.prisma.blockedUser.findFirst({
       where: {
         OR: [
@@ -71,14 +72,14 @@ export class PartnerContactsService {
         });
       }
     }
-    const record = await this.prisma.partnerContact.findUnique({
+    // Флаг сверяется при каждом PUT: контакт сейчас завёл партнёр — true; контакт
+    // уже был — прежний флаг не трогаем (повтор PUT по своему же контакту не
+    // делает его «чужим»), а новая запись получает false.
+    await this.prisma.partnerContact.upsert({
       where: { partnerId_userAId_userBId: { partnerId: partner.id, userAId, userBId } },
+      create: { partnerId: partner.id, userAId, userBId, createdContact: !wasContact },
+      update: wasContact ? {} : { createdContact: true },
     });
-    if (!record) {
-      await this.prisma.partnerContact.create({
-        data: { partnerId: partner.id, userAId, userBId, createdContact: !wasContact },
-      });
-    }
     if (!wasContact) {
       await this.audit.log(partner, 'CONTACT_CREATED', {
         externalId: `${extA},${extB}`,
@@ -91,7 +92,7 @@ export class PartnerContactsService {
   }
 
   async remove(partner: PartnerRecord, extA: string, extB: string, ip?: string): Promise<{ contact: boolean }> {
-    const [userAId, userBId] = await this.pair(partner, extA, extB, false);
+    const [userAId, userBId] = await this.pair(partner, extA, extB);
     const record = await this.prisma.partnerContact.findUnique({
       where: { partnerId_userAId_userBId: { partnerId: partner.id, userAId, userBId } },
     });
@@ -122,8 +123,13 @@ export class PartnerContactsService {
     return { contact: rows.some((r) => r.status === 'ACCEPTED') };
   }
 
-  /** userId обоих, упорядоченные: так пара хранится в PartnerContact. */
-  private async pair(partner: PartnerRecord, extA: string, extB: string, activeOnly: boolean): Promise<[string, string]> {
+  /**
+   * userId обоих, упорядоченные: так пара хранится в PartnerContact. Обе связки
+   * обязаны быть ACTIVE: иначе DELETE на PENDING-связку (человек ещё не
+   * подтвердил код из письма) отвечал бы, контакты ли эти двое на самом деле —
+   * утечка о произвольной паре чужих аккаунтов.
+   */
+  private async pair(partner: PartnerRecord, extA: string, extB: string): Promise<[string, string]> {
     assertExternalId(extA);
     assertExternalId(extB);
     if (extA === extB) throw new BadRequestException('same_user');
@@ -131,16 +137,14 @@ export class PartnerContactsService {
       where: {
         partnerId: partner.id,
         externalId: { in: [extA, extB] },
-        ...(activeOnly ? { status: 'ACTIVE' as const, user: { deletedAt: null } } : {}),
+        status: 'ACTIVE' as const,
+        user: { deletedAt: null },
       },
       select: { externalId: true, userId: true },
     });
     const a = links.find((l) => l.externalId === extA);
     const b = links.find((l) => l.externalId === extB);
-    if (!a || !b) {
-      if (activeOnly) throw new ConflictException('link_not_active');
-      throw new NotFoundException('not_linked');
-    }
+    if (!a || !b) throw new ConflictException('link_not_active');
     return [a.userId, b.userId].sort() as [string, string];
   }
 
