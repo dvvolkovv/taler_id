@@ -74,12 +74,25 @@ export class PartnerContactsService {
     }
     // Флаг сверяется при каждом PUT: контакт сейчас завёл партнёр — true; контакт
     // уже был — прежний флаг не трогаем (повтор PUT по своему же контакту не
-    // делает его «чужим»), а новая запись получает false.
-    await this.prisma.partnerContact.upsert({
-      where: { partnerId_userAId_userBId: { partnerId: partner.id, userAId, userBId } },
-      create: { partnerId: partner.id, userAId, userBId, createdContact: !wasContact },
-      update: wasContact ? {} : { createdContact: true },
-    });
+    // делает его «чужим»), а новая запись получает false. Два разных запроса,
+    // а не один upsert с тернарным update: пустой update Prisma эмулирует как
+    // SELECT, затем INSERT — не атомарно, и гонка двух одинаковых PUT могла бы
+    // упасть на уникальном индексе мимо единственного повтора put() (тот уже
+    // потрачен на гонку ContactRequest выше). createMany+skipDuplicates —
+    // настоящий ON CONFLICT DO NOTHING; upsert с непустым update — настоящий
+    // ON CONFLICT DO UPDATE. Оба атомарны на стороне БД.
+    if (wasContact) {
+      await this.prisma.partnerContact.createMany({
+        data: [{ partnerId: partner.id, userAId, userBId, createdContact: false }],
+        skipDuplicates: true,
+      });
+    } else {
+      await this.prisma.partnerContact.upsert({
+        where: { partnerId_userAId_userBId: { partnerId: partner.id, userAId, userBId } },
+        create: { partnerId: partner.id, userAId, userBId, createdContact: true },
+        update: { createdContact: true },
+      });
+    }
     if (!wasContact) {
       await this.audit.log(partner, 'CONTACT_CREATED', {
         externalId: `${extA},${extB}`,

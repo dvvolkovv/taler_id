@@ -30,6 +30,7 @@ function make(links: any[] = activeLinks) {
     partnerContact: {
       findUnique: jest.fn().mockResolvedValue(null),
       upsert: jest.fn().mockResolvedValue({}),
+      createMany: jest.fn().mockResolvedValue({ count: 1 }),
       deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
       count: jest.fn().mockResolvedValue(0),
     },
@@ -51,11 +52,13 @@ describe('PartnerContactsService.put', () => {
     expect(prisma.contactRequest.create).toHaveBeenCalledWith({
       data: { senderId: 'u-a', receiverId: 'u-b', status: 'ACCEPTED' },
     });
+    // !wasContact → upsert с непустым update: атомарный ON CONFLICT DO UPDATE.
     expect(prisma.partnerContact.upsert).toHaveBeenCalledWith({
       where: { partnerId_userAId_userBId: { partnerId: 'p1', userAId: 'u-a', userBId: 'u-b' } },
       create: { partnerId: 'p1', userAId: 'u-a', userBId: 'u-b', createdContact: true },
       update: { createdContact: true },
     });
+    expect(prisma.partnerContact.createMany).not.toHaveBeenCalled();
   });
 
   it('records a contact that existed before the partner as not its own', async () => {
@@ -64,11 +67,13 @@ describe('PartnerContactsService.put', () => {
     await expect(service.put(partner, 'a', 'b')).resolves.toEqual({ contact: true, created: false });
     expect(prisma.contactRequest.create).not.toHaveBeenCalled();
     expect(prisma.contactRequest.updateMany).not.toHaveBeenCalled();
-    expect(prisma.partnerContact.upsert).toHaveBeenCalledWith({
-      where: { partnerId_userAId_userBId: { partnerId: 'p1', userAId: 'u-a', userBId: 'u-b' } },
-      create: { partnerId: 'p1', userAId: 'u-a', userBId: 'u-b', createdContact: false },
-      update: {},
+    // wasContact → createMany+skipDuplicates: атомарный ON CONFLICT DO NOTHING,
+    // а не upsert с пустым update (Prisma эмулирует его как SELECT+INSERT).
+    expect(prisma.partnerContact.createMany).toHaveBeenCalledWith({
+      data: [{ partnerId: 'p1', userAId: 'u-a', userBId: 'u-b', createdContact: false }],
+      skipDuplicates: true,
     });
+    expect(prisma.partnerContact.upsert).not.toHaveBeenCalled();
   });
 
   it('upgrades every request of the pair instead of creating another row', async () => {
@@ -100,25 +105,31 @@ describe('PartnerContactsService.put', () => {
     });
   });
 
-  it('leaves createdContact alone (empty update) on a repeat PUT of an already-accepted pair', async () => {
+  it('a repeat PUT racing on the PartnerContact row does not throw — skipDuplicates absorbs the conflict', async () => {
     const { service, prisma } = make();
     prisma.contactRequest.findMany.mockResolvedValue([{ id: 'c1', status: 'ACCEPTED' }]);
-    await service.put(partner, 'a', 'b');
-    expect(prisma.partnerContact.upsert).toHaveBeenCalledWith(
-      expect.objectContaining({ update: {} }),
-    );
+    // count: 0 — строка уже была (гонка с параллельным PUT), skipDuplicates
+    // молча пропустил вставку; Prisma в этом случае не бросает P2002.
+    prisma.partnerContact.createMany.mockResolvedValue({ count: 0 });
+    await expect(service.put(partner, 'a', 'b')).resolves.toEqual({ contact: true, created: false });
   });
 
   it('answers the same PUT sent twice at once instead of failing on the unique index', async () => {
     const { service, prisma } = make();
     prisma.contactRequest.create.mockRejectedValueOnce(Object.assign(new Error('dup'), { code: 'P2002' }));
-    // К повтору параллельный запрос уже всё записал.
+    // К повтору параллельный запрос уже всё записал: на ретрае wasContact уже
+    // true, и запись PartnerContact идёт атомарным createMany, а не upsert —
+    // второй гонки (уже без бюджета на повтор) здесь просто не может случиться.
     prisma.contactRequest.findMany
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ id: 'c1', status: 'ACCEPTED' }]);
     await expect(service.put(partner, 'a', 'b')).resolves.toEqual({ contact: true, created: false });
-    expect(prisma.partnerContact.upsert).toHaveBeenCalledTimes(1);
-    expect(prisma.partnerContact.upsert).toHaveBeenCalledWith(expect.objectContaining({ update: {} }));
+    expect(prisma.partnerContact.createMany).toHaveBeenCalledTimes(1);
+    expect(prisma.partnerContact.createMany).toHaveBeenCalledWith({
+      data: [{ partnerId: 'p1', userAId: 'u-a', userBId: 'u-b', createdContact: false }],
+      skipDuplicates: true,
+    });
+    expect(prisma.partnerContact.upsert).not.toHaveBeenCalled();
   });
 
   it('never overrides a block', async () => {
@@ -135,6 +146,14 @@ describe('PartnerContactsService.put', () => {
 
   it('a PENDING (not yet confirmed) link does not count as active', async () => {
     const { service } = make([activeLinks[0], { externalId: 'b', userId: 'u-a', status: 'PENDING', user: { deletedAt: null } }]);
+    await expect(service.put(partner, 'a', 'b')).rejects.toThrow('link_not_active');
+  });
+
+  it('an ACTIVE link of a deleted account does not count as active either', async () => {
+    const { service } = make([
+      activeLinks[0],
+      { externalId: 'b', userId: 'u-a', status: 'ACTIVE', user: { deletedAt: new Date() } },
+    ]);
     await expect(service.put(partner, 'a', 'b')).rejects.toThrow('link_not_active');
   });
 
