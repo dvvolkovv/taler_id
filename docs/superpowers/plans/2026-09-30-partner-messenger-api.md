@@ -66,7 +66,7 @@
 
 Код из письма остался в теме письма, как у `sendOtp`: угроза «код продиктуют злоумышленнику» от места кода в письме не зависит, а e2e читает его оттуда.
 
-Под это переписаны задачи 18 (`@PartnerApi()`), 20 (скрипт отвергает неизвестные флаги и проверяет адреса, `set-ips` требует `--ips` или `--clear`), 37 (ошибки и заголовки в документации), 41–43 (проверка `TRUST_PROXY` и подделки `X-Forwarded-For`).
+Под это переписаны задачи 16 (лимиты письма с кодом — `countInWindow`: без Redis отказ 503, окно не продлевается отказами), 18 (`@PartnerApi()`), 20 (скрипт отвергает неизвестные флаги и проверяет адреса, `set-ips` требует `--ips` или `--clear`), 37 (ошибки и заголовки в документации), 41–43 (проверка `TRUST_PROXY` и подделки `X-Forwarded-For`).
 
 Замечено попутно, вне этой ветки: guard Linkeon (`src/partner/partner-secret.guard.ts`) берёт первый адрес из `X-Forwarded-For`, который задаёт сам клиент, — его белый список IP подделывается; в `email.service.ts` имя организации, имя пригласившего и причина отказа KYC попадают в HTML без экранирования.
 
@@ -2797,15 +2797,78 @@ git commit -m "feat(partner): токен мессенджера, статус, �
 
 **Files:**
 - Create: `src/partner-api/partner-link-code.service.ts`
-- Test: `src/partner-api/partner-link-code.service.spec.ts`
+- Modify: `src/partner-api/partner-counter.util.ts` (общий потолок ожидания `bounded`, счётчик в окне `countInWindow`)
+- Test: `src/partner-api/partner-link-code.service.spec.ts`, `src/partner-api/partner-counter.util.spec.ts`
 
-- [ ] **Step 1: Написать падающий тест**
+Лимиты отправки письма берегут почтовый ящик человека. Поэтому, в отличие от лимита запросов партнёра, без Redis они отказывают (`503 rate_limiter_unavailable`), а не пропускают. Окно открывает первое письмо: ключ создаётся сразу со сроком (`SET NX EX`), `INCR` срок не трогает. Потерять срок между командами нельзя, отказы внутри окна его не продлевают, `retryAfter` — точный остаток окна. Ждать Redis дольше 250 мс не будем, как и в лимитах задач 9–13.
+
+- [ ] **Step 1: Написать падающие тесты**
+
+В конец `src/partner-api/partner-counter.util.spec.ts` добавить (и `countInWindow` — в импорт из `./partner-counter.util`):
+
+```ts
+describe('countInWindow', () => {
+  /** multi().set().incr().ttl().exec() с управляемым результатом exec(). */
+  function fakeWindowRedis(exec: () => Promise<any>) {
+    const chain: any = {};
+    chain.set = jest.fn(() => chain);
+    chain.incr = jest.fn(() => chain);
+    chain.ttl = jest.fn(() => chain);
+    chain.exec = exec;
+    return { redis: { getClient: () => ({ multi: () => chain }) } as any, chain };
+  }
+
+  it('opens the window with SET NX EX, counts with INCR and reports the time left', async () => {
+    const { redis, chain } = fakeWindowRedis(() =>
+      Promise.resolve([
+        [null, null], // окно уже открыто — SET NX ничего не сделал
+        [null, 3],
+        [null, 1795],
+      ]),
+    );
+    await expect(countInWindow(redis, 'w', 3600)).resolves.toEqual({ count: 3, retryAfter: 1795 });
+    expect(chain.set).toHaveBeenCalledWith('w', '0', 'EX', 3600, 'NX');
+    expect(chain.incr).toHaveBeenCalledWith('w');
+    expect(chain.ttl).toHaveBeenCalledWith('w');
+  });
+
+  it('returns null when a queued command failed, exec() rejected or Redis did not answer', async () => {
+    const failed = fakeWindowRedis(() =>
+      Promise.resolve([
+        [null, 'OK'],
+        [new Error('ERR value is not an integer or out of range'), null],
+        [null, 60],
+      ]),
+    );
+    await expect(countInWindow(failed.redis, 'w', 60)).resolves.toBeNull();
+    const rejected = fakeWindowRedis(() =>
+      Promise.reject(new Error('EXECABORT Transaction discarded because of previous errors.')),
+    );
+    await expect(countInWindow(rejected.redis, 'w', 60)).resolves.toBeNull();
+    const hung = fakeWindowRedis(() => new Promise(() => {}));
+    await expect(countInWindow(hung.redis, 'w', 60, 5)).resolves.toBeNull();
+  });
+});
+```
 
 Создать `src/partner-api/partner-link-code.service.spec.ts`:
 
 ```ts
 import { hashLinkCode } from '../partner-core/partner-secrets.util';
+import { countInWindow } from './partner-counter.util';
 import { PartnerLinkCodeService } from './partner-link-code.service';
+
+jest.mock('./partner-counter.util', () => ({
+  ...jest.requireActual('./partner-counter.util'),
+  countInWindow: jest.fn(),
+}));
+const windowCount = countInWindow as jest.Mock;
+
+beforeEach(() => {
+  windowCount.mockReset();
+  // Оба окна свободны: первое письмо за минуту и за час.
+  windowCount.mockResolvedValue({ count: 1, retryAfter: 60 });
+});
 
 // До описания тестов: withCode() ниже зовёт hashLinkCode, которому нужен ключ.
 const savedKey = process.env.PARTNER_SECRETS_KEY;
@@ -2844,14 +2907,8 @@ function make(link: any) {
       update: jest.fn().mockResolvedValue({}),
     },
   };
-  const client = { ttl: jest.fn().mockResolvedValue(42) };
-  const redis: any = {
-    setNxEx: jest.fn().mockResolvedValue(true),
-    incr: jest.fn().mockResolvedValue(1),
-    expire: jest.fn().mockResolvedValue(undefined),
-    del: jest.fn().mockResolvedValue(undefined),
-    getClient: () => client,
-  };
+  // Окна считает countInWindow (замокан выше); сервис сам зовёт только del.
+  const redis: any = { del: jest.fn().mockResolvedValue(undefined) };
   const email: any = { sendPartnerLinkCode: jest.fn().mockResolvedValue(undefined) };
   const audit: any = { log: jest.fn().mockResolvedValue(undefined) };
   return { service: new PartnerLinkCodeService(prisma, redis, email, audit), prisma, redis, email };
@@ -2859,8 +2916,10 @@ function make(link: any) {
 
 describe('PartnerLinkCodeService.send', () => {
   it("stores only a hash and mails the code in the person's language", async () => {
-    const { service, prisma, email } = make(pending);
+    const { service, prisma, redis, email } = make(pending);
     await expect(service.send(partner, 'm-1')).resolves.toEqual({ sent: true, expiresIn: 600 });
+    expect(windowCount).toHaveBeenNthCalledWith(1, redis, 'partner:linkcode:cd:l1', 60);
+    expect(windowCount).toHaveBeenNthCalledWith(2, redis, 'partner:linkcode:h:l1', 3600);
     const [to, code, name, lang] = email.sendPartnerLinkCode.mock.calls[0];
     expect([to, name, lang]).toEqual(['ivan@example.com', 'Nadi', 'ru']);
     expect(code).toMatch(/^\d{6}$/);
@@ -2871,20 +2930,38 @@ describe('PartnerLinkCodeService.send', () => {
   });
 
   it('answers 429 with retryAfter inside the one-minute cooldown', async () => {
-    const { service, redis, email } = make(pending);
-    redis.setNxEx.mockResolvedValue(false);
+    const { service, email } = make(pending);
+    windowCount.mockResolvedValueOnce({ count: 2, retryAfter: 42 });
     const err = await service.send(partner, 'm-1').catch((e) => e);
     expect(err.getStatus()).toBe(429);
     expect(err.getResponse()).toEqual({ message: 'too_many_requests', retryAfter: 42 });
+    expect(windowCount).toHaveBeenCalledTimes(1);
     expect(email.sendPartnerLinkCode).not.toHaveBeenCalled();
   });
 
   it('answers 429 after five letters in an hour', async () => {
-    const { service, redis } = make(pending);
-    redis.incr.mockResolvedValue(6);
+    const { service, email } = make(pending);
+    windowCount
+      .mockResolvedValueOnce({ count: 1, retryAfter: 60 })
+      .mockResolvedValueOnce({ count: 6, retryAfter: 1800 });
     const err = await service.send(partner, 'm-1').catch((e) => e);
     expect(err.getStatus()).toBe(429);
+    expect(err.getResponse()).toEqual({ message: 'too_many_requests', retryAfter: 1800 });
+    expect(email.sendPartnerLinkCode).not.toHaveBeenCalled();
   });
+
+  it.each([0, 1])(
+    'refuses with 503 when Redis cannot count window #%i: the limits protect the inbox',
+    async (failing: number) => {
+      const { service, email } = make(pending);
+      if (failing === 1) windowCount.mockResolvedValueOnce({ count: 1, retryAfter: 60 });
+      windowCount.mockResolvedValueOnce(null);
+      const err = await service.send(partner, 'm-1').catch((e) => e);
+      expect(err.getStatus()).toBe(503);
+      expect(err.message).toBe('rate_limiter_unavailable');
+      expect(email.sendPartnerLinkCode).not.toHaveBeenCalled();
+    },
+  );
 
   it('409 for a link that is not waiting for a code', async () => {
     const { service } = make({ ...pending, status: 'ACTIVE' });
@@ -2971,10 +3048,80 @@ describe('PartnerLinkCodeService.verify', () => {
 
 - [ ] **Step 2: Убедиться, что тест падает**
 
-Run: `npx jest src/partner-api/partner-link-code.service.spec.ts`
-Expected: FAIL — `Cannot find module './partner-link-code.service'`.
+Run: `npx jest src/partner-api/partner-link-code.service.spec.ts src/partner-api/partner-counter.util.spec.ts`
+Expected: FAIL — `Cannot find module './partner-link-code.service'` и `countInWindow is not a function`.
 
 - [ ] **Step 3: Реализация**
+
+В `src/partner-api/partner-counter.util.ts` перед `incrementCounter` добавить общий потолок ожидания:
+
+```ts
+/**
+ * Запрос к Redis с потолком ожидания. Никогда не бросает: таймаут, отказ
+ * Redis и синхронная ошибка клиента — это null, а что делать без ответа,
+ * решает вызывающий.
+ */
+async function bounded<T>(run: () => Promise<T | null>, timeoutMs: number): Promise<T | null> {
+  let timer!: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), timeoutMs);
+  });
+  try {
+    return await Promise.race([run().catch((): null => null), timeout]);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+```
+
+Тело `incrementCounter` (JSDoc над ним оставить как есть) заменить на:
+
+```ts
+export function incrementCounter(
+  redis: RedisService,
+  key: string,
+  ttlSeconds: number,
+  timeoutMs: number = PARTNER_COUNTER_TIMEOUT_MS,
+): Promise<number | null> {
+  return bounded(async () => {
+    const results = await redis.getClient().multi().incr(key).expire(key, ttlSeconds).exec();
+    if (!results) return null;
+    const [err, value] = results[0];
+    return err ? null : Number(value);
+  }, timeoutMs);
+}
+```
+
+и после него добавить:
+
+```ts
+/**
+ * Счётчик в окне, которое открывает первый запрос: SET NX EX создаёт ключ
+ * сразу со сроком, INCR срок не трогает. Одна транзакция — срок не потеряется
+ * между командами, а отказы внутри окна его не продлевают. retryAfter —
+ * сколько окну осталось жить. null — Redis не ответил за timeoutMs.
+ */
+export function countInWindow(
+  redis: RedisService,
+  key: string,
+  windowSeconds: number,
+  timeoutMs: number = PARTNER_COUNTER_TIMEOUT_MS,
+): Promise<{ count: number; retryAfter: number } | null> {
+  return bounded(async () => {
+    const results = await redis
+      .getClient()
+      .multi()
+      .set(key, '0', 'EX', windowSeconds, 'NX')
+      .incr(key)
+      .ttl(key)
+      .exec();
+    if (!results || results.some(([err]) => err)) return null;
+    return { count: Number(results[1][1]), retryAfter: Math.max(1, Number(results[2][1])) };
+  }, timeoutMs);
+}
+```
 
 Создать `src/partner-api/partner-link-code.service.ts`:
 
@@ -2997,6 +3144,7 @@ import { RedisService } from '../redis/redis.service';
 import { PartnerRecord } from '../partner-core/partner-registry.service';
 import { hashLinkCode, linkCodeMatches } from '../partner-core/partner-secrets.util';
 import { PartnerAuditService } from './partner-audit.service';
+import { countInWindow } from './partner-counter.util';
 
 const CODE_TTL_SECONDS = 600;
 const CODE_MAX_ATTEMPTS = 5;
@@ -3024,14 +3172,15 @@ export class PartnerLinkCodeService {
     const to = link.user.email;
     if (!to) throw new NotFoundException('not_linked');
 
+    // Оба окна берегут почтовый ящик человека: без Redis — отказ (503), а не
+    // пропуск, как у лимита запросов партнёра.
     const cooldownKey = `partner:linkcode:cd:${link.id}`;
-    if (!(await this.redis.setNxEx(cooldownKey, SEND_COOLDOWN_SECONDS, '1'))) {
-      throw await this.tooMany(cooldownKey);
-    }
-    const hourKey = `partner:linkcode:h:${link.id}`;
-    const sentThisHour = await this.redis.incr(hourKey);
-    if (sentThisHour === 1) await this.redis.expire(hourKey, 3600);
-    if (sentThisHour > SENDS_PER_HOUR) throw await this.tooMany(hourKey);
+    const cooldown = await countInWindow(this.redis, cooldownKey, SEND_COOLDOWN_SECONDS);
+    if (!cooldown) throw new ServiceUnavailableException('rate_limiter_unavailable');
+    if (cooldown.count > 1) throw tooManyRequests(cooldown.retryAfter);
+    const hour = await countInWindow(this.redis, `partner:linkcode:h:${link.id}`, 3600);
+    if (!hour) throw new ServiceUnavailableException('rate_limiter_unavailable');
+    if (hour.count > SENDS_PER_HOUR) throw tooManyRequests(hour.retryAfter);
 
     const code = randomInt(0, 1_000_000).toString().padStart(6, '0');
     await this.prisma.partnerLink.update({
@@ -3046,7 +3195,8 @@ export class PartnerLinkCodeService {
       await this.email.sendPartnerLinkCode(to, code, partner.name, link.user.profile?.language ?? 'en');
     } catch (e) {
       // Письмо не ушло — человек не должен ждать минуту до следующей попытки.
-      await this.redis.del(cooldownKey);
+      // Ответ про почту не держим ради Redis: del — без ожидания.
+      this.redis.del(cooldownKey).catch(() => undefined);
       this.logger.error(`link code mail failed for ${link.id}: ${(e as Error).message}`);
       throw new ServiceUnavailableException('email_unavailable');
     }
@@ -3116,26 +3266,22 @@ export class PartnerLinkCodeService {
     if (link.status !== 'PENDING') throw new ConflictException('not_pending');
     return link;
   }
+}
 
-  private async tooMany(key: string): Promise<HttpException> {
-    const ttl = await this.redis.getClient().ttl(key);
-    return new HttpException(
-      { message: 'too_many_requests', retryAfter: Math.max(1, ttl) },
-      HttpStatus.TOO_MANY_REQUESTS,
-    );
-  }
+function tooManyRequests(retryAfter: number): HttpException {
+  return new HttpException({ message: 'too_many_requests', retryAfter }, HttpStatus.TOO_MANY_REQUESTS);
 }
 ```
 
 - [ ] **Step 4: Тест проходит**
 
-Run: `npx jest src/partner-api/partner-link-code.service.spec.ts`
-Expected: PASS, 12 тестов.
+Run: `npx jest src/partner-api/partner-link-code.service.spec.ts src/partner-api/partner-counter.util.spec.ts`
+Expected: PASS — 14 тестов кода привязки, 11 тестов счётчиков (прежние 9 без изменений: `incrementCounter` перешёл на `bounded`, поведение то же).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/partner-api/partner-link-code.service.ts src/partner-api/partner-link-code.service.spec.ts
+git add src/partner-api/partner-link-code.service.ts src/partner-api/partner-link-code.service.spec.ts src/partner-api/partner-counter.util.ts src/partner-api/partner-counter.util.spec.ts
 git commit -m "feat(partner): привязка существующего аккаунта кодом из письма" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
@@ -6917,6 +7063,7 @@ curl -X POST https://staging.id.taler.tirol/partner/v1/users \
 2. `POST /partner/v1/users/{externalId}/link-code` → `{ "sent": true, "expiresIn": 600 }`.
    - Не чаще раза в минуту и не больше 5 раз в час, иначе `429 too_many_requests` + `retryAfter` (секунды).
    - `409 not_pending` — связка уже подтверждена или кода не ждёт.
+   - `503 email_unavailable` — письмо не ушло, можно сразу повторить; `503 rate_limiter_unavailable` — лимит сейчас не проверить, повторите через минуту.
 3. Человек вводит 6 цифр: `POST /partner/v1/users/{externalId}/link-code/verify` `{"code":"123456"}` → `{ "status": "active", "talerUserId": "…" }`.
    - `400 invalid_code` + `attemptsLeft` — неверный код;
    - `410 code_expired` — код истёк (10 минут) или сожжён после 5 ошибок: отправьте новый.
