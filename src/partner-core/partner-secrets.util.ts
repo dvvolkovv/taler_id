@@ -41,3 +41,28 @@ export function linkCodeMatches(linkId: string, code: string, storedHash: string
   const b = Buffer.from(storedHash ?? '', 'hex');
   return a.length === b.length && timingSafeEqual(a, b);
 }
+
+/** Короткий отпечаток мастер-ключа: не секрет, его сравнивают глазами в логах нод. */
+export function partnerSecretsKeyFingerprint(): string {
+  return derive('key-fingerprint').subarray(0, 4).toString('hex');
+}
+
+/**
+ * Проверка при старте: при включённом партнёрском API пишет в лог отпечаток
+ * ключа (на обеих нодах PROD он обязан совпадать) или громко ругается, если
+ * ключа нет. Бэкенд при этом не падает: вход и чаты не должны страдать из-за
+ * настроек партнёров.
+ */
+export function reportPartnerSecretsKey(logger: {
+  log(message: string): void;
+  error(message: string): void;
+}): void {
+  if (process.env.PARTNER_API_ENABLED !== 'true') return;
+  try {
+    logger.log(`partner secrets key fingerprint: ${partnerSecretsKeyFingerprint()}`);
+  } catch (e) {
+    logger.error(
+      `PARTNER_API_ENABLED=true, но ${(e as Error).message} — коды привязки и вебхуки работать не будут`,
+    );
+  }
+}
