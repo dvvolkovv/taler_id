@@ -240,26 +240,33 @@ export class PartnerUsersService {
     const link = await this.findLink(partner.id, externalId);
     if (!link) throw new NotFoundException('not_linked');
     // Штатное удаление обнуляет почту; у заблокированного администратором она
-    // остаётся — такой аккаунт партнёр не удаляет (isManagedBy ложен).
-    const alreadyDeleted = link.user.deletedAt !== null && link.user.email === null;
+    // остаётся — такой аккаунт партнёр не удаляет (isManagedBy ложен). И то,
+    // и другое — только для аккаунта, который завёл именно этот партнёр:
+    // чужой удалённый аккаунт (createdByPartnerId не наш) не «уже удалён»
+    // для нас, а просто неуправляем — 409, а не тихий повторный 204.
+    const alreadyDeleted =
+      link.user.deletedAt !== null && link.user.email === null && link.user.createdByPartnerId === partner.id;
     const deletesNow = deleteAccount && !alreadyDeleted;
     if (deletesNow && !isManagedBy(partner, link.user)) throw new ConflictException('account_not_managed');
     // REVOKED с грантом — прошлый отзыв не доделан (сбой Redis): доделываем.
     const revokes = link.status !== 'REVOKED' || !!link.grantId;
     if (revokes) await this.revoke(link);
     if (deletesNow) await this.profiles.deleteAccount(link.userId);
-    if (deleteAccount) {
-      // Подписки на каналы удалённому ни к чему, а тестовые прогоны иначе
-      // копили бы их в системном канале. Повтор после сбоя дочищает.
-      await this.prisma.conversationParticipant.deleteMany({
-        where: { userId: link.userId, conversation: { type: 'CHANNEL' } },
-      });
-    }
+    // Журнал — сразу после удаления аккаунта и до очистки каналов: если чистка
+    // ниже упадёт, повтор (alreadyDeleted уже true, отзывать больше нечего)
+    // не должен молча остаться без строки про само удаление.
     if (revokes || deletesNow) {
       await this.audit.log(partner, deletesNow ? 'ACCOUNT_DELETED' : 'LINK_REVOKED', {
         externalId,
         userId: link.userId,
         ip,
+      });
+    }
+    if (deleteAccount) {
+      // Подписки на каналы удалённому ни к чему, а тестовые прогоны иначе
+      // копили бы их в системном канале. Повтор после сбоя дочищает.
+      await this.prisma.conversationParticipant.deleteMany({
+        where: { userId: link.userId, conversation: { type: 'CHANNEL' } },
       });
     }
   }
@@ -347,6 +354,10 @@ export class PartnerUsersService {
       await this.revoker.revokeLink(link);
     } catch (e) {
       if (e instanceof HttpException) throw e;
+      // P2025 — строку уже удалили. Единственное место, которое удаляет
+      // строки связок, удаляет только полностью отозванные (REVOKED,
+      // grantId: null) — значит, отзывать уже нечего, это не сбой.
+      if ((e as { code?: string } | null)?.code === 'P2025') return;
       this.logger.error(`revocation of link ${link.id} failed: ${(e as Error).message}`);
       throw new ServiceUnavailableException('revocation_unavailable');
     }

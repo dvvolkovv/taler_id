@@ -87,12 +87,24 @@ describe('PartnerUsersService.provision', () => {
     links(prisma, { id: 'l1', userId: 'u1', status: 'ACTIVE', user: liveUser });
     await expect(service.provision(partner, dto)).resolves.toEqual({ status: 'active', talerUserId: 'u1', created: false });
     expect(prisma.$queryRaw).not.toHaveBeenCalled();
+    // Ничего не пишем: живая связка отвечает без единой записи в базу.
+    expect(prisma.partnerLink.create).not.toHaveBeenCalled();
+    expect(prisma.partnerLink.updateMany).not.toHaveBeenCalled();
+    expect(prisma.partnerLink.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.user.create).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it('keeps a PENDING link pending', async () => {
     const { service, prisma } = make();
     links(prisma, { id: 'l1', userId: 'u1', status: 'PENDING', user: liveUser });
     await expect(service.provision(partner, dto)).resolves.toEqual({ status: 'confirmation_required', talerUserId: null });
+    expect(prisma.$queryRaw).not.toHaveBeenCalled();
+    expect(prisma.partnerLink.create).not.toHaveBeenCalled();
+    expect(prisma.partnerLink.updateMany).not.toHaveBeenCalled();
+    expect(prisma.partnerLink.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.user.create).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it('asks for confirmation when the email already belongs to someone', async () => {
@@ -171,6 +183,11 @@ describe('PartnerUsersService.provision', () => {
     prisma.$queryRaw.mockResolvedValue([{ id: 'u1', passwordHash: null, deletedAt: null, createdByPartnerId: 'p1' }]);
     await service.provision(partner, dto);
     expect(revoker.revokeLink).toHaveBeenCalledWith(unfinished);
+    // Отзыв должен успеть закончиться до того, как строку переиспользуют:
+    // иначе updateMany состязался бы с ещё идущим revokeLink за тот же грант.
+    expect(revoker.revokeLink.mock.invocationCallOrder[0]).toBeLessThan(
+      prisma.partnerLink.updateMany.mock.invocationCallOrder[0],
+    );
   });
 
   it('finishes the revocation of a stale link under another externalId before deleting it', async () => {
@@ -418,6 +435,20 @@ describe('PartnerUsersService token and lifecycle', () => {
     });
   });
 
+  it('writes the audit row for a deletion even if the channel cleanup fails afterward', async () => {
+    const { service, prisma, audit } = make();
+    links(prisma, active);
+    prisma.conversationParticipant.deleteMany.mockRejectedValueOnce(new Error('db down'));
+    await expect(service.deleteUser(partner, 'm-1', true)).rejects.toThrow('db down');
+    // Иначе повтор (аккаунт уже удалён, alreadyDeleted=true, отзыва больше нет)
+    // никогда не залогировал бы само удаление.
+    expect(audit.log).toHaveBeenCalledWith(
+      partner,
+      'ACCOUNT_DELETED',
+      expect.objectContaining({ externalId: 'm-1', userId: 'u1' }),
+    );
+  });
+
   it('refuses to delete an account it does not manage, and changes nothing', async () => {
     const { service, prisma, revoker, profiles } = make();
     links(prisma, { ...active, user: { ...liveUser, createdByPartnerId: null } });
@@ -442,6 +473,21 @@ describe('PartnerUsersService token and lifecycle', () => {
     expect(revoker.revokeLink).toHaveBeenCalledWith(unfinished);
   });
 
+  it('treats a P2025 from revocation as already-gone and stays quiet', async () => {
+    const { service, prisma, revoker, audit } = make();
+    const unfinished = { ...active, status: 'REVOKED' };
+    links(prisma, unfinished);
+    revoker.revokeLink.mockRejectedValueOnce(Object.assign(new Error('not found'), { code: 'P2025' }));
+    const errorSpy = jest.spyOn((service as any).logger, 'error');
+    await expect(service.deleteUser(partner, 'm-1', false)).resolves.toBeUndefined();
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(audit.log).toHaveBeenCalledWith(
+      partner,
+      'LINK_REVOKED',
+      expect.objectContaining({ externalId: 'm-1', userId: 'u1' }),
+    );
+  });
+
   it('is idempotent when retrying deleteAccount=true after the account is already gone', async () => {
     const { service, prisma, revoker, profiles, audit } = make();
     const alreadyGone = {
@@ -456,6 +502,21 @@ describe('PartnerUsersService token and lifecycle', () => {
       where: { userId: 'u1', conversation: { type: 'CHANNEL' } },
     });
     expect(audit.log).not.toHaveBeenCalled();
+  });
+
+  it('refuses to delete a foreign account that was already deleted elsewhere, and touches nothing', async () => {
+    const { service, prisma, revoker, profiles } = make();
+    // Тот же снимок «полностью удалён» (deletedAt+email:null), но завёл его
+    // не этот партнёр — alreadyDeleted не должен сработать на чужом аккаунте.
+    const foreignGone = {
+      ...active, status: 'REVOKED', grantId: null,
+      user: { ...liveUser, deletedAt: new Date(), email: null, createdByPartnerId: null },
+    };
+    links(prisma, foreignGone);
+    await expect(service.deleteUser(partner, 'm-1', true)).rejects.toThrow('account_not_managed');
+    expect(revoker.revokeLink).not.toHaveBeenCalled();
+    expect(profiles.deleteAccount).not.toHaveBeenCalled();
+    expect(prisma.conversationParticipant.deleteMany).not.toHaveBeenCalled();
   });
 
   it('refuses to delete an admin-blocked account and revokes nothing', async () => {
