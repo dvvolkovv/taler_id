@@ -18,19 +18,10 @@ import { assertLivekitCredentials } from './common/livekit-credentials';
 import { json } from 'express';
 import { VoiceGateService } from './voice-gate/voice-gate.service';
 import { PcmWindow, wrapWavMono, pcmRms16 } from './voice-gate/pcm-window';
-
-// The realtime proxy talks to OpenAI on the server's own API key, and the model
-// used to come straight from a query parameter — so anyone holding a token
-// could point it at the most expensive realtime model and burn credits at
-// whatever rate they liked. No shipped client sends `model` at all; the
-// parameter survives only as an allow-listed override for experiments.
-const DEFAULT_REALTIME_MODEL = 'gpt-realtime-mini-2025-12-15';
-const ALLOWED_REALTIME_MODELS = new Set(
-  (process.env.REALTIME_ALLOWED_MODELS ?? DEFAULT_REALTIME_MODEL)
-    .split(',')
-    .map((m) => m.trim())
-    .filter(Boolean),
-);
+// Model and voice-gate choice per connection (translator mode differs), see
+// realtime-proxy-mode.ts. Only allow-listed models may be requested: anyone
+// holding a token could otherwise burn credits on the priciest model.
+import { realtimeProxyMode } from './voice/realtime-proxy-mode';
 
 async function bootstrap() {
   // Refuse to start on credentials published in this repo, rather than coming
@@ -721,17 +712,17 @@ async function bootstrap() {
     }
     const billingSessionId = url.searchParams.get('billingSessionId');
     wss.handleUpgrade(req, socket, head, (clientWs) => {
-      const requestedModel = url.searchParams.get('model');
-      if (requestedModel && !ALLOWED_REALTIME_MODELS.has(requestedModel)) {
+      const proxyMode = realtimeProxyMode(url.searchParams);
+      if (proxyMode.refusedModel) {
         Logger.warn(
-          `proxy: refused model "${requestedModel}" (userId=${userIdFromToken}), using default`,
+          `proxy: refused model "${proxyMode.refusedModel}" (userId=${userIdFromToken}), using default`,
           'RealtimeProxy',
         );
       }
-      const model =
-        requestedModel && ALLOWED_REALTIME_MODELS.has(requestedModel)
-          ? requestedModel
-          : DEFAULT_REALTIME_MODEL;
+      const model = proxyMode.model;
+      // Translator mode translates the other person's speech — the voice gate
+      // would retract exactly that as "not the owner".
+      const gateEnabled = voiceGate.isEnabled() && proxyMode.voiceGate;
       // Per-session voice-gate state
       let ownerEmbedding: number[] = [];
       let responseInFlight = false;
@@ -755,7 +746,7 @@ async function bootstrap() {
       // and bypass the gate. Acceptable for the experimental flag — a brief
       // non-owner exposure window is better than blocking the user's first
       // word behind a DB roundtrip.
-      if (voiceGate.isEnabled() && userIdFromToken) {
+      if (gateEnabled && userIdFromToken) {
         prismaService.profile
           .findUnique({ where: { userId: userIdFromToken } })
           .then((p) => {
@@ -896,7 +887,7 @@ async function bootstrap() {
         // verify against owner embedding via the local sidecar. On non-owner
         // verdict, inject retract events into the OpenAI socket.
         if (
-          voiceGate.isEnabled() &&
+          gateEnabled &&
           ownerEmbedding.length > 0 &&
           parsedClient &&
           !verifyInFlight
