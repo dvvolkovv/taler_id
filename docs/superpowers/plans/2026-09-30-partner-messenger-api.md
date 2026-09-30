@@ -5309,6 +5309,15 @@ describe('MessengerGateway connections', () => {
     expect(client.join).not.toHaveBeenCalled();
   });
 
+  it('drops a partner socket whose link was revoked while it was connecting', async () => {
+    const principal = { userId: 'u1', partnerId: 'p1', partnerSlug: 'nadi', grantId: 'g1', expiresAt: Math.floor(Date.now() / 1000) + 900 };
+    partnerTokens.verify.mockResolvedValueOnce(principal).mockResolvedValueOnce(null);
+    const client = fakeClient('opaque');
+    await gateway.handleConnection(client as any);
+    expect(client.join).toHaveBeenCalledWith('plink:p1:u1');
+    expect(client.disconnect).toHaveBeenCalled();
+  });
+
   it('clears the expiry timer when the socket goes away first', async () => {
     jest.useFakeTimers({ now: new Date('2026-10-01T10:00:00Z') });
     partnerTokens.verify.mockResolvedValue({
@@ -5405,6 +5414,10 @@ import { installSocketGate } from './socket-gate';
       client.data.partner = principal;
       client.join(`user:${principal.userId}`);
       client.join(partnerLinkRoom(principal.partnerId, principal.userId));
+      // Отзыв мог прийти, пока шла проверка: тогда команда «порвать сокеты
+      // связки» разошлась раньше, чем этот сокет вошёл в комнату. Проверяем
+      // токен ещё раз уже из комнаты — всё, что отзовут дальше, его достанет.
+      if (!(await this.partnerTokens.verify(token))) throw new Error('Revoked while connecting');
       // Дальше клиент переподключается со свежим токеном, а отозванная связка
       // не держит открытым старое соединение.
       const timer = setTimeout(
@@ -5458,7 +5471,7 @@ import { PartnerConversationScope } from './partner-conversation-scope.service';
 - [ ] **Step 7: Тесты мессенджера и сборка**
 
 Run: `npx jest src/messenger && npm run build`
-Expected: новый набор PASS (5 тестов), прежние наборы — как в базе; сборка без ошибок.
+Expected: новый набор PASS (6 тестов), прежние наборы — как в базе; сборка без ошибок.
 
 - [ ] **Step 8: Commit**
 
@@ -6884,9 +6897,10 @@ curl -X POST https://staging.id.taler.tirol/partner/v1/users \
 
 | Ответ | Что значит |
 |---|---|
-| `404 not_linked` | связки нет или она отозвана |
+| `404 not_linked` | связки нет или она отозвана (в том числе прямо во время этого запроса) |
 | `409 confirmation_required` | связка ждёт кода из письма |
 | `410 account_deleted` | человек удалил аккаунт в Taler ID; связка отозвана |
+| `503 link_busy` | редкая гонка параллельных запросов токена; повторите через секунду |
 
 Refresh-токена нет: истёк — попросите новый.
 
@@ -7574,7 +7588,7 @@ Expected: `no new failures`. Строки с `>` в выводе `diff` — но
 node scripts/verify-partner-tokens.cjs
 ```
 
-Expected: по строке `OK` на каждый из четырёх сценариев отзыва (две параллельные выдачи, смена гранта через 30 дней, выдача наперегонки с отзывом, сбой Redis посреди отзыва), код выхода 0. Моки в юнит-тестах такие ошибки не ловят — только этот прогон.
+Expected: строка `OK` на каждый сценарий (основа, две параллельные выдачи, смена гранта, выдача наперегонки с отзывом, сбой Redis посреди отзыва, замена гранта с остатком меньше минуты), в конце `all … scenarios passed`, код выхода 0. Моки в юнит-тестах такие ошибки не ловят — только этот прогон.
 
 - [ ] **Step 2: Сборка и линтер новых файлов**
 
@@ -7945,7 +7959,7 @@ cd ~/Downloads/taler_id_tests && npm run test:partner:talerid  # PROD, коро�
 - Партнёры и ключи — только скриптом: `npx ts-node -r dotenv/config scripts/partner-admin.ts create|rotate-key|set-webhook|set-ips|enable|disable|show`. Секреты — через `--out` в файл 600, не на экран. Каждая нода держит снимок партнёров до 30 с: после `rotate-key` новый ключ заработает, а старый перестанет, в пределах этого окна — партнёру менять ключ с запасом в минуту.
 - Где ключи: DEV `~/partner-keys/` на `89.169.55.217`, TEST — там же на `138.124.61.221`, PROD `/root/partner-keys/` на `do-app-1`.
 - Партнёры: DEV — `nadi`, `e2e`; TEST — только `e2e`; PROD — `nadi` (IP 165.227.141.149), `e2e`. Вебхук nadi заводится, когда команда nadi даст адрес: `set-webhook --slug nadi --url …`.
-- Отключить партнёра немедленно: `disable --slug nadi` (≤30 с) или `PARTNER_API_ENABLED=false` + рестарт — второе гасит и все партнёрские токены мессенджера.
+- Отключить партнёра: `disable --slug nadi` закрывает REST за ≤30 с, но уже открытые сокеты живут до истечения своего токена (до 15 минут) — токен сокета проверяется только при подключении. Мгновенно всё сразу — `PARTNER_API_ENABLED=false` + рестарт: это гасит и сокеты, и все партнёрские токены мессенджера.
 ~~~~
 
 - [ ] **Step 3: Память**
