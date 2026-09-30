@@ -1164,7 +1164,8 @@ model PartnerLink {
   partnerId      String
   externalId     String
   userId         String
-  status         PartnerLinkStatus @default(ACTIVE)
+  /// Без умолчания: ACTIVE открывает партнёру чаты человека, поэтому статус всегда задаётся явно.
+  status         PartnerLinkStatus
   /// Аккаунт создал сам партнёр (а не привязал существующий).
   createdAccount Boolean           @default(false)
   /// Грант OIDC: по нему отзываются сразу все токены связки.
@@ -1176,7 +1177,7 @@ model PartnerLink {
   revokedAt      DateTime?
   createdAt      DateTime          @default(now())
   updatedAt      DateTime          @updatedAt
-  partner        Partner           @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  partner        Partner           @relation(fields: [partnerId], references: [id], onDelete: Restrict)
   user           User              @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([partnerId, externalId])
@@ -1194,7 +1195,8 @@ model PartnerContact {
   userBId        String
   createdContact Boolean
   createdAt      DateTime @default(now())
-  partner        Partner  @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  partner        Partner  @relation(fields: [partnerId], references: [id], onDelete: Restrict)
 
   @@unique([partnerId, userAId, userBId])
+  @@index([userAId, userBId])
 }

@@ -69,8 +69,10 @@ export async function createOidcProvider(config: OidcProviderConfig) {
       'offline_access',
       // единый источник — mcp.constants: новый MCP-scope нельзя «забыть» в OIDC
       ...MCP_SCOPES,
-      // Токены партнёров (nadi): выпускаются только партнёрским API на сервере,
-      // через consent-экран и DCR не выдаются (см. prisma-client-adapter).
+      // Токены партнёров (nadi) выпускает только партнёрский API на сервере.
+      // Через DCR этот scope не получить — prisma-client-adapter его вырезает;
+      // на consent-экран он не попадёт, потому что есть только в allowedScopes
+      // партнёрских клиентов, а у них нет redirect URI.
       MESSENGER_SCOPE,
     ],
 

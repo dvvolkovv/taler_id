@@ -1,3 +1,5 @@
+import type { ConvType } from '@prisma/client';
+
 /**
  * Партнёрский API мессенджера: общие константы.
  * Спека: docs/superpowers/specs/2026-09-30-partner-messenger-api-design.md
@@ -7,7 +9,7 @@
 export const MESSENGER_SCOPE = 'messenger';
 
 /** Какие беседы видит и может трогать партнёрский токен. */
-export const PARTNER_CONVERSATION_TYPES = ['DIRECT', 'GROUP'] as const;
+export const PARTNER_CONVERSATION_TYPES = ['DIRECT', 'GROUP'] as const satisfies readonly ConvType[];
 
 export function isPartnerConversationType(type: string | null | undefined): boolean {
   return (PARTNER_CONVERSATION_TYPES as readonly string[]).includes(type ?? '');

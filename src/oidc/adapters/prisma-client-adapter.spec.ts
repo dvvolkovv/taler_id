@@ -41,6 +41,7 @@ describe('PrismaClientAdapter DCR', () => {
     }, 0);
     const createCall = prisma.oAuthClient.create.mock.calls[0][0];
     expect(createCall.data.dcrMetadata.scope).toBe('openid mcp:calendar');
+    expect(createCall.data.allowedScopes).toEqual(['openid', 'mcp:calendar']);
   });
 
   it('find returns dcrMetadata for dynamic client', async () => {

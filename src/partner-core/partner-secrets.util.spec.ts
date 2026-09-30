@@ -37,4 +37,22 @@ describe('partner secrets', () => {
     process.env.PARTNER_SECRETS_KEY = 'short';
     expect(() => hashLinkCode('l', '1')).toThrow('PARTNER_SECRETS_KEY');
   });
+
+  it('fails to decrypt with a different master key', () => {
+    const secret = generateWebhookSecret();
+    const enc = encryptWebhookSecret(secret);
+    process.env.PARTNER_SECRETS_KEY = 'b'.repeat(64);
+    expect(() => decryptWebhookSecret(enc)).toThrow();
+  });
+
+  it('encrypts the same secret differently each time', () => {
+    const secret = generateWebhookSecret();
+    expect(encryptWebhookSecret(secret)).not.toBe(encryptWebhookSecret(secret));
+  });
+
+  it('fails closed on encrypt/decrypt without a proper master key too', () => {
+    process.env.PARTNER_SECRETS_KEY = 'short';
+    expect(() => encryptWebhookSecret('whsec_x')).toThrow('PARTNER_SECRETS_KEY');
+    expect(() => decryptWebhookSecret('whatever')).toThrow('PARTNER_SECRETS_KEY');
+  });
 });

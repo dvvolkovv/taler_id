@@ -34,4 +34,20 @@ describe('partner key', () => {
   it('refuses to generate a key for an invalid slug', () => {
     expect(() => generatePartnerKey('Bad_Slug')).toThrow('invalid partner slug');
   });
+
+  it('rejects slugs outside the 2..32 length boundary', () => {
+    expect(() => generatePartnerKey('a')).toThrow('invalid partner slug');
+    expect(() => generatePartnerKey('x'.repeat(33))).toThrow('invalid partner slug');
+  });
+
+  it('accepts slugs at the 2..32 length boundary', () => {
+    const shortSlug = 'ab';
+    const longSlug = 'x'.repeat(32);
+    expect(parsePartnerKey(generatePartnerKey(shortSlug))).toEqual({ slug: shortSlug });
+    expect(parsePartnerKey(generatePartnerKey(longSlug))).toEqual({ slug: longSlug });
+  });
+
+  it('rejects a non-string key', () => {
+    expect(parsePartnerKey(123 as any)).toBeNull();
+  });
 });
