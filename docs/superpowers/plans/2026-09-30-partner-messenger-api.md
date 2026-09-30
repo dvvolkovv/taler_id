@@ -75,6 +75,8 @@
 - `Retry-After` ставит глобальный фильтр ошибок для любого `429` с `retryAfter` (у `link-code` его не было); при сбое письма возвращается и часовой слот человека;
 - в Task 40 добавлен prettier по всем файлам ветки.
 
+Для эксплуатации: выбор `410`/`404` сравнивает `revokedAt` и `deletedAt`; ручная блокировка SQL-ом на сервере не в UTC (`now()` в местном времени) его ломает — блокировать через admin API или писать `now() at time zone 'utc'`. Отзыв не должен переписывать `revokedAt` уже отозванной связки (доделка оборванного отзыва) — правка в партнёрском ядре вместе с задачами 21–23.
+
 Принято без правки: гонка в `revokeAllForUser` (строку связки успели переиспользовать под другой аккаунт — отзывается свежая связка; безопасная сторона, лечится повторным `POST /users`), действия скрипта не пишутся в `AuditLog`.
 
 ### Правки по ревью задач 16–17 — код отличается от блоков ниже
@@ -7182,7 +7184,7 @@ curl -X POST https://staging.id.taler.tirol/partner/v1/users \
 { "status": "active", "talerUserId": "…", "managed": true, "linkedAt": "2026-10-01T10:00:00.000Z" }
 ```
 
-- `status`: `active`, `confirmation_required` или `revoked` (в том числе если человек удалил аккаунт в Taler ID); `404 not_linked` — такого `externalId` у вас нет.
+- `status`: `active`, `confirmation_required` или `revoked` (в том числе если человек удалил аккаунт в Taler ID, а вы были к нему допущены); `404 not_linked` — такого `externalId` у вас нет, или связка так и не была подтверждена, а аккаунт удалён, или вы сами отвязали человека до того, как он удалил аккаунт (в том числе своим `DELETE ?deleteAccount=true`).
 - `managed: true` — аккаунт создали вы, и человек ни разу не задавал пароль Taler ID. Только такой аккаунт вы можете переименовать и удалить.
 
 ### Имя — `PATCH /partner/v1/users/{externalId}`
@@ -7823,7 +7825,13 @@ async function main() {
         const del = await http.delete('/profile', auth(linked));
         check('8j. человек удалил аккаунт в TalerID', del.status < 300, del.data);
         linkedToken = null;
-        check('8k. после удаления связка отозвана, токен → 404', (await partner.post(`/users/${ext.d}/token`)).status === 404);
+        // Аккаунт привязан кодом, партнёр был допущен — ему положено знать об удалении (410),
+        // чтобы не заводить человека заново самому. Повтор — снова 410, GET — revoked без id.
+        const gone = await partner.post(`/users/${ext.d}/token`);
+        check('8k. после удаления связка отозвана, токен → 410 account_deleted', gone.status === 410 && gone.data?.message === 'account_deleted', gone.data);
+        check('8l. повторный запрос токена → снова 410', (await partner.post(`/users/${ext.d}/token`)).status === 410);
+        const after = await partner.get(`/users/${ext.d}`);
+        check('8m. статус: revoked, id не отдаётся', after.data?.status === 'revoked' && after.data?.talerUserId === null, after.data);
       }
     }
 
