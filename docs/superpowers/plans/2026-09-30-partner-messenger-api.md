@@ -66,6 +66,19 @@
 
 Код из письма остался в теме письма, как у `sendOtp`: угроза «код продиктуют злоумышленнику» от места кода в письме не зависит, а e2e читает его оттуда.
 
+### Правки по ревью задач 14–15 — код и схема отличаются от блоков ниже
+
+Ревью прогнало сервис на настоящем Postgres. Источник правды для задач 14–15 и для схемы — файлы в ветке:
+- владелец почты ищется `$queryRaw` с `lower(email) = lower($1)`: фильтр Prisma `mode: 'insensitive'` становится `ILIKE`, и `_`/`%` в адресе работали как шаблон (`ivan_petrenko@` находил `ivan.petrenko@`, через отозванную связку — вплоть до захвата без кода);
+- аккаунт и связка — одной транзакцией; строка связки переиспользуется и удаляется только в том полностью отозванном виде, в каком прочитана; гонка — до трёх попыток, потом `503 link_busy`;
+- «аккаунт завёл партнёр» — `User.createdByPartnerId` вместо `PartnerLink.createdAccount` (строку связки переиспользуют под другой аккаунт, и отметка терялась). Миграция задачи 1 поправлена на месте — она ещё нигде не накатывалась;
+- почта заблокированного администратором аккаунта — `409 email_unavailable`, а не 500 на каждый запрос;
+- повторный `DELETE ?deleteAccount=true` — снова `204`, без второго удаления; `PATCH` с `null` стирает поле; пустой `PATCH` и повторный отзыв не пишут журнал;
+- `PENDING` удалённого аккаунта — `404` (о судьбе чужого аккаунта не сообщаем), `ACTIVE` удалённого — `revoked` в статусе и `410` на токен;
+- сбой Redis при отзыве — `503 revocation_unavailable`.
+
+Под это переписаны задачи 23 (фильтр поиска по `createdByPartnerId`), 37 (формулировка `managed`) и 39 (гонки проверяются e2e-набором на настоящей базе: `2g`, `2h`).
+
 При подготовке задачи 17 (контакты) исправлено: одновременные одинаковые PUT не падают на уникальном индексе `ContactRequest`, принимаются все запросы пары, повторный DELETE не падает.
 
 Под это переписаны задачи 16 (лимиты письма с кодом — `countInWindow`: без Redis отказ 503, окно не продлевается отказами), 18 (`@PartnerApi()`), 20 (скрипт отвергает неизвестные флаги и проверяет адреса, `set-ips` требует `--ips` или `--clear`), 37 (ошибки и заголовки в документации), 41–43 (проверка `TRUST_PROXY` и подделки `X-Forwarded-For`).
@@ -4461,7 +4474,7 @@ describe('MessengerService.searchUsers', () => {
     for (const [args] of prisma.user.findMany.mock.calls) {
       expect(args.where.NOT).toEqual({
         passwordHash: null,
-        partnerLinks: { some: { createdAccount: true } },
+        createdByPartnerId: { not: null },
       });
     }
   });
@@ -4481,13 +4494,13 @@ Expected: FAIL — `args.where.NOT` равен `undefined`.
         // Аккаунты, которые завёл партнёр (nadi) и в которые человек сам не
         // входил: он не регистрировался в TalerID и не соглашался показывать
         // почту незнакомым. Задал пароль, чтобы войти в TalerID, — стал виден.
-        NOT: { passwordHash: null, partnerLinks: { some: { createdAccount: true } } },
+        NOT: { passwordHash: null, createdByPartnerId: { not: null } },
 ```
 
 - [ ] **Step 4: Тест проходит, сборка**
 
 Run: `npx jest src/messenger/messenger.service.search.spec.ts && npm run build`
-Expected: PASS; сборка без ошибок (связь `partnerLinks` появилась в Task 1).
+Expected: PASS; сборка без ошибок (поле `User.createdByPartnerId` появилось в правках по ревью задач 14–15).
 
 - [ ] **Step 5: Commit**
 
@@ -7102,6 +7115,8 @@ curl -X POST https://staging.id.taler.tirol/partner/v1/users \
 | `active`, `created: false` | связка уже есть; повтор безопасен |
 | `confirmation_required`, `talerUserId: null` | у почты уже есть аккаунт Taler ID — нужен код из письма (ниже) |
 | `409 user_linked_to_other_external_id` | этот аккаунт уже привязан к вам под другим `externalId` — снимите старую связку (`DELETE`) |
+| `409 email_unavailable` | почта принадлежит аккаунту, заблокированному в Taler ID; завести второй на тот же адрес нельзя |
+| `503 link_busy` | параллельные запросы про того же человека не разошлись; повторите через секунду |
 
 - Почту **вы обязаны проверить сами** до вызова (у nadi это вход по коду): Taler ID помечает её подтверждённой.
 - Почта нужна только при первой привязке. Потом человека определяет `externalId`, и смена почты у вас на Taler ID не влияет.
@@ -7127,18 +7142,20 @@ curl -X POST https://staging.id.taler.tirol/partner/v1/users \
 { "status": "active", "talerUserId": "…", "managed": true, "linkedAt": "2026-10-01T10:00:00.000Z" }
 ```
 
-- `status`: `active`, `confirmation_required` или `revoked`; `404 not_linked` — такого `externalId` у вас нет.
-- `managed: true` — аккаунт создали вы, и человек ни разу не входил в Taler ID сам. Только такой аккаунт вы можете переименовать и удалить.
+- `status`: `active`, `confirmation_required` или `revoked` (в том числе если человек удалил аккаунт в Taler ID); `404 not_linked` — такого `externalId` у вас нет.
+- `managed: true` — аккаунт создали вы, и человек ни разу не задавал пароль Taler ID. Только такой аккаунт вы можете переименовать и удалить.
 
 ### Имя — `PATCH /partner/v1/users/{externalId}`
 
-Тело `{"firstName": "…", "lastName": "…"}`, любое из полей. Только для `managed`, иначе `409 profile_not_managed`.
+Тело `{"firstName": "…", "lastName": "…"}`, любое из полей; `null` стирает поле. Только для `managed`, иначе `409 profile_not_managed`; связка не `active` — `404 not_linked`.
 
 ### Отвязать — `DELETE /partner/v1/users/{externalId}` → `204`
 
 Все выданные токены гаснут сразу, открытые сокеты рвутся. Аккаунт Taler ID остаётся за человеком.
 
-`?deleteAccount=true` — ещё и удалить аккаунт, для случая «человек удалился у вас и просит стереть данные». Только для `managed`, иначе `409 account_not_managed`, и тогда не меняется ничего.
+`?deleteAccount=true` — ещё и удалить аккаунт, для случая «человек удалился у вас и просит стереть данные». Только для `managed`, иначе `409 account_not_managed`, и тогда не меняется ничего. Повтор безопасен: уже удалённый аккаунт второй раз не удаляется, ответ снова `204`.
+
+Если на отзыве Taler ID не достучался до своего хранилища токенов — `503 revocation_unavailable`; повторите запрос, связка останется в прежнем состоянии или будет доотозвана.
 
 ### Токен мессенджера — `POST /partner/v1/users/{externalId}/token`
 
@@ -7150,7 +7167,7 @@ curl -X POST https://staging.id.taler.tirol/partner/v1/users \
 |---|---|
 | `404 not_linked` | связки нет или она отозвана (в том числе прямо во время этого запроса) |
 | `409 confirmation_required` | связка ждёт кода из письма |
-| `410 account_deleted` | человек удалил аккаунт в Taler ID; связка отозвана |
+| `410 account_deleted` | человек удалил аккаунт в Taler ID или аккаунт заблокирован; связка отозвана |
 | `503 link_busy` | редкая гонка параллельных запросов токена; повторите через секунду |
 
 Refresh-токена нет: истёк — попросите новый.
@@ -7583,7 +7600,10 @@ async function main() {
   if (!SMOKE && !WEBHOOK_SECRET) throw new PrerequisiteError('PARTNER_E2E_WEBHOOK_SECRET не задан в .env');
 
   const run = Date.now().toString(36);
-  const ext = { a: `e2e-a-${run}`, b: `e2e-b-${run}`, c: `e2e-c-${run}`, d: `e2e-d-${run}` };
+  const ext = {
+    a: `e2e-a-${run}`, b: `e2e-b-${run}`, c: `e2e-c-${run}`, d: `e2e-d-${run}`,
+    r: `e2e-r-${run}`, s1: `e2e-s1-${run}`, s2: `e2e-s2-${run}`,
+  };
   const createdExternalIds: string[] = [];
   const sockets: Socket[] = [];
   const mailUidsToDelete: number[] = [];
@@ -7610,6 +7630,26 @@ async function main() {
     check('2e. неизвестный externalId → 404', (await partner.get(`/users/nobody-${run}`)).status === 404);
     const status = await partner.get(`/users/${ext.a}`);
     check('2f. статус: active, managed', status.data?.status === 'active' && status.data?.managed === true, status.data);
+
+    // Гонки проверяются только здесь, на настоящей базе: юнит-тесты транзакцию
+    // и уникальные индексы не видят. Один и тот же запрос дважды разом (повтор
+    // по таймауту) — оба 200, аккаунт один.
+    const raceEmail = `partner-e2e-r-${run}@taler-test.com`;
+    const twin = await Promise.all([0, 1].map(() => partner.post('/users', { externalId: ext.r, email: raceEmail })));
+    createdExternalIds.push(ext.r);
+    check('2g. одинаковый POST дважды разом → оба active, created ровно у одного',
+      twin.every((r) => r.status === 200 && r.data?.status === 'active') &&
+        twin.filter((r) => r.data?.created === true).length === 1 &&
+        twin[0].data?.talerUserId === twin[1].data?.talerUserId,
+      twin.map((r) => [r.status, r.data]));
+    // Одна почта под двумя externalId разом — аккаунт один, второму 409.
+    const clashEmail = `partner-e2e-s-${run}@taler-test.com`;
+    const clash = await Promise.all([ext.s1, ext.s2].map((id) => partner.post('/users', { externalId: id, email: clashEmail })));
+    for (const [i, r] of clash.entries()) if (r.data?.status === 'active') createdExternalIds.push([ext.s1, ext.s2][i]);
+    check('2h. одна почта под двумя externalId разом → один active, второй 409',
+      clash.filter((r) => r.status === 200 && r.data?.status === 'active').length === 1 &&
+        clash.filter((r) => r.status === 409 && r.data?.message === 'user_linked_to_other_external_id').length === 1,
+      clash.map((r) => [r.status, r.data]));
 
     console.log('\n3. Токены');
     const tok = {} as Record<'a' | 'b' | 'c', { accessToken: string; talerUserId: string }>;

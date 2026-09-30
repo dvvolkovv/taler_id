@@ -60,7 +60,7 @@ TalerID (NestJS, DEV / TEST / PROD)
 
 - **Связка** (`PartnerLink`) — «партнёр + `externalId` ↔ пользователь TalerID». Статусы: `PENDING` (ждёт кода), `ACTIVE`, `REVOKED`.
 - **`externalId`** — стабильный id человека у партнёра (для nadi — id участника). 1–128 символов `[A-Za-z0-9._:-]`.
-- **Управляемый аккаунт** — аккаунт, созданный этим партнёром, в котором человек ни разу не задавал пароль TalerID. Только такой аккаунт партнёр может переименовать, удалить, и только такой скрыт из глобального поиска. Как только человек задал пароль (например, через «забыли пароль», чтобы войти в приложение TalerID), аккаунт перестаёт быть управляемым.
+- **Управляемый аккаунт** — аккаунт, созданный этим партнёром, в котором человек ни разу не задавал пароль TalerID. Только такой аккаунт партнёр может переименовать, удалить, и только такой скрыт из глобального поиска. Как только человек задал пароль (например, через «забыли пароль», чтобы войти в приложение TalerID), аккаунт перестаёт быть управляемым. Кто завёл аккаунт, помнит сам аккаунт (`User.createdByPartnerId`), а не связка: строку связки переиспользуют под другой аккаунт.
 
 ## Партнёрский API
 
@@ -70,7 +70,9 @@ TalerID (NestJS, DEV / TEST / PROD)
 
 ### `POST /partner/v1/users`
 
-Тело: `{ externalId, email, firstName?, lastName?, locale? }`. Почта приводится к нижнему регистру, поиск существующего аккаунта — без учёта регистра (уникальный индекс в БД регистрозависим, иначе `Ivan@…` и `ivan@…` стали бы двумя аккаунтами). `locale`: `ru`/`en` сохраняются в профиль, остальное → `en`.
+Тело: `{ externalId, email, firstName?, lastName?, locale? }`. Почта приводится к нижнему регистру, поиск существующего аккаунта — точное совпадение без учёта регистра, `lower(email) = lower($1)` (уникальный индекс в БД регистрозависим, иначе `Ivan@…` и `ivan@…` стали бы двумя аккаунтами). Не фильтр Prisma `mode: 'insensitive'`: на PostgreSQL он становится `ILIKE`, и `_`/`%` в адресе работали бы как шаблон. `locale`: `ru`/`en` сохраняются в профиль, остальное → `en`.
+
+Аккаунт и связка пишутся одной транзакцией, переиспользуемая строка связки — только если она всё ещё та полностью отозванная, что прочитана. Параллельные запросы про одного человека повторяются с начала до трёх раз, дальше `503 link_busy`.
 
 | Ситуация | Ответ |
 |---|---|
@@ -80,6 +82,8 @@ TalerID (NestJS, DEV / TEST / PROD)
 | Почта принадлежит аккаунту, не привязанному к партнёру | Связка `PENDING`, **письмо не отправляется** → `200 {status:'confirmation_required', talerUserId:null}`. Id чужого аккаунта не раскрывается |
 | Этот аккаунт уже привязан к партнёру под другим `externalId` | `409 user_linked_to_other_external_id` |
 | Связка была `REVOKED` | Те же правила, что при первой привязке: управляемый аккаунт — снова `active`, чужой — снова через код, удалённый — создаётся новый |
+| Почту держит аккаунт, заблокированный администратором | `409 email_unavailable` |
+| Параллельные запросы не разошлись за три попытки | `503 link_busy` — повторить |
 
 Новый аккаунт получает тот же набор записей, что при обычной регистрации: `User` (почта, `emailVerified=true` — nadi проверил её своим кодом, это обязанность партнёра), `Profile` (имя, язык), `KycRecord`, подписку на системный канал новостей. Пароля нет. Письмо при массовой первичной загрузке не отправляется — только по явному `link-code`.
 
@@ -97,21 +101,23 @@ TalerID (NestJS, DEV / TEST / PROD)
 
 ### `POST /partner/v1/users/{externalId}/token`
 
-`200 {accessToken, tokenType:'Bearer', expiresIn:900, talerUserId}`. Ошибки: `404 not_linked` (в том числе если связку отозвали прямо во время запроса), `409 confirmation_required`, `410 account_deleted` (аккаунт удалён в TalerID; связка отзывается сама), `503 link_busy` (редкая гонка параллельных запросов токена — повторить).
+`200 {accessToken, tokenType:'Bearer', expiresIn:900, talerUserId}`. Ошибки: `404 not_linked` (в том числе если связку отозвали прямо во время запроса, и для `PENDING`-связки удалённого аккаунта — о судьбе аккаунта, к которому доступа не давали, партнёр не узнаёт), `409 confirmation_required`, `410 account_deleted` (аккаунт удалён или заблокирован в TalerID; связка отзывается сама), `503 link_busy` (редкая гонка параллельных запросов токена — повторить).
+
+Любая ручка, которой приходится отзывать связку, при сбое Redis отвечает `503 revocation_unavailable` — повторить.
 
 ### `GET /partner/v1/users/{externalId}`
 
-`200 {status:'active'|'confirmation_required'|'revoked', talerUserId|null, managed:boolean, linkedAt|null}`; `404 not_linked`.
+`200 {status:'active'|'confirmation_required'|'revoked', talerUserId|null, managed:boolean, linkedAt|null}`; `404 not_linked`. Связка удалённого аккаунта — `revoked`, а `PENDING` такого аккаунта — `404`, как у `/token`.
 
 ### `PATCH /partner/v1/users/{externalId}`
 
-Тело `{firstName?, lastName?}`. Только для управляемого аккаунта, иначе `409 profile_not_managed`.
+Тело `{firstName?, lastName?}`, `null` стирает поле. Только для управляемого аккаунта, иначе `409 profile_not_managed`; связки не `ACTIVE` — `404 not_linked`.
 
 ### `DELETE /partner/v1/users/{externalId}[?deleteAccount=true]`
 
 Отзывает связку: статус `REVOKED`, `revokeByGrantId` гасит все её токены мгновенно, открытые сокеты связки рвутся (комната `plink:<linkId>`, через Redis-адаптер — на всех нодах). Аккаунт TalerID остаётся за человеком. `204`.
 
-С `deleteAccount=true` — ещё и удаляет аккаунт штатной процедурой `ProfileService.deleteAccount` (обнуляет почту, телефон, пароль; ставит `deletedAt`). Только для управляемого аккаунта, иначе `409 account_not_managed` и ничего не меняется. Нужно, когда человек удаляется из nadi и просит стереть данные; заодно так убирают за собой тесты.
+С `deleteAccount=true` — ещё и удаляет аккаунт штатной процедурой `ProfileService.deleteAccount` (обнуляет почту, телефон, пароль; ставит `deletedAt`). Только для управляемого аккаунта, иначе `409 account_not_managed` и ничего не меняется. Повтор безопасен: уже удалённый аккаунт второй раз не удаляется, ответ тот же `204`. Нужно, когда человек удаляется из nadi и просит стереть данные; заодно так убирают за собой тесты.
 
 ### `PUT /partner/v1/contacts/{a}/{b}` и `DELETE …/{a}/{b}`
 
@@ -238,9 +244,10 @@ TalerID (NestJS, DEV / TEST / PROD)
 Новые модели Prisma (одна миграция):
 
 - **`Partner`** — `id`, `slug` (уникальный), `name` (для писем: «Nadi»), `keyHash` (sha256 ключа), `ipAllowlist String[]`, `webhookUrl?` (только https), `webhookSecretEnc?`, `oauthClientId` (уникальный; клиент `nadi-partner` в `OAuthClient`: `verifiedPartner=true`, `allowedScopes=['messenger']`, без redirect URI), `enabled`, даты.
-- **`PartnerLink`** — `id`, `partnerId`, `externalId`, `userId`, `status` (`PENDING|ACTIVE|REVOKED`), `createdAccount`, `grantId?`, `codeHash?`, `codeExpiresAt?`, `codeAttempts`, `activatedAt?`, `revokedAt?`, даты. Уникальные: `(partnerId, externalId)`, `(partnerId, userId)` — повторная привязка переиспользует строку. Ограничения отправки кода (раз в 60 с, 5 в час) — счётчиками в Redis с TTL, не в БД.
+- **`PartnerLink`** — `id`, `partnerId`, `externalId`, `userId`, `status` (`PENDING|ACTIVE|REVOKED`), `grantId?`, `codeHash?`, `codeExpiresAt?`, `codeAttempts`, `activatedAt?`, `revokedAt?`, даты. Уникальные: `(partnerId, externalId)`, `(partnerId, userId)` — повторная привязка переиспользует строку. Ограничения отправки кода (раз в 60 с, 5 в час) — счётчиками в Redis с TTL, не в БД.
 - **`PartnerContact`** — `partnerId`, `userAId`, `userBId` (упорядочены), `createdContact` (контакт создал партнёр или он был раньше), дата. Уникальный `(partnerId, userAId, userBId)`.
 - **`BlockedUser.hadContact Boolean @default(false)`** — для исправления разблокировки.
+- **`User.createdByPartnerId String?`** (FK на `Partner`, `Restrict`) — какой партнёр завёл аккаунт; вместе с отсутствием пароля определяет управляемый аккаунт.
 
 Правка вне Prisma: scope `messenger` добавляется в список scopes OIDC-провайдера (`oidc-provider.factory.ts`) через константу, по образцу `MCP_SCOPES`.
 
