@@ -66,6 +66,8 @@
 
 Код из письма остался в теме письма, как у `sendOtp`: угроза «код продиктуют злоумышленнику» от места кода в письме не зависит, а e2e читает его оттуда.
 
+При подготовке задачи 17 (контакты) исправлено: одновременные одинаковые PUT не падают на уникальном индексе `ContactRequest`, принимаются все запросы пары, повторный DELETE не падает.
+
 Под это переписаны задачи 16 (лимиты письма с кодом — `countInWindow`: без Redis отказ 503, окно не продлевается отказами), 18 (`@PartnerApi()`), 20 (скрипт отвергает неизвестные флаги и проверяет адреса, `set-ips` требует `--ips` или `--clear`), 37 (ошибки и заголовки в документации), 41–43 (проверка `TRUST_PROXY` и подделки `X-Forwarded-For`).
 
 Замечено попутно, вне этой ветки: guard Linkeon (`src/partner/partner-secret.guard.ts`) берёт первый адрес из `X-Forwarded-For`, который задаёт сам клиент, — его белый список IP подделывается; в `email.service.ts` имя организации, имя пригласившего и причина отказа KYC попадают в HTML без экранирования.
@@ -3316,13 +3318,13 @@ function make() {
     partnerContact: {
       findUnique: jest.fn().mockResolvedValue(null),
       create: jest.fn().mockResolvedValue({}),
-      delete: jest.fn().mockResolvedValue({}),
+      deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
       count: jest.fn().mockResolvedValue(0),
     },
     contactRequest: {
       findMany: jest.fn().mockResolvedValue([]),
       create: jest.fn().mockResolvedValue({}),
-      update: jest.fn().mockResolvedValue({}),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
   };
@@ -3347,18 +3349,39 @@ describe('PartnerContactsService.put', () => {
     prisma.contactRequest.findMany.mockResolvedValue([{ id: 'c1', status: 'ACCEPTED' }]);
     await expect(service.put(partner, 'a', 'b')).resolves.toEqual({ contact: true, created: false });
     expect(prisma.contactRequest.create).not.toHaveBeenCalled();
-    expect(prisma.contactRequest.update).not.toHaveBeenCalled();
+    expect(prisma.contactRequest.updateMany).not.toHaveBeenCalled();
     expect(prisma.partnerContact.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ createdContact: false }),
     });
   });
 
-  it('upgrades a pending request instead of creating a second row', async () => {
+  it('upgrades every request of the pair instead of creating another row', async () => {
     const { service, prisma } = make();
-    prisma.contactRequest.findMany.mockResolvedValue([{ id: 'c1', status: 'PENDING' }]);
+    // Отклонённый запрос в одну сторону и висящий встречный: оба становятся
+    // принятыми, иначе у человека остался бы «входящий запрос» от контакта.
+    prisma.contactRequest.findMany.mockResolvedValue([
+      { id: 'c1', status: 'REJECTED' },
+      { id: 'c2', status: 'PENDING' },
+    ]);
     await service.put(partner, 'a', 'b');
-    expect(prisma.contactRequest.update).toHaveBeenCalledWith({ where: { id: 'c1' }, data: { status: 'ACCEPTED' } });
+    expect(prisma.contactRequest.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['c1', 'c2'] } },
+      data: { status: 'ACCEPTED' },
+    });
     expect(prisma.contactRequest.create).not.toHaveBeenCalled();
+  });
+
+  it('answers the same PUT sent twice at once instead of failing on the unique index', async () => {
+    const { service, prisma } = make();
+    prisma.contactRequest.create.mockRejectedValueOnce(Object.assign(new Error('dup'), { code: 'P2002' }));
+    // К повтору параллельный запрос уже всё записал.
+    prisma.contactRequest.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: 'c1', status: 'ACCEPTED' }]);
+    // Первая попытка до PartnerContact не дошла, а параллельный запрос его уже завёл.
+    prisma.partnerContact.findUnique.mockResolvedValue({ id: 'pc1' });
+    await expect(service.put(partner, 'a', 'b')).resolves.toEqual({ contact: true, created: false });
+    expect(prisma.partnerContact.create).not.toHaveBeenCalled();
   });
 
   it('never overrides a block', async () => {
@@ -3385,7 +3408,7 @@ describe('PartnerContactsService.remove', () => {
     const { service, prisma } = make();
     prisma.partnerContact.findUnique.mockResolvedValue({ id: 'pc1', createdContact: true });
     await expect(service.remove(partner, 'a', 'b')).resolves.toEqual({ contact: false });
-    expect(prisma.partnerContact.delete).toHaveBeenCalledWith({ where: { id: 'pc1' } });
+    expect(prisma.partnerContact.deleteMany).toHaveBeenCalledWith({ where: { id: 'pc1' } });
     expect(prisma.contactRequest.deleteMany).toHaveBeenCalled();
   });
 
@@ -3408,7 +3431,7 @@ describe('PartnerContactsService.remove', () => {
   it('does nothing but report when the partner never made them contacts', async () => {
     const { service, prisma } = make();
     await expect(service.remove(partner, 'a', 'b')).resolves.toEqual({ contact: false });
-    expect(prisma.partnerContact.delete).not.toHaveBeenCalled();
+    expect(prisma.partnerContact.deleteMany).not.toHaveBeenCalled();
   });
 });
 ```
@@ -3446,7 +3469,29 @@ export class PartnerContactsService {
     private readonly audit: PartnerAuditService,
   ) {}
 
-  async put(partner: PartnerRecord, extA: string, extB: string, ip?: string): Promise<{ contact: true; created: boolean }> {
+  async put(
+    partner: PartnerRecord,
+    extA: string,
+    extB: string,
+    ip?: string,
+    retried = false,
+  ): Promise<{ contact: true; created: boolean }> {
+    try {
+      return await this.putOnce(partner, extA, extB, ip);
+    } catch (e: any) {
+      // Тот же PUT пришёл дважды одновременно (оба друга подтвердили дружбу):
+      // второй упирается в уникальный индекс. Первый уже всё записал — перечитываем.
+      if (e?.code === 'P2002' && !retried) return this.put(partner, extA, extB, ip, true);
+      throw e;
+    }
+  }
+
+  private async putOnce(
+    partner: PartnerRecord,
+    extA: string,
+    extB: string,
+    ip?: string,
+  ): Promise<{ contact: true; created: boolean }> {
     const [userAId, userBId] = await this.pair(partner, extA, extB, true);
     const blocked = await this.prisma.blockedUser.findFirst({
       where: {
@@ -3462,7 +3507,12 @@ export class PartnerContactsService {
     const wasContact = rows.some((r) => r.status === 'ACCEPTED');
     if (!wasContact) {
       if (rows.length > 0) {
-        await this.prisma.contactRequest.update({ where: { id: rows[0].id }, data: { status: 'ACCEPTED' } });
+        // Все запросы пары, а не первый: висящий встречный запрос иначе
+        // остался бы «входящим» от человека, который уже в контактах.
+        await this.prisma.contactRequest.updateMany({
+          where: { id: { in: rows.map((r) => r.id) } },
+          data: { status: 'ACCEPTED' },
+        });
       } else {
         await this.prisma.contactRequest.create({
           data: { senderId: userAId, receiverId: userBId, status: 'ACCEPTED' },
@@ -3494,7 +3544,8 @@ export class PartnerContactsService {
       where: { partnerId_userAId_userBId: { partnerId: partner.id, userAId, userBId } },
     });
     if (record) {
-      await this.prisma.partnerContact.delete({ where: { id: record.id } });
+      // deleteMany: повторный или параллельный DELETE не падает на уже удалённой строке.
+      await this.prisma.partnerContact.deleteMany({ where: { id: record.id } });
       // Снимаем только контакт, который завёл сам партнёр, и только если его
       // не держит другой партнёр. Дружба, бывшая в TalerID раньше, остаётся.
       const heldByOthers = await this.prisma.partnerContact.count({ where: { userAId, userBId } });
@@ -3558,7 +3609,7 @@ export class PartnerContactsService {
 - [ ] **Step 4: Тест проходит**
 
 Run: `npx jest src/partner-api/partner-contacts.service.spec.ts`
-Expected: PASS, 10 тестов.
+Expected: PASS, 11 тестов.
 
 - [ ] **Step 5: Commit**
 
