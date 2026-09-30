@@ -1,0 +1,40 @@
+import {
+  decryptWebhookSecret,
+  encryptWebhookSecret,
+  generateWebhookSecret,
+  hashLinkCode,
+  linkCodeMatches,
+} from './partner-secrets.util';
+
+const saved = process.env.PARTNER_SECRETS_KEY;
+
+describe('partner secrets', () => {
+  beforeEach(() => {
+    process.env.PARTNER_SECRETS_KEY = 'a'.repeat(64);
+  });
+  afterAll(() => {
+    if (saved === undefined) delete process.env.PARTNER_SECRETS_KEY;
+    else process.env.PARTNER_SECRETS_KEY = saved;
+  });
+
+  it('encrypts and decrypts the webhook secret', () => {
+    const secret = generateWebhookSecret();
+    expect(secret).toMatch(/^whsec_[A-Za-z0-9_-]{43}$/);
+    const enc = encryptWebhookSecret(secret);
+    expect(enc).not.toContain(secret);
+    expect(decryptWebhookSecret(enc)).toBe(secret);
+  });
+
+  it('binds the link-code hash to the link', () => {
+    const hash = hashLinkCode('link-1', '123456');
+    expect(linkCodeMatches('link-1', '123456', hash)).toBe(true);
+    expect(linkCodeMatches('link-2', '123456', hash)).toBe(false);
+    expect(linkCodeMatches('link-1', '654321', hash)).toBe(false);
+    expect(linkCodeMatches('link-1', '123456', '')).toBe(false);
+  });
+
+  it('fails closed without a proper master key', () => {
+    process.env.PARTNER_SECRETS_KEY = 'short';
+    expect(() => hashLinkCode('l', '1')).toThrow('PARTNER_SECRETS_KEY');
+  });
+});
