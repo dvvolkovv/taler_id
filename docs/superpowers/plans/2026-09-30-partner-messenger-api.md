@@ -79,6 +79,8 @@
 
 Под это переписаны задачи 23 (фильтр поиска по `createdByPartnerId`), 37 (формулировка `managed`) и 39 (гонки проверяются e2e-набором на настоящей базе: `2g`, `2h`).
 
+Код «письмо не ушло» у `link-code` (задача 16) — `503 email_send_failed`, чтобы не путать с `409 email_unavailable` у `POST /users`. Миграция поправлена на месте, поэтому перед выкаткой на каждое окружение `npx prisma migrate status` должен показывать её как ещё не применённую — иначе Prisma откажется («migration was modified after it was applied»).
+
 При подготовке задачи 17 (контакты) исправлено: одновременные одинаковые PUT не падают на уникальном индексе `ContactRequest`, принимаются все запросы пары, повторный DELETE не падает.
 
 Под это переписаны задачи 16 (лимиты письма с кодом — `countInWindow`: без Redis отказ 503, окно не продлевается отказами), 18 (`@PartnerApi()`), 20 (скрипт отвергает неизвестные флаги и проверяет адреса, `set-ips` требует `--ips` или `--clear`), 37 (ошибки и заголовки в документации), 41–43 (проверка `TRUST_PROXY` и подделки `X-Forwarded-For`).
@@ -181,6 +183,8 @@ Expected: список уже падающих наборов (`FAIL …`) и и
 ---
 
 ## Task 1: Схема Prisma и миграция
+
+> ⚠️ Блоки кода этой задачи — исторические. Источник правды — `prisma/schema.prisma` и миграция в ветке: после ревью у связки нет `createdAccount`, а у `User` есть `createdByPartnerId` (см. «Правки по ревью задач 14–15» в начале плана).
 
 **Files:**
 - Modify: `prisma/schema.prisma` (модели `User`, `BlockedUser`; новые `PartnerLinkStatus`, `Partner`, `PartnerLink`, `PartnerContact` в конце файла)
@@ -2140,6 +2144,8 @@ git commit -m "feat(partner): externalId и DTO партнёрского API" -m
 
 ## Task 14: Завести или привязать человека
 
+> ⚠️ Блоки кода этой задачи — исторические, повторять их нельзя: в них поиск почты через `mode: 'insensitive'` (ILIKE с шаблонами) и неатомарная запись. Источник правды — `src/partner-api/partner-users.service.ts` и его spec в ветке (см. «Правки по ревью задач 14–15»).
+
 **Files:**
 - Create: `src/partner-api/partner-users.service.ts`
 - Test: `src/partner-api/partner-users.service.spec.ts`
@@ -2585,6 +2591,8 @@ git commit -m "feat(partner): заведение и привязка людей 
 ---
 
 ## Task 15: Токен, статус, имя, отзыв и удаление
+
+> ⚠️ Блоки кода этой задачи — исторические. Источник правды — `src/partner-api/partner-users.service.ts` и его spec в ветке (см. «Правки по ревью задач 14–15»).
 
 **Files:**
 - Modify: `src/partner-api/partner-users.service.ts` (методы `issueToken`, `getUser`, `patchUser`, `deleteUser`)
@@ -3213,7 +3221,7 @@ export class PartnerLinkCodeService {
       // Ответ про почту не держим ради Redis: del — без ожидания.
       this.redis.del(cooldownKey).catch(() => undefined);
       this.logger.error(`link code mail failed for ${link.id}: ${(e as Error).message}`);
-      throw new ServiceUnavailableException('email_unavailable');
+      throw new ServiceUnavailableException('email_send_failed');
     }
     await this.audit.log(partner, 'LINK_CODE_SENT', { externalId, userId: link.userId, ip });
     return { sent: true, expiresIn: CODE_TTL_SECONDS };
@@ -7117,6 +7125,7 @@ curl -X POST https://staging.id.taler.tirol/partner/v1/users \
 | `409 user_linked_to_other_external_id` | этот аккаунт уже привязан к вам под другим `externalId` — снимите старую связку (`DELETE`) |
 | `409 email_unavailable` | почта принадлежит аккаунту, заблокированному в Taler ID; завести второй на тот же адрес нельзя |
 | `503 link_busy` | параллельные запросы про того же человека не разошлись; повторите через секунду |
+| `503 revocation_unavailable` | чтобы переиспользовать отозванную связку, Taler ID доотзывает её токены и не достучался до своего хранилища; повторите |
 
 - Почту **вы обязаны проверить сами** до вызова (у nadi это вход по коду): Taler ID помечает её подтверждённой.
 - Почта нужна только при первой привязке. Потом человека определяет `externalId`, и смена почты у вас на Taler ID не влияет.
@@ -7129,7 +7138,7 @@ curl -X POST https://staging.id.taler.tirol/partner/v1/users \
 2. `POST /partner/v1/users/{externalId}/link-code` → `{ "sent": true, "expiresIn": 600 }`.
    - Не чаще раза в минуту и не больше 5 раз в час, иначе `429 too_many_requests` + `retryAfter` (секунды).
    - `409 not_pending` — связка уже подтверждена или кода не ждёт.
-   - `503 email_unavailable` — письмо не ушло, можно сразу повторить; `503 rate_limiter_unavailable` — лимит сейчас не проверить, повторите через минуту.
+   - `503 email_send_failed` — письмо не ушло, можно сразу повторить; `503 rate_limiter_unavailable` — лимит сейчас не проверить, повторите через минуту.
 3. Человек вводит 6 цифр: `POST /partner/v1/users/{externalId}/link-code/verify` `{"code":"123456"}` → `{ "status": "active", "talerUserId": "…" }`.
    - `400 invalid_code` + `attemptsLeft` — неверный код;
    - `410 code_expired` — код истёк (10 минут) или сожжён после 5 ошибок: отправьте новый.
@@ -7169,6 +7178,7 @@ curl -X POST https://staging.id.taler.tirol/partner/v1/users \
 | `409 confirmation_required` | связка ждёт кода из письма |
 | `410 account_deleted` | человек удалил аккаунт в Taler ID или аккаунт заблокирован; связка отозвана |
 | `503 link_busy` | редкая гонка параллельных запросов токена; повторите через секунду |
+| `503 revocation_unavailable` | аккаунт удалён, а отозвать связку не удалось — хранилище токенов недоступно; повторите |
 
 Refresh-токена нет: истёк — попросите новый.
 
