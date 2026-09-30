@@ -1,4 +1,5 @@
 import type { PrismaService } from '../../prisma/prisma.service';
+import { MESSENGER_SCOPE } from '../../partner-core/partner.constants';
 
 export class PrismaClientAdapter {
   constructor(
@@ -87,7 +88,9 @@ export class PrismaClientAdapter {
   async upsert(id: string, payload: any, _expiresIn: number): Promise<void> {
     const scope = String(payload.scope ?? '')
       .split(' ')
-      .filter((s) => s && s !== 'offline_access')
+      // offline_access — только для проверенных партнёров, messenger — только
+      // для партнёрского API: через открытую регистрацию их не получить.
+      .filter((s) => s && s !== 'offline_access' && s !== MESSENGER_SCOPE)
       .join(' ');
     const metadata = { ...payload, scope };
 

@@ -5,6 +5,7 @@ import type { PrismaService } from '../prisma/prisma.service';
 import { RedisOidcAdapter } from './adapters/redis-adapter.js';
 import { PrismaClientAdapter } from './adapters/prisma-client-adapter.js';
 import { MCP_SCOPES } from '../mcp/mcp.constants';
+import { MESSENGER_SCOPE } from '../partner-core/partner.constants';
 
 export interface OidcProviderConfig {
   issuer: string;
@@ -68,6 +69,9 @@ export async function createOidcProvider(config: OidcProviderConfig) {
       'offline_access',
       // единый источник — mcp.constants: новый MCP-scope нельзя «забыть» в OIDC
       ...MCP_SCOPES,
+      // Токены партнёров (nadi): выпускаются только партнёрским API на сервере,
+      // через consent-экран и DCR не выдаются (см. prisma-client-adapter).
+      MESSENGER_SCOPE,
     ],
 
     features: {
