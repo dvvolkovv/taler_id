@@ -9,23 +9,28 @@ const dto: any = {
   lastName: 'Петренко',
   locale: 'uk',
 };
-const liveUser = { id: 'u1', deletedAt: null, passwordHash: null };
+// Партнёр p1 завёл этот аккаунт: пароля нет, аккаунт жив — «управляемый».
+const liveUser = { id: 'u1', email: 'ivan@example.com', deletedAt: null, passwordHash: null, createdByPartnerId: 'p1' };
 
 function make() {
   const prisma: any = {
     partnerLink: {
       findUnique: jest.fn().mockResolvedValue(null),
       create: jest.fn().mockResolvedValue({}),
-      update: jest.fn().mockResolvedValue({}),
-      delete: jest.fn().mockResolvedValue({}),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
     user: {
-      findFirst: jest.fn().mockResolvedValue(null),
       create: jest.fn().mockResolvedValue({ id: 'u-new' }),
     },
     profile: { upsert: jest.fn().mockResolvedValue({}) },
     conversationParticipant: { deleteMany: jest.fn().mockResolvedValue({ count: 1 }) },
+    // Владелец почты теперь ищется точным SQL (lower(email)=lower(...)), а не findFirst.
+    $queryRaw: jest.fn().mockResolvedValue([]),
   };
+  // Мок транзакции просто выполняет колбэк на том же prisma — настоящий откат
+  // при ошибке внутри проверяет e2e-набор на реальной базе, не этот мок.
+  prisma.$transaction = jest.fn((fn: any) => fn(prisma));
   const tokens: any = { issueAccessToken: jest.fn(), revokeGrant: jest.fn() };
   const revoker: any = { revokeLink: jest.fn().mockResolvedValue(undefined) };
   const systemChannel: any = { subscribeUser: jest.fn().mockResolvedValue(undefined) };
@@ -50,14 +55,12 @@ describe('PartnerUsersService.provision', () => {
       talerUserId: 'u-new',
       created: true,
     });
-    expect(prisma.user.findFirst).toHaveBeenCalledWith({
-      where: { email: { equals: 'ivan@example.com', mode: 'insensitive' }, deletedAt: null },
-      select: { id: true, passwordHash: true },
-    });
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
     expect(prisma.user.create).toHaveBeenCalledWith({
       data: {
         email: 'ivan@example.com',
         emailVerified: true,
+        createdByPartnerId: 'p1',
         profile: { create: { firstName: 'Іван', lastName: 'Петренко', language: 'en' } },
         kycRecord: { create: {} },
       },
@@ -70,7 +73,6 @@ describe('PartnerUsersService.provision', () => {
         externalId: 'm-1',
         userId: 'u-new',
         status: 'ACTIVE',
-        createdAccount: true,
       }),
     });
     expect(audit.log).toHaveBeenCalledWith(
@@ -82,54 +84,56 @@ describe('PartnerUsersService.provision', () => {
 
   it('is idempotent for an ACTIVE link', async () => {
     const { service, prisma } = make();
-    links(prisma, { id: 'l1', userId: 'u1', status: 'ACTIVE', createdAccount: true, user: liveUser });
+    links(prisma, { id: 'l1', userId: 'u1', status: 'ACTIVE', user: liveUser });
     await expect(service.provision(partner, dto)).resolves.toEqual({ status: 'active', talerUserId: 'u1', created: false });
-    expect(prisma.user.findFirst).not.toHaveBeenCalled();
+    expect(prisma.$queryRaw).not.toHaveBeenCalled();
   });
 
   it('keeps a PENDING link pending', async () => {
     const { service, prisma } = make();
-    links(prisma, { id: 'l1', userId: 'u1', status: 'PENDING', createdAccount: false, user: liveUser });
+    links(prisma, { id: 'l1', userId: 'u1', status: 'PENDING', user: liveUser });
     await expect(service.provision(partner, dto)).resolves.toEqual({ status: 'confirmation_required', talerUserId: null });
   });
 
   it('asks for confirmation when the email already belongs to someone', async () => {
     const { service, prisma } = make();
-    prisma.user.findFirst.mockResolvedValue({ id: 'u-existing', passwordHash: 'hash' });
+    prisma.$queryRaw.mockResolvedValue([{ id: 'u-existing', passwordHash: 'hash', deletedAt: null, createdByPartnerId: null }]);
     await expect(service.provision(partner, dto)).resolves.toEqual({ status: 'confirmation_required', talerUserId: null });
     expect(prisma.user.create).not.toHaveBeenCalled();
     expect(prisma.partnerLink.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ userId: 'u-existing', status: 'PENDING', createdAccount: false }),
+      data: expect.objectContaining({ userId: 'u-existing', status: 'PENDING' }),
     });
   });
 
   it('refuses when that account is linked under another externalId', async () => {
     const { service, prisma } = make();
-    prisma.user.findFirst.mockResolvedValue({ id: 'u-existing', passwordHash: null });
-    links(prisma, null, { id: 'l-other', userId: 'u-existing', externalId: 'm-0', status: 'ACTIVE', createdAccount: true });
+    prisma.$queryRaw.mockResolvedValue([{ id: 'u-existing', passwordHash: null, deletedAt: null, createdByPartnerId: null }]);
+    links(prisma, null, { id: 'l-other', userId: 'u-existing', externalId: 'm-0', status: 'ACTIVE' });
     await expect(service.provision(partner, dto)).rejects.toThrow(ConflictException);
   });
 
   it('replaces a revoked link held under another externalId', async () => {
     const { service, prisma } = make();
-    prisma.user.findFirst.mockResolvedValue({ id: 'u-existing', passwordHash: null });
-    links(prisma, null, { id: 'l-other', userId: 'u-existing', externalId: 'm-0', status: 'REVOKED', createdAccount: true });
+    prisma.$queryRaw.mockResolvedValue([{ id: 'u-existing', passwordHash: null, deletedAt: null, createdByPartnerId: 'p1' }]);
+    links(prisma, null, { id: 'l-other', userId: 'u-existing', externalId: 'm-0', status: 'REVOKED', grantId: null });
     await expect(service.provision(partner, dto)).resolves.toEqual({
       status: 'active',
       talerUserId: 'u-existing',
       created: false,
     });
-    expect(prisma.partnerLink.delete).toHaveBeenCalledWith({ where: { id: 'l-other' } });
+    expect(prisma.partnerLink.deleteMany).toHaveBeenCalledWith({
+      where: { id: 'l-other', status: 'REVOKED', grantId: null },
+    });
   });
 
   it('reactivates its own managed account without a code', async () => {
     const { service, prisma } = make();
-    const revoked = { id: 'l1', userId: 'u1', externalId: 'm-1', status: 'REVOKED', createdAccount: true, grantId: null, user: liveUser };
+    const revoked = { id: 'l1', userId: 'u1', externalId: 'm-1', status: 'REVOKED', grantId: null, user: liveUser };
     links(prisma, revoked, revoked);
-    prisma.user.findFirst.mockResolvedValue({ id: 'u1', passwordHash: null });
+    prisma.$queryRaw.mockResolvedValue([{ id: 'u1', passwordHash: null, deletedAt: null, createdByPartnerId: 'p1' }]);
     await expect(service.provision(partner, dto)).resolves.toEqual({ status: 'active', talerUserId: 'u1', created: false });
-    expect(prisma.partnerLink.update).toHaveBeenCalledWith({
-      where: { id: 'l1' },
+    expect(prisma.partnerLink.updateMany).toHaveBeenCalledWith({
+      where: { id: 'l1', userId: 'u1', status: 'REVOKED', grantId: null },
       data: expect.objectContaining({ status: 'ACTIVE', revokedAt: null }),
     });
   });
@@ -137,53 +141,130 @@ describe('PartnerUsersService.provision', () => {
   it('asks for a code again once the person has set a TalerID password', async () => {
     const { service, prisma } = make();
     const revoked = {
-      id: 'l1', userId: 'u1', externalId: 'm-1', status: 'REVOKED', createdAccount: true, grantId: null,
+      id: 'l1', userId: 'u1', externalId: 'm-1', status: 'REVOKED', grantId: null,
       user: { ...liveUser, passwordHash: 'set' },
     };
     links(prisma, revoked, revoked);
-    prisma.user.findFirst.mockResolvedValue({ id: 'u1', passwordHash: 'set' });
+    prisma.$queryRaw.mockResolvedValue([{ id: 'u1', passwordHash: 'set', deletedAt: null, createdByPartnerId: 'p1' }]);
     await expect(service.provision(partner, dto)).resolves.toEqual({ status: 'confirmation_required', talerUserId: null });
   });
 
   it('revokes a link whose account was deleted and starts over', async () => {
     const { service, prisma, revoker } = make();
     const stale = {
-      id: 'l1', userId: 'u-dead', externalId: 'm-1', status: 'ACTIVE', createdAccount: true, grantId: 'g1',
-      user: { id: 'u-dead', deletedAt: new Date(), passwordHash: null },
+      id: 'l1', userId: 'u-dead', externalId: 'm-1', status: 'ACTIVE', grantId: 'g1',
+      user: { id: 'u-dead', email: 'dead@old.com', deletedAt: new Date(), passwordHash: null, createdByPartnerId: 'p1' },
     };
     links(prisma, stale);
     await expect(service.provision(partner, dto)).resolves.toEqual({ status: 'active', talerUserId: 'u-new', created: true });
     expect(revoker.revokeLink).toHaveBeenCalledWith(stale);
-    expect(prisma.partnerLink.update).toHaveBeenCalledWith({
-      where: { id: 'l1' },
+    expect(prisma.partnerLink.updateMany).toHaveBeenCalledWith({
+      where: { id: 'l1', userId: 'u-dead', status: 'REVOKED', grantId: null },
       data: expect.objectContaining({ userId: 'u-new', status: 'ACTIVE' }),
     });
   });
 
   it('finishes an unfinished revocation before reusing the link row', async () => {
     const { service, prisma, revoker } = make();
-    const unfinished = { id: 'l1', userId: 'u1', externalId: 'm-1', status: 'REVOKED', createdAccount: true, grantId: 'g-old', user: liveUser };
+    const unfinished = { id: 'l1', userId: 'u1', externalId: 'm-1', status: 'REVOKED', grantId: 'g-old', user: liveUser };
     links(prisma, unfinished, unfinished);
-    prisma.user.findFirst.mockResolvedValue({ id: 'u1', passwordHash: null });
+    prisma.$queryRaw.mockResolvedValue([{ id: 'u1', passwordHash: null, deletedAt: null, createdByPartnerId: 'p1' }]);
     await service.provision(partner, dto);
     expect(revoker.revokeLink).toHaveBeenCalledWith(unfinished);
   });
 
   it('finishes the revocation of a stale link under another externalId before deleting it', async () => {
     const { service, prisma, revoker } = make();
-    prisma.user.findFirst.mockResolvedValue({ id: 'u-existing', passwordHash: null });
-    const other = { id: 'l-other', userId: 'u-existing', externalId: 'm-0', status: 'REVOKED', createdAccount: true, grantId: 'g-old' };
+    prisma.$queryRaw.mockResolvedValue([{ id: 'u-existing', passwordHash: null, deletedAt: null, createdByPartnerId: null }]);
+    const other = { id: 'l-other', userId: 'u-existing', externalId: 'm-0', status: 'REVOKED', grantId: 'g-old' };
     links(prisma, null, other);
     await service.provision(partner, dto);
     expect(revoker.revokeLink).toHaveBeenCalledWith(other);
-    expect(prisma.partnerLink.delete).toHaveBeenCalledWith({ where: { id: 'l-other' } });
+    expect(prisma.partnerLink.deleteMany).toHaveBeenCalledWith({
+      where: { id: 'l-other', status: 'REVOKED', grantId: null },
+    });
   });
 
-  it('retries once on a unique-constraint race', async () => {
+  it('retries once on a unique-constraint race and picks up the concurrent write', async () => {
     const { service, prisma } = make();
-    prisma.user.create.mockRejectedValueOnce(Object.assign(new Error('dup'), { code: 'P2002' }));
-    prisma.user.findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 'u-raced', passwordHash: 'x' });
+    const concurrent = {
+      id: 'l1', userId: 'u-raced', status: 'ACTIVE', grantId: null,
+      user: { id: 'u-raced', email: 'ivan@example.com', deletedAt: null, passwordHash: null, createdByPartnerId: 'p1' },
+    };
+    prisma.partnerLink.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(concurrent);
+    prisma.partnerLink.create.mockRejectedValueOnce(Object.assign(new Error('dup'), { code: 'P2002' }));
+    await expect(service.provision(partner, dto)).resolves.toEqual({ status: 'active', talerUserId: 'u-raced', created: false });
+    // Аккаунт, созданный в первой (проигранной) попытке, второй раз не создаётся —
+    // вторая попытка подхватывает уже активную связку конкурента.
+    expect(prisma.user.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('looks up the owner by exact case-insensitive match, not a SQL LIKE pattern', async () => {
+    const { service, prisma } = make();
+    const patternDto = { ...dto, email: 'ivan_petrenko%@example.com' };
+    await service.provision(partner, patternDto);
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    const [strings, ...values] = prisma.$queryRaw.mock.calls[0];
+    expect(strings.join('')).toContain('lower("email") = lower(');
+    // Regular equals + mode:'insensitive' compiles to ILIKE on Postgres, and `_`/`%`
+    // in the address would work as wildcards there. Здесь значение просто bind-параметр.
+    expect(values).toEqual(['ivan_petrenko%@example.com']);
+  });
+
+  it('refuses to provision over an admin-blocked account and leaves it alone', async () => {
+    const { service, prisma } = make();
+    // AdminService.deleteUser блокирует через deletedAt, почту не обнуляет —
+    // второй аккаунт на тот же адрес завести нельзя.
+    prisma.$queryRaw.mockResolvedValue([{ id: 'u-blocked', passwordHash: null, deletedAt: new Date(), createdByPartnerId: null }]);
+    await expect(service.provision(partner, dto)).rejects.toThrow('email_unavailable');
+    expect(prisma.user.create).not.toHaveBeenCalled();
+  });
+
+  it('does not treat an account managed by a different partner as its own', async () => {
+    const { service, prisma } = make();
+    prisma.$queryRaw.mockResolvedValue([{ id: 'u-other-partner', passwordHash: null, deletedAt: null, createdByPartnerId: 'p2' }]);
     await expect(service.provision(partner, dto)).resolves.toEqual({ status: 'confirmation_required', talerUserId: null });
+    expect(prisma.partnerLink.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ userId: 'u-other-partner', status: 'PENDING' }),
+    });
+  });
+
+  it('gives up after repeated CAS misses on link reuse', async () => {
+    const { service, prisma } = make();
+    const revoked = { id: 'l1', userId: 'u1', externalId: 'm-1', status: 'REVOKED', grantId: null, user: liveUser };
+    links(prisma, revoked, revoked);
+    prisma.$queryRaw.mockResolvedValue([{ id: 'u1', passwordHash: null, deletedAt: null, createdByPartnerId: 'p1' }]);
+    prisma.partnerLink.updateMany.mockResolvedValue({ count: 0 });
+    await expect(service.provision(partner, dto)).rejects.toThrow('link_busy');
+    expect(prisma.partnerLink.updateMany).toHaveBeenCalledTimes(3);
+  });
+
+  it('treats a lost stale-link cleanup as a race too', async () => {
+    const { service, prisma } = make();
+    prisma.$queryRaw.mockResolvedValue([{ id: 'u-existing', passwordHash: null, deletedAt: null, createdByPartnerId: null }]);
+    const other = { id: 'l-other', userId: 'u-existing', externalId: 'm-0', status: 'REVOKED', grantId: null };
+    links(prisma, null, other);
+    prisma.partnerLink.deleteMany.mockResolvedValue({ count: 0 });
+    await expect(service.provision(partner, dto)).rejects.toThrow('link_busy');
+    expect(prisma.partnerLink.deleteMany).toHaveBeenCalledTimes(3);
+  });
+
+  it('turns a plain revocation failure into 503', async () => {
+    const { service, prisma, revoker } = make();
+    const unfinished = { id: 'l1', userId: 'u1', externalId: 'm-1', status: 'REVOKED', grantId: 'g-old', user: liveUser };
+    links(prisma, unfinished, unfinished);
+    revoker.revokeLink.mockRejectedValueOnce(new Error('redis down'));
+    await expect(service.provision(partner, dto)).rejects.toThrow('revocation_unavailable');
+  });
+
+  it('lets an HttpException from revocation pass through unchanged', async () => {
+    const { service, prisma, revoker } = make();
+    const unfinished = { id: 'l1', userId: 'u1', externalId: 'm-1', status: 'REVOKED', grantId: 'g-old', user: liveUser };
+    links(prisma, unfinished, unfinished);
+    revoker.revokeLink.mockRejectedValueOnce(new ConflictException('weird'));
+    await expect(service.provision(partner, dto)).rejects.toThrow(ConflictException);
   });
 });
 
@@ -194,7 +275,8 @@ describe('profileLanguage', () => {
     ['en', 'en'],
     ['uk', 'en'],
     [undefined, 'en'],
-  ])('%p → %p', (input: string | undefined, out: string) => {
+    [null, 'en'],
+  ])('%p → %p', (input: string | null | undefined, out: string) => {
     expect(profileLanguage(input)).toBe(out);
   });
 });
@@ -204,7 +286,6 @@ describe('PartnerUsersService token and lifecycle', () => {
     id: 'l1',
     userId: 'u1',
     status: 'ACTIVE',
-    createdAccount: true,
     grantId: 'g1',
     activatedAt: new Date('2026-10-01T10:00:00Z'),
     user: liveUser,
@@ -242,9 +323,17 @@ describe('PartnerUsersService token and lifecycle', () => {
     expect(revoker.revokeLink).toHaveBeenCalledWith(dead);
   });
 
+  it('revokes and answers not_linked for a PENDING link whose account was deleted', async () => {
+    const { service, prisma, revoker } = make();
+    const deadPending = { ...active, status: 'PENDING', user: { ...liveUser, deletedAt: new Date() } };
+    links(prisma, deadPending);
+    await expect(service.issueToken(partner, 'm-1')).rejects.toThrow('not_linked');
+    expect(revoker.revokeLink).toHaveBeenCalledWith(deadPending);
+  });
+
   it('reports the status without leaking the id of a pending account', async () => {
     const { service, prisma } = make();
-    links(prisma, { ...active, status: 'PENDING', createdAccount: false, activatedAt: null });
+    links(prisma, { ...active, status: 'PENDING', activatedAt: null, user: { ...liveUser, createdByPartnerId: null } });
     await expect(service.getUser(partner, 'm-1')).resolves.toEqual({
       status: 'confirmation_required',
       talerUserId: null,
@@ -260,6 +349,19 @@ describe('PartnerUsersService token and lifecycle', () => {
     });
   });
 
+  it('reports a deleted account as revoked (ACTIVE link) or not_linked (PENDING link)', async () => {
+    const { service, prisma } = make();
+    links(prisma, { ...active, user: { ...liveUser, deletedAt: new Date() } });
+    await expect(service.getUser(partner, 'm-1')).resolves.toEqual({
+      status: 'revoked',
+      talerUserId: null,
+      managed: false,
+      linkedAt: active.activatedAt.toISOString(),
+    });
+    links(prisma, { ...active, status: 'PENDING', user: { ...liveUser, deletedAt: new Date() } });
+    await expect(service.getUser(partner, 'm-1')).rejects.toThrow('not_linked');
+  });
+
   it('renames only managed accounts', async () => {
     const { service, prisma } = make();
     links(prisma, active);
@@ -269,8 +371,33 @@ describe('PartnerUsersService token and lifecycle', () => {
       update: { firstName: 'Олена' },
       create: { userId: 'u1', firstName: 'Олена' },
     });
-    links(prisma, { ...active, createdAccount: false });
+    links(prisma, { ...active, user: { ...liveUser, createdByPartnerId: null } });
     await expect(service.patchUser(partner, 'm-1', { firstName: 'X' })).rejects.toThrow('profile_not_managed');
+  });
+
+  it('clears the first name on explicit null, trims lastName, and skips an empty patch', async () => {
+    const { service, prisma, audit } = make();
+    links(prisma, active);
+
+    await expect(service.patchUser(partner, 'm-1', { firstName: null })).resolves.toEqual({ ok: true });
+    expect(prisma.profile.upsert).toHaveBeenLastCalledWith({
+      where: { userId: 'u1' },
+      update: { firstName: null },
+      create: { userId: 'u1', firstName: null },
+    });
+
+    await expect(service.patchUser(partner, 'm-1', { lastName: '  Coelho  ' })).resolves.toEqual({ ok: true });
+    expect(prisma.profile.upsert).toHaveBeenLastCalledWith({
+      where: { userId: 'u1' },
+      update: { lastName: 'Coelho' },
+      create: { userId: 'u1', lastName: 'Coelho' },
+    });
+
+    prisma.profile.upsert.mockClear();
+    audit.log.mockClear();
+    await expect(service.patchUser(partner, 'm-1', {})).resolves.toEqual({ ok: true });
+    expect(prisma.profile.upsert).not.toHaveBeenCalled();
+    expect(audit.log).not.toHaveBeenCalled();
   });
 
   it('revokes the link and keeps the account by default', async () => {
@@ -293,17 +420,18 @@ describe('PartnerUsersService token and lifecycle', () => {
 
   it('refuses to delete an account it does not manage, and changes nothing', async () => {
     const { service, prisma, revoker, profiles } = make();
-    links(prisma, { ...active, createdAccount: false });
+    links(prisma, { ...active, user: { ...liveUser, createdByPartnerId: null } });
     await expect(service.deleteUser(partner, 'm-1', true)).rejects.toThrow('account_not_managed');
     expect(revoker.revokeLink).not.toHaveBeenCalled();
     expect(profiles.deleteAccount).not.toHaveBeenCalled();
   });
 
-  it('is idempotent for an already revoked link', async () => {
-    const { service, prisma, revoker } = make();
+  it('is idempotent for an already revoked link, and writes no audit row', async () => {
+    const { service, prisma, revoker, audit } = make();
     links(prisma, { ...active, status: 'REVOKED', grantId: null });
     await service.deleteUser(partner, 'm-1', false);
     expect(revoker.revokeLink).not.toHaveBeenCalled();
+    expect(audit.log).not.toHaveBeenCalled();
   });
 
   it('finishes a revocation that was interrupted (REVOKED with a grant left)', async () => {
@@ -312,5 +440,33 @@ describe('PartnerUsersService token and lifecycle', () => {
     links(prisma, unfinished);
     await service.deleteUser(partner, 'm-1', false);
     expect(revoker.revokeLink).toHaveBeenCalledWith(unfinished);
+  });
+
+  it('is idempotent when retrying deleteAccount=true after the account is already gone', async () => {
+    const { service, prisma, revoker, profiles, audit } = make();
+    const alreadyGone = {
+      ...active, status: 'REVOKED', grantId: null,
+      user: { ...liveUser, deletedAt: new Date(), email: null },
+    };
+    links(prisma, alreadyGone);
+    await service.deleteUser(partner, 'm-1', true);
+    expect(revoker.revokeLink).not.toHaveBeenCalled();
+    expect(profiles.deleteAccount).not.toHaveBeenCalled();
+    expect(prisma.conversationParticipant.deleteMany).toHaveBeenCalledWith({
+      where: { userId: 'u1', conversation: { type: 'CHANNEL' } },
+    });
+    expect(audit.log).not.toHaveBeenCalled();
+  });
+
+  it('refuses to delete an admin-blocked account and revokes nothing', async () => {
+    const { service, prisma, revoker, profiles, audit } = make();
+    // AdminService.deleteUser: deletedAt задан, почта сохранена — в отличие от
+    // ProfileService.deleteAccount, который её обнуляет.
+    const blocked = { ...active, user: { ...liveUser, deletedAt: new Date() } };
+    links(prisma, blocked);
+    await expect(service.deleteUser(partner, 'm-1', true)).rejects.toThrow('account_not_managed');
+    expect(revoker.revokeLink).not.toHaveBeenCalled();
+    expect(profiles.deleteAccount).not.toHaveBeenCalled();
+    expect(audit.log).not.toHaveBeenCalled();
   });
 });

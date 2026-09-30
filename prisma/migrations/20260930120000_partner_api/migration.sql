@@ -1,7 +1,7 @@
 -- Партнёрский API мессенджера (первый партнёр — nadi).
 -- Спека: docs/superpowers/specs/2026-09-30-partner-messenger-api-design.md
 --
--- Всё аддитивно: новые таблицы и колонка с дефолтом. Старый код продолжает
+-- Всё аддитивно: новые таблицы и колонки (с дефолтом или nullable). Старый код продолжает
 -- работать поверх этой схемы, поэтому миграцию можно накатить до рестарта нод.
 --
 -- Prisma гонит этот файл одной неявной транзакцией. Если `prisma migrate
@@ -46,7 +46,6 @@ CREATE TABLE "PartnerLink" (
     "externalId" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
     "status" "PartnerLinkStatus" NOT NULL,
-    "createdAccount" BOOLEAN NOT NULL DEFAULT false,
     "grantId" TEXT,
     "codeHash" TEXT,
     "codeExpiresAt" TIMESTAMP(3),
@@ -86,6 +85,13 @@ CREATE INDEX "PartnerContact_userAId_userBId_idx" ON "PartnerContact"("userAId",
 ALTER TABLE "PartnerLink" ADD CONSTRAINT "PartnerLink_partnerId_fkey" FOREIGN KEY ("partnerId") REFERENCES "Partner"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "PartnerLink" ADD CONSTRAINT "PartnerLink_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "PartnerContact" ADD CONSTRAINT "PartnerContact_partnerId_fkey" FOREIGN KEY ("partnerId") REFERENCES "Partner"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- Кто завёл аккаунт. Признак на аккаунте, а не на связке: строку связки
+-- переиспользуют под другой аккаунт, а аккаунт своего создателя помнит.
+-- Колонка без умолчания — только метаданные; ALTER на "User" стоит в конце
+-- файла по той же причине, что и BlockedUser ниже.
+ALTER TABLE "User" ADD COLUMN "createdByPartnerId" TEXT;
+ALTER TABLE "User" ADD CONSTRAINT "User_createdByPartnerId_fkey" FOREIGN KEY ("createdByPartnerId") REFERENCES "Partner"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- Блокировки, сделанные до этой миграции, получают false: неизвестно, были ли
 -- люди контактами, и безопаснее не восстанавливать контакт при разблокировке.

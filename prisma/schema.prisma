@@ -48,6 +48,9 @@ model User {
   /// Связки с продуктами-партнёрами (nadi): кто и под каким id завёл или
   /// привязал этого человека. Спека: 2026-09-30-partner-messenger-api-design.md
   partnerLinks         PartnerLink[]
+  /// Партнёр, который завёл этот аккаунт (партнёрский API). Пока человек не задал пароль TalerID, аккаунт для этого партнёра «управляемый».
+  createdByPartnerId   String?
+  createdByPartner     Partner?              @relation(fields: [createdByPartnerId], references: [id], onDelete: Restrict)
 }
 
 model DeviceKey {
@@ -1154,6 +1157,7 @@ model Partner {
   updatedAt        DateTime         @updatedAt
   links            PartnerLink[]
   contacts         PartnerContact[]
+  createdUsers     User[]
 }
 
 /// «Партнёр + externalId ↔ пользователь TalerID». PENDING — ждёт кода из
@@ -1166,8 +1170,6 @@ model PartnerLink {
   userId         String
   /// Без умолчания: ACTIVE открывает партнёру чаты человека, поэтому статус всегда задаётся явно.
   status         PartnerLinkStatus
-  /// Аккаунт создал сам партнёр (а не привязал существующий).
-  createdAccount Boolean           @default(false)
   /// Грант OIDC: по нему отзываются сразу все токены связки.
   grantId        String?
   codeHash       String?
