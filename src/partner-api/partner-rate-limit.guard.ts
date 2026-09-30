@@ -1,13 +1,7 @@
-import {
-  CanActivate,
-  ExecutionContext,
-  HttpException,
-  HttpStatus,
-  Injectable,
-  SetMetadata,
-} from '@nestjs/common';
+import { CanActivate, ExecutionContext, Injectable, Logger, SetMetadata } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { RedisService } from '../redis/redis.service';
+import { currentMinute, incrementCounter, throwTooManyRequests } from './partner-counter.util';
 
 export type PartnerRateBucketName = 'token' | 'default';
 
@@ -25,10 +19,20 @@ export const PartnerRateBucket = (bucket: PartnerRateBucketName) =>
  * Лимит по партнёру, а не по IP: весь партнёр ходит с одного сервера, и
  * глобальные лимиты по IP (1000 в час на эндпоинт) упёрлись бы в него на
  * первых же сотнях активных людей. Счётчик — в Redis, общий для всех нод.
- * Ставится после PartnerKeyGuard: без req.partner считать нечего.
+ * Ставится после PartnerKeyGuard: без req.partner считать нечего, и если
+ * порядок guard'ов где-то нарушен — лучше упасть 500-й, чем молча пропускать
+ * запросы без лимита.
+ *
+ * Redis недоступен → пропускаем: лимит — это про справедливость между
+ * партнёрами, а не про безопасность (партнёр уже прошёл проверку ключа в
+ * PartnerKeyGuard). Предупреждение в лог — не чаще раза в минуту на процесс,
+ * иначе падение Redis утопит лог тем же warn на каждый запрос.
  */
 @Injectable()
 export class PartnerRateLimitGuard implements CanActivate {
+  private readonly logger = new Logger('PartnerApi');
+  private lastOutageWarnAt = 0;
+
   constructor(
     private readonly reflector: Reflector,
     private readonly redis: RedisService,
@@ -37,21 +41,27 @@ export class PartnerRateLimitGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest();
     const partner = req.partner as { id: string } | undefined;
-    if (!partner) return true;
+    if (!partner) {
+      throw new Error('PartnerRateLimitGuard must run after PartnerKeyGuard');
+    }
     const bucket =
       this.reflector.getAllAndOverride<PartnerRateBucketName>(PARTNER_RATE_BUCKET, [
         context.getHandler(),
         context.getClass(),
       ]) ?? 'default';
-    const nowSec = Math.floor(Date.now() / 1000);
-    const key = `partner:rl:${partner.id}:${bucket}:${Math.floor(nowSec / 60)}`;
-    const count = await this.redis.incr(key);
-    if (count === 1) await this.redis.expire(key, 120);
+    const { minute, retryAfter } = currentMinute();
+    const key = `partner:rl:${partner.id}:${bucket}:${minute}`;
+    const count = await incrementCounter(this.redis, key, 120);
+    if (count === null) {
+      const now = Date.now();
+      if (now - this.lastOutageWarnAt > 60_000) {
+        this.lastOutageWarnAt = now;
+        this.logger.warn('partner rate limit: counter unavailable, letting the request through');
+      }
+      return true;
+    }
     if (count > PARTNER_RATE_LIMITS[bucket]) {
-      throw new HttpException(
-        { message: 'rate_limited', retryAfter: 60 - (nowSec % 60) },
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
+      throwTooManyRequests(context.switchToHttp().getResponse(), 'rate_limited', retryAfter);
     }
     return true;
   }

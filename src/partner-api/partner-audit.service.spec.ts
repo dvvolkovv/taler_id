@@ -25,4 +25,20 @@ describe('PartnerAuditService', () => {
       new PartnerAuditService(prisma).log({ id: 'p1', slug: 'nadi' }, 'LINK_REVOKED', {}),
     ).resolves.toBeUndefined();
   });
+
+  it('meta cannot overwrite the partner slug or externalId', async () => {
+    const prisma: any = { auditLog: { create: jest.fn().mockResolvedValue({}) } };
+    await new PartnerAuditService(prisma).log({ id: 'p1', slug: 'nadi' }, 'USER_CREATED', {
+      externalId: 'm-1',
+      meta: { partner: 'evil', externalId: 'evil', extra: 1 },
+    });
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({
+      data: {
+        userId: null,
+        action: 'PARTNER_USER_CREATED',
+        ipAddress: null,
+        meta: { extra: 1, partner: 'nadi', externalId: 'm-1' },
+      },
+    });
+  });
 });

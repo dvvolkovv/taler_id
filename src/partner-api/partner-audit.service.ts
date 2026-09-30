@@ -1,6 +1,18 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
+export type PartnerAuditAction =
+  | 'USER_CREATED'
+  | 'USER_RELINKED'
+  | 'LINK_PENDING'
+  | 'LINK_CODE_SENT'
+  | 'LINK_CONFIRMED'
+  | 'LINK_REVOKED'
+  | 'ACCOUNT_DELETED'
+  | 'PROFILE_UPDATED'
+  | 'CONTACT_CREATED'
+  | 'CONTACT_REMOVED';
+
 export interface PartnerAuditEntry {
   externalId?: string;
   userId?: string | null;
@@ -18,7 +30,7 @@ export class PartnerAuditService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  async log(partner: { id: string; slug: string }, action: string, entry: PartnerAuditEntry): Promise<void> {
+  async log(partner: { id: string; slug: string }, action: PartnerAuditAction, entry: PartnerAuditEntry): Promise<void> {
     this.logger.log(`[${partner.slug}] ${action} externalId=${entry.externalId ?? '-'} user=${entry.userId ?? '-'}`);
     try {
       await this.prisma.auditLog.create({
@@ -26,7 +38,9 @@ export class PartnerAuditService {
           userId: entry.userId ?? null,
           action: `PARTNER_${action}`,
           ipAddress: entry.ip ?? null,
-          meta: { partner: partner.slug, externalId: entry.externalId ?? null, ...(entry.meta ?? {}) },
+          // Фиксированные поля — после спрэда: meta от партнёра не должна
+          // суметь подменить, к какому партнёру или externalId относится запись.
+          meta: { ...(entry.meta ?? {}), partner: partner.slug, externalId: entry.externalId ?? null },
         },
       });
     } catch (e) {

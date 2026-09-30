@@ -2,28 +2,28 @@ import { IsEmail, IsOptional, IsString, Matches, MaxLength } from 'class-validat
 import { EXTERNAL_ID_RE } from '../external-id.util';
 
 export class ProvisionUserDto {
-  @IsString()
+  @IsString({ message: 'invalid_external_id' })
   @Matches(EXTERNAL_ID_RE, { message: 'invalid_external_id' })
   externalId!: string;
 
   /** Партнёр обязан проверить её сам до вызова (у nadi — вход по коду из письма). */
   @IsEmail({}, { message: 'invalid_email' })
-  @MaxLength(254)
+  @MaxLength(254, { message: 'invalid_email' })
   email!: string;
 
   @IsOptional()
-  @IsString()
-  @MaxLength(100)
+  @IsString({ message: 'invalid_first_name' })
+  @MaxLength(100, { message: 'invalid_first_name' })
   firstName?: string;
 
   @IsOptional()
-  @IsString()
-  @MaxLength(100)
+  @IsString({ message: 'invalid_last_name' })
+  @MaxLength(100, { message: 'invalid_last_name' })
   lastName?: string;
 
-  /** Язык человека у партнёра. Профиль TalerID знает ru и en, остальное станет en. */
+  /** Письма и уведомления TalerID существуют только на ru и en; всё остальное (uk, de, …) становится en. */
   @IsOptional()
-  @IsString()
-  @MaxLength(10)
+  @IsString({ message: 'invalid_locale' })
+  @MaxLength(10, { message: 'invalid_locale' })
   locale?: string;
 }
