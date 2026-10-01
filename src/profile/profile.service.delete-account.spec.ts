@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ProfileService } from './profile.service';
+import { ProfileService, AccountNotManagedError } from './profile.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { FileStorageService } from '../common/file-storage.service';
 import { PartnerLinkRevokerService } from '../partner-core/partner-link-revoker.service';
@@ -27,6 +27,7 @@ const mockPrisma = {
   user: {
     update: jest.fn(),
   },
+  $queryRaw: jest.fn(),
   $transaction: jest.fn(),
 };
 
@@ -119,4 +120,90 @@ describe('ProfileService.deleteAccount', () => {
       success: true,
     });
   });
+});
+
+describe('ProfileService.deleteAccount with onlyIfManagedBy', () => {
+  let service: ProfileService;
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    mockPrisma.profile.findUnique.mockResolvedValue({
+      id: 'profile-1',
+      userId: 'user-1',
+    });
+    // Interactive-transaction mode: the callback runs against the same mock,
+    // recording calls exactly like the array-form branch does.
+    mockPrisma.$transaction.mockImplementation((arg: any) =>
+      typeof arg === 'function' ? arg(mockPrisma) : Promise.resolve(undefined),
+    );
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ProfileService,
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: FileStorageService, useValue: mockFileStorage },
+        { provide: PartnerLinkRevokerService, useValue: mockPartnerLinks },
+      ],
+    }).compile();
+
+    service = module.get<ProfileService>(ProfileService);
+  });
+
+  it('deletes when the row read under FOR UPDATE is still managed by this partner', async () => {
+    mockPrisma.$queryRaw.mockResolvedValue([
+      { passwordHash: null, createdByPartnerId: 'partner-1', deletedAt: null },
+    ]);
+
+    await expect(
+      service.deleteAccount('user-1', { onlyIfManagedBy: 'partner-1' }),
+    ).resolves.toEqual({ success: true });
+
+    expect(mockPrisma.document.deleteMany).toHaveBeenCalledWith({
+      where: { profileId: 'profile-1' },
+    });
+    expect(mockPrisma.user.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'user-1' },
+        data: expect.objectContaining({
+          email: null,
+          phone: null,
+          passwordHash: null,
+        }),
+      }),
+    );
+    expect(mockPartnerLinks.revokeAllForUser).toHaveBeenCalledWith('user-1');
+  });
+
+  it.each([
+    [
+      'a password was set in between (forgot-password claimed the account)',
+      { passwordHash: 'hash', createdByPartnerId: 'partner-1', deletedAt: null },
+    ],
+    [
+      'a different partner now owns the row',
+      { passwordHash: null, createdByPartnerId: 'partner-2', deletedAt: null },
+    ],
+    [
+      'the account was already deleted',
+      { passwordHash: null, createdByPartnerId: 'partner-1', deletedAt: new Date() },
+    ],
+    ['the row is gone entirely', undefined],
+  ])(
+    'refuses and changes nothing when %s',
+    async (_label, row) => {
+      mockPrisma.$queryRaw.mockResolvedValue(row ? [row] : []);
+
+      await expect(
+        service.deleteAccount('user-1', { onlyIfManagedBy: 'partner-1' }),
+      ).rejects.toThrow(AccountNotManagedError);
+
+      expect(mockPrisma.document.deleteMany).not.toHaveBeenCalled();
+      expect(mockPrisma.kycRecord.deleteMany).not.toHaveBeenCalled();
+      expect(mockPrisma.session.deleteMany).not.toHaveBeenCalled();
+      expect(mockPrisma.totpSecret.deleteMany).not.toHaveBeenCalled();
+      expect(mockPrisma.profile.deleteMany).not.toHaveBeenCalled();
+      expect(mockPrisma.user.update).not.toHaveBeenCalled();
+      expect(mockPartnerLinks.revokeAllForUser).not.toHaveBeenCalled();
+    },
+  );
 });

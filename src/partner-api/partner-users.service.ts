@@ -10,7 +10,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { ProfileService } from '../profile/profile.service';
+import { AccountNotManagedError, ProfileService } from '../profile/profile.service';
 import { RedisService } from '../redis/redis.service';
 import { SystemChannelService } from '../system-channel/system-channel.service';
 import { PartnerLinkRevokerService } from '../partner-core/partner-link-revoker.service';
@@ -428,7 +428,24 @@ export class PartnerUsersService {
     // REVOKED с грантом — прошлый отзыв не доделан (сбой Redis): доделываем.
     const revokes = link.status !== 'REVOKED' || !!link.grantId;
     if (revokes) await this.revoke(link);
-    if (deletesNow) await this.profiles.deleteAccount(link.userId);
+    if (deletesNow) {
+      try {
+        // isManagedBy выше прочитан не под замком: человек мог успеть задать
+        // первый пароль (resetPassword) между тем чтением и этим вызовом.
+        // onlyIfManagedBy повторяет проверку атомарно под FOR UPDATE внутри
+        // транзакции ProfileService — здесь просто доверяем её вердикту.
+        await this.profiles.deleteAccount(link.userId, {
+          onlyIfManagedBy: partner.id,
+        });
+      } catch (e) {
+        if (e instanceof AccountNotManagedError) {
+          // Связка уже отозвана строкой выше — человек остаётся при своём
+          // аккаунте (и новом пароле), просто без доступа этого партнёра.
+          throw new ConflictException('account_not_managed');
+        }
+        throw e;
+      }
+    }
     // Журнал — сразу после удаления аккаунта и до очистки каналов: если чистка
     // ниже упадёт, повтор (alreadyDeleted уже true, отзывать больше нечего)
     // не должен молча остаться без строки про само удаление.

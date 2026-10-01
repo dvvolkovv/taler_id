@@ -1,6 +1,7 @@
 import { ConflictException } from '@nestjs/common';
 import { countInWindow } from './partner-counter.util';
 import { PartnerUsersService, profileLanguage } from './partner-users.service';
+import { AccountNotManagedError } from '../profile/profile.service';
 
 jest.mock('./partner-counter.util', () => ({
   ...jest.requireActual('./partner-counter.util'),
@@ -1214,10 +1215,25 @@ describe('PartnerUsersService token and lifecycle', () => {
     const { service, prisma, profiles } = make();
     links(prisma, active);
     await service.deleteUser(partner, 'm-1', true);
-    expect(profiles.deleteAccount).toHaveBeenCalledWith('u1');
+    expect(profiles.deleteAccount).toHaveBeenCalledWith('u1', {
+      onlyIfManagedBy: 'p1',
+    });
     expect(prisma.conversationParticipant.deleteMany).toHaveBeenCalledWith({
       where: { userId: 'u1', conversation: { type: 'CHANNEL' } },
     });
+  });
+
+  it('answers 409 and keeps the account when ProfileService finds it is no longer managed under FOR UPDATE (e.g. the person just set a password)', async () => {
+    const { service, prisma, revoker, profiles, audit } = make();
+    links(prisma, active);
+    profiles.deleteAccount.mockRejectedValueOnce(new AccountNotManagedError());
+    await expect(service.deleteUser(partner, 'm-1', true)).rejects.toThrow(
+      'account_not_managed',
+    );
+    // The link is still revoked — only the account deletion itself was refused.
+    expect(revoker.revokeLink).toHaveBeenCalledWith(active);
+    expect(prisma.conversationParticipant.deleteMany).not.toHaveBeenCalled();
+    expect(audit.log).not.toHaveBeenCalled();
   });
 
   it('writes the audit row for a deletion even if the channel cleanup fails afterward', async () => {
