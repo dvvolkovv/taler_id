@@ -144,7 +144,7 @@ TalerID (NestJS, DEV / TEST / PROD)
 `MessengerAuthGuard` заменяет `JwtAuthGuard` на контроллере мессенджера:
 1. `@Public()` — пропустить.
 2. Токен проверяется как собственный токен входа TalerID (подпись + `isApiAccessToken`) → `req.user = payload`, как сегодня. Для приложения TalerID ничего не меняется.
-3. Иначе — поиск OIDC-токена (`provider.AccessToken.find`): не истёк, scope содержит `messenger`, клиент принадлежит включённому партнёру (кэш на 30 с) → `req.user = { sub: accountId, partner: { partnerId, linkId } }`. Остальной код мессенджера читает только `user.sub` и не меняется.
+3. Иначе — поиск OIDC-токена (`provider.AccessToken.find`): не истёк, scope содержит `messenger`, клиент принадлежит включённому партнёру (кэш на 30 с) → `req.user = { sub: accountId, partner: { userId, partnerId, partnerSlug, grantId, expiresAt } }` (`PartnerPrincipal`). Токен принимается, только пока жив его грант того же пользователя и клиента. Остальной код мессенджера читает только `user.sub` и не меняется.
 4. Партнёрский токен пускают только обработчики с `@PartnerAllowed()`; остальные отвечают `403 not_available_for_partner`. Новые ручки мессенджера по умолчанию закрыты для партнёров.
 5. Иначе `401`.
 
