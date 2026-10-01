@@ -2,6 +2,7 @@ import {
   ConflictException,
   GoneException,
   HttpException,
+  HttpStatus,
   Injectable,
   Logger,
   NotFoundException,
@@ -10,13 +11,23 @@ import {
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ProfileService } from '../profile/profile.service';
+import { RedisService } from '../redis/redis.service';
 import { SystemChannelService } from '../system-channel/system-channel.service';
 import { PartnerLinkRevokerService } from '../partner-core/partner-link-revoker.service';
 import { PartnerRecord } from '../partner-core/partner-registry.service';
 import { PartnerTokensService } from '../partner-core/partner-tokens.service';
 import { PartnerAuditService } from './partner-audit.service';
+import { countInWindow } from './partner-counter.util';
 import { PatchUserDto } from './dto/patch-user.dto';
 import { ProvisionUserDto } from './dto/provision-user.dto';
+
+/**
+ * Суточный потолок на заведение новых аккаунтов одним партнёром: утёкший
+ * ключ иначе заводил бы ~170 тысяч аккаунтов в сутки, и каждый подписывается
+ * на системный канал новостей (рассылка по участникам). Поднимается в .env
+ * на время разовой массовой загрузки.
+ */
+const DEFAULT_PARTNER_ACCOUNTS_PER_DAY = 5000;
 
 export type ProvisionResult =
   | { status: 'active'; talerUserId: string; created: boolean }
@@ -94,6 +105,7 @@ export class PartnerUsersService {
     private readonly systemChannel: SystemChannelService,
     private readonly profiles: ProfileService,
     private readonly audit: PartnerAuditService,
+    private readonly redis: RedisService,
   ) {}
 
   async provision(
@@ -151,19 +163,32 @@ export class PartnerUsersService {
     }
 
     if (!owner) {
+      // Суточный потолок — до создания и считает только реально созданные
+      // аккаунты (ключ партнёра, а не человека): идемпотентные повторы и
+      // привязка к уже существующим адресам сюда не доходят вовсе.
+      await this.checkCreationCap(partner);
       // Аккаунт и связка — одной транзакцией: аккаунта без связки не бывает,
       // а параллельный запрос видит либо оба, либо ничего.
-      const userId = await this.prisma.$transaction(async (tx) => {
-        const user = await tx.user.create({
-          data: this.newAccount(partner, email, dto),
-          select: { id: true },
+      let userId: string;
+      try {
+        userId = await this.prisma.$transaction(async (tx) => {
+          const user = await tx.user.create({
+            data: this.newAccount(partner, email, dto),
+            select: { id: true },
+          });
+          await this.saveLink(tx, partner.id, externalId, link, {
+            userId: user.id,
+            status: 'ACTIVE',
+          });
+          return user.id;
         });
-        await this.saveLink(tx, partner.id, externalId, link, {
-          userId: user.id,
-          status: 'ACTIVE',
-        });
-        return user.id;
-      });
+      } catch (e) {
+        // Слот потолка уже засчитан, а аккаунт не появился (гонка, откат
+        // транзакции) — отдаём его обратно: иначе повтор provision() (см.
+        // isRace) насчитывал бы партнёру лишнее за то, что не создалось.
+        this.giveBackCreationSlot(partner.id);
+        throw e;
+      }
       await this.subscribeToNews(userId);
       await this.audit.log(partner, 'USER_CREATED', { externalId, userId, ip });
       return { status: 'active', talerUserId: userId, created: true };
@@ -409,6 +434,41 @@ export class PartnerUsersService {
         `system-channel subscribe failed for ${userId}: ${(e as Error).message}`,
       );
     }
+  }
+
+  private creationCapKey(partnerId: string): string {
+    return `partner:create:day:${partnerId}`;
+  }
+
+  /** Суточный потолок партнёра на НОВЫЕ аккаунты. Redis недоступен — 503, а не пропуск. */
+  private async checkCreationCap(partner: PartnerRecord): Promise<void> {
+    const key = this.creationCapKey(partner.id);
+    const day = await countInWindow(this.redis, key, 86400);
+    if (!day) throw new ServiceUnavailableException('rate_limiter_unavailable');
+    const limit =
+      parseInt(process.env.PARTNER_ACCOUNTS_PER_DAY ?? '', 10) ||
+      DEFAULT_PARTNER_ACCOUNTS_PER_DAY;
+    if (day.count > limit) {
+      // Первое превышение за окно — сигнал человеку (утёкший ключ или
+      // сломанный клиент); дальше по тому же окну лог не становится громче.
+      if (day.count === limit + 1) {
+        this.logger.error(
+          `partner ${partner.slug} exceeded the daily account-creation cap (${limit}/day)`,
+        );
+      }
+      throw new HttpException(
+        { message: 'too_many_requests', retryAfter: day.retryAfter },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+  }
+
+  /** Слот checkCreationCap уже засчитан, а аккаунт не создался — вернуть его. */
+  private giveBackCreationSlot(partnerId: string): void {
+    this.redis
+      .getClient()
+      .decr(this.creationCapKey(partnerId))
+      .catch(() => undefined);
   }
 
   private async saveLink(

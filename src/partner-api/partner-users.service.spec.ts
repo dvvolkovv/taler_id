@@ -1,5 +1,19 @@
 import { ConflictException } from '@nestjs/common';
+import { countInWindow } from './partner-counter.util';
 import { PartnerUsersService, profileLanguage } from './partner-users.service';
+
+jest.mock('./partner-counter.util', () => ({
+  ...jest.requireActual('./partner-counter.util'),
+  countInWindow: jest.fn(),
+}));
+const windowCount = countInWindow as jest.Mock;
+
+beforeEach(() => {
+  windowCount.mockReset();
+  // Далеко под дефолтным суточным потолком (5000) — не мешает ни одному
+  // существующему тесту, которые о лимите не знают вовсе.
+  windowCount.mockResolvedValue({ count: 1, retryAfter: 86400 });
+});
 
 const partner: any = { id: 'p1', slug: 'nadi', name: 'Nadi' };
 const dto: any = {
@@ -48,6 +62,8 @@ function make() {
     deleteAccount: jest.fn().mockResolvedValue({ success: true }),
   };
   const audit: any = { log: jest.fn().mockResolvedValue(undefined) };
+  const decr = jest.fn().mockResolvedValue(0);
+  const redis: any = { getClient: () => ({ decr }) };
   const service = new PartnerUsersService(
     prisma,
     tokens,
@@ -55,8 +71,19 @@ function make() {
     systemChannel,
     profiles,
     audit,
+    redis,
   );
-  return { service, prisma, tokens, revoker, systemChannel, profiles, audit };
+  return {
+    service,
+    prisma,
+    tokens,
+    revoker,
+    systemChannel,
+    profiles,
+    audit,
+    redis,
+    decr,
+  };
 }
 
 /** findUnique отвечает по форме where: связка по externalId или по пользователю. */
@@ -578,6 +605,128 @@ describe('PartnerUsersService.provision', () => {
     await expect(service.provision(partner, dto)).rejects.toThrow(
       ConflictException,
     );
+  });
+});
+
+describe('PartnerUsersService.provision — daily account-creation cap', () => {
+  it('checks the cap, via Redis, before creating the account', async () => {
+    const { service, prisma, redis } = make();
+    await service.provision(partner, dto);
+    expect(windowCount).toHaveBeenCalledWith(
+      redis,
+      'partner:create:day:p1',
+      86400,
+    );
+    expect(windowCount.mock.invocationCallOrder[0]).toBeLessThan(
+      prisma.user.create.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('does not count a relink of an already-active account (idempotent path)', async () => {
+    const { service, prisma } = make();
+    links(prisma, { id: 'l1', userId: 'u1', status: 'ACTIVE', user: liveUser });
+    await service.provision(partner, dto);
+    expect(windowCount).not.toHaveBeenCalled();
+  });
+
+  it('does not count relinking an existing owner (confirmation_required path)', async () => {
+    const { service, prisma } = make();
+    prisma.$queryRaw.mockResolvedValue([
+      {
+        id: 'u-existing',
+        passwordHash: 'hash',
+        deletedAt: null,
+        createdByPartnerId: null,
+        emailVerified: true,
+      },
+    ]);
+    await service.provision(partner, dto);
+    expect(windowCount).not.toHaveBeenCalled();
+  });
+
+  it('answers 429 with retryAfter over the cap, and creates nothing', async () => {
+    const { service, prisma } = make();
+    windowCount.mockResolvedValueOnce({ count: 5001, retryAfter: 1234 });
+    const err = await service.provision(partner, dto).catch((e) => e);
+    expect(err.getStatus()).toBe(429);
+    expect(err.getResponse()).toEqual({
+      message: 'too_many_requests',
+      retryAfter: 1234,
+    });
+    expect(prisma.user.create).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('answers 503 when the cap cannot be counted (Redis unavailable), and creates nothing', async () => {
+    const { service, prisma } = make();
+    windowCount.mockResolvedValueOnce(null);
+    await expect(service.provision(partner, dto)).rejects.toThrow(
+      'rate_limiter_unavailable',
+    );
+    expect(prisma.user.create).not.toHaveBeenCalled();
+  });
+
+  it('reads the limit from PARTNER_ACCOUNTS_PER_DAY instead of the 5000 default', async () => {
+    const saved = process.env.PARTNER_ACCOUNTS_PER_DAY;
+    process.env.PARTNER_ACCOUNTS_PER_DAY = '10';
+    try {
+      const { service } = make();
+      windowCount.mockResolvedValueOnce({ count: 11, retryAfter: 1234 });
+      await expect(service.provision(partner, dto)).rejects.toThrow(
+        'too_many_requests',
+      );
+      windowCount.mockResolvedValueOnce({ count: 10, retryAfter: 1234 });
+      await expect(service.provision(partner, dto)).resolves.toMatchObject({
+        created: true,
+      });
+    } finally {
+      if (saved === undefined) delete process.env.PARTNER_ACCOUNTS_PER_DAY;
+      else process.env.PARTNER_ACCOUNTS_PER_DAY = saved;
+    }
+  });
+
+  it('logs once exactly when the cap is first exceeded in the window, not on the next hit', async () => {
+    const { service } = make();
+    const logSpy = jest
+      .spyOn((service as any).logger, 'error')
+      .mockImplementation(() => undefined);
+    windowCount.mockResolvedValueOnce({ count: 5001, retryAfter: 1234 });
+    await service.provision(partner, dto).catch(() => undefined);
+    expect(logSpy).toHaveBeenCalledTimes(1);
+
+    logSpy.mockClear();
+    windowCount.mockResolvedValueOnce({ count: 5002, retryAfter: 1234 });
+    await service.provision(partner, dto).catch(() => undefined);
+    expect(logSpy).not.toHaveBeenCalled();
+  });
+
+  it('gives the slot back when the create transaction fails after the slot was counted (race retry)', async () => {
+    const { service, prisma, decr } = make();
+    const concurrent = {
+      id: 'l1',
+      userId: 'u-raced',
+      status: 'ACTIVE',
+      grantId: null,
+      user: {
+        id: 'u-raced',
+        email: 'ivan@example.com',
+        deletedAt: null,
+        passwordHash: null,
+        createdByPartnerId: 'p1',
+      },
+    };
+    prisma.partnerLink.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(concurrent);
+    prisma.partnerLink.create.mockRejectedValueOnce(
+      Object.assign(new Error('dup'), { code: 'P2002' }),
+    );
+    await expect(service.provision(partner, dto)).resolves.toEqual({
+      status: 'active',
+      talerUserId: 'u-raced',
+      created: false,
+    });
+    expect(decr).toHaveBeenCalledWith('partner:create:day:p1');
   });
 });
 
