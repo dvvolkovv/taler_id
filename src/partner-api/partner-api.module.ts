@@ -9,11 +9,13 @@ import { PartnerKeyGuard } from './partner-key.guard';
 import { PartnerLinkCodeService } from './partner-link-code.service';
 import { PartnerRateLimitGuard } from './partner-rate-limit.guard';
 import { PartnerUsersService } from './partner-users.service';
+import { PartnerWebhookSinkController } from './partner-webhook-sink.controller';
+import { PartnerWebhookSinkStore } from './partner-webhook-sink.store';
 
 // PrismaModule, RedisModule и EmailModule глобальные.
 @Module({
   imports: [PartnerCoreModule, SystemChannelModule, ProfileModule],
-  controllers: [PartnerApiController],
+  controllers: [PartnerApiController, PartnerWebhookSinkController],
   providers: [
     PartnerKeyGuard,
     PartnerRateLimitGuard,
@@ -21,6 +23,7 @@ import { PartnerUsersService } from './partner-users.service';
     PartnerUsersService,
     PartnerLinkCodeService,
     PartnerContactsService,
+    PartnerWebhookSinkStore,
   ],
 })
 export class PartnerApiModule {}

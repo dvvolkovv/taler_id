@@ -10,13 +10,17 @@ describe('PartnerApiController', () => {
   let users: any;
   let codes: any;
   let contacts: any;
+  let webhooks: any;
+  let sink: any;
   let controller: PartnerApiController;
 
   beforeEach(() => {
     users = { provision: jest.fn(), getUser: jest.fn(), patchUser: jest.fn(), deleteUser: jest.fn(), issueToken: jest.fn() };
     codes = { send: jest.fn(), verify: jest.fn() };
     contacts = { put: jest.fn(), remove: jest.fn() };
-    controller = new PartnerApiController(users, codes, contacts);
+    webhooks = { deliver: jest.fn(), recentDeliveries: jest.fn() };
+    sink = { list: jest.fn() };
+    controller = new PartnerApiController(users, codes, contacts, webhooks, sink);
   });
 
   it('passes deleteAccount=true through and validates the externalId', async () => {
@@ -44,6 +48,14 @@ describe('PartnerApiController', () => {
 
   it('rate-limits the token route on its own bucket, by partner rather than per-IP', () => {
     expect(Reflect.getMetadata(PARTNER_RATE_BUCKET, PartnerApiController.prototype.token)).toBe('token');
+  });
+
+  it('sends a ping and reports what the partner answered', async () => {
+    webhooks.deliver.mockResolvedValue({
+      eventId: 'evt_ping_x', type: 'ping', attempt: 1, delivered: true, status: 204, error: null, durationMs: 12, at: 'x',
+    });
+    await expect(controller.testWebhook(req)).resolves.toEqual({ delivered: true, status: 204, durationMs: 12 });
+    expect(webhooks.deliver).toHaveBeenCalledWith('p1', expect.objectContaining({ type: 'ping' }));
   });
 
   it('answers the documented HTTP status per route', () => {

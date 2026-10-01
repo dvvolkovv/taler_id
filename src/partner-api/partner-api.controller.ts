@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   HttpCode,
+  NotFoundException,
   Param,
   Patch,
   Post,
@@ -12,6 +13,8 @@ import {
   Req,
 } from '@nestjs/common';
 import type { PartnerRecord } from '../partner-core/partner-registry.service';
+import { pingEvent } from '../partner-core/partner-webhook-events';
+import { PartnerWebhooksService } from '../partner-core/partner-webhooks.service';
 import { DeleteUserQueryDto } from './dto/delete-user-query.dto';
 import { PatchUserDto } from './dto/patch-user.dto';
 import { ProvisionUserDto } from './dto/provision-user.dto';
@@ -22,6 +25,7 @@ import { PartnerContactsService } from './partner-contacts.service';
 import { PartnerLinkCodeService } from './partner-link-code.service';
 import { PartnerRateBucket } from './partner-rate-limit.guard';
 import { PartnerUsersService } from './partner-users.service';
+import { PartnerWebhookSinkStore } from './partner-webhook-sink.store';
 
 interface PartnerRequest {
   partner: PartnerRecord;
@@ -41,6 +45,8 @@ export class PartnerApiController {
     private readonly users: PartnerUsersService,
     private readonly codes: PartnerLinkCodeService,
     private readonly contacts: PartnerContactsService,
+    private readonly webhooks: PartnerWebhooksService,
+    private readonly sink: PartnerWebhookSinkStore,
   ) {}
 
   @Post('users')
@@ -104,5 +110,30 @@ export class PartnerApiController {
   @Delete('contacts/:a/:b')
   removeContact(@Req() req: PartnerRequest, @Param('a') a: string, @Param('b') b: string) {
     return this.contacts.remove(req.partner, a, b, req.ip);
+  }
+
+  /** Отправить ping на вебхук партнёра и сразу вернуть, что тот ответил. */
+  @Post('webhooks/test')
+  @HttpCode(200)
+  async testWebhook(@Req() req: PartnerRequest) {
+    const result = await this.webhooks.deliver(req.partner.id, pingEvent());
+    return {
+      delivered: result.delivered,
+      status: result.status,
+      ...(result.error ? { error: result.error } : {}),
+      durationMs: result.durationMs,
+    };
+  }
+
+  @Get('webhooks/deliveries')
+  deliveries(@Req() req: PartnerRequest, @Query('limit') limit?: string) {
+    return this.webhooks.recentDeliveries(req.partner.id, Number(limit) || 50);
+  }
+
+  /** Тестовый приёмник (только DEV/TEST): что пришло на вебхук этого партнёра. */
+  @Get('_sink/events')
+  sinkEvents(@Req() req: PartnerRequest) {
+    if (!PartnerWebhookSinkStore.enabled()) throw new NotFoundException();
+    return this.sink.list(req.partner.slug);
   }
 }
