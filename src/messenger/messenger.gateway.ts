@@ -473,7 +473,9 @@ export class MessengerGateway
         enrichedMsg,
         client.data.userId,
         payload.conversationId,
-        { silent: payload.silent, senderName },
+        // msgConvType уже прочитан выше (ветвление DIRECT/CHANNEL/AI_*) —
+        // fanOutToParticipants не должен спрашивать базу о том же второй раз.
+        { silent: payload.silent, senderName, conversationType: msgConvType },
       );
 
     } catch (e) {
@@ -526,13 +528,28 @@ export class MessengerGateway
     enrichedMsg: any,
     senderId: string,
     conversationId: string,
-    opts: { silent?: boolean; senderName?: string; systemPost?: boolean } = {},
+    opts: {
+      silent?: boolean;
+      senderName?: string;
+      systemPost?: boolean;
+      /** Тип беседы, если он уже известен вызывающему (handleMessage его уже
+       *  прочитал) — тогда свой conversation.findUnique не делаем вовсе. */
+      conversationType?: string | null;
+    } = {},
   ): Promise<void> {
     const senderName =
       opts.senderName ?? (enrichedMsg?.senderName as string | undefined) ?? '';
     // Один раз на весь fan-out: решает, мирорить ли события в puser:<id>
     // партнёрских сокетов участников (только DIRECT/GROUP — см. partnerUserRoom).
-    const convType = await this.conversationType(conversationId);
+    // Известный вызывающему тип — всегда в приоритете (экономит повторный
+    // запрос). Иначе смотрим в базе только если партнёрский API включён —
+    // выключен он, партнёрских сокетов не бывает и мирорить нечего.
+    const convType =
+      opts.conversationType !== undefined
+        ? opts.conversationType
+        : process.env.PARTNER_API_ENABLED === 'true'
+          ? await this.conversationType(conversationId)
+          : null;
     const participants = await this.service.getParticipants(conversationId);
     // Один cross-node fetchSockets на весь fan-out, не per-participant:
     // на системном канале (24k участников) внутрицикловой вызов делал 24k
@@ -554,9 +571,14 @@ export class MessengerGateway
     // Тихое сообщение не шлёт пуш НИКОМУ (см. opts.silent ниже) — сам план с
     // его запросами в базу (partnerLink.findMany, при группе ещё и название)
     // в этом случае не нужен совсем.
-    const partnerFanOut = opts.silent
+    // НЕ await здесь: запрос в базу внутри planFanOut не должен задерживать
+    // синхронный emit ниже (реальное время доставки) ни на одну участницу
+    // цикла — ждём этот промис только там, где его результат действительно
+    // нужен (enqueue), и к тому моменту он успевает дозреть параллельно с
+    // остальной работой цикла.
+    const partnerFanOutPromise = opts.silent
       ? null
-      : await this.partnerWebhooks.planFanOut({
+      : this.partnerWebhooks.planFanOut({
           conversationId,
           participantIds: participants.map((p) => p.userId),
           senderId,
@@ -607,6 +629,9 @@ export class MessengerGateway
         if (muted) {
           this.logger.log(`FCM skipped for ${p.userId}: conversation muted`);
         } else {
+          const partnerFanOut = partnerFanOutPromise
+            ? await partnerFanOutPromise
+            : null;
           partnerFanOut?.enqueue(p.userId, {
             message: { id: enrichedMsg.id, senderId, sentAt: enrichedMsg.sentAt },
             senderName,

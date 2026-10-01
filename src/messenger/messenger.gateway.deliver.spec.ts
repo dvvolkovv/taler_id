@@ -395,10 +395,25 @@ describe('MessengerGateway.deliverNewMessage', () => {
 
   describe('partner webhooks', () => {
     let enqueue: jest.Mock;
+    let savedPartnerApiEnabled: string | undefined;
 
     beforeEach(() => {
+      // Эти тесты специально проверяют путь, где fanOutToParticipants САМ
+      // смотрит тип беседы в базе (никто не передал известный тип через
+      // opts.conversationType) — он включается только при PARTNER_API_ENABLED,
+      // иначе партнёрских сокетов всё равно не бывает и смотреть незачем.
+      savedPartnerApiEnabled = process.env.PARTNER_API_ENABLED;
+      process.env.PARTNER_API_ENABLED = 'true';
       enqueue = jest.fn();
       (mockWebhooks.planFanOut as jest.Mock).mockResolvedValue({ enqueue });
+    });
+
+    afterEach(() => {
+      if (savedPartnerApiEnabled === undefined) {
+        delete process.env.PARTNER_API_ENABLED;
+      } else {
+        process.env.PARTNER_API_ENABLED = savedPartnerApiEnabled;
+      }
     });
 
     it('queues a webhook for a recipient who does not have the chat open', async () => {
@@ -460,6 +475,72 @@ describe('MessengerGateway.deliverNewMessage', () => {
         'recipient',
         expect.objectContaining({ mentionsRecipient: true }),
       );
+    });
+  });
+
+  describe('conversation-type resolution (latency)', () => {
+    let savedPartnerApiEnabled: string | undefined;
+
+    beforeEach(() => {
+      savedPartnerApiEnabled = process.env.PARTNER_API_ENABLED;
+      delete process.env.PARTNER_API_ENABLED;
+    });
+
+    afterEach(() => {
+      if (savedPartnerApiEnabled === undefined) {
+        delete process.env.PARTNER_API_ENABLED;
+      } else {
+        process.env.PARTNER_API_ENABLED = savedPartnerApiEnabled;
+      }
+    });
+
+    it('skips the Prisma lookup when PARTNER_API_ENABLED is not "true" and no known type was supplied', async () => {
+      await gateway.fanOutToParticipants(baseMsg, 'sender', 'conv-1', {});
+      expect(mockPrisma.conversation.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('passes null as the conversation type to planFanOut when disabled and unknown', async () => {
+      process.env.PARTNER_API_ENABLED = 'true'; // so planFanOut is actually invoked
+      const planFanOut = mockWebhooks.planFanOut as jest.Mock;
+      delete process.env.PARTNER_API_ENABLED;
+      await gateway.fanOutToParticipants(baseMsg, 'sender', 'conv-1', {});
+      expect(planFanOut).toHaveBeenCalledWith(
+        expect.objectContaining({ conversationType: null }),
+      );
+    });
+
+    it('uses the caller-supplied conversation type and skips the Prisma lookup, regardless of PARTNER_API_ENABLED', async () => {
+      process.env.PARTNER_API_ENABLED = 'true';
+      await gateway.fanOutToParticipants(baseMsg, 'sender', 'conv-1', {
+        conversationType: 'GROUP',
+      });
+      expect(mockPrisma.conversation.findUnique).not.toHaveBeenCalled();
+      expect(mockWebhooks.planFanOut).toHaveBeenCalledWith(
+        expect.objectContaining({ conversationType: 'GROUP' }),
+      );
+    });
+
+    it('does not block the real-time per-participant emit on planFanOut resolving (latency)', async () => {
+      process.env.PARTNER_API_ENABLED = 'true';
+      let resolvePlan!: (v: any) => void;
+      (mockWebhooks.planFanOut as jest.Mock).mockReturnValue(
+        new Promise((resolve) => {
+          resolvePlan = resolve;
+        }),
+      );
+      const done = gateway.fanOutToParticipants(baseMsg, 'sender', 'conv-1', {
+        conversationType: 'DIRECT',
+      });
+      // Дать шанс всем уже запланированным микро/макро-тасках пройти — если
+      // бы planFanOut всё ещё ожидался ДО цикла, emit ниже не случился бы.
+      await new Promise((r) => setImmediate(r));
+      expect(
+        emitted.some(
+          (e) => e.rooms.includes('user:recipient') && e.event === 'new_message',
+        ),
+      ).toBe(true);
+      resolvePlan({ enqueue: jest.fn() });
+      await done;
     });
   });
 });

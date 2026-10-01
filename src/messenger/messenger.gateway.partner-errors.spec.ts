@@ -234,6 +234,28 @@ describe('MessengerGateway socket errors: machine codes for partner, unchanged t
     });
   });
 
+  describe('message: fan-out reuses the already-known conversation type (no duplicate DB lookup)', () => {
+    it('does not call prisma.conversation.findUnique a second time for the type fanOutToParticipants would otherwise look up itself', async () => {
+      const saved = process.env.PARTNER_API_ENABLED;
+      // Even with the flag ON (the one case where fanOutToParticipants WOULD
+      // otherwise query the DB), the type handleMessage already knows must
+      // still win and skip that query entirely.
+      process.env.PARTNER_API_ENABLED = 'true';
+      try {
+        service.getConversationType.mockResolvedValue('GROUP');
+        const client = nativeClient();
+        await gateway.handleMessage(
+          client as any,
+          { conversationId: 'conv-1', content: 'hi' } as any,
+        );
+        expect(prisma.conversation.findUnique).not.toHaveBeenCalled();
+      } finally {
+        if (saved === undefined) delete process.env.PARTNER_API_ENABLED;
+        else process.env.PARTNER_API_ENABLED = saved;
+      }
+    });
+  });
+
   describe('edit_message: unexpected failure', () => {
     beforeEach(() => {
       service.editMessage.mockRejectedValue(new Error('edit exploded'));

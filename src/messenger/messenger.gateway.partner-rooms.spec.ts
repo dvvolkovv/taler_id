@@ -197,6 +197,23 @@ describe('MessengerGateway partner room isolation', () => {
       senderName: 'Alice',
       reactions: [],
     };
+    let savedPartnerApiEnabled: string | undefined;
+
+    // Эти тесты зовут fanOutToParticipants без opts.conversationType — тип
+    // беседы ищет сам метод в базе, а он делает это только когда партнёрский
+    // API включён (иначе партнёрских сокетов всё равно не бывает).
+    beforeEach(() => {
+      savedPartnerApiEnabled = process.env.PARTNER_API_ENABLED;
+      process.env.PARTNER_API_ENABLED = 'true';
+    });
+
+    afterEach(() => {
+      if (savedPartnerApiEnabled === undefined) {
+        delete process.env.PARTNER_API_ENABLED;
+      } else {
+        process.env.PARTNER_API_ENABLED = savedPartnerApiEnabled;
+      }
+    });
 
     it('DIRECT: new_message reaches both user: and puser: of the recipient', async () => {
       setConvType('DIRECT');
