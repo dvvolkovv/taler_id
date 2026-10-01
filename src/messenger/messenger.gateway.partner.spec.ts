@@ -11,6 +11,7 @@ import { ApnsService } from '../common/apns.service';
 import { FcmService } from '../common/fcm.service';
 import { PartnerRealtimeService } from '../partner-core/partner-realtime.service';
 import { PartnerTokensService } from '../partner-core/partner-tokens.service';
+import { partnerUserRoom } from '../partner-core/partner.constants';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { AiTwinService } from './ai-twin.service';
@@ -91,7 +92,10 @@ describe('MessengerGateway connections', () => {
     const client = fakeClient('opaque');
     await gateway.handleConnection(client as any);
     expect(client.data.partner).toMatchObject({ partnerId: 'p1', grantId: 'g1' });
-    expect(client.join).toHaveBeenCalledWith('user:u1');
+    // user:<id> is a firehose (AI, calls, billing, "Избранное") — a partner
+    // socket must NOT sit there. It gets its own puser:<id> room instead.
+    expect(client.join).not.toHaveBeenCalledWith('user:u1');
+    expect(client.join).toHaveBeenCalledWith(partnerUserRoom('u1'));
     expect(client.join).toHaveBeenCalledWith('plink:p1:u1');
     jest.advanceTimersByTime(15 * 60 * 1000 - 1);
     expect(client.disconnect).not.toHaveBeenCalled();

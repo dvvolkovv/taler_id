@@ -71,6 +71,7 @@ describe('MessengerController for partner tokens', () => {
     const nativeUser = { sub: 'u1' };
     let service: any;
     let scope: any;
+    let gateway: any;
     let controller: MessengerController;
 
     beforeEach(() => {
@@ -98,9 +99,11 @@ describe('MessengerController for partner tokens', () => {
         assertAllContacts: jest.fn().mockResolvedValue(undefined),
         assertMessages: jest.fn().mockResolvedValue(undefined),
       };
-      const gateway: any = {
+      gateway = {
         emitToUser: jest.fn(),
+        emitToUserInConversation: jest.fn(),
         emitToConversationParticipants: jest.fn(),
+        emitToConversationParticipantsInConversation: jest.fn(),
         broadcastNewMessage: jest.fn(),
         fanOutToParticipants: jest.fn(),
       };
@@ -189,6 +192,17 @@ describe('MessengerController for partner tokens', () => {
     it('lets partners put only their contacts into groups', async () => {
       await controller.createGroup({ name: 'G', participantIds: ['u2'] } as any, partnerUser);
       expect(scope.assertAllContacts).toHaveBeenCalledWith('u1', ['u2']);
+      // group_created is announced through the type-aware helper so a partner
+      // socket of the same user also gets it (puser:<id>), hard-coded to
+      // GROUP since createGroupConversation never produces anything else.
+      expect(gateway.emitToUserInConversation).toHaveBeenCalledWith('u1', 'GROUP', 'group_created', {
+        conversationId: 'g1',
+        name: 'G',
+      });
+      expect(gateway.emitToUserInConversation).toHaveBeenCalledWith('u2', 'GROUP', 'group_created', {
+        conversationId: 'g1',
+        name: 'G',
+      });
       await controller.addMembers('g1', { userIds: ['u3'] } as any, partnerUser);
       expect(scope.assertAllContacts).toHaveBeenCalledWith('u1', ['u3']);
       scope.assertAllContacts.mockClear();

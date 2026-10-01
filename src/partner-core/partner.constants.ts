@@ -32,6 +32,9 @@ export function partnerLinkRoom(partnerId: string, userId: string): string {
   return `plink:${partnerId}:${userId}`;
 }
 
+/** Личная комната партнёрских сокетов. В `user:<id>` сервер шлёт всё подряд (AI, звонки, биллинг, «Избранное»), поэтому партнёрский сокет туда не входит, а сюда дублируются только события личных чатов и групп. */
+export const partnerUserRoom = (userId: string) => `puser:${userId}`;
+
 /** Кто стоит за партнёрским токеном. */
 export interface PartnerPrincipal {
   userId: string;

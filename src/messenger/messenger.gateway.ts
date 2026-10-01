@@ -32,7 +32,11 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { PartnerRealtimeService } from '../partner-core/partner-realtime.service';
 import { PartnerTokensService } from '../partner-core/partner-tokens.service';
-import { partnerLinkRoom } from '../partner-core/partner.constants';
+import {
+  isPartnerConversationType,
+  partnerLinkRoom,
+  partnerUserRoom,
+} from '../partner-core/partner.constants';
 import { PartnerConversationScope } from './partner-conversation-scope.service';
 import { installSocketGate } from './socket-gate';
 import {
@@ -120,7 +124,10 @@ export class MessengerGateway
       client.data.userId = principal.userId;
       client.data.connectedAt = Date.now();
       client.data.partner = principal;
-      client.join(`user:${principal.userId}`);
+      // НЕ user:<id> — туда шлётся всё подряд (AI, звонки, биллинг,
+      // «Избранное»). Партнёрский сокет сидит в своей комнате и получает
+      // только то, что явно продублировано через emitToUserInConversation.
+      client.join(partnerUserRoom(principal.userId));
       client.join(partnerLinkRoom(principal.partnerId, principal.userId));
       // Отзыв мог прийти, пока шла проверка: тогда команда «порвать сокеты
       // связки» разошлась раньше, чем этот сокет вошёл в комнату. Проверяем
@@ -519,6 +526,9 @@ export class MessengerGateway
   ): Promise<void> {
     const senderName =
       opts.senderName ?? (enrichedMsg?.senderName as string | undefined) ?? '';
+    // Один раз на весь fan-out: решает, мирорить ли события в puser:<id>
+    // партнёрских сокетов участников (только DIRECT/GROUP — см. partnerUserRoom).
+    const convType = await this.conversationType(conversationId);
     const participants = await this.service.getParticipants(conversationId);
     // Один cross-node fetchSockets на весь fan-out, не per-participant:
     // на системном канале (24k участников) внутрицикловой вызов делал 24k
@@ -542,15 +552,20 @@ export class MessengerGateway
         where: { blockerId: p.userId, blockedId: senderId },
       });
       if (isBlocked) continue;
-      this.server.to(`user:${p.userId}`).emit('new_message', enrichedMsg);
+      this.emitToUserInConversation(p.userId, convType, 'new_message', enrichedMsg);
       const recipientInConv = userIdsInConv.has(p.userId);
-      const sockets = await this.server.in(`user:${p.userId}`).fetchSockets();
+      // Партнёрский сокет того же участника держит отдельную комнату
+      // (puser:<id>), а не user:<id> — его тоже считаем «онлайн».
+      const sockets = await this.server
+        .in([`user:${p.userId}`, partnerUserRoom(p.userId)])
+        .fetchSockets();
       const isOnline = sockets.length > 0;
       if (isOnline) {
         await this.service.markDelivered(enrichedMsg.id);
-        this.server
-          .to(`user:${senderId}`)
-          .emit('message_updated', { id: enrichedMsg.id, isDelivered: true });
+        this.emitToUserInConversation(senderId, convType, 'message_updated', {
+          id: enrichedMsg.id,
+          isDelivered: true,
+        });
       }
       this.logger.log(
         `FCM: recipientId=${p.userId} online=${isOnline} inConv=${recipientInConv} → push=${!recipientInConv}`,
@@ -1206,8 +1221,9 @@ export class MessengerGateway
       const participants = await this.service.getParticipants(
         payload.conversationId,
       );
+      const convType = await this.conversationType(payload.conversationId);
       for (const p of participants) {
-        this.server.to(`user:${p.userId}`).emit('message_reaction_updated', {
+        this.emitToUserInConversation(p.userId, convType, 'message_reaction_updated', {
           messageId: payload.messageId,
           conversationId: payload.conversationId,
           reactions,
@@ -1240,11 +1256,12 @@ export class MessengerGateway
       };
       // Receipts to the other participants (senders) + this user's OTHER devices.
       const participants = await this.service.getParticipants(payload.conversationId);
+      const convType = await this.conversationType(payload.conversationId);
       for (const p of participants) {
-        this.server.to(`user:${p.userId}`).emit('conversation_read', evt);
+        this.emitToUserInConversation(p.userId, convType, 'conversation_read', evt);
       }
       // Legacy event kept during client transition (harmless double-signal).
-      this.server.to(`user:${userId}`).emit('messages_read', {
+      this.emitToUserInConversation(userId, convType, 'messages_read', {
         conversationId: payload.conversationId,
         messageIds: [],
       });
@@ -1270,6 +1287,26 @@ export class MessengerGateway
   }
 
   /**
+   * Type-aware variant of emitToConversationParticipants: additionally
+   * mirrors into each participant's puser:<id> room when conversationType is
+   * partner-visible (DIRECT/GROUP). Kept separate from the plain
+   * emitToConversationParticipants above so its other callers
+   * (group_updated, group_role_changed, group_member_added) keep their
+   * user:-only behaviour unchanged — only call sites that opt in here do.
+   */
+  async emitToConversationParticipantsInConversation(
+    conversationId: string,
+    conversationType: string | null | undefined,
+    event: string,
+    data: any,
+  ) {
+    const participants = await this.service.getParticipants(conversationId);
+    for (const p of participants) {
+      this.emitToUserInConversation(p.userId, conversationType, event, data);
+    }
+  }
+
+  /**
    * Emit a Socket.io event to a specific user's personal room. Mirrors the
    * inline `server.to(`user:${userId}`).emit(...)` pattern used throughout
    * this gateway. Provided for cross-module use (e.g., GroupCallGateway in
@@ -1280,15 +1317,43 @@ export class MessengerGateway
   }
 
   /**
+   * Событие беседы в личную комнату участника. Партнёрским сокетам того же
+   * человека — только если беседа личная или группа (см. partnerUserRoom):
+   * `user:<id>` получает всё как раньше, `puser:<id>` — только это.
+   */
+  emitToUserInConversation(
+    userId: string,
+    conversationType: string | null | undefined,
+    event: string,
+    data: any,
+  ) {
+    this.server.to(`user:${userId}`).emit(event, data);
+    if (isPartnerConversationType(conversationType)) {
+      this.server.to(partnerUserRoom(userId)).emit(event, data);
+    }
+  }
+
+  /** Тип беседы для emitToUserInConversation. Нет беседы — null, ответит сам обработчик. */
+  private async conversationType(conversationId: string): Promise<string | null> {
+    const conv = await this.prisma.conversation.findUnique({
+      where: { id: conversationId },
+      select: { type: true },
+    });
+    return conv?.type ?? null;
+  }
+
+  /**
    * Removes every socket of `userId` from a conversation's Socket.IO room.
    *
    * Room membership is granted on `join` and used to be kept until the socket
    * disconnected, so a user removed from a group went on receiving its live
    * messages for the rest of their session. Goes through the Redis adapter, so
-   * it also reaches sockets held by the other app node.
+   * it also reaches sockets held by the other app node. Partner sockets of the
+   * same user sit in puser:<id> rather than user:<id> (see partnerUserRoom),
+   * so they must be evicted from the conversation room too.
    */
   evictFromConversationRoom(userId: string, conversationId: string) {
-    this.server.in(`user:${userId}`).socketsLeave(conversationId);
+    this.server.in([`user:${userId}`, partnerUserRoom(userId)]).socketsLeave(conversationId);
   }
 
   /** Get user's preferred language from their profile. Defaults to 'en'. */

@@ -38,10 +38,16 @@ describe('MessengerGateway.deliverNewMessage', () => {
           emitted.push({ room, event, data });
         },
       }),
-      in: (room: string) => ({
+      // fanOutToParticipants' online check now passes an array
+      // ([`user:x`, `puser:x`]) instead of a single room string, to count a
+      // partner socket (puser:<id>) as online too — see partner.constants.ts
+      // partnerUserRoom. Normalize to an array so both call shapes work.
+      in: (room: string | string[]) => ({
         fetchSockets: async () => {
-          if (room.startsWith('user:')) {
-            const userId = room.slice(5);
+          const rooms = Array.isArray(room) ? room : [room];
+          const userRoom = rooms.find((r) => r.startsWith('user:'));
+          if (userRoom) {
+            const userId = userRoom.slice(5);
             return socketsInUser[userId] ?? [];
           }
           return socketsInConv;
@@ -71,6 +77,11 @@ describe('MessengerGateway.deliverNewMessage', () => {
             },
             profile: {
               findUnique: jest.fn().mockResolvedValue({ language: 'ru' }),
+            },
+            // fanOutToParticipants now looks the conversation type up once
+            // (to decide puser:<id> mirroring) — see partner room isolation.
+            conversation: {
+              findUnique: jest.fn().mockResolvedValue({ type: 'DIRECT' }),
             },
           },
         },
@@ -355,8 +366,12 @@ describe('MessengerGateway.deliverNewMessage', () => {
   it('conv-level fetchSockets failure does not abort fan-out (everyone treated offline)', async () => {
     socketsInConv = null as any; // заставим общий fetchSockets кинуть
     const origIn = (gateway as any).server.in.bind((gateway as any).server);
-    (gateway as any).server.in = (room: string) => {
-      if (!room.startsWith('user:')) {
+    (gateway as any).server.in = (room: string | string[]) => {
+      // conv-level fetch uses a bare conversationId string; the per-participant
+      // online check uses an array containing a user: room — only the former
+      // should hit the simulated cross-node timeout.
+      const rooms = Array.isArray(room) ? room : [room];
+      if (!rooms.some((r) => r.startsWith('user:'))) {
         return { fetchSockets: async () => { throw new Error('cross-node timeout'); } };
       }
       return origIn(room);

@@ -267,9 +267,10 @@ export class MessengerController {
       dto.name,
       dto.participantIds,
     );
-    // Notify all participants about the new group
+    // Notify all participants about the new group. createGroupConversation
+    // always creates type GROUP, so the type is hard-coded, not looked up.
     for (const pid of conv.participantIds) {
-      this.gateway.emitToUser(pid, 'group_created', {
+      this.gateway.emitToUserInConversation(pid, 'GROUP', 'group_created', {
         conversationId: conv.id,
         name: dto.name,
       });
@@ -307,9 +308,11 @@ export class MessengerController {
           userIds: newIds,
         },
       );
-      // Also notify newly added users so they refresh their conversation list
+      // Also notify newly added users so they refresh their conversation
+      // list. addGroupMembers already asserted conv.type === 'GROUP' above
+      // (it throws otherwise), so the type is hard-coded here too.
       for (const uid of newIds) {
-        this.gateway.emitToUser(uid, 'group_created', { conversationId: id });
+        this.gateway.emitToUserInConversation(uid, 'GROUP', 'group_created', { conversationId: id });
       }
     }
     return newIds;
@@ -326,8 +329,11 @@ export class MessengerController {
     // Drop their sockets from the room before announcing it, or they keep
     // receiving the group's messages until they reconnect.
     this.gateway.evictFromConversationRoom(uid, id);
-    await this.gateway.emitToConversationParticipants(
+    // removeGroupMember already asserted conv.type === 'GROUP' (throws
+    // otherwise), so the type is hard-coded rather than looked up again.
+    await this.gateway.emitToConversationParticipantsInConversation(
       id,
+      'GROUP',
       'group_member_removed',
       {
         conversationId: id,
@@ -335,7 +341,7 @@ export class MessengerController {
       },
     );
     // Also notify removed user
-    this.gateway.emitToUser(uid, 'group_member_removed', {
+    this.gateway.emitToUserInConversation(uid, 'GROUP', 'group_member_removed', {
       conversationId: id,
       userId: uid,
     });
@@ -425,8 +431,9 @@ export class MessengerController {
     // Get participants before deletion
     const members = await this.service.getGroupMembers(id, user.sub);
     await this.service.deleteGroup(id, user.sub);
+    // deleteGroup already asserted conv.type === 'GROUP' (throws otherwise).
     for (const m of members) {
-      this.gateway.emitToUser(m.userId, 'group_deleted', {
+      this.gateway.emitToUserInConversation(m.userId, 'GROUP', 'group_deleted', {
         conversationId: id,
       });
     }
@@ -1358,8 +1365,15 @@ export class MessengerController {
    * нужно, чтобы второе устройство подхватило изменение сразу — ради этого всё
    * и переносилось с локального хранилища на сервер.
    */
-  private emitListState(userId: string, conversationId: string, patch: any) {
-    this.gateway.server.to(`user:${userId}`).emit('conversation_state', {
+  private async emitListState(userId: string, conversationId: string, patch: any) {
+    // Тип неизвестен заранее (это может быть любая беседа, включая AI/канал),
+    // поэтому — в отличие от гарантированно-групповых group_* выше — здесь
+    // действительно смотрим в базу перед тем как решить, мирорить ли партнёру.
+    const conv = await this.prisma.conversation.findUnique({
+      where: { id: conversationId },
+      select: { type: true },
+    });
+    this.gateway.emitToUserInConversation(userId, conv?.type ?? null, 'conversation_state', {
       conversationId,
       draft: patch.draft ?? null,
       draftAt: patch.draftAt ?? null,
@@ -1375,21 +1389,21 @@ export class MessengerController {
     @CurrentUser() user: any,
   ) {
     const row = await this.service.setDraft(id, user.sub, text ?? '');
-    this.emitListState(user.sub, id, row);
+    await this.emitListState(user.sub, id, row);
     return { draft: row.draft, draftAt: row.draftAt };
   }
 
   @Post('conversations/:id/archive')
   async archiveConversation(@Param('id') id: string, @CurrentUser() user: any) {
     const row = await this.service.setArchived(id, user.sub, true);
-    this.emitListState(user.sub, id, row);
+    await this.emitListState(user.sub, id, row);
     return { archivedAt: row.archivedAt };
   }
 
   @Delete('conversations/:id/archive')
   async unarchiveConversation(@Param('id') id: string, @CurrentUser() user: any) {
     const row = await this.service.setArchived(id, user.sub, false);
-    this.emitListState(user.sub, id, row);
+    await this.emitListState(user.sub, id, row);
     return { archivedAt: null };
   }
 
@@ -1400,14 +1414,14 @@ export class MessengerController {
   @Post('conversations/:id/chat-pin')
   async pinConversation(@Param('id') id: string, @CurrentUser() user: any) {
     const row = await this.service.setChatPinned(id, user.sub, true);
-    this.emitListState(user.sub, id, row);
+    await this.emitListState(user.sub, id, row);
     return { chatPinnedAt: row.chatPinnedAt };
   }
 
   @Delete('conversations/:id/chat-pin')
   async unpinConversation(@Param('id') id: string, @CurrentUser() user: any) {
     const row = await this.service.setChatPinned(id, user.sub, false);
-    this.emitListState(user.sub, id, row);
+    await this.emitListState(user.sub, id, row);
     return { chatPinnedAt: null };
   }
 
