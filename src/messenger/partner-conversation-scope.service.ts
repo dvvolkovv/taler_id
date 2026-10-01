@@ -37,6 +37,19 @@ export class PartnerConversationScope {
     }
   }
 
+  /** Исходные сообщения пересылки: хоть одно из чужой для партнёра беседы — 403. */
+  async assertMessages(messageIds: string[] | undefined): Promise<void> {
+    const ids = [...new Set(messageIds ?? [])];
+    if (ids.length === 0) return;
+    const rows = await this.prisma.message.findMany({
+      where: { id: { in: ids } },
+      select: { conversation: { select: { type: true } } },
+    });
+    if (rows.some((m) => !isPartnerConversationType(m.conversation.type))) {
+      throw new ForbiddenException(PARTNER_FORBIDDEN);
+    }
+  }
+
   /** Беседы пользователя, видимые партнёрскому токену, — для фильтрации списков. */
   async visibleConversationIds(userId: string): Promise<Set<string>> {
     const rows = await this.prisma.conversationParticipant.findMany({

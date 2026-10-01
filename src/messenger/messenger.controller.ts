@@ -35,7 +35,11 @@ import { MessengerGateway } from './messenger.gateway';
 import { MessengerAuthGuard } from './messenger-auth.guard';
 import { PartnerAllowed } from './partner-allowed.decorator';
 import { PartnerConversationScope } from './partner-conversation-scope.service';
-import { isPartnerCaller, isPartnerConversationType } from '../partner-core/partner.constants';
+import {
+  isPartnerCaller,
+  isPartnerConversationType,
+  PARTNER_CONVERSATION_TYPES,
+} from '../partner-core/partner.constants';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { CreateGroupDto } from './dto/create-group.dto';
 import { UpdateGroupDto } from './dto/update-group.dto';
@@ -160,12 +164,12 @@ export class MessengerController {
     @CurrentUser() user: any,
   ) {
     const parsedLimit = limit ? Math.min(Math.max(parseInt(limit, 10) || 200, 1), 500) : 200;
-    const page = await this.service.sync(user.sub, cursor || undefined, parsedLimit);
-    if (!isPartnerCaller(user)) return page;
-    // Курсор остаётся от полной страницы: отфильтрованные сообщения просто не
-    // отдаются, следующая страница начнётся там же, где и без фильтра.
-    const visible = await this.partnerScope.visibleConversationIds(user.sub);
-    return { ...page, messages: page.messages.filter((m) => visible.has(m.conversationId)) };
+    // Фильтр передаём в сам запрос сервиса, а не после: курсор считался по
+    // всем беседам пользователя и утекал наружу (id и точное время сообщений
+    // из «Избранного», чатов AI и системного канала) ещё до того, как
+    // сообщения отфильтруются здесь.
+    const types = isPartnerCaller(user) ? PARTNER_CONVERSATION_TYPES : undefined;
+    return this.service.sync(user.sub, cursor || undefined, parsedLimit, types);
   }
 
   @Get('read-state')
@@ -583,10 +587,11 @@ export class MessengerController {
   @Get('messages/search')
   @PartnerAllowed()
   async searchMessages(@Query('q') q: string, @CurrentUser() user: any) {
-    const found = await this.service.searchMessages(q, user.sub);
-    if (!isPartnerCaller(user)) return found;
-    const visible = await this.partnerScope.visibleConversationIds(user.sub);
-    return found.filter((m: any) => visible.has(m.conversationId));
+    // Тот же приём, что в sync: лимит в 50 совпадений считается самим
+    // запросом по видимым беседам, а не после — иначе скрытые совпадения
+    // просто съедали бы top-50 и партнёр получал бы пустой результат.
+    const types = isPartnerCaller(user) ? PARTNER_CONVERSATION_TYPES : undefined;
+    return this.service.searchMessages(q, user.sub, types);
   }
 
   // ─── User search ───
@@ -1424,6 +1429,12 @@ export class MessengerController {
     @Body('messageIds') messageIds: string[],
     @CurrentUser() user: any,
   ) {
+    // Guard проверяет только тип беседы-получателя из URL (id). Источники
+    // пересылки приходят в теле и могли быть «Избранным», чатом AI или
+    // системным каналом — сервис только требует быть участником, любого типа.
+    if (isPartnerCaller(user)) {
+      await this.partnerScope.assertMessages(messageIds);
+    }
     const created = await this.service.forwardMessages(
       id,
       user.sub,
@@ -1487,7 +1498,7 @@ export class MessengerController {
   // ─── Pinned messages ───
 
   @Post('conversations/:id/messages/:msgId/pin')
-  @PartnerAllowed({ conversationParam: 'id' })
+  @PartnerAllowed({ conversationParam: 'id', messageParam: 'msgId' })
   async pinMessage(
     @Param('id') id: string,
     @Param('msgId') msgId: string,
@@ -1535,7 +1546,7 @@ export class MessengerController {
   }
 
   @Delete('conversations/:id/messages/:msgId/pin')
-  @PartnerAllowed({ conversationParam: 'id' })
+  @PartnerAllowed({ conversationParam: 'id', messageParam: 'msgId' })
   async unpinMessage(
     @Param('id') id: string,
     @Param('msgId') msgId: string,
@@ -1641,7 +1652,7 @@ export class MessengerController {
   // ─── Threads ───
 
   @Get('conversations/:convId/messages/:msgId/thread')
-  @PartnerAllowed({ conversationParam: 'convId' })
+  @PartnerAllowed({ conversationParam: 'convId', messageParam: 'msgId' })
   async getThread(
     @Param('convId') convId: string,
     @Param('msgId') msgId: string,
@@ -1659,7 +1670,7 @@ export class MessengerController {
   }
 
   @Post('conversations/:convId/messages/:msgId/thread')
-  @PartnerAllowed({ conversationParam: 'convId' })
+  @PartnerAllowed({ conversationParam: 'convId', messageParam: 'msgId' })
   async sendThreadReply(
     @Param('convId') convId: string,
     @Param('msgId') msgId: string,

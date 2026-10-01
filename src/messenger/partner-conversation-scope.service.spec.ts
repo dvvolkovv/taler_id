@@ -8,7 +8,7 @@ describe('PartnerConversationScope', () => {
   beforeEach(() => {
     prisma = {
       conversation: { findUnique: jest.fn() },
-      message: { findUnique: jest.fn() },
+      message: { findUnique: jest.fn(), findMany: jest.fn() },
       conversationParticipant: { findMany: jest.fn() },
       contactRequest: { findMany: jest.fn() },
     };
@@ -46,6 +46,26 @@ describe('PartnerConversationScope', () => {
       where: { userId: 'u1', conversation: { type: { in: ['DIRECT', 'GROUP'] } } },
       select: { conversationId: true },
     });
+  });
+
+  it('checks every source message of a forward', async () => {
+    prisma.message.findMany.mockResolvedValue([
+      { conversation: { type: 'DIRECT' } },
+      { conversation: { type: 'GROUP' } },
+    ]);
+    await expect(scope.assertMessages(['m1', 'm2'])).resolves.toBeUndefined();
+
+    prisma.message.findMany.mockResolvedValue([
+      { conversation: { type: 'DIRECT' } },
+      { conversation: { type: 'SAVED' } },
+    ]);
+    await expect(scope.assertMessages(['m1', 'm3'])).rejects.toThrow(ForbiddenException);
+  });
+
+  it('skips the query for an empty forward', async () => {
+    await expect(scope.assertMessages([])).resolves.toBeUndefined();
+    await expect(scope.assertMessages(undefined)).resolves.toBeUndefined();
+    expect(prisma.message.findMany).not.toHaveBeenCalled();
   });
 
   it('names the people who are not contacts', async () => {

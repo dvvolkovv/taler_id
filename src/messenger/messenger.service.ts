@@ -5,7 +5,7 @@ import {
   BadRequestException,
   Logger,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, ConvType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { FileStorageService } from '../common/file-storage.service';
 import { resolveUserIdOrUsername } from '../common/utils/user-id.util';
@@ -783,6 +783,11 @@ export class MessengerService {
     userId: string,
     cursor?: string,
     limit = 200,
+    // Партнёрский токен видит только DIRECT/GROUP (PARTNER_CONVERSATION_TYPES
+    // из messenger.controller.ts). Раньше курсор считался по ВСЕМ беседам
+    // пользователя, а фильтровался только отданный messages[] — курсор и сам
+    // факт существования скрытых бесед (их id, точное время) утекали наружу.
+    conversationTypes?: readonly ConvType[],
   ): Promise<{
     messages: any[];
     nextCursor: string | null;
@@ -796,6 +801,7 @@ export class MessengerService {
           deletedAt: null,
           conversation: {
             participants: { some: { userId } },
+            ...(conversationTypes ? { type: { in: [...conversationTypes] } } : {}),
           },
           NOT: { hiddenFor: { some: { userId } } },
         },
@@ -823,6 +829,13 @@ export class MessengerService {
     // the comparison in the same naive-timestamp domain and avoids Prisma serializing
     // the Date as a timestamptz wire type which breaks the PostgreSQL row comparison.
     const safeCursorTs = cursorTsDate.toISOString().replace('Z', '');
+
+    // Та же причина, что в findFirst выше: без этого курсорная ветка отдавала
+    // бы сообщения из скрытых для партнёра бесед. Пустая строка при
+    // отсутствии типов — байт-в-байт тот же SQL, что и раньше (Prisma.empty).
+    const typeFilterSql = conversationTypes
+      ? Prisma.sql` AND EXISTS (SELECT 1 FROM "Conversation" c WHERE c.id = m."conversationId" AND c."type"::text IN (${Prisma.join([...conversationTypes])}))`
+      : Prisma.empty;
 
     const rows: any[] = await this.prisma.$queryRaw`
       SELECT
@@ -893,7 +906,7 @@ export class MessengerService {
           WHERE h."messageId" = m.id AND h."userId" = ${userId}
         )
         AND (m."sentAt" > ${Prisma.raw(`'${safeCursorTs}'::timestamp`)}
-          OR (m."sentAt" = ${Prisma.raw(`'${safeCursorTs}'::timestamp`)} AND m.id > ${cursorId}))
+          OR (m."sentAt" = ${Prisma.raw(`'${safeCursorTs}'::timestamp`)} AND m.id > ${cursorId}))${typeFilterSql}
       ORDER BY m."sentAt" ASC, m.id ASC
       LIMIT ${cap + 1}
     `;
@@ -2905,10 +2918,17 @@ export class MessengerService {
 
   // ─── Message search ───
 
-  async searchMessages(query: string, userId: string) {
+  async searchMessages(
+    query: string,
+    userId: string,
+    conversationTypes?: readonly ConvType[],
+  ) {
     if (!query || query.length < 2) return [];
     const conversations = await this.prisma.conversation.findMany({
-      where: { participants: { some: { userId } } },
+      where: {
+        participants: { some: { userId } },
+        ...(conversationTypes ? { type: { in: [...conversationTypes] } } : {}),
+      },
       select: { id: true },
     });
     const convIds = conversations.map((c) => c.id);

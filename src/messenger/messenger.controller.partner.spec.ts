@@ -1,6 +1,8 @@
+import { ForbiddenException } from '@nestjs/common';
 import { MessengerAuthGuard } from './messenger-auth.guard';
 import { MessengerController } from './messenger.controller';
 import { PARTNER_ALLOWED_KEY, PartnerAllowedOptions } from './partner-allowed.decorator';
+import { PARTNER_CONVERSATION_TYPES } from '../partner-core/partner.constants';
 
 /** Ровно этот набор обработчиков открыт партнёрам — спека, раздел «Что открыто». */
 const EXPECTED: Record<string, PartnerAllowedOptions> = {
@@ -35,13 +37,13 @@ const EXPECTED: Record<string, PartnerAllowedOptions> = {
   abortChunkedUpload: {},
   linkPreview: {},
   forwardMessages: { conversationParam: 'id' },
-  pinMessage: { conversationParam: 'id' },
-  unpinMessage: { conversationParam: 'id' },
+  pinMessage: { conversationParam: 'id', messageParam: 'msgId' },
+  unpinMessage: { conversationParam: 'id', messageParam: 'msgId' },
   listPinned: { conversationParam: 'id' },
   unpinAll: { conversationParam: 'id' },
   dismissPins: { conversationParam: 'id' },
-  getThread: { conversationParam: 'convId' },
-  sendThreadReply: { conversationParam: 'convId' },
+  getThread: { conversationParam: 'convId', messageParam: 'msgId' },
+  sendThreadReply: { conversationParam: 'convId', messageParam: 'msgId' },
 };
 
 function partnerAllowlist(): Record<string, PartnerAllowedOptions> {
@@ -88,12 +90,20 @@ describe('MessengerController for partner tokens', () => {
         searchMessages: jest.fn().mockResolvedValue([{ id: 'm1', conversationId: 'c1' }, { id: 'm2', conversationId: 'c4' }]),
         createGroupConversation: jest.fn().mockResolvedValue({ id: 'g1', participantIds: ['u1', 'u2'] }),
         addGroupMembers: jest.fn().mockResolvedValue([]),
+        forwardMessages: jest.fn().mockResolvedValue([]),
+        getUserDisplayName: jest.fn().mockResolvedValue('Name'),
       };
       scope = {
         visibleConversationIds: jest.fn().mockResolvedValue(new Set(['c1', 'c3'])),
         assertAllContacts: jest.fn().mockResolvedValue(undefined),
+        assertMessages: jest.fn().mockResolvedValue(undefined),
       };
-      const gateway: any = { emitToUser: jest.fn(), emitToConversationParticipants: jest.fn() };
+      const gateway: any = {
+        emitToUser: jest.fn(),
+        emitToConversationParticipants: jest.fn(),
+        broadcastNewMessage: jest.fn(),
+        fanOutToParticipants: jest.fn(),
+      };
       const unused: any = {};
       controller = new MessengerController(
         service, gateway, unused, unused, unused, unused, unused,
@@ -109,17 +119,71 @@ describe('MessengerController for partner tokens', () => {
       await expect(controller.list(nativeUser)).resolves.toHaveLength(4);
     });
 
-    it('filters sync, read state and message search by visible conversations', async () => {
+    it('still filters read state by visible conversations for partners', async () => {
+      await expect(controller.readState(partnerUser)).resolves.toEqual({ conversations: [{ conversationId: 'c1' }] });
+      await expect(controller.readState(nativeUser)).resolves.toEqual({
+        conversations: [{ conversationId: 'c1' }, { conversationId: 'c2' }],
+      });
+      expect(scope.visibleConversationIds).toHaveBeenCalledTimes(1);
+    });
+
+    it('asks the service to restrict sync to partner-visible conversation types, unfiltered by the controller', async () => {
+      // Фильтрация теперь — в самом запросе сервиса (курсор иначе протекал по
+      // скрытым беседам), контроллер просто передаёт список типов и отдаёт
+      // страницу как есть.
       await expect(controller.sync(undefined, undefined, partnerUser)).resolves.toEqual({
-        messages: [{ id: 'm1', conversationId: 'c1' }],
+        messages: [{ id: 'm1', conversationId: 'c1' }, { id: 'm2', conversationId: 'c2' }],
         nextCursor: 'x',
         hasMore: false,
       });
-      await expect(controller.readState(partnerUser)).resolves.toEqual({ conversations: [{ conversationId: 'c1' }] });
-      await expect(controller.searchMessages('hi', partnerUser)).resolves.toEqual([{ id: 'm1', conversationId: 'c1' }]);
-      const nativeSync: any = await controller.sync(undefined, undefined, nativeUser);
-      expect(nativeSync.messages).toHaveLength(2);
-      expect(scope.visibleConversationIds).toHaveBeenCalledTimes(3);
+      expect(service.sync).toHaveBeenCalledWith('u1', undefined, 200, PARTNER_CONVERSATION_TYPES);
+
+      await controller.sync(undefined, undefined, nativeUser);
+      expect(service.sync).toHaveBeenLastCalledWith('u1', undefined, 200, undefined);
+      expect(scope.visibleConversationIds).not.toHaveBeenCalled();
+    });
+
+    it('asks the service to restrict message search to partner-visible conversation types, unfiltered by the controller', async () => {
+      await expect(controller.searchMessages('hi', partnerUser)).resolves.toEqual([
+        { id: 'm1', conversationId: 'c1' },
+        { id: 'm2', conversationId: 'c4' },
+      ]);
+      expect(service.searchMessages).toHaveBeenCalledWith('hi', 'u1', PARTNER_CONVERSATION_TYPES);
+
+      await controller.searchMessages('hi', nativeUser);
+      expect(service.searchMessages).toHaveBeenLastCalledWith('hi', 'u1', undefined);
+      expect(scope.visibleConversationIds).not.toHaveBeenCalled();
+    });
+
+    describe('forward', () => {
+      it('checks every source message for a partner before asking the service to forward', async () => {
+        const order: string[] = [];
+        scope.assertMessages.mockImplementation(async () => {
+          order.push('assertMessages');
+        });
+        service.forwardMessages.mockImplementation(async () => {
+          order.push('forwardMessages');
+          return [];
+        });
+
+        await controller.forwardMessages('c1', ['m1', 'm2'], partnerUser);
+
+        expect(scope.assertMessages).toHaveBeenCalledWith(['m1', 'm2']);
+        expect(order).toEqual(['assertMessages', 'forwardMessages']);
+      });
+
+      it('a rejecting scope stops the forward before the service is called', async () => {
+        scope.assertMessages.mockRejectedValue(new ForbiddenException('not_available_for_partner'));
+
+        await expect(controller.forwardMessages('c1', ['m1'], partnerUser)).rejects.toThrow(ForbiddenException);
+        expect(service.forwardMessages).not.toHaveBeenCalled();
+      });
+
+      it('does not check source messages for a native caller', async () => {
+        await controller.forwardMessages('c1', ['m1'], nativeUser);
+        expect(scope.assertMessages).not.toHaveBeenCalled();
+        expect(service.forwardMessages).toHaveBeenCalledWith('c1', 'u1', ['m1']);
+      });
     });
 
     it('lets partners put only their contacts into groups', async () => {
