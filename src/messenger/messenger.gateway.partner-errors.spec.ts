@@ -54,6 +54,14 @@ describe('MessengerGateway socket errors: machine codes for partner, unchanged t
       editMessage: jest.fn().mockResolvedValue({ id: 'm1', content: 'edited' }),
       deleteMessage: jest.fn().mockResolvedValue({}),
       toggleReaction: jest.fn().mockResolvedValue([{ emoji: '👍', count: 1 }]),
+      sendThreadReply: jest
+        .fn()
+        .mockResolvedValue({ id: 'm2', conversationId: 'conv-1' }),
+      getThreadCount: jest.fn().mockResolvedValue(1),
+      advanceReadHorizon: jest.fn().mockResolvedValue({
+        lastReadAt: new Date('2026-10-01T00:00:00Z'),
+        lastReadMessageId: 'm1',
+      }),
     };
     prisma = {
       blockedUser: { findFirst: jest.fn().mockResolvedValue(null) },
@@ -387,6 +395,83 @@ describe('MessengerGateway socket errors: machine codes for partner, unchanged t
       });
       expect((gateway as any).logger.error).toHaveBeenCalledWith(
         expect.stringContaining('react exploded'),
+      );
+    });
+  });
+
+  describe('thread_reply: unexpected failure', () => {
+    beforeEach(() => {
+      service.sendThreadReply.mockRejectedValue(
+        new Error('thread_reply exploded'),
+      );
+    });
+
+    it('partner socket gets `internal_error`, never the raw Error text', async () => {
+      const client = partnerClient();
+      await gateway.handleThreadReply(client as any, {
+        conversationId: 'conv-1',
+        threadParentId: 'm1',
+        content: 'x',
+      });
+      expect(client.emit).toHaveBeenCalledWith('error', {
+        message: 'internal_error',
+      });
+      expect(client.emit).not.toHaveBeenCalledWith('error', {
+        message: 'thread_reply exploded',
+      });
+    });
+
+    it('native socket now gets the raw message through the standard error event (previously an unhandled Nest "exception" event — no try/catch at all)', async () => {
+      const client = nativeClient();
+      await gateway.handleThreadReply(client as any, {
+        conversationId: 'conv-1',
+        threadParentId: 'm1',
+        content: 'x',
+      });
+      expect(client.emit).toHaveBeenCalledWith('error', {
+        message: 'thread_reply exploded',
+      });
+    });
+
+    it('logs the real error server-side', async () => {
+      const client = partnerClient();
+      await gateway.handleThreadReply(client as any, {
+        conversationId: 'conv-1',
+        threadParentId: 'm1',
+        content: 'x',
+      });
+      expect((gateway as any).logger.error).toHaveBeenCalledWith(
+        expect.stringContaining('thread_reply exploded'),
+      );
+    });
+  });
+
+  describe('mark_read: unexpected failure', () => {
+    beforeEach(() => {
+      service.advanceReadHorizon.mockRejectedValue(
+        new Error('mark_read exploded'),
+      );
+    });
+
+    it('partner socket gets `internal_error` (previously nothing at all)', async () => {
+      const client = partnerClient();
+      await gateway.handleMarkRead(client as any, { conversationId: 'conv-1' });
+      expect(client.emit).toHaveBeenCalledWith('error', {
+        message: 'internal_error',
+      });
+    });
+
+    it('native socket still gets nothing — mark_read stays a silent best-effort for it, unchanged', async () => {
+      const client = nativeClient();
+      await gateway.handleMarkRead(client as any, { conversationId: 'conv-1' });
+      expect(client.emit).not.toHaveBeenCalled();
+    });
+
+    it('logs the real error server-side either way', async () => {
+      const client = nativeClient();
+      await gateway.handleMarkRead(client as any, { conversationId: 'conv-1' });
+      expect((gateway as any).logger.error).toHaveBeenCalledWith(
+        expect.stringContaining('mark_read exploded'),
       );
     });
   });

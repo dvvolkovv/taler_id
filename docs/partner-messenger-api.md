@@ -231,16 +231,18 @@ io.Socket connectMessenger(String baseUrl, String accessToken) {
 | Событие | Когда |
 |---|---|
 | `new_message` | новое сообщение; приходит и без `join` |
-| `message_acked` `{clientTempId, messageId}` | ваше сообщение сохранено |
-| `message_updated` | правка, «доставлено» |
-| `message_deleted`, `message_reaction_updated`, `typing`, `conversation_read` | как в названии |
-| `group_created`, `group_member_added`, `group_member_removed`, `group_role_changed`, `group_updated`, `group_deleted` | изменения групп |
-| `message_pinned`, `message_unpinned`, `pins_cleared` | закрепы |
+| `message_acked` `{clientTempId, messageId}` | ваше сообщение сохранено — персональный ответ вашему сокету, `join` ни при чём |
+| `message_updated` | «доставлено» — персонально, без `join`; правка текста (edit) — трансляция в саму беседу, приходит только после `join` в неё |
+| `message_reaction_updated`, `conversation_read` | как в названии — персонально каждому участнику, без `join` |
+| `message_deleted` | `scope:"self"` («удалено у меня») — персонально автору, без `join`; `scope:"all"` — трансляция в саму беседу, приходит только после `join` |
+| `typing` | трансляция в саму беседу — приходит только участникам, сделавшим `join` |
+| `group_created`, `group_member_added`, `group_member_removed`, `group_role_changed`, `group_updated`, `group_deleted` | изменения групп — персонально каждому участнику, без `join` |
+| `message_pinned`, `message_unpinned`, `pins_cleared` | закрепы — трансляция в саму беседу, приходит только после `join` в неё |
 | `new_thread_reply` | новый ответ в треде — свой `thread_reply` (сокет) или REST-тред из таблицы выше; это трансляция в саму беседу, не персональная, как `new_message`, — приходит только если вы сделали `join` в эту беседу |
-| `conversation_state` | хозяин связки поменял в приложении Taler ID черновик, архив или закреп этого чата в списке — не ваше действие, но видно и вам, если беседа личная или группа |
-| `error` `{message}` | отказ — код в `message`, список ниже |
+| `conversation_state` | хозяин связки поменял в приложении Taler ID черновик, архив или закреп этого чата в списке — не ваше действие, но видно и вам, если беседа личная или группа; персонально, без `join` |
+| `error` `{message}` | отказ — код в `message`, список ниже; персональный ответ вашему сокету, `join` ни при чём |
 
-Коды `error.message`: `not_available_for_partner` — событие не из восьми перечисленных выше либо беседа/сообщение не личный чат и не группа; `not_a_participant` — `join` в беседу, где вас нет; на `message` в личный чат — `blocked` (получатель заблокировал отправителя) или `not_a_contact` (вы больше не контакты); `internal_error` — с любого из восьми событий, внутренняя ошибка на стороне Taler ID, подробности только в её логе.
+Коды `error.message`: `not_available_for_partner` — событие не из восьми перечисленных в разделе «Сокет: от приложения» либо беседа/сообщение не личный чат и не группа; `not_a_participant` — `join` в беседу, где вас нет; на `message` в личный чат — `blocked` (получатель заблокировал отправителя) или `not_a_contact` (вы больше не контакты); `internal_error` — непредвиденная ошибка на стороне Taler ID (подробности только в её логе), приходит с `message`, `edit_message`, `delete_message`, `react_message`, `thread_reply` или `mark_read`. `typing` ошибок не шлёт вовсе (сбой при подстановке вашего имени в пакет молча оставляет его без имени).
 
 Вместе с `conversation_read` иногда приходит такой же по смыслу легаси-дубль `messages_read` (без `messageIds`) — можно игнорировать.
 

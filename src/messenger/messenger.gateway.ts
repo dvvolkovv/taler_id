@@ -1310,6 +1310,13 @@ export class MessengerGateway
       await this.clearOnRead(userId, payload.conversationId, advanced.lastReadAt);
     } catch (e) {
       this.logger.error(`mark_read failed (conv=${payload?.conversationId}): ${(e as Error).message}`);
+      // Обычный клиент TalerID и раньше не получал здесь ничего — mark_read
+      // для него best-effort и молчит (это не меняем). Партнёрский сокет
+      // раньше тоже не получал НИЧЕГО на этой ручке — тихий отказ без единого
+      // сигнала не позволял бы заметить проблему со своей стороны вовсе.
+      if (client.data.partner) {
+        this.emitSocketError(client, 'internal_error', (e as Error).message);
+      }
     }
   }
 
@@ -1482,22 +1489,33 @@ export class MessengerGateway
       content: string;
     },
   ) {
-    const msg = await this.service.sendThreadReply(
-      payload.conversationId,
-      client.data.userId,
-      payload.content,
-      payload.threadParentId,
-    );
-    const senderName = await this.service.getUserDisplayName(
-      client.data.userId,
-    );
-    const count = await this.service.getThreadCount(payload.threadParentId);
-    this.server.to(payload.conversationId).emit('new_thread_reply', {
-      ...msg,
-      senderName,
-      threadParentId: payload.threadParentId,
-      threadReplyCount: count,
-    });
+    try {
+      const msg = await this.service.sendThreadReply(
+        payload.conversationId,
+        client.data.userId,
+        payload.content,
+        payload.threadParentId,
+      );
+      const senderName = await this.service.getUserDisplayName(
+        client.data.userId,
+      );
+      const count = await this.service.getThreadCount(payload.threadParentId);
+      this.server.to(payload.conversationId).emit('new_thread_reply', {
+        ...msg,
+        senderName,
+        threadParentId: payload.threadParentId,
+        threadReplyCount: count,
+      });
+    } catch (e) {
+      // Раньше без try/catch — сбой уходил в Nest'овский дефолтный
+      // WS-exceptions-фильтр (событие `exception`, не `error`), и партнёрский
+      // сокет получал бы что угодно, кроме согласованного кода: та же дырка,
+      // которую это семейство ручек уже закрыло всем соседям.
+      this.logger.error(
+        `thread_reply failed (user=${client.data?.userId} conv=${payload?.conversationId}): ${(e as Error).message}`,
+      );
+      this.emitSocketError(client, 'internal_error', (e as Error).message);
+    }
   }
 
   // ─── AI Analyst dispatch ──────────────────────────────────────
