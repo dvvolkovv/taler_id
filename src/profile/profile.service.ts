@@ -1,19 +1,33 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   BadRequestException,
   ConflictException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { FileStorageService } from '../common/file-storage.service';
+import { PartnerLinkRevokerService } from '../partner-core/partner-link-revoker.service';
 import { resolveUserIdOrUsername } from '../common/utils/user-id.util';
 import { UpdateProfileDto, LinkWalletDto } from './dto/update-profile.dto';
 
+/**
+ * `deleteAccount(userId, { onlyIfManagedBy })` refused: a fresh `FOR UPDATE`
+ * read of the User row found it no longer managed by that partner (a password
+ * got set in between — e.g. forgot-password — a different partner now owns
+ * it, or it's already gone). No row was touched.
+ */
+export class AccountNotManagedError extends Error {}
+
 @Injectable()
 export class ProfileService {
+  private readonly logger = new Logger(ProfileService.name);
+
   constructor(
     private prisma: PrismaService,
     private fileStorage: FileStorageService,
+    private partnerLinks: PartnerLinkRevokerService,
   ) {}
 
   async getProfile(userIdOrUsername: string) {
@@ -226,22 +240,82 @@ export class ProfileService {
     };
   }
 
-  async deleteAccount(userId: string) {
+  /**
+   * @param opts.onlyIfManagedBy Partner-API guard (Task: deleteUser). The
+   * partner decided "managed" from an earlier, unlocked read; a person can
+   * set their first TalerID password (forgot-password) in the gap between
+   * that read and this call, which hands the account back to them. When set,
+   * the deletion runs inside one transaction that re-reads the User row
+   * `FOR UPDATE` and aborts with `AccountNotManagedError` (no row touched) if
+   * it no longer matches `createdByPartnerId === onlyIfManagedBy &&
+   * passwordHash IS NULL && deletedAt IS NULL` — same shape as the `FOR
+   * UPDATE` re-check in PartnerUsersService.provisionOnce. Omitted: behaves
+   * exactly as before (the caller's own `DELETE /profile`, admin).
+   */
+  async deleteAccount(userId: string, opts?: { onlyIfManagedBy: string }) {
     const profile = await this.prisma.profile.findUnique({
       where: { userId },
     });
 
-    await this.prisma.$transaction([
+    if (opts?.onlyIfManagedBy) {
+      const partnerId = opts.onlyIfManagedBy;
+      await this.prisma.$transaction(async (tx) => {
+        const [fresh] = await tx.$queryRaw<
+          {
+            passwordHash: string | null;
+            createdByPartnerId: string | null;
+            deletedAt: Date | null;
+          }[]
+        >`SELECT "passwordHash", "createdByPartnerId", "deletedAt" FROM "User" WHERE id = ${userId} FOR UPDATE`;
+        if (
+          !fresh ||
+          fresh.createdByPartnerId !== partnerId ||
+          fresh.passwordHash !== null ||
+          fresh.deletedAt !== null
+        ) {
+          throw new AccountNotManagedError();
+        }
+        for (const op of this.deletionStatements(tx, userId, profile)) {
+          await op;
+        }
+      });
+    } else {
       // Prisma drops `undefined` filters, so `profileId: profile?.id` would match
       // every row and wipe the whole Document table for a user without a Profile.
+      await this.prisma.$transaction(
+        this.deletionStatements(this.prisma, userId, profile),
+      );
+    }
+
+    // Партнёры (nadi) теряют доступ сразу, а не когда истекут выданные токены:
+    // человек удалил аккаунт — его чатов не должен видеть никто. Сбой отзыва
+    // не отменяет удаления: новых токенов партнёр уже не получит (аккаунт
+    // удалён), выданные доживут не дольше 15 минут, а недоделанный отзыв
+    // добьёт следующий DELETE связки партнёром.
+    try {
+      await this.partnerLinks.revokeAllForUser(userId);
+    } catch (e) {
+      this.logger.error(`partner links not fully revoked for ${userId}: ${(e as Error).message}`);
+    }
+
+    return { success: true };
+  }
+
+  /** Same six statements either way — only whether they run via `this.prisma` (array transaction) or `tx` (interactive transaction, guarded path) differs. */
+  private deletionStatements(
+    db: PrismaService | Prisma.TransactionClient,
+    userId: string,
+    profile: { id: string } | null,
+  ) {
+    return [
       ...(profile
-        ? [this.prisma.document.deleteMany({ where: { profileId: profile.id } })]
+        ? [db.document.deleteMany({ where: { profileId: profile.id } })]
         : []),
-      this.prisma.kycRecord.deleteMany({ where: { userId } }),
-      this.prisma.session.deleteMany({ where: { userId } }),
-      this.prisma.totpSecret.deleteMany({ where: { userId } }),
-      this.prisma.profile.deleteMany({ where: { userId } }),
-      this.prisma.user.update({
+      db.kycRecord.deleteMany({ where: { userId } }),
+      db.session.deleteMany({ where: { userId } }),
+      db.totpSecret.deleteMany({ where: { userId } }),
+      db.profile.deleteMany({ where: { userId } }),
+      db.user.update({
         where: { id: userId },
         data: {
           deletedAt: new Date(),
@@ -250,9 +324,7 @@ export class ProfileService {
           passwordHash: null,
         },
       }),
-    ]);
-
-    return { success: true };
+    ];
   }
 
   async uploadAvatar(userId: string, filename: string) {

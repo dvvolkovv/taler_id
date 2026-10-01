@@ -1,0 +1,677 @@
+import {
+  ConflictException,
+  GoneException,
+  HttpException,
+  HttpStatus,
+  Injectable,
+  Logger,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import { AccountNotManagedError, ProfileService } from '../profile/profile.service';
+import { RedisService } from '../redis/redis.service';
+import { SystemChannelService } from '../system-channel/system-channel.service';
+import { PartnerLinkRevokerService } from '../partner-core/partner-link-revoker.service';
+import { PartnerRecord } from '../partner-core/partner-registry.service';
+import { PartnerTokensService } from '../partner-core/partner-tokens.service';
+import { PartnerAuditService } from './partner-audit.service';
+import { countInWindow } from './partner-counter.util';
+import { PatchUserDto } from './dto/patch-user.dto';
+import { ProvisionUserDto } from './dto/provision-user.dto';
+
+/**
+ * Суточный потолок на заведение новых аккаунтов одним партнёром: утёкший
+ * ключ иначе заводил бы ~170 тысяч аккаунтов в сутки, и каждый подписывается
+ * на системный канал новостей (рассылка по участникам). Поднимается в .env
+ * на время разовой массовой загрузки.
+ */
+const DEFAULT_PARTNER_ACCOUNTS_PER_DAY = 5000;
+
+/** Как часто максимум один раз логировать превышение суточного потолка — на партнёра. */
+const CAP_LOG_INTERVAL_MS = 60 * 60 * 1000;
+
+export type ProvisionResult =
+  | { status: 'active'; talerUserId: string; created: boolean }
+  | { status: 'confirmation_required'; talerUserId: null };
+
+type LinkStatus = 'PENDING' | 'ACTIVE' | 'REVOKED';
+
+interface AccountState {
+  deletedAt: Date | null;
+  passwordHash: string | null;
+  createdByPartnerId: string | null;
+}
+
+interface LinkWithUser {
+  id: string;
+  userId: string;
+  status: LinkStatus;
+  grantId: string | null;
+  activatedAt: Date | null;
+  revokedAt: Date | null;
+  user: AccountState & { id: string; email: string | null };
+}
+
+interface EmailOwner extends AccountState {
+  id: string;
+  emailVerified: boolean;
+}
+
+/** Сколько раз provision начинает заново, наткнувшись на параллельный запрос. */
+const PROVISION_ATTEMPTS = 3;
+
+/** Строку связки изменили между чтением и записью — начать заново. */
+class LinkChangedError extends Error {}
+
+function isRace(e: unknown): boolean {
+  return (
+    e instanceof LinkChangedError ||
+    (e as { code?: string } | null)?.code === 'P2002'
+  );
+}
+
+/** Профиль TalerID знает ru и en; всё остальное (uk и т.д.) — en. */
+export function profileLanguage(locale?: string | null): 'ru' | 'en' {
+  return locale?.toLowerCase().startsWith('ru') ? 'ru' : 'en';
+}
+
+/**
+ * Аккаунт, которым партнёр вправе распоряжаться (переименовать, удалить):
+ * его завёл этот партнёр, человек ни разу не задавал пароль TalerID, и аккаунт
+ * не удалён и не заблокирован.
+ */
+export function isManagedBy(
+  partner: { id: string },
+  user: AccountState,
+): boolean {
+  return (
+    user.createdByPartnerId === partner.id &&
+    user.passwordHash === null &&
+    user.deletedAt === null
+  );
+}
+
+/**
+ * emailVerified=true на аккаунте, который завёл ДРУГОЙ партнёр и в котором
+ * человек ни разу не задавал пароль, — это claim партнёра A, не почты: такой
+ * аккаунт никто пока не востребовал. Код из письма партнёру B доказал бы
+ * только то, что он доказывает всегда — владение ящиком, а не этим
+ * конкретным аккаунтом, который человек, возможно, никогда не видел. Как
+ * только человек задаёт первый пароль (или заводит аккаунт сам партнёр B —
+ * тогда он уже managed для B), условие больше не выполняется.
+ */
+export function isForeignUnclaimedManaged(
+  partner: { id: string },
+  user: AccountState,
+): boolean {
+  return (
+    user.createdByPartnerId !== null &&
+    user.createdByPartnerId !== partner.id &&
+    user.passwordHash === null
+  );
+}
+
+/**
+ * Люди партнёра в TalerID. Спека, раздел «Партнёрский API»:
+ * docs/superpowers/specs/2026-09-30-partner-messenger-api-design.md
+ */
+@Injectable()
+export class PartnerUsersService {
+  private readonly logger = new Logger(PartnerUsersService.name);
+  /** Когда партнёр последний раз получил лог о превышении суточного потолка (в памяти процесса). */
+  private readonly capExceededLoggedAt = new Map<string, number>();
+  /** Один warn за жизнь инстанса на невалидный PARTNER_ACCOUNTS_PER_DAY — не на каждый вызов. */
+  private capParseWarned = false;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly tokens: PartnerTokensService,
+    private readonly revoker: PartnerLinkRevokerService,
+    private readonly systemChannel: SystemChannelService,
+    private readonly profiles: ProfileService,
+    private readonly audit: PartnerAuditService,
+    private readonly redis: RedisService,
+  ) {}
+
+  async provision(
+    partner: PartnerRecord,
+    dto: ProvisionUserDto,
+    ip?: string,
+  ): Promise<ProvisionResult> {
+    const email = dto.email.trim().toLowerCase();
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await this.provisionOnce(
+          partner,
+          dto.externalId,
+          email,
+          dto,
+          ip,
+        );
+      } catch (e) {
+        // Параллельный запрос про того же человека: уникальный индекс или
+        // строка, изменённая между чтением и записью. Он уже всё записал —
+        // перечитываем. Не успокоилось за три попытки — пусть партнёр повторит.
+        if (!isRace(e)) throw e;
+        if (attempt >= PROVISION_ATTEMPTS)
+          throw new ServiceUnavailableException('link_busy');
+      }
+    }
+  }
+
+  private async provisionOnce(
+    partner: PartnerRecord,
+    externalId: string,
+    email: string,
+    dto: ProvisionUserDto,
+    ip?: string,
+  ): Promise<ProvisionResult> {
+    const link = await this.findLink(partner.id, externalId);
+    if (link && !link.user.deletedAt) {
+      if (link.status === 'ACTIVE')
+        return { status: 'active', talerUserId: link.userId, created: false };
+      if (link.status === 'PENDING')
+        return { status: 'confirmation_required', talerUserId: null };
+    }
+    if (link && (link.status !== 'REVOKED' || link.grantId)) {
+      // Строку связки сейчас переиспользуем (аккаунт удалён или связка
+      // отозвана). Сначала гасим всё, что за ней числится: действующий доступ
+      // удалённого аккаунта или недоделанный прошлый отзыв (REVOKED с грантом).
+      await this.revoke(link);
+    }
+
+    const owner = await this.findOwner(email);
+    if (owner?.deletedAt) {
+      // Почту держит аккаунт, заблокированный администратором: блокировка
+      // обратима и почту не обнуляет, второй аккаунт на тот же адрес не завести.
+      throw new ConflictException('email_unavailable');
+    }
+
+    if (!owner) {
+      // Суточный потолок — до создания и считает только реально созданные
+      // аккаунты (ключ партнёра, а не человека): идемпотентные повторы и
+      // привязка к уже существующим адресам сюда не доходят вовсе.
+      await this.checkCreationCap(partner);
+      // Аккаунт и связка — одной транзакцией: аккаунта без связки не бывает,
+      // а параллельный запрос видит либо оба, либо ничего.
+      let userId: string;
+      try {
+        userId = await this.prisma.$transaction(async (tx) => {
+          const user = await tx.user.create({
+            data: this.newAccount(partner, email, dto),
+            select: { id: true },
+          });
+          await this.saveLink(tx, partner.id, externalId, link, {
+            userId: user.id,
+            status: 'ACTIVE',
+          });
+          return user.id;
+        });
+      } catch (e) {
+        // Слот потолка уже засчитан, а аккаунт не появился (гонка, откат
+        // транзакции) — отдаём его обратно: иначе повтор provision() (см.
+        // isRace) насчитывал бы партнёру лишнее за то, что не создалось.
+        this.giveBackCreationSlot(partner.id);
+        throw e;
+      }
+      await this.subscribeToNews(userId);
+      await this.audit.log(partner, 'USER_CREATED', { externalId, userId, ip });
+      return { status: 'active', talerUserId: userId, created: true };
+    }
+
+    // Без кода снова активен только аккаунт, который завёл этот партнёр и в
+    // котором человек не задал пароль; любой другой — через код из письма.
+    const managed = isManagedBy(partner, owner);
+    // Код из письма доказал бы только владение ящиком, а не аккаунтом: его мог
+    // завести кто угодно на чужой адрес, поскольку TalerID не проверяет почту
+    // при обычной регистрации. Управляемые ЭТИМ партнёром аккаунты всегда
+    // создаются с emailVerified=true (newAccount), поэтому это условие их не
+    // касается. Управляемый ДРУГИМ партнёром и никем не востребованный
+    // (passwordHash всё ещё null) — это claim того партнёра, а не почты: код
+    // для партнёра B не должен открывать claim партнёра A.
+    if (
+      !managed &&
+      (!owner.emailVerified || isForeignUnclaimedManaged(partner, owner))
+    ) {
+      throw new ConflictException('email_unverified');
+    }
+
+    const other = await this.prisma.partnerLink.findUnique({
+      where: { partnerId_userId: { partnerId: partner.id, userId: owner.id } },
+    });
+    const stale = other && other.externalId !== externalId ? other : null;
+    if (stale) {
+      if (stale.status !== 'REVOKED')
+        throw new ConflictException('user_linked_to_other_external_id');
+      // Отозванная связка того же человека под старым id больше ничего не
+      // значит, а уникальный индекс (partnerId, userId) не даст завести новую.
+      // Если её отзыв не доделан (остался грант) — доделываем до удаления строки.
+      if (stale.grantId) await this.revoke(stale);
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      if (managed) {
+        // «managed» прочитан ДО транзакции — пока шли проверки stale/revoke
+        // выше, владелец мог успеть задать первый пароль (resetPassword
+        // отзывает связки партнёра именно на этот случай). FOR UPDATE не даёт
+        // строке измениться незамеченно между этой проверкой и записью ниже:
+        // перестал быть managed — начинаем provisionOnce заново (см. isRace),
+        // а не активируем связку без кода мимо уже случившегося отзыва.
+        // Эмпирически проверено на отдельной (throwaway) таблице: конкурентный
+        // SELECT…FOR UPDATE блокируется до COMMIT другой транзакции и видит
+        // уже закоммиченные данные, а не снимок на момент своего вызова.
+        const [fresh] = await tx.$queryRaw<
+          {
+            passwordHash: string | null;
+            createdByPartnerId: string | null;
+            deletedAt: Date | null;
+          }[]
+        >`SELECT "passwordHash", "createdByPartnerId", "deletedAt" FROM "User" WHERE id = ${owner.id} FOR UPDATE`;
+        if (!fresh || !isManagedBy(partner, fresh)) {
+          throw new LinkChangedError();
+        }
+      }
+      if (stale) {
+        // Удаляем только ту отозванную строку, что видели: если её успели
+        // оживить, повтор ответит 409.
+        const { count } = await tx.partnerLink.deleteMany({
+          where: { id: stale.id, status: 'REVOKED', grantId: null },
+        });
+        if (count === 0) throw new LinkChangedError();
+      }
+      await this.saveLink(tx, partner.id, externalId, link, {
+        userId: owner.id,
+        status: managed ? 'ACTIVE' : 'PENDING',
+      });
+    });
+    await this.audit.log(partner, managed ? 'USER_RELINKED' : 'LINK_PENDING', {
+      externalId,
+      userId: owner.id,
+      ip,
+    });
+    return managed
+      ? { status: 'active', talerUserId: owner.id, created: false }
+      : { status: 'confirmation_required', talerUserId: null };
+  }
+
+  async issueToken(
+    partner: PartnerRecord,
+    externalId: string,
+  ): Promise<{
+    accessToken: string;
+    tokenType: 'Bearer';
+    expiresIn: number;
+    talerUserId: string;
+  }> {
+    const link = await this.findLink(partner.id, externalId);
+    if (!link) throw new NotFoundException('not_linked');
+    if (link.user.deletedAt) {
+      // Связку мог уже отозвать Task 19 при удалении аккаунта — проверка
+      // REVOKED ниже не должна перехватить это раньше: иначе партнёр видит
+      // обычный 404 и может молча завести человеку новый аккаунт вместо того,
+      // чтобы узнать об удалении. REVOKED с недоотозванным грантом (сбой
+      // Redis) — доделываем и здесь, а не только отвечаем по старому статусу.
+      if (link.status !== 'REVOKED' || link.grantId) await this.revoke(link);
+      // Партнёру сообщаем об удалении только если он был допущен к аккаунту
+      // (связка подтверждалась кодом) и сам не отвязал её ещё до удаления —
+      // иначе он узнал бы то, чего не знал даже до собственного отказа от связки.
+      throw this.knowsAboutDeletion(link)
+        ? new GoneException('account_deleted')
+        : new NotFoundException('not_linked');
+    }
+    if (link.status === 'REVOKED') throw new NotFoundException('not_linked');
+    if (link.status === 'PENDING')
+      throw new ConflictException('confirmation_required');
+    const { accessToken, expiresIn } = await this.tokens.issueAccessToken(
+      link,
+      partner,
+    );
+    return {
+      accessToken,
+      tokenType: 'Bearer',
+      expiresIn,
+      talerUserId: link.userId,
+    };
+  }
+
+  /**
+   * Сообщать ли партнёру, что аккаунт удалён: только если он был к аккаунту
+   * допущен (связка подтверждалась) и не отвязал его сам ещё до удаления.
+   */
+  private knowsAboutDeletion(link: LinkWithUser): boolean {
+    if (!link.user.deletedAt || !link.activatedAt) return false;
+    return !(
+      link.status === 'REVOKED' &&
+      link.revokedAt &&
+      link.revokedAt < link.user.deletedAt
+    );
+  }
+
+  async getUser(partner: PartnerRecord, externalId: string) {
+    const link = await this.findLink(partner.id, externalId);
+    // Удалённый аккаунт без ведома партнёра (не было согласия, или партнёр сам
+    // отвязал его ещё до удаления) — как будто связки нет вовсе (см. issueToken).
+    if (!link || (link.user.deletedAt && !this.knowsAboutDeletion(link))) {
+      throw new NotFoundException('not_linked');
+    }
+    const status =
+      link.status === 'REVOKED' || link.user.deletedAt
+        ? 'revoked'
+        : link.status === 'ACTIVE'
+          ? 'active'
+          : 'confirmation_required';
+    return {
+      status,
+      // Пока человек не подтвердил привязку кодом, id его аккаунта партнёру не положен.
+      talerUserId: status === 'active' ? link.userId : null,
+      managed: isManagedBy(partner, link.user),
+      linkedAt: link.activatedAt ? link.activatedAt.toISOString() : null,
+    };
+  }
+
+  async patchUser(
+    partner: PartnerRecord,
+    externalId: string,
+    dto: PatchUserDto,
+    ip?: string,
+  ) {
+    const link = await this.findLink(partner.id, externalId);
+    if (!link || link.status !== 'ACTIVE' || link.user.deletedAt)
+      throw new NotFoundException('not_linked');
+    if (!isManagedBy(partner, link.user))
+      throw new ConflictException('profile_not_managed');
+    const data: { firstName?: string | null; lastName?: string | null } = {};
+    if (dto.firstName !== undefined)
+      data.firstName = dto.firstName?.trim() || null;
+    if (dto.lastName !== undefined)
+      data.lastName = dto.lastName?.trim() || null;
+    if (Object.keys(data).length === 0) return { ok: true };
+    await this.prisma.profile.upsert({
+      where: { userId: link.userId },
+      update: data,
+      create: { userId: link.userId, ...data },
+    });
+    await this.audit.log(partner, 'PROFILE_UPDATED', {
+      externalId,
+      userId: link.userId,
+      ip,
+    });
+    return { ok: true };
+  }
+
+  /**
+   * Снимает связку. С deleteAccount — ещё и удаляет аккаунт штатной процедурой
+   * TalerID, но только управляемый: человек удалился у партнёра и просит
+   * стереть данные. Неуправляемый аккаунт — 409, и ничего не меняется.
+   * Повтор безопасен: удалённый аккаунт второй раз не удаляется, ответ тот же.
+   */
+  async deleteUser(
+    partner: PartnerRecord,
+    externalId: string,
+    deleteAccount: boolean,
+    ip?: string,
+  ): Promise<void> {
+    const link = await this.findLink(partner.id, externalId);
+    if (!link) throw new NotFoundException('not_linked');
+    // Штатное удаление обнуляет почту; у заблокированного администратором она
+    // остаётся — такой аккаунт партнёр не удаляет (isManagedBy ложен). И то,
+    // и другое — только для аккаунта, который завёл именно этот партнёр:
+    // чужой удалённый аккаунт (createdByPartnerId не наш) не «уже удалён»
+    // для нас, а просто неуправляем — 409, а не тихий повторный 204.
+    const alreadyDeleted =
+      link.user.deletedAt !== null &&
+      link.user.email === null &&
+      link.user.createdByPartnerId === partner.id;
+    const deletesNow = deleteAccount && !alreadyDeleted;
+    if (deletesNow && !isManagedBy(partner, link.user))
+      throw new ConflictException('account_not_managed');
+    // REVOKED с грантом — прошлый отзыв не доделан (сбой Redis): доделываем.
+    const revokes = link.status !== 'REVOKED' || !!link.grantId;
+    if (revokes) await this.revoke(link);
+    if (deletesNow) {
+      try {
+        // isManagedBy выше прочитан не под замком: человек мог успеть задать
+        // первый пароль (resetPassword) между тем чтением и этим вызовом.
+        // onlyIfManagedBy повторяет проверку атомарно под FOR UPDATE внутри
+        // транзакции ProfileService — здесь просто доверяем её вердикту.
+        await this.profiles.deleteAccount(link.userId, {
+          onlyIfManagedBy: partner.id,
+        });
+      } catch (e) {
+        if (e instanceof AccountNotManagedError) {
+          // Связка уже отозвана строкой выше — человек остаётся при своём
+          // аккаунте (и новом пароле), просто без доступа этого партнёра.
+          throw new ConflictException('account_not_managed');
+        }
+        throw e;
+      }
+    }
+    // Журнал — сразу после удаления аккаунта и до очистки каналов: если чистка
+    // ниже упадёт, повтор (alreadyDeleted уже true, отзывать больше нечего)
+    // не должен молча остаться без строки про само удаление.
+    if (revokes || deletesNow) {
+      await this.audit.log(
+        partner,
+        deletesNow ? 'ACCOUNT_DELETED' : 'LINK_REVOKED',
+        {
+          externalId,
+          userId: link.userId,
+          ip,
+        },
+      );
+    }
+    if (deleteAccount) {
+      // Подписки на каналы удалённому ни к чему, а тестовые прогоны иначе
+      // копили бы их в системном канале. Повтор после сбоя дочищает.
+      await this.prisma.conversationParticipant.deleteMany({
+        where: { userId: link.userId, conversation: { type: 'CHANNEL' } },
+      });
+    }
+  }
+
+  /** Тот же набор, что при обычной регистрации, только без пароля и с отметкой партнёра. */
+  private newAccount(
+    partner: PartnerRecord,
+    email: string,
+    dto: ProvisionUserDto,
+  ): Prisma.UserUncheckedCreateInput {
+    return {
+      email,
+      // Партнёр проверил почту своим кодом до вызова — это его обязанность.
+      emailVerified: true,
+      createdByPartnerId: partner.id,
+      profile: {
+        create: {
+          firstName: dto.firstName?.trim() || null,
+          lastName: dto.lastName?.trim() || null,
+          language: profileLanguage(dto.locale),
+        },
+      },
+      kycRecord: { create: {} },
+    };
+  }
+
+  /**
+   * Как у всех: ensureSeeded() всё равно подписал бы при следующем рестарте.
+   * Партнёрский токен каналов не видит (PartnerConversationScope).
+   */
+  private async subscribeToNews(userId: string): Promise<void> {
+    try {
+      await this.systemChannel.subscribeUser(userId);
+    } catch (e) {
+      this.logger.warn(
+        `system-channel subscribe failed for ${userId}: ${(e as Error).message}`,
+      );
+    }
+  }
+
+  private creationCapKey(partnerId: string): string {
+    return `partner:create:day:${partnerId}`;
+  }
+
+  /**
+   * Только простое неотрицательное целое (пробелы по краям — не в счёт),
+   * иначе дефолт 5000. `parseInt` в одиночку принимает куда больше, чем
+   * администратор, скорее всего, имел в виду, и расхождение незаметно до
+   * первого разбора лога: `'1e4'` → 1, `'5,000'` → 5, `'0.5'` → 0 (последнее
+   * тихо выключило бы создание аккаунтов, хотя человек хотел задать лимит, а
+   * не ноль). Ровно `'0'` — не «не задано», а осознанное «создание
+   * выключено»: при нём ЛЮБАЯ попытка завести аккаунт отвечает 429.
+   */
+  private static readonly CAP_ENV_PATTERN = /^\s*\d+\s*$/;
+
+  private creationCapLimit(): number {
+    const raw = process.env.PARTNER_ACCOUNTS_PER_DAY;
+    if (raw !== undefined && PartnerUsersService.CAP_ENV_PATTERN.test(raw)) {
+      return parseInt(raw, 10);
+    }
+    if (!this.capParseWarned) {
+      this.capParseWarned = true;
+      this.logger.warn(
+        `PARTNER_ACCOUNTS_PER_DAY=${JSON.stringify(raw ?? null)} is not a plain non-negative integer — using the default (${DEFAULT_PARTNER_ACCOUNTS_PER_DAY}/day)`,
+      );
+    }
+    return DEFAULT_PARTNER_ACCOUNTS_PER_DAY;
+  }
+
+  /** Суточный потолок партнёра на НОВЫЕ аккаунты. Redis недоступен — 503, а не пропуск. */
+  private async checkCreationCap(partner: PartnerRecord): Promise<void> {
+    const key = this.creationCapKey(partner.id);
+    const day = await countInWindow(this.redis, key, 86400);
+    if (!day) throw new ServiceUnavailableException('rate_limiter_unavailable');
+    const limit = this.creationCapLimit();
+    if (day.count > limit) {
+      // Отказ не создаёт аккаунт — слот, который countInWindow только что
+      // засчитал, ему не принадлежит. Без возврата каждый повтор того же
+      // партнёра (а в худшем случае — просто обычный день, упёршийся в
+      // лимит) бесконечно раздувал бы счётчик без всякого смысла: он нужен
+      // только настоящим созданиям.
+      this.giveBackCreationSlot(partner.id);
+      this.logCapExceededOnce(partner, limit);
+      throw new HttpException(
+        { message: 'too_many_requests', retryAfter: day.retryAfter },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+  }
+
+  /**
+   * Не чаще раза в час на партнёра (в памяти процесса, не в Redis — сигнал
+   * для логов/алёртов этого инстанса, не распределённый лимит) — сигнал
+   * человеку, что что-то не так (утёкший ключ или сломанный клиент), без
+   * захлёбывания лога повтором одного и того же на каждый запрос поверх
+   * лимита. Раньше логировалось строго на count===limit+1 — тот же утёкший
+   * ключ, догнавший лимит ПОСЛЕ перезапуска процесса (счётчик уже далеко за
+   * limit+1 в Redis), не логировался вовсе.
+   */
+  private logCapExceededOnce(partner: PartnerRecord, limit: number): void {
+    const now = Date.now();
+    const last = this.capExceededLoggedAt.get(partner.id);
+    if (last !== undefined && now - last < CAP_LOG_INTERVAL_MS) return;
+    this.capExceededLoggedAt.set(partner.id, now);
+    this.logger.error(
+      `partner ${partner.slug} exceeded the daily account-creation cap (${limit}/day)`,
+    );
+  }
+
+  /** Слот checkCreationCap уже засчитан, а аккаунт не создался (или отказан) — вернуть его. */
+  private giveBackCreationSlot(partnerId: string): void {
+    this.redis
+      .getClient()
+      .decr(this.creationCapKey(partnerId))
+      .catch(() => undefined);
+  }
+
+  private async saveLink(
+    db: Prisma.TransactionClient,
+    partnerId: string,
+    externalId: string,
+    link: LinkWithUser | null,
+    data: { userId: string; status: 'ACTIVE' | 'PENDING' },
+  ): Promise<void> {
+    const fields = {
+      userId: data.userId,
+      status: data.status,
+      activatedAt: data.status === 'ACTIVE' ? new Date() : null,
+      revokedAt: null,
+      grantId: null,
+      codeHash: null,
+      codeExpiresAt: null,
+      codeAttempts: 0,
+    };
+    if (!link) {
+      await db.partnerLink.create({
+        data: { partnerId, externalId, ...fields },
+      });
+      return;
+    }
+    // Переиспользуем только полностью отозванную строку, которую прочитали:
+    // иначе затёрли бы грант связки, которую параллельный запрос успел оживить.
+    const { count } = await db.partnerLink.updateMany({
+      where: {
+        id: link.id,
+        userId: link.userId,
+        status: 'REVOKED',
+        grantId: null,
+      },
+      data: fields,
+    });
+    if (count === 0) throw new LinkChangedError();
+  }
+
+  /**
+   * Владелец почты — точное совпадение без учёта регистра. Не фильтр Prisma
+   * equals + mode: 'insensitive': на PostgreSQL он становится ILIKE, и `_`/`%`
+   * в адресе работали бы как шаблон (ivan_petrenko@ находил бы ivan.petrenko@).
+   * Уникальный индекс почты регистрозависим, вариантов может быть несколько:
+   * живой раньше заблокированного, старший раньше младшего.
+   */
+  private async findOwner(email: string): Promise<EmailOwner | null> {
+    const rows = await this.prisma.$queryRaw<EmailOwner[]>`
+      SELECT "id", "passwordHash", "deletedAt", "createdByPartnerId", "emailVerified"
+      FROM "User"
+      WHERE lower("email") = lower(${email})
+      ORDER BY ("deletedAt" IS NOT NULL), "emailVerified" DESC, "createdAt"
+      LIMIT 1`;
+    return rows[0] ?? null;
+  }
+
+  /** Отзыв ходит в Redis (гранты OIDC): его сбой — 503, партнёр повторит, а не 500. */
+  private async revoke(link: { id: string }): Promise<void> {
+    try {
+      await this.revoker.revokeLink(link);
+    } catch (e) {
+      if (e instanceof HttpException) throw e;
+      // P2025 — строку уже удалили. Единственное место, которое удаляет
+      // строки связок, удаляет только полностью отозванные (REVOKED,
+      // grantId: null) — значит, отзывать уже нечего, это не сбой.
+      if ((e as { code?: string } | null)?.code === 'P2025') return;
+      this.logger.error(
+        `revocation of link ${link.id} failed: ${(e as Error).message}`,
+      );
+      throw new ServiceUnavailableException('revocation_unavailable');
+    }
+  }
+
+  private findLink(
+    partnerId: string,
+    externalId: string,
+  ): Promise<LinkWithUser | null> {
+    return this.prisma.partnerLink.findUnique({
+      where: { partnerId_externalId: { partnerId, externalId } },
+      include: {
+        user: {
+          select: {
+            id: true,
+            email: true,
+            deletedAt: true,
+            passwordHash: true,
+            createdByPartnerId: true,
+          },
+        },
+      },
+    });
+  }
+}

@@ -90,4 +90,52 @@ describe('MessengerService.sync', () => {
     expect(out.hasMore).toBe(true);
     expect(out.nextCursor).toBe('2026-05-13T10:12:00.000Z|m2');
   });
+
+  it('initialization restricts the probe to given conversation types', async () => {
+    mockPrisma.message.findFirst.mockResolvedValue(null);
+
+    await service.sync('user-1', undefined, 200, ['DIRECT', 'GROUP'] as any);
+
+    const where = mockPrisma.message.findFirst.mock.calls[0][0].where;
+    expect(where.conversation.type).toEqual({ in: ['DIRECT', 'GROUP'] });
+  });
+
+  it('initialization leaves the probe unrestricted without conversation types', async () => {
+    mockPrisma.message.findFirst.mockResolvedValue(null);
+
+    await service.sync('user-1');
+
+    const where = mockPrisma.message.findFirst.mock.calls[0][0].where;
+    expect(where.conversation.type).toBeUndefined();
+  });
+
+  it('delta restricts the raw query to given conversation types', async () => {
+    mockPrisma.$queryRaw.mockResolvedValueOnce([]);
+
+    await service.sync('user-1', '2026-05-13T10:00:00.000Z|m0', 10, [
+      'DIRECT',
+      'GROUP',
+    ] as any);
+
+    const args = mockPrisma.$queryRaw.mock.calls[0];
+    const typeArg = args.find(
+      (a: any) =>
+        Array.isArray(a?.values) &&
+        a.values.includes('DIRECT') &&
+        a.values.includes('GROUP'),
+    );
+    expect(typeArg).toBeDefined();
+  });
+
+  it('delta leaves the raw query unchanged without conversation types', async () => {
+    mockPrisma.$queryRaw.mockResolvedValueOnce([]);
+
+    await service.sync('user-1', '2026-05-13T10:00:00.000Z|m0', 10);
+
+    const args = mockPrisma.$queryRaw.mock.calls[0];
+    const hasConversationClause = args.some(
+      (a: any) => typeof a?.text === 'string' && a.text.includes('"Conversation" c'),
+    );
+    expect(hasConversationClause).toBe(false);
+  });
 });

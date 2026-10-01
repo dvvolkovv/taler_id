@@ -5,14 +5,18 @@ import {
   BadRequestException,
   Logger,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, ConvType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { FileStorageService } from '../common/file-storage.service';
 import { resolveUserIdOrUsername } from '../common/utils/user-id.util';
 import { extractMentionHandles, resolveMentions } from './mention.util';
 
-/** Потолок на пачку пересылки; совпадает с потолком выделения в клиенте. */
-const FORWARD_BATCH_LIMIT = 50;
+/**
+ * Потолок на пачку пересылки; совпадает с потолком выделения в клиенте.
+ * Экспортирован — partner-conversation-scope.service.ts проверяет этот же
+ * потолок до похода в БД, когда partner-API пересылает сообщения.
+ */
+export const FORWARD_BATCH_LIMIT = 50;
 
 /** Сколько символов оригинала уезжает в превью цитаты. */
 const REPLY_PREVIEW_LIMIT = 200;
@@ -365,7 +369,16 @@ export class MessengerService {
   }
 
   async getGroupMembers(conversationId: string, userId: string) {
-    await this.assertParticipant(conversationId, userId);
+    const me = await this.assertParticipant(conversationId, userId);
+    const conv = await this._getConversationOrThrow(conversationId);
+    // Список участников канала — это id+имя каждого подписчика. Канал
+    // подписывает автоматически всех пользователей (системный канал новостей —
+    // 12 665 на PROD), поэтому рядовой подписчик не должен уметь его выкачать:
+    // в нём видны и управляемые партнёром аккаунты, которых спека обещает не
+    // светить в адресной книге. В группе список участников нужен всем, как раньше.
+    if (conv.type === 'CHANNEL' && me.role !== 'OWNER' && me.role !== 'ADMIN') {
+      throw new ForbiddenException('Список подписчиков канала доступен только его администраторам');
+    }
     const participants = await this.prisma.conversationParticipant.findMany({
       where: { conversationId },
       orderBy: [{ role: 'asc' }, { joinedAt: 'asc' }],
@@ -774,6 +787,11 @@ export class MessengerService {
     userId: string,
     cursor?: string,
     limit = 200,
+    // Партнёрский токен видит только DIRECT/GROUP (PARTNER_CONVERSATION_TYPES
+    // из messenger.controller.ts). Раньше курсор считался по ВСЕМ беседам
+    // пользователя, а фильтровался только отданный messages[] — курсор и сам
+    // факт существования скрытых бесед (их id, точное время) утекали наружу.
+    conversationTypes?: readonly ConvType[],
   ): Promise<{
     messages: any[];
     nextCursor: string | null;
@@ -787,6 +805,7 @@ export class MessengerService {
           deletedAt: null,
           conversation: {
             participants: { some: { userId } },
+            ...(conversationTypes ? { type: { in: [...conversationTypes] } } : {}),
           },
           NOT: { hiddenFor: { some: { userId } } },
         },
@@ -814,6 +833,13 @@ export class MessengerService {
     // the comparison in the same naive-timestamp domain and avoids Prisma serializing
     // the Date as a timestamptz wire type which breaks the PostgreSQL row comparison.
     const safeCursorTs = cursorTsDate.toISOString().replace('Z', '');
+
+    // Та же причина, что в findFirst выше: без этого курсорная ветка отдавала
+    // бы сообщения из скрытых для партнёра бесед. Пустая строка при
+    // отсутствии типов — байт-в-байт тот же SQL, что и раньше (Prisma.empty).
+    const typeFilterSql = conversationTypes
+      ? Prisma.sql` AND EXISTS (SELECT 1 FROM "Conversation" c WHERE c.id = m."conversationId" AND c."type"::text IN (${Prisma.join([...conversationTypes])}))`
+      : Prisma.empty;
 
     const rows: any[] = await this.prisma.$queryRaw`
       SELECT
@@ -884,7 +910,7 @@ export class MessengerService {
           WHERE h."messageId" = m.id AND h."userId" = ${userId}
         )
         AND (m."sentAt" > ${Prisma.raw(`'${safeCursorTs}'::timestamp`)}
-          OR (m."sentAt" = ${Prisma.raw(`'${safeCursorTs}'::timestamp`)} AND m.id > ${cursorId}))
+          OR (m."sentAt" = ${Prisma.raw(`'${safeCursorTs}'::timestamp`)} AND m.id > ${cursorId}))${typeFilterSql}
       ORDER BY m."sentAt" ASC, m.id ASC
       LIMIT ${cap + 1}
     `;
@@ -1383,6 +1409,10 @@ export class MessengerService {
       where: {
         id: { not: currentUserId },
         deletedAt: null,
+        // Аккаунты, которые завёл партнёр (nadi) и в которые человек сам не
+        // входил: он не регистрировался в TalerID и не соглашался показывать
+        // почту незнакомым. Задал пароль, чтобы войти в TalerID, — стал виден.
+        NOT: { passwordHash: null, createdByPartnerId: { not: null } },
         ...(isPhone
           ? { phone: query.trim() }
           : {
@@ -2520,6 +2550,19 @@ export class MessengerService {
     });
     if (blocked) throw new ForbiddenException('Не удалось отправить запрос');
 
+    // Управляемый партнёром аккаунт, в который человек сам не входил (нет
+    // своего пароля TalerID), никогда не пользуется приложением и не может
+    // принять запрос — его контакты заводит только партнёр (PartnerContactsService.put).
+    // Тот же нейтральный ответ, что и для блокировки: не намекаем, чем этот
+    // аккаунт отличается от обычного.
+    const receiver = await this.prisma.user.findUnique({
+      where: { id: receiverId },
+      select: { createdByPartnerId: true, passwordHash: true },
+    });
+    if (receiver?.createdByPartnerId && receiver.passwordHash === null) {
+      throw new ForbiddenException('Не удалось отправить запрос');
+    }
+
     // Check if there's already an accepted contact or existing conversation
     const existing = await this.prisma.contactRequest.findUnique({
       where: { senderId_receiverId: { senderId, receiverId } },
@@ -2682,7 +2725,9 @@ export class MessengerService {
       where: { id: requestId },
     });
     if (!request) throw new NotFoundException('Request not found');
-    if (request.receiverId !== userId && request.senderId !== userId) {
+    // Принять запрос может только тот, кому он адресован. Раньше его мог
+    // «принять» и сам отправитель — и стать контактом без согласия второго.
+    if (request.receiverId !== userId) {
       throw new ForbiddenException('Not your request');
     }
     if (request.status !== 'PENDING')
@@ -2877,10 +2922,17 @@ export class MessengerService {
 
   // ─── Message search ───
 
-  async searchMessages(query: string, userId: string) {
+  async searchMessages(
+    query: string,
+    userId: string,
+    conversationTypes?: readonly ConvType[],
+  ) {
     if (!query || query.length < 2) return [];
     const conversations = await this.prisma.conversation.findMany({
-      where: { participants: { some: { userId } } },
+      where: {
+        participants: { some: { userId } },
+        ...(conversationTypes ? { type: { in: [...conversationTypes] } } : {}),
+      },
       select: { id: true },
     });
     const convIds = conversations.map((c) => c.id);
@@ -2958,21 +3010,52 @@ export class MessengerService {
   }
 
   async blockUser(myId: string, targetId: string) {
+    // Запоминаем, были ли контактами: разблокировка вернёт только такой
+    // контакт. Раньше она создавала его всегда, и блок с разблоком делали
+    // контактами людей, которые ими не были.
+    const hadContact = await this.hasContactWith(myId, targetId);
     // Delete contact relationship first
     await this.deleteContact(myId, targetId);
     // Create block record
     try {
       await this.prisma.blockedUser.create({
-        data: { blockerId: myId, blockedId: targetId },
+        data: { blockerId: myId, blockedId: targetId, hadContact },
       });
     } catch (_) {}
     return { ok: true };
   }
 
   async unblockUser(myId: string, targetId: string) {
-    await this.prisma.blockedUser.deleteMany({
-      where: { blockerId: myId, blockedId: targetId },
+    // Атомарно: delete по составному ключу вместо findFirst+deleteMany — так
+    // нет окна между чтением и удалением, в которое проскочил бы параллельный
+    // запрос. Нет строки — Prisma бросает P2025, и восстанавливать нечего.
+    let block: { hadContact: boolean } | null;
+    try {
+      block = await this.prisma.blockedUser.delete({
+        where: { blockerId_blockedId: { blockerId: myId, blockedId: targetId } },
+      });
+    } catch (e: any) {
+      if (e?.code === 'P2025') return { ok: true };
+      throw e;
+    }
+    if (!block.hadContact) return { ok: true };
+
+    // Встречная блокировка (targetId всё ещё блокирует myId) могла пережить
+    // снятие этой: тогда контакт восстанавливать рано — тот, кого всё ещё
+    // блокируют, не должен обнаружить себя в контактах заблокировавшего.
+    // Вместо этого передаём память о бывшем контакте оставшейся блокировке:
+    // она вернёт его сама, когда снимут и её.
+    const reverseBlock = await this.prisma.blockedUser.findUnique({
+      where: { blockerId_blockedId: { blockerId: targetId, blockedId: myId } },
     });
+    if (reverseBlock) {
+      await this.prisma.blockedUser.updateMany({
+        where: { blockerId: targetId, blockedId: myId },
+        data: { hadContact: true },
+      });
+      return { ok: true };
+    }
+
     // Restore contact relationship so they don't need to re-add each other
     const existing = await this.prisma.contactRequest.findFirst({
       where: {

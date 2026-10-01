@@ -22,7 +22,7 @@ import { AiAnalystService } from '../ai-analyst/ai-analyst.service';
 import { InformerBotService } from '../informer-bot/informer-bot.service';
 import { AssistantChatService } from '../assistant/assistant-chat.service';
 import { FcmService } from '../common/fcm.service';
-import { systemMessagePushText } from './system-message-text.util';
+import { buildPushText, messageKind } from './push-text.util';
 import { sanitizeVoiceMeta } from './voice-meta.util';
 import { ApnsService } from '../common/apns.service';
 import * as jwt from 'jsonwebtoken';
@@ -30,6 +30,16 @@ import * as fs from 'fs';
 import { isApiAccessToken } from '../common/utils/access-token.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
+import { PartnerRealtimeService } from '../partner-core/partner-realtime.service';
+import { PartnerTokensService } from '../partner-core/partner-tokens.service';
+import { PartnerWebhooksService } from '../partner-core/partner-webhooks.service';
+import {
+  isPartnerConversationType,
+  partnerLinkRoom,
+  partnerUserRoom,
+} from '../partner-core/partner.constants';
+import { PartnerConversationScope } from './partner-conversation-scope.service';
+import { installSocketGate } from './socket-gate';
 import {
   PHASE_LABELS,
   resolveToolLabel,
@@ -56,6 +66,10 @@ export class MessengerGateway
     private readonly aiAnalyst: AiAnalystService,
     @Inject(forwardRef(() => AssistantChatService))
     private readonly assistantChat: AssistantChatService,
+    private readonly partnerTokens: PartnerTokensService,
+    private readonly partnerRealtime: PartnerRealtimeService,
+    private readonly partnerScope: PartnerConversationScope,
+    private readonly partnerWebhooks: PartnerWebhooksService,
     @Optional() private readonly informerBot?: InformerBotService,
   ) {
     const publicKeyPath =
@@ -78,25 +92,78 @@ export class MessengerGateway
           .emit('call_ai_twin_joined', payload);
       },
     );
+
+    // Отзыв партнёрской связки рвёт её сокеты на всех нодах (Redis-адаптер).
+    this.partnerRealtime.registerDisconnector((partnerId, userId) => {
+      this.server.in(partnerLinkRoom(partnerId, userId)).disconnectSockets(true);
+    });
   }
 
   async handleConnection(client: Socket) {
+    const ready = this.authenticateSocket(client);
+    installSocketGate(client, ready, this.partnerScope);
+    await ready;
+  }
+
+  /**
+   * Опознаёт сокет: сначала собственный токен входа TalerID (синхронно, как
+   * раньше), потом партнёрский OAuth-токен со scope `messenger`. Не опознали —
+   * отключаем. Партнёрский сокет живёт не дольше своего токена.
+   */
+  private async authenticateSocket(client: Socket): Promise<boolean> {
     try {
-      const token = (client.handshake.auth?.token as string)?.replace(
-        'Bearer ',
-        '',
-      );
+      const token = (client.handshake.auth?.token as string)?.replace('Bearer ', '');
       if (!token) throw new Error('No token');
-      const payload = jwt.verify(token, this.publicKey, {
-        algorithms: ['RS256'],
-      }) as any;
-      // OIDC ID tokens are signed with the same key — reject them here too.
-      if (!isApiAccessToken(payload)) throw new Error('Not an access token');
-      client.data.userId = payload.sub;
+      const nativeUserId = this.nativeUserId(token);
+      if (nativeUserId) {
+        client.data.userId = nativeUserId;
+        client.data.connectedAt = Date.now();
+        client.join(`user:${nativeUserId}`);
+        return true;
+      }
+      const principal = await this.partnerTokens.verify(token);
+      if (!principal) throw new Error('Not an access token');
+      client.data.userId = principal.userId;
       client.data.connectedAt = Date.now();
-      client.join(`user:${payload.sub}`);
+      client.data.partner = principal;
+      client.join(partnerLinkRoom(principal.partnerId, principal.userId));
+      // Отзыв мог прийти, пока шла проверка: тогда команда «порвать сокеты
+      // связки» разошлась раньше, чем этот сокет вошёл в комнату. Проверяем
+      // токен ещё раз уже из комнаты — всё, что отзовут дальше, его достанет.
+      // puser:<id> сокет получает только ПОСЛЕ этой проверки (не раньше, не
+      // одновременно с plink) — иначе в промежутке между join(plink) и этой
+      // проверкой он мог бы успеть получить мирорнутое событие, уже будучи
+      // фактически отозванным, но ещё не пойманным.
+      if (!(await this.partnerTokens.verify(token))) throw new Error('Revoked while connecting');
+      // НЕ user:<id> — туда шлётся всё подряд (AI, звонки, биллинг,
+      // «Избранное»). Партнёрский сокет сидит в своей комнате и получает
+      // только то, что явно продублировано через emitToUserInConversation.
+      client.join(partnerUserRoom(principal.userId));
+      if (!client.connected) return false; // закрылся, пока шли проверки
+      // Дальше клиент переподключается со свежим токеном, а отозванная связка
+      // не держит открытым старое соединение.
+      const timer = setTimeout(
+        () => client.disconnect(true),
+        Math.max(0, principal.expiresAt * 1000 - Date.now()),
+      );
+      timer.unref?.();
+      // Таймер — не в socket.data: Redis-адаптер сериализует data в JSON по запросу
+      // соседней ноды (fetchSockets), и Timeout с циклическими ссылками ронял её процесс.
+      client.once('disconnect', () => clearTimeout(timer));
+      return true;
     } catch {
       client.disconnect();
+      return false;
+    }
+  }
+
+  private nativeUserId(token: string): string | null {
+    try {
+      const payload = jwt.verify(token, this.publicKey, { algorithms: ['RS256'] }) as any;
+      // OIDC ID tokens are signed with the same key — reject them here too.
+      return isApiAccessToken(payload) ? payload.sub : null;
+    } catch {
+      return null;
     }
   }
 
@@ -120,7 +187,7 @@ export class MessengerGateway
       );
       client.join(payload.conversationId);
     } catch {
-      client.emit('error', { message: 'Not a participant' });
+      this.emitSocketError(client, 'not_a_participant', 'Not a participant');
     }
   }
 
@@ -212,9 +279,7 @@ export class MessengerGateway
             },
           });
           if (blocked) {
-            client.emit('error', {
-              message: 'Вы заблокированы этим пользователем',
-            });
+            this.emitSocketError(client, 'blocked', 'Вы заблокированы этим пользователем');
             return;
           }
           // Check if still contacts
@@ -223,9 +288,7 @@ export class MessengerGateway
             otherParticipant.userId,
           );
           if (!stillContacts) {
-            client.emit('error', {
-              message: 'Пользователь удалил вас из контактов',
-            });
+            this.emitSocketError(client, 'not_a_contact', 'Пользователь удалил вас из контактов');
             return;
           }
         }
@@ -410,7 +473,9 @@ export class MessengerGateway
         enrichedMsg,
         client.data.userId,
         payload.conversationId,
-        { silent: payload.silent, senderName },
+        // msgConvType уже прочитан выше (ветвление DIRECT/CHANNEL/AI_*) —
+        // fanOutToParticipants не должен спрашивать базу о том же второй раз.
+        { silent: payload.silent, senderName, conversationType: msgConvType },
       );
 
     } catch (e) {
@@ -421,7 +486,7 @@ export class MessengerGateway
         `handleMessage failed (user=${client.data?.userId} conv=${payload?.conversationId}): ${(e as Error).message}`,
         (e as Error).stack,
       );
-      client.emit('error', { message: (e as Error).message });
+      this.emitSocketError(client, 'internal_error', (e as Error).message);
     }
   }
 
@@ -463,10 +528,28 @@ export class MessengerGateway
     enrichedMsg: any,
     senderId: string,
     conversationId: string,
-    opts: { silent?: boolean; senderName?: string; systemPost?: boolean } = {},
+    opts: {
+      silent?: boolean;
+      senderName?: string;
+      systemPost?: boolean;
+      /** Тип беседы, если он уже известен вызывающему (handleMessage его уже
+       *  прочитал) — тогда свой conversation.findUnique не делаем вовсе. */
+      conversationType?: string | null;
+    } = {},
   ): Promise<void> {
     const senderName =
       opts.senderName ?? (enrichedMsg?.senderName as string | undefined) ?? '';
+    // Один раз на весь fan-out: решает, мирорить ли события в puser:<id>
+    // партнёрских сокетов участников (только DIRECT/GROUP — см. partnerUserRoom).
+    // Известный вызывающему тип — всегда в приоритете (экономит повторный
+    // запрос). Иначе смотрим в базе только если партнёрский API включён —
+    // выключен он, партнёрских сокетов не бывает и мирорить нечего.
+    const convType =
+      opts.conversationType !== undefined
+        ? opts.conversationType
+        : process.env.PARTNER_API_ENABLED === 'true'
+          ? await this.conversationType(conversationId)
+          : null;
     const participants = await this.service.getParticipants(conversationId);
     // Один cross-node fetchSockets на весь fan-out, не per-participant:
     // на системном канале (24k участников) внутрицикловой вызов делал 24k
@@ -482,6 +565,40 @@ export class MessengerGateway
     const userIdsInConv = new Set(
       socketsInConv.map((s) => s.data?.userId).filter(Boolean),
     );
+    // Партнёрам (nadi) — вебхук тем же, кому шлём пуш: приложения TalerID у их
+    // людей нет, пуш отправит сам партнёр своими ключами. conversationType —
+    // тот, что уже вычислен выше: planFanOut не делает по нему второй запрос.
+    // Тихое сообщение не шлёт пуш НИКОМУ (см. opts.silent ниже) — сам план с
+    // его запросами в базу (partnerLink.findMany, при группе ещё и название)
+    // в этом случае не нужен совсем.
+    // НЕ await здесь: запрос в базу внутри planFanOut не должен задерживать
+    // синхронный emit ниже (реальное время доставки) ни на одну участницу
+    // цикла — ждём этот промис только там, где его результат действительно
+    // нужен (enqueue), и к тому моменту он успевает дозреть параллельно с
+    // остальной работой цикла.
+    const partnerFanOutPromise = opts.silent
+      ? null
+      : this.partnerWebhooks
+          .planFanOut({
+            conversationId,
+            participantIds: participants.map((p) => p.userId),
+            senderId,
+            systemPost: opts.systemPost === true,
+            conversationType: convType,
+          })
+          .catch((e) => {
+            // Поймано у истока, не у места await: когда у всех участников
+            // recipientInConv=true (все уже смотрят чат) или все приглушены,
+            // этот промис вообще никто не ждёт — без .catch() здесь любой
+            // отказ (planFanOut обещает не бросать, но мало ли) стал бы
+            // необработанным rejection'ом, а не просто пропущенным вебхуком.
+            this.logger.warn(
+              `planFanOut rejected unexpectedly for ${conversationId}: ${(e as Error).message}`,
+            );
+            return null;
+          });
+    const pushText = buildPushText(enrichedMsg);
+    const kind = messageKind(enrichedMsg);
     for (const p of participants) {
       if (p.userId === senderId) continue;
       try {
@@ -490,15 +607,20 @@ export class MessengerGateway
         where: { blockerId: p.userId, blockedId: senderId },
       });
       if (isBlocked) continue;
-      this.server.to(`user:${p.userId}`).emit('new_message', enrichedMsg);
+      this.emitToUserInConversation(p.userId, convType, 'new_message', enrichedMsg);
       const recipientInConv = userIdsInConv.has(p.userId);
-      const sockets = await this.server.in(`user:${p.userId}`).fetchSockets();
+      // Партнёрский сокет того же участника держит отдельную комнату
+      // (puser:<id>), а не user:<id> — его тоже считаем «онлайн».
+      const sockets = await this.server
+        .in([`user:${p.userId}`, partnerUserRoom(p.userId)])
+        .fetchSockets();
       const isOnline = sockets.length > 0;
       if (isOnline) {
         await this.service.markDelivered(enrichedMsg.id);
-        this.server
-          .to(`user:${senderId}`)
-          .emit('message_updated', { id: enrichedMsg.id, isDelivered: true });
+        this.emitToUserInConversation(senderId, convType, 'message_updated', {
+          id: enrichedMsg.id,
+          isDelivered: true,
+        });
       }
       this.logger.log(
         `FCM: recipientId=${p.userId} online=${isOnline} inConv=${recipientInConv} → push=${!recipientInConv}`,
@@ -519,26 +641,18 @@ export class MessengerGateway
         if (muted) {
           this.logger.log(`FCM skipped for ${p.userId}: conversation muted`);
         } else {
+          const partnerFanOut = partnerFanOutPromise
+            ? await partnerFanOutPromise
+            : null;
+          partnerFanOut?.enqueue(p.userId, {
+            message: { id: enrichedMsg.id, senderId, sentAt: enrichedMsg.sentAt },
+            senderName,
+            preview: pushText,
+            kind,
+            mentionsRecipient: mentionsMe,
+          });
           const fcmTokens = await this.service.getFcmTokens(p.userId);
           if (fcmTokens.length) {
-            const pushText = (() => {
-              const c = (enrichedMsg?.content as string | null) ?? '';
-              // У служебных сообщений в content лежит JSON, который
-              // расшифровывает клиент при отрисовке ленты. В пуше
-              // расшифровывать некому — без этой ветки в шторку прилетало
-              // «{"action":"member_added",…}».
-              if (enrichedMsg?.isSystem) return systemMessagePushText(c);
-              if (c.startsWith('[CONTACT]')) return '📇 Контакт';
-              if (c.startsWith('[POLL]')) return '📊 Опрос';
-              if (enrichedMsg?.fileUrl) {
-                const ft = (enrichedMsg?.fileType as string | null) ?? '';
-                if (ft === 'image') return '🖼 Фото';
-                if (ft === 'video') return '🎥 Видео';
-                if (ft === 'audio') return '🎵 Аудио';
-                return '📎 Файл';
-              }
-              return c;
-            })();
             // Fan out to every logged-in device of the recipient.
             for (const fcmToken of fcmTokens) {
               this.fcmService
@@ -613,7 +727,8 @@ export class MessengerGateway
         isEdited: true,
       });
     } catch (e) {
-      client.emit('error', { message: e.message });
+      this.logger.error(`edit_message failed (user=${client.data?.userId} conv=${payload?.conversationId}): ${e.message}`);
+      this.emitSocketError(client, 'internal_error', e.message);
     }
   }
 
@@ -639,14 +754,18 @@ export class MessengerGateway
           scope: 'all',
         });
       } else {
-        this.server.to(`user:${client.data.userId}`).emit('message_deleted', {
+        // "Удалено у меня" — личное решение автора, но его партнёрский сокет
+        // (та же беседа у него же) должен увидеть собственное скрытие.
+        const convType = await this.conversationType(payload.conversationId);
+        this.emitToUserInConversation(client.data.userId, convType, 'message_deleted', {
           messageId: payload.messageId,
           conversationId: payload.conversationId,
           scope: 'self',
         });
       }
     } catch (e) {
-      client.emit('error', { message: e.message });
+      this.logger.error(`delete_message failed (user=${client.data?.userId} conv=${payload?.conversationId}): ${e.message}`);
+      this.emitSocketError(client, 'internal_error', e.message);
     }
   }
 
@@ -1154,15 +1273,17 @@ export class MessengerGateway
       const participants = await this.service.getParticipants(
         payload.conversationId,
       );
+      const convType = await this.conversationType(payload.conversationId);
       for (const p of participants) {
-        this.server.to(`user:${p.userId}`).emit('message_reaction_updated', {
+        this.emitToUserInConversation(p.userId, convType, 'message_reaction_updated', {
           messageId: payload.messageId,
           conversationId: payload.conversationId,
           reactions,
         });
       }
     } catch (e) {
-      client.emit('error', { message: (e as Error).message });
+      this.logger.error(`react_message failed (user=${client.data?.userId} conv=${payload?.conversationId}): ${(e as Error).message}`);
+      this.emitSocketError(client, 'internal_error', (e as Error).message);
     }
   }
 
@@ -1188,11 +1309,12 @@ export class MessengerGateway
       };
       // Receipts to the other participants (senders) + this user's OTHER devices.
       const participants = await this.service.getParticipants(payload.conversationId);
+      const convType = await this.conversationType(payload.conversationId);
       for (const p of participants) {
-        this.server.to(`user:${p.userId}`).emit('conversation_read', evt);
+        this.emitToUserInConversation(p.userId, convType, 'conversation_read', evt);
       }
       // Legacy event kept during client transition (harmless double-signal).
-      this.server.to(`user:${userId}`).emit('messages_read', {
+      this.emitToUserInConversation(userId, convType, 'messages_read', {
         conversationId: payload.conversationId,
         messageIds: [],
       });
@@ -1200,20 +1322,32 @@ export class MessengerGateway
       await this.clearOnRead(userId, payload.conversationId, advanced.lastReadAt);
     } catch (e) {
       this.logger.error(`mark_read failed (conv=${payload?.conversationId}): ${(e as Error).message}`);
+      // Обычный клиент TalerID и раньше не получал здесь ничего — mark_read
+      // для него best-effort и молчит (это не меняем). Партнёрский сокет
+      // раньше тоже не получал НИЧЕГО на этой ручке — тихий отказ без единого
+      // сигнала не позволял бы заметить проблему со своей стороны вовсе.
+      if (client.data.partner) {
+        this.emitSocketError(client, 'internal_error', (e as Error).message);
+      }
     }
   }
 
   // ─── Group events broadcast ───
 
-  /** Emit a group event to all participants' personal rooms */
-  async emitToConversationParticipants(
+  /**
+   * Type-aware group broadcast: emits to every participant's personal room,
+   * additionally mirroring into puser:<id> when conversationType is
+   * partner-visible (DIRECT/GROUP) — see emitToUserInConversation.
+   */
+  async emitToConversationParticipantsInConversation(
     conversationId: string,
+    conversationType: string | null | undefined,
     event: string,
     data: any,
   ) {
     const participants = await this.service.getParticipants(conversationId);
     for (const p of participants) {
-      this.server.to(`user:${p.userId}`).emit(event, data);
+      this.emitToUserInConversation(p.userId, conversationType, event, data);
     }
   }
 
@@ -1228,15 +1362,61 @@ export class MessengerGateway
   }
 
   /**
+   * Событие беседы в личную комнату участника. Партнёрским сокетам того же
+   * человека — только если беседа личная или группа (см. partnerUserRoom):
+   * `user:<id>` получает всё как раньше, `puser:<id>` — только это.
+   *
+   * Один emit, а не два: Socket.IO сам схлопывает пересечение комнат (сокет,
+   * оказавшийся в обеих, получит событие один раз), а один вызов — это один
+   * publish в Redis-адаптере вместо двух на каждого адресата.
+   */
+  emitToUserInConversation(
+    userId: string,
+    conversationType: string | null | undefined,
+    event: string,
+    data: any,
+  ) {
+    const rooms = isPartnerConversationType(conversationType)
+      ? [`user:${userId}`, partnerUserRoom(userId)]
+      : `user:${userId}`;
+    this.server.to(rooms).emit(event, data);
+  }
+
+  /** Тип беседы для emitToUserInConversation. Нет беседы — null, ответит сам обработчик. */
+  private async conversationType(conversationId: string): Promise<string | null> {
+    const conv = await this.prisma.conversation.findUnique({
+      where: { id: conversationId },
+      select: { type: true },
+    });
+    return conv?.type ?? null;
+  }
+
+  /**
+   * Отказ в сокете одной из восьми ручек, открытых партнёру (join, message,
+   * edit_message, delete_message, typing, react_message, mark_read,
+   * thread_reply): партнёрский сокет (client.data.partner задан — см.
+   * authenticateSocket) получает машинный код вместо русской фразы или
+   * сырого текста исключения Prisma/Error, обычный клиент TalerID получает
+   * ровно то же, что и раньше. Коды — docs/partner-messenger-api.md, раздел
+   * «Сокет: от сервера». Логировать настоящую причину (для internal_error)
+   * должен вызывающий, до вызова этого метода — здесь только emit.
+   */
+  private emitSocketError(client: Socket, code: string, fallbackText: string): void {
+    client.emit('error', { message: client.data.partner ? code : fallbackText });
+  }
+
+  /**
    * Removes every socket of `userId` from a conversation's Socket.IO room.
    *
    * Room membership is granted on `join` and used to be kept until the socket
    * disconnected, so a user removed from a group went on receiving its live
    * messages for the rest of their session. Goes through the Redis adapter, so
-   * it also reaches sockets held by the other app node.
+   * it also reaches sockets held by the other app node. Partner sockets of the
+   * same user sit in puser:<id> rather than user:<id> (see partnerUserRoom),
+   * so they must be evicted from the conversation room too.
    */
   evictFromConversationRoom(userId: string, conversationId: string) {
-    this.server.in(`user:${userId}`).socketsLeave(conversationId);
+    this.server.in([`user:${userId}`, partnerUserRoom(userId)]).socketsLeave(conversationId);
   }
 
   /** Get user's preferred language from their profile. Defaults to 'en'. */
@@ -1321,22 +1501,33 @@ export class MessengerGateway
       content: string;
     },
   ) {
-    const msg = await this.service.sendThreadReply(
-      payload.conversationId,
-      client.data.userId,
-      payload.content,
-      payload.threadParentId,
-    );
-    const senderName = await this.service.getUserDisplayName(
-      client.data.userId,
-    );
-    const count = await this.service.getThreadCount(payload.threadParentId);
-    this.server.to(payload.conversationId).emit('new_thread_reply', {
-      ...msg,
-      senderName,
-      threadParentId: payload.threadParentId,
-      threadReplyCount: count,
-    });
+    try {
+      const msg = await this.service.sendThreadReply(
+        payload.conversationId,
+        client.data.userId,
+        payload.content,
+        payload.threadParentId,
+      );
+      const senderName = await this.service.getUserDisplayName(
+        client.data.userId,
+      );
+      const count = await this.service.getThreadCount(payload.threadParentId);
+      this.server.to(payload.conversationId).emit('new_thread_reply', {
+        ...msg,
+        senderName,
+        threadParentId: payload.threadParentId,
+        threadReplyCount: count,
+      });
+    } catch (e) {
+      // Раньше без try/catch — сбой уходил в Nest'овский дефолтный
+      // WS-exceptions-фильтр (событие `exception`, не `error`), и партнёрский
+      // сокет получал бы что угодно, кроме согласованного кода: та же дырка,
+      // которую это семейство ручек уже закрыло всем соседям.
+      this.logger.error(
+        `thread_reply failed (user=${client.data?.userId} conv=${payload?.conversationId}): ${(e as Error).message}`,
+      );
+      this.emitSocketError(client, 'internal_error', (e as Error).message);
+    }
   }
 
   // ─── AI Analyst dispatch ──────────────────────────────────────

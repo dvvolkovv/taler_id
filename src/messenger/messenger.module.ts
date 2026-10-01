@@ -18,11 +18,14 @@ import { ApnsService } from '../common/apns.service';
 import { FileStorageService } from '../common/file-storage.service';
 import { ThumbnailService } from '../common/thumbnail.service';
 import { VideoTranscodeService } from '../common/video-transcode.service';
+import { PartnerCoreModule } from '../partner-core/partner-core.module';
+import { PartnerConversationScope } from './partner-conversation-scope.service';
 
 @Module({
   imports: [
     ConfigModule,
     RedisModule,
+    PartnerCoreModule,
     // AiTwinService gates dispatch through GatingService/MeteringService (Task 14).
     // forwardRef because BillingModule imports MessengerModule (for MESSENGER_GATEWAY
     // token) — the cycle is real and must be broken at both ends.
@@ -48,6 +51,7 @@ import { VideoTranscodeService } from '../common/video-transcode.service';
     FileStorageService,
     ThumbnailService,
     VideoTranscodeService,
+    PartnerConversationScope,
     // Expose MessengerGateway under the 'MESSENGER_GATEWAY' token so BillingModule
     // (and any other feature module) can @Inject('MESSENGER_GATEWAY') without a
     // hard type dependency on MessengerGateway itself — keeps the billing code

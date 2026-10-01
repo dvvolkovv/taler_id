@@ -5,10 +5,16 @@ import { AdminService } from './admin.service';
 import { AdminGuard } from './admin.guard';
 import { BlockchainModule } from '../blockchain/blockchain.module';
 import { SystemChannelModule } from '../system-channel/system-channel.module';
+import { PartnerCoreModule } from '../partner-core/partner-core.module';
 // PrismaModule is @Global - no need to import here
 
 @Module({
-  imports: [JwtModule.register({}), BlockchainModule, SystemChannelModule],
+  imports: [
+    JwtModule.register({}),
+    BlockchainModule,
+    SystemChannelModule,
+    PartnerCoreModule,
+  ],
   controllers: [AdminController],
   providers: [AdminService, AdminGuard],
 })

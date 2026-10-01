@@ -45,6 +45,12 @@ model User {
   groupCallInvites     GroupCallInvite[]     @relation("GroupCallInvitesReceived")
   informerAlertConfig  InformerAlertConfig?
   mailAccount          MailAccount?
+  /// Связки с продуктами-партнёрами (nadi): кто и под каким id завёл или
+  /// привязал этого человека. Спека: 2026-09-30-partner-messenger-api-design.md
+  partnerLinks         PartnerLink[]
+  /// Партнёр, который завёл этот аккаунт (партнёрский API). Пока человек не задал пароль TalerID, аккаунт для этого партнёра «управляемый».
+  createdByPartnerId   String?
+  createdByPartner     Partner?              @relation(fields: [createdByPartnerId], references: [id], onDelete: Restrict)
 }
 
 model DeviceKey {
@@ -756,6 +762,9 @@ model BlockedUser {
   blockerId String
   blockedId String
   createdAt DateTime @default(now())
+  /// Были ли люди контактами в момент блокировки. Разблокировка возвращает
+  /// только такой контакт — иначе блок и разблок делали контактами кого угодно.
+  hadContact Boolean  @default(false)
 
   @@unique([blockerId, blockedId])
   @@index([blockerId])
@@ -1120,4 +1129,76 @@ model ScheduledMessage {
 
   @@index([sendAt, sentAt])
   @@index([senderId])
+}
+
+enum PartnerLinkStatus {
+  PENDING
+  ACTIVE
+  REVOKED
+}
+
+/// Внешний продукт, который заводит своих людей в TalerID и пускает их в
+/// мессенджер (первый — nadi). Ключ хранится только хэшем, секрет вебхука —
+/// зашифрованным (PARTNER_SECRETS_KEY).
+/// Спека: docs/superpowers/specs/2026-09-30-partner-messenger-api-design.md
+model Partner {
+  id               String           @id @default(uuid())
+  slug             String           @unique
+  /// Так партнёр называется в письмах людям.
+  name             String
+  keyHash          String
+  ipAllowlist      String[]         @default([])
+  webhookUrl       String?
+  webhookSecretEnc String?
+  /// OAuth-клиент `<slug>-partner`, от имени которого выпускаются токены.
+  oauthClientId    String           @unique
+  enabled          Boolean          @default(true)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  links            PartnerLink[]
+  contacts         PartnerContact[]
+  createdUsers     User[]
+}
+
+/// «Партнёр + externalId ↔ пользователь TalerID». PENDING — ждёт кода из
+/// письма (почта принадлежала чужому аккаунту), ACTIVE — партнёр может
+/// выпускать токены, REVOKED — отозвана.
+model PartnerLink {
+  id             String            @id @default(uuid())
+  partnerId      String
+  externalId     String
+  userId         String
+  /// Без умолчания: ACTIVE открывает партнёру чаты человека, поэтому статус всегда задаётся явно.
+  status         PartnerLinkStatus
+  /// Грант OIDC: по нему отзываются сразу все токены связки.
+  grantId        String?
+  codeHash       String?
+  codeExpiresAt  DateTime?
+  codeAttempts   Int               @default(0)
+  activatedAt    DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  partner        Partner           @relation(fields: [partnerId], references: [id], onDelete: Restrict)
+  user           User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([partnerId, externalId])
+  @@unique([partnerId, userId])
+  @@index([userId, status])
+}
+
+/// Контакт, который завёл партнёр по своей «дружбе». createdContact=false —
+/// люди были контактами в TalerID ещё до партнёра, и снимать такой контакт
+/// партнёр не вправе. userAId < userBId.
+model PartnerContact {
+  id             String   @id @default(uuid())
+  partnerId      String
+  userAId        String
+  userBId        String
+  createdContact Boolean
+  createdAt      DateTime @default(now())
+  partner        Partner  @relation(fields: [partnerId], references: [id], onDelete: Restrict)
+
+  @@unique([partnerId, userAId, userBId])
+  @@index([userAId, userBId])
 }
