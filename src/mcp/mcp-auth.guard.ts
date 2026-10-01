@@ -8,6 +8,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { OIDC_PROVIDER } from '../oidc/oidc.service';
+import { PARTNER_TOKEN_GTY } from '../partner-core/partner.constants';
 
 export interface McpAuthContext {
   userId: string;
@@ -54,6 +55,11 @@ export class McpAuthGuard implements CanActivate {
     }
 
     if (!at?.accountId || (at as any).isExpired) {
+      throw new UnauthorizedException('Invalid or expired token');
+    }
+    // Токены партнёрского API (scope messenger, gty=PARTNER_TOKEN_GTY) не
+    // пускают никуда кроме открытых ручек мессенджера — /mcp среди них нет.
+    if ((at as any).gty === PARTNER_TOKEN_GTY) {
       throw new UnauthorizedException('Invalid or expired token');
     }
 

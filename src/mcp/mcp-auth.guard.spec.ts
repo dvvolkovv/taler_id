@@ -1,4 +1,5 @@
 import { ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
+import { PARTNER_TOKEN_GTY } from '../partner-core/partner.constants';
 import { McpAuthGuard } from './mcp-auth.guard';
 
 function ctx(authHeader?: string) {
@@ -49,6 +50,18 @@ describe('McpAuthGuard', () => {
     });
     const { ctx: c } = ctx('Bearer stale');
     await expect(guard.canActivate(c)).rejects.toThrow(UnauthorizedException);
+  });
+
+  it('rejects a partner-issued token (gty === PARTNER_TOKEN_GTY) even if otherwise well-formed', async () => {
+    provider.AccessToken.find.mockResolvedValue({
+      accountId: 'user-1',
+      clientId: 'nadi-partner',
+      scope: 'messenger',
+      gty: PARTNER_TOKEN_GTY,
+    });
+    const { ctx: c, req } = ctx('Bearer partner-token');
+    await expect(guard.canActivate(c)).rejects.toThrow(UnauthorizedException);
+    expect(req.mcpAuth).toBeUndefined();
   });
 
   it('attaches mcpAuth on valid token', async () => {
