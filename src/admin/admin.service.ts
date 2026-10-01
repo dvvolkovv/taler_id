@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
@@ -9,14 +10,18 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import * as fs from 'fs';
+import { PartnerLinkRevokerService } from '../partner-core/partner-link-revoker.service';
 
 @Injectable()
 export class AdminService {
+  private readonly logger = new Logger(AdminService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly blockchain: BlockchainService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
+    private readonly partnerLinks: PartnerLinkRevokerService,
   ) {}
 
   async adminLogin(email: string, password: string) {
@@ -163,6 +168,17 @@ export class AdminService {
       where: { id: userId },
       data: { deletedAt: new Date() },
     });
+    // Партнёры (nadi) теряют доступ к заблокированному сразу, а не когда
+    // истекут выданные токены. Сбой отзыва не отменяет блокировку (тот же
+    // приём, что в ProfileService.deleteAccount) — недоделанный отзыв
+    // доделает следующий DELETE связки партнёром.
+    try {
+      await this.partnerLinks.revokeAllForUser(userId);
+    } catch (e) {
+      this.logger.error(
+        `partner links not fully revoked for ${userId}: ${(e as Error).message}`,
+      );
+    }
     return { success: true };
   }
 

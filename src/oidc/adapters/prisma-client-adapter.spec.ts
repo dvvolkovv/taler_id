@@ -29,6 +29,21 @@ describe('PrismaClientAdapter DCR', () => {
     expect(createCall.data.dcrMetadata.scope).toBe('openid mcp:calendar');
   });
 
+  it('upsert strips the partner-only messenger scope from dynamic clients', async () => {
+    // Токен со scope messenger пускает в чужие переписки. Выдавать его может
+    // только партнёрский API, а не любой, кто зарегистрировался через DCR.
+    prisma.oAuthClient.findUnique.mockResolvedValue(null);
+    await adapter.upsert('dyn-client-2', {
+      client_name: 'Someone',
+      redirect_uris: ['https://example.com/cb'],
+      token_endpoint_auth_method: 'none',
+      scope: 'openid messenger mcp:calendar',
+    }, 0);
+    const createCall = prisma.oAuthClient.create.mock.calls[0][0];
+    expect(createCall.data.dcrMetadata.scope).toBe('openid mcp:calendar');
+    expect(createCall.data.allowedScopes).toEqual(['openid', 'mcp:calendar']);
+  });
+
   it('find returns dcrMetadata for dynamic client', async () => {
     prisma.oAuthClient.findUnique.mockResolvedValue({
       clientId: 'dyn-client-1',

@@ -33,6 +33,7 @@ import { PresenceModule } from './presence/presence.module';
 import { MailModule } from './mail/mail.module';
 import { McpModule } from './mcp/mcp.module';
 import { PartnerModule } from './partner/partner.module';
+import { PartnerApiModule } from './partner-api/partner-api.module';
 import { SystemChannelModule } from './system-channel/system-channel.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import configuration from './config/configuration';
@@ -125,6 +126,7 @@ import configuration from './config/configuration';
     MailModule,
     McpModule,
     PartnerModule,
+    PartnerApiModule,
     SystemChannelModule,
   ],
   controllers: [AppController],

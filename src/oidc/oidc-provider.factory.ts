@@ -5,6 +5,7 @@ import type { PrismaService } from '../prisma/prisma.service';
 import { RedisOidcAdapter } from './adapters/redis-adapter.js';
 import { PrismaClientAdapter } from './adapters/prisma-client-adapter.js';
 import { MCP_SCOPES } from '../mcp/mcp.constants';
+import { MESSENGER_SCOPE } from '../partner-core/partner.constants';
 
 export interface OidcProviderConfig {
   issuer: string;
@@ -68,6 +69,11 @@ export async function createOidcProvider(config: OidcProviderConfig) {
       'offline_access',
       // единый источник — mcp.constants: новый MCP-scope нельзя «забыть» в OIDC
       ...MCP_SCOPES,
+      // Токены партнёров (nadi) выпускает только партнёрский API на сервере.
+      // Через DCR этот scope не получить — prisma-client-adapter его вырезает;
+      // на consent-экран он не попадёт, потому что есть только в allowedScopes
+      // партнёрских клиентов, а у них нет redirect URI.
+      MESSENGER_SCOPE,
     ],
 
     features: {
@@ -90,6 +96,8 @@ export async function createOidcProvider(config: OidcProviderConfig) {
 
     responseTypes: ['code'],
 
+    // Партнёрские токены узнаются по виду «43 символа base64url»: формат access-токенов (formats)
+    // не менять без PARTNER_TOKEN_FORMAT в src/partner-core/partner-tokens.service.ts.
     ttl: {
       AccessToken: 900,
       AuthorizationCode: 60,

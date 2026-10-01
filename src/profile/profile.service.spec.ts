@@ -3,6 +3,7 @@ import { ProfileService } from './profile.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { S3Service } from './s3.service';
 import { FileStorageService } from '../common/file-storage.service';
+import { PartnerLinkRevokerService } from '../partner-core/partner-link-revoker.service';
 import { NotFoundException, BadRequestException } from '@nestjs/common';
 
 const mockPrisma = {
@@ -70,6 +71,10 @@ describe('ProfileService', () => {
         // ProfileService перешёл на FileStorageService; спека продолжала
         // подставлять S3Service и потому не поднималась вовсе.
         { provide: FileStorageService, useValue: mockS3 },
+        {
+          provide: PartnerLinkRevokerService,
+          useValue: { revokeAllForUser: jest.fn().mockResolvedValue(0) },
+        },
       ],
     }).compile();
     service = module.get<ProfileService>(ProfileService);

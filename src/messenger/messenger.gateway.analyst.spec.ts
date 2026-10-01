@@ -9,6 +9,10 @@ import { AssistantChatService } from '../assistant/assistant-chat.service';
 import { FcmService } from '../common/fcm.service';
 import { ApnsService } from '../common/apns.service';
 import { ConfigService } from '@nestjs/config';
+import { PartnerRealtimeService } from '../partner-core/partner-realtime.service';
+import { PartnerTokensService } from '../partner-core/partner-tokens.service';
+import { PartnerWebhooksService } from '../partner-core/partner-webhooks.service';
+import { PartnerConversationScope } from './partner-conversation-scope.service';
 
 interface SubmitTaskInput {
   onChunk: (text: string) => void;
@@ -78,6 +82,10 @@ describe('MessengerGateway._dispatchToAnalyst', () => {
         { provide: FcmService, useValue: {} },
         { provide: ApnsService, useValue: {} },
         { provide: ConfigService, useValue: { get: () => undefined } },
+        { provide: PartnerTokensService, useValue: { verify: jest.fn().mockResolvedValue(null) } },
+        { provide: PartnerRealtimeService, useValue: { registerDisconnector: jest.fn() } },
+        { provide: PartnerConversationScope, useValue: { assertConversation: jest.fn(), assertMessage: jest.fn() } },
+        { provide: PartnerWebhooksService, useValue: { planFanOut: jest.fn().mockResolvedValue(null) } },
       ],
     }).compile();
     gateway = mod.get(MessengerGateway);
