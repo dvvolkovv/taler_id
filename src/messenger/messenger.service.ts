@@ -3002,13 +3002,36 @@ export class MessengerService {
   }
 
   async unblockUser(myId: string, targetId: string) {
-    const block = await this.prisma.blockedUser.findFirst({
-      where: { blockerId: myId, blockedId: targetId },
+    // Атомарно: delete по составному ключу вместо findFirst+deleteMany — так
+    // нет окна между чтением и удалением, в которое проскочил бы параллельный
+    // запрос. Нет строки — Prisma бросает P2025, и восстанавливать нечего.
+    let block: { hadContact: boolean } | null;
+    try {
+      block = await this.prisma.blockedUser.delete({
+        where: { blockerId_blockedId: { blockerId: myId, blockedId: targetId } },
+      });
+    } catch (e: any) {
+      if (e?.code === 'P2025') return { ok: true };
+      throw e;
+    }
+    if (!block.hadContact) return { ok: true };
+
+    // Встречная блокировка (targetId всё ещё блокирует myId) могла пережить
+    // снятие этой: тогда контакт восстанавливать рано — тот, кого всё ещё
+    // блокируют, не должен обнаружить себя в контактах заблокировавшего.
+    // Вместо этого передаём память о бывшем контакте оставшейся блокировке:
+    // она вернёт его сама, когда снимут и её.
+    const reverseBlock = await this.prisma.blockedUser.findUnique({
+      where: { blockerId_blockedId: { blockerId: targetId, blockedId: myId } },
     });
-    await this.prisma.blockedUser.deleteMany({
-      where: { blockerId: myId, blockedId: targetId },
-    });
-    if (!block?.hadContact) return { ok: true };
+    if (reverseBlock) {
+      await this.prisma.blockedUser.updateMany({
+        where: { blockerId: targetId, blockedId: myId },
+        data: { hadContact: true },
+      });
+      return { ok: true };
+    }
+
     // Restore contact relationship so they don't need to re-add each other
     const existing = await this.prisma.contactRequest.findFirst({
       where: {

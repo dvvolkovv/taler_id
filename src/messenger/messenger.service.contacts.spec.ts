@@ -107,4 +107,42 @@ describe('MessengerService.sendContactRequest', () => {
     await expect(service.sendContactRequest('me', 'u2')).resolves.toBeTruthy();
     expect(prisma.contactRequest.upsert).toHaveBeenCalled();
   });
+
+  // Regression cover for the interaction of three fixes on this one path: the
+  // managed-account check above, acceptContactRequest now refusing anyone but
+  // the receiver (Task 21), and this pre-existing auto-accept shortcut. The
+  // caller here ('me') must reach acceptContactRequest as the real receiver
+  // of the reverse request, or Task 21's guard would reject it.
+  it('auto-accepts via the real acceptContactRequest when a reverse PENDING request exists', async () => {
+    const prisma: any = {
+      blockedUser: { findFirst: jest.fn().mockResolvedValue(null) },
+      user: {
+        findUnique: jest.fn((args: any) =>
+          Promise.resolve(
+            args.where.id === 'u2' ? { createdByPartnerId: null, passwordHash: 'hash' } : { username: 'me', profile: null },
+          ),
+        ),
+      },
+      contactRequest: {
+        findUnique: jest
+          .fn()
+          // 1st call inside sendContactRequest: existing (me → u2) — none.
+          .mockResolvedValueOnce(null)
+          // 2nd call inside sendContactRequest: reverse (u2 → me) — pending;
+          // 3rd call inside acceptContactRequest: the same row, fetched by id.
+          .mockResolvedValue({ id: 'rev-1', senderId: 'u2', receiverId: 'me', status: 'PENDING' }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+    };
+    const service = Object.create(MessengerService.prototype) as MessengerService;
+    (service as any).prisma = prisma;
+    (service as any).getOrCreateDirectConversation = jest.fn().mockResolvedValue({ id: 'conv-1' });
+
+    await expect(service.sendContactRequest('me', 'u2')).resolves.toEqual({
+      senderId: 'u2',
+      receiverId: 'me',
+      conversationId: 'conv-1',
+    });
+    expect(prisma.contactRequest.update).toHaveBeenCalledWith({ where: { id: 'rev-1' }, data: { status: 'ACCEPTED' } });
+  });
 });
