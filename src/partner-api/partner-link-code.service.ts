@@ -20,6 +20,7 @@ import {
 } from '../partner-core/partner-secrets.util';
 import { PartnerAuditService } from './partner-audit.service';
 import { countInWindow } from './partner-counter.util';
+import { isForeignUnclaimedManaged } from './partner-users.service';
 
 const CODE_TTL_SECONDS = 600;
 const CODE_MAX_ATTEMPTS = 5;
@@ -59,9 +60,14 @@ export class PartnerLinkCodeService {
     if (!to) throw new NotFoundException('not_linked');
     // Код из письма доказывал бы только владение ящиком, а не аккаунтом —
     // этот аккаунт мог завести кто угодно на чужой адрес, пока TalerID не
-    // проверяет почту при обычной регистрации. Проверяем до счётчиков в
+    // проверяет почту при обычной регистрации. То же для managed-аккаунта
+    // ДРУГОГО партнёра, которого никто не востребовал: emailVerified там
+    // true, но это claim того партнёра, а не почты. Проверяем до счётчиков в
     // Redis: неподходящему запросу нет смысла тратить чужой бюджет окон.
-    if (!link.user.emailVerified) {
+    if (
+      !link.user.emailVerified ||
+      isForeignUnclaimedManaged(partner, link.user)
+    ) {
       throw new ConflictException('email_unverified');
     }
 
@@ -158,7 +164,10 @@ export class PartnerLinkCodeService {
     ip?: string,
   ): Promise<{ status: 'active'; talerUserId: string }> {
     const link = await this.pendingLink(partner.id, externalId);
-    if (!link.user.emailVerified) {
+    if (
+      !link.user.emailVerified ||
+      isForeignUnclaimedManaged(partner, link.user)
+    ) {
       throw new ConflictException('email_unverified');
     }
     // Кода не отправляли — и попытку тратить не на что.
@@ -204,7 +213,30 @@ export class PartnerLinkCodeService {
     // Дальше пишем только пока код тот же: гонка с повторной отправкой не
     // сотрёт свежий код, а гонка с отзывом не оживит отозванную связку.
     const sameCode = { id: link.id, status: 'PENDING' as const, codeHash };
-    if (!linkCodeMatches(link.id, code, codeHash)) {
+    let matches: boolean;
+    try {
+      matches = linkCodeMatches(link.id, code, codeHash);
+    } catch (e) {
+      // linkCodeMatches зовёт hashLinkCode — падает на сломанном
+      // PARTNER_SECRETS_KEY. Сравнения не было: отдаём и списанную попытку
+      // (условно, по тому же codeHash — не задеть свежий код), и суточный
+      // слот, чтобы инфраструктурный сбой не жёг бюджет человека/партнёра.
+      await this.prisma.partnerLink
+        .updateMany({
+          where: sameCode,
+          data: { codeAttempts: { decrement: 1 } },
+        })
+        .catch(() => undefined);
+      this.redis
+        .getClient()
+        .decr(verifyDayKey)
+        .catch(() => undefined);
+      this.logger.error(
+        `link code comparison failed for ${link.id}: ${(e as Error).message}`,
+      );
+      throw new ServiceUnavailableException('secrets_unavailable');
+    }
+    if (!matches) {
       const { codeAttempts } = await this.prisma.partnerLink.findUniqueOrThrow({
         where: { id: link.id },
         select: { codeAttempts: true },
@@ -234,9 +266,20 @@ export class PartnerLinkCodeService {
       });
     }
     const activated = await this.prisma.partnerLink.updateMany({
-      // emailVerified:true снова, уже в самом условии записи: закрывает гонку
-      // между чтением выше и этой записью — активируем только то, что видели.
-      where: { ...sameCode, user: { emailVerified: true } },
+      // emailVerified:true и «не чужой неподтверждённый managed» снова, уже
+      // в самом условии записи: закрывает гонку между чтением выше и этой
+      // записью — активируем только то, что видели.
+      where: {
+        ...sameCode,
+        user: {
+          emailVerified: true,
+          OR: [
+            { createdByPartnerId: null },
+            { createdByPartnerId: partner.id },
+            { passwordHash: { not: null } },
+          ],
+        },
+      },
       data: {
         status: 'ACTIVE',
         activatedAt: new Date(),
@@ -303,6 +346,8 @@ export class PartnerLinkCodeService {
             email: true,
             deletedAt: true,
             emailVerified: true,
+            createdByPartnerId: true,
+            passwordHash: true,
             profile: { select: { language: true } },
           },
         },

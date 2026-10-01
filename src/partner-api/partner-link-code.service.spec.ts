@@ -34,6 +34,8 @@ const pending = {
     email: 'ivan@example.com',
     deletedAt: null,
     emailVerified: true,
+    createdByPartnerId: null as string | null,
+    passwordHash: null as string | null,
     profile: { language: 'ru' },
   },
 };
@@ -197,6 +199,39 @@ describe('PartnerLinkCodeService.send', () => {
     expect(windowCount).not.toHaveBeenCalled();
   });
 
+  it("refuses with 409 for a foreign managed account nobody has claimed yet, even though emailVerified is true (it's partner p2's claim, not the mailbox's)", async () => {
+    const foreignManaged = {
+      ...pending,
+      user: {
+        ...pending.user,
+        createdByPartnerId: 'p2',
+        passwordHash: null,
+      },
+    };
+    const { service } = make(foreignManaged);
+    await expect(service.send(partner, 'm-1')).rejects.toThrow(
+      'email_unverified',
+    );
+    expect(windowCount).not.toHaveBeenCalled();
+  });
+
+  it('allows sending a code once the foreign-managed account has been claimed (first password set)', async () => {
+    const claimed = {
+      ...pending,
+      user: {
+        ...pending.user,
+        createdByPartnerId: 'p2',
+        passwordHash: 'claimed-by-real-owner',
+      },
+    };
+    const { service, email } = make(claimed);
+    await expect(service.send(partner, 'm-1')).resolves.toEqual({
+      sent: true,
+      expiresIn: 600,
+    });
+    expect(email.sendPartnerLinkCode).toHaveBeenCalled();
+  });
+
   it('404 for an unknown link', async () => {
     const { service } = make(null);
     await expect(service.send(partner, 'm-1')).rejects.toThrow('not_linked');
@@ -257,7 +292,14 @@ describe('PartnerLinkCodeService.verify', () => {
         id: 'l1',
         status: 'PENDING',
         codeHash: link.codeHash,
-        user: { emailVerified: true },
+        user: {
+          emailVerified: true,
+          OR: [
+            { createdByPartnerId: null },
+            { createdByPartnerId: 'p1' },
+            { passwordHash: { not: null } },
+          ],
+        },
       },
       data: expect.objectContaining({
         status: 'ACTIVE',
@@ -287,7 +329,37 @@ describe('PartnerLinkCodeService.verify', () => {
     expect(prisma.partnerLink.updateMany).not.toHaveBeenCalled();
   });
 
-  it('requires emailVerified:true in the activating updateMany where-clause (closes a race with the account becoming unverified)', async () => {
+  it('refuses with 409 for a foreign managed account nobody has claimed yet, without spending an attempt', async () => {
+    const link = withCode();
+    const foreignManaged = {
+      ...link,
+      user: { ...link.user, createdByPartnerId: 'p2', passwordHash: null },
+    };
+    const { service, prisma } = make(foreignManaged);
+    await expect(service.verify(partner, 'm-1', '123456')).rejects.toThrow(
+      'email_unverified',
+    );
+    expect(prisma.partnerLink.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('allows verifying once the foreign-managed account has been claimed (first password set)', async () => {
+    const link = withCode();
+    const claimed = {
+      ...link,
+      user: {
+        ...link.user,
+        createdByPartnerId: 'p2',
+        passwordHash: 'claimed-by-real-owner',
+      },
+    };
+    const { service } = make(claimed);
+    await expect(service.verify(partner, 'm-1', '123456')).resolves.toEqual({
+      status: 'active',
+      talerUserId: 'u1',
+    });
+  });
+
+  it('requires emailVerified:true AND not-foreign-managed in the activating updateMany where-clause (closes races on both)', async () => {
     const link = withCode();
     const { service, prisma } = make(link);
     await service.verify(partner, 'm-1', '123456');
@@ -296,7 +368,14 @@ describe('PartnerLinkCodeService.verify', () => {
         id: 'l1',
         status: 'PENDING',
         codeHash: link.codeHash,
-        user: { emailVerified: true },
+        user: {
+          emailVerified: true,
+          OR: [
+            { createdByPartnerId: null },
+            { createdByPartnerId: 'p1' },
+            { passwordHash: { not: null } },
+          ],
+        },
       },
       data: expect.objectContaining({ status: 'ACTIVE' }),
     });
@@ -351,6 +430,31 @@ describe('PartnerLinkCodeService.verify', () => {
     const err = await service.verify(partner, 'm-1', '123456').catch((e) => e);
     expect(err.getStatus()).toBe(410);
     expect(prisma.partnerLink.updateMany).toHaveBeenCalledTimes(1);
+    expect(decr).toHaveBeenCalledWith('partner:linkcode:verify:p1');
+  });
+
+  it('gives back the spent attempt and the daily verify slot, and answers 503, when comparing the code throws (bad PARTNER_SECRETS_KEY)', async () => {
+    const link = withCode();
+    const { service, prisma, decr } = make(link);
+    const savedKeyForThisTest = process.env.PARTNER_SECRETS_KEY;
+    // linkCodeMatches вызывает hashLinkCode, который проверяет формат ключа
+    // при каждом вызове — портим его без моков, как в тесте на send().
+    process.env.PARTNER_SECRETS_KEY = 'not-64-hex-chars';
+    try {
+      const err = await service
+        .verify(partner, 'm-1', '123456')
+        .catch((e) => e);
+      expect(err.getStatus()).toBe(503);
+      expect(err.message).toBe('secrets_unavailable');
+    } finally {
+      process.env.PARTNER_SECRETS_KEY = savedKeyForThisTest;
+    }
+    // Попытка была списана (codeAttempts: increment) ДО сравнения — теперь
+    // должна быть возвращена тем же условным UPDATE по тому же codeHash.
+    expect(prisma.partnerLink.updateMany).toHaveBeenLastCalledWith({
+      where: { id: 'l1', status: 'PENDING', codeHash: link.codeHash },
+      data: { codeAttempts: { decrement: 1 } },
+    });
     expect(decr).toHaveBeenCalledWith('partner:linkcode:verify:p1');
   });
 

@@ -91,6 +91,26 @@ export function isManagedBy(
 }
 
 /**
+ * emailVerified=true на аккаунте, который завёл ДРУГОЙ партнёр и в котором
+ * человек ни разу не задавал пароль, — это claim партнёра A, не почты: такой
+ * аккаунт никто пока не востребовал. Код из письма партнёру B доказал бы
+ * только то, что он доказывает всегда — владение ящиком, а не этим
+ * конкретным аккаунтом, который человек, возможно, никогда не видел. Как
+ * только человек задаёт первый пароль (или заводит аккаунт сам партнёр B —
+ * тогда он уже managed для B), условие больше не выполняется.
+ */
+export function isForeignUnclaimedManaged(
+  partner: { id: string },
+  user: AccountState,
+): boolean {
+  return (
+    user.createdByPartnerId !== null &&
+    user.createdByPartnerId !== partner.id &&
+    user.passwordHash === null
+  );
+}
+
+/**
  * Люди партнёра в TalerID. Спека, раздел «Партнёрский API»:
  * docs/superpowers/specs/2026-09-30-partner-messenger-api-design.md
  */
@@ -199,9 +219,15 @@ export class PartnerUsersService {
     const managed = isManagedBy(partner, owner);
     // Код из письма доказал бы только владение ящиком, а не аккаунтом: его мог
     // завести кто угодно на чужой адрес, поскольку TalerID не проверяет почту
-    // при обычной регистрации. Управляемые партнёром аккаунты всегда создаются
-    // с emailVerified=true (newAccount), поэтому это условие их не касается.
-    if (!managed && !owner.emailVerified) {
+    // при обычной регистрации. Управляемые ЭТИМ партнёром аккаунты всегда
+    // создаются с emailVerified=true (newAccount), поэтому это условие их не
+    // касается. Управляемый ДРУГИМ партнёром и никем не востребованный
+    // (passwordHash всё ещё null) — это claim того партнёра, а не почты: код
+    // для партнёра B не должен открывать claim партнёра A.
+    if (
+      !managed &&
+      (!owner.emailVerified || isForeignUnclaimedManaged(partner, owner))
+    ) {
       throw new ConflictException('email_unverified');
     }
 

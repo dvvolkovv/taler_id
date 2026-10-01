@@ -446,12 +446,31 @@ describe('PartnerUsersService.provision', () => {
     expect(prisma.user.create).not.toHaveBeenCalled();
   });
 
-  it('does not treat an account managed by a different partner as its own', async () => {
+  it("refuses a foreign managed account nobody has claimed yet, even though emailVerified is true (it is partner p2's claim, not the mailbox's)", async () => {
     const { service, prisma } = make();
     prisma.$queryRaw.mockResolvedValue([
       {
         id: 'u-other-partner',
         passwordHash: null,
+        deletedAt: null,
+        createdByPartnerId: 'p2',
+        emailVerified: true,
+      },
+    ]);
+    await expect(service.provision(partner, dto)).rejects.toThrow(
+      'email_unverified',
+    );
+    expect(prisma.partnerLink.create).not.toHaveBeenCalled();
+    expect(prisma.partnerLink.updateMany).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('allows linking a foreign-managed account once it has been claimed by its real owner (first password set)', async () => {
+    const { service, prisma } = make();
+    prisma.$queryRaw.mockResolvedValue([
+      {
+        id: 'u-other-partner',
+        passwordHash: 'claimed-by-real-owner',
         deletedAt: null,
         createdByPartnerId: 'p2',
         emailVerified: true,
@@ -467,6 +486,23 @@ describe('PartnerUsersService.provision', () => {
         status: 'PENDING',
       }),
     });
+  });
+
+  it('still refuses a foreign managed account when the email itself is also unverified', async () => {
+    const { service, prisma } = make();
+    prisma.$queryRaw.mockResolvedValue([
+      {
+        id: 'u-other-partner',
+        passwordHash: null,
+        deletedAt: null,
+        createdByPartnerId: 'p2',
+        emailVerified: false,
+      },
+    ]);
+    await expect(service.provision(partner, dto)).rejects.toThrow(
+      'email_unverified',
+    );
+    expect(prisma.partnerLink.create).not.toHaveBeenCalled();
   });
 
   it('gives up after repeated CAS misses on link reuse', async () => {
