@@ -18,19 +18,29 @@ export class PartnerLinkRevokerService {
    * (вызывающие считают такую связку незавершённой).
    */
   async revokeLink(link: { id: string }): Promise<void> {
+    const now = new Date();
     // Грант берём из той же строки, что переводим в REVOKED, а не у вызывающего:
     // его копия могла устареть, а параллельный выпуск токена после этой записи
     // сменить грант уже не сможет — он меняет его только у ACTIVE-связки.
     const row = await this.prisma.partnerLink.update({
       where: { id: link.id },
-      data: { status: 'REVOKED', revokedAt: new Date(), codeHash: null, codeExpiresAt: null, codeAttempts: 0 },
-      select: { grantId: true, partnerId: true, userId: true },
+      data: { status: 'REVOKED', codeHash: null, codeExpiresAt: null, codeAttempts: 0 },
+      select: { grantId: true, partnerId: true, userId: true, revokedAt: true },
     });
     if (row.grantId) {
       await this.tokens.revokeGrant(row.grantId);
       await this.prisma.partnerLink.updateMany({
         where: { id: link.id, grantId: row.grantId },
         data: { grantId: null },
+      });
+    }
+    if (!row.revokedAt) {
+      // Время первого отзыва не переписываем: по нему партнёрский API решает,
+      // сообщать ли об удалении аккаунта (410) или нет (404). Условие по статусу —
+      // чтобы не проставить время строке, которую уже переиспользовали под новую связку.
+      await this.prisma.partnerLink.updateMany({
+        where: { id: link.id, status: 'REVOKED', revokedAt: null },
+        data: { revokedAt: now },
       });
     }
     await this.realtime.disconnectLink(row.partnerId, row.userId);

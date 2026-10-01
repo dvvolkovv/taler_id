@@ -44,7 +44,7 @@ describe('PartnerLinkRevokerService', () => {
   beforeEach(() => {
     prisma = {
       partnerLink: {
-        update: jest.fn().mockResolvedValue({ grantId: 'g-db', partnerId: 'p1', userId: 'u1' }),
+        update: jest.fn().mockResolvedValue({ grantId: 'g-db', partnerId: 'p1', userId: 'u1', revokedAt: null }),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         findMany: jest.fn(),
       },
@@ -60,12 +60,11 @@ describe('PartnerLinkRevokerService', () => {
       where: { id: 'l1' },
       data: {
         status: 'REVOKED',
-        revokedAt: expect.any(Date),
         codeHash: null,
         codeExpiresAt: null,
         codeAttempts: 0,
       },
-      select: { grantId: true, partnerId: true, userId: true },
+      select: { grantId: true, partnerId: true, userId: true, revokedAt: true },
     });
     expect(tokens.revokeGrant).toHaveBeenCalledTimes(1);
     expect(tokens.revokeGrant).toHaveBeenCalledWith('g-db');
@@ -99,11 +98,38 @@ describe('PartnerLinkRevokerService', () => {
   });
 
   it('still disconnects sockets of a link that has no grant', async () => {
-    prisma.partnerLink.update.mockResolvedValue({ grantId: null, partnerId: 'p1', userId: 'u1' });
+    prisma.partnerLink.update.mockResolvedValue({ grantId: null, partnerId: 'p1', userId: 'u1', revokedAt: null });
     await revoker.revokeLink({ id: 'l1' });
     expect(tokens.revokeGrant).not.toHaveBeenCalled();
-    expect(prisma.partnerLink.updateMany).not.toHaveBeenCalled();
     expect(realtime.disconnectLink).toHaveBeenCalledWith('p1', 'u1');
+  });
+
+  it('sets revokedAt via the guarded updateMany on first revocation', async () => {
+    prisma.partnerLink.update.mockResolvedValue({ grantId: null, partnerId: 'p1', userId: 'u1', revokedAt: null });
+    await revoker.revokeLink({ id: 'l1' });
+    expect(prisma.partnerLink.updateMany).toHaveBeenCalledWith({
+      where: { id: 'l1', status: 'REVOKED', revokedAt: null },
+      data: { revokedAt: expect.any(Date) },
+    });
+  });
+
+  it('does not rewrite revokedAt when completing an already-revoked row', async () => {
+    const firstRevokedAt = new Date('2026-01-01T00:00:00Z');
+    prisma.partnerLink.update.mockResolvedValue({
+      grantId: 'g-db',
+      partnerId: 'p1',
+      userId: 'u1',
+      revokedAt: firstRevokedAt,
+    });
+    await revoker.revokeLink({ id: 'l1' });
+    // The grant is still cleared (that's the "unfinished revocation" this row represents)...
+    expect(prisma.partnerLink.updateMany).toHaveBeenCalledWith({
+      where: { id: 'l1', grantId: 'g-db' },
+      data: { grantId: null },
+    });
+    // ...but revokedAt is never touched a second time.
+    const revokedAtWrites = prisma.partnerLink.updateMany.mock.calls.filter(([args]: any[]) => 'revokedAt' in args.data);
+    expect(revokedAtWrites).toHaveLength(0);
   });
 
   describe('revokeAllForUser', () => {
