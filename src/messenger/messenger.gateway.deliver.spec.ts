@@ -24,7 +24,10 @@ describe('MessengerGateway.deliverNewMessage', () => {
   let mockMessenger: MessengerService;
   let mockPrisma: PrismaService;
   let mockFcm: FcmService;
-  let emitted: Array<{ room: string; event: string; data: any }> = [];
+  // emitToUserInConversation шлёт ОДИН emit с массивом комнат, когда
+  // мирорит в puser:<id> (один publish в Redis-адаптере вместо двух) —
+  // поэтому rooms всегда массив, даже когда в нём одна комната.
+  let emitted: Array<{ rooms: string[]; event: string; data: any }> = [];
   let socketsInConv: Array<{ data: { userId: string } }> = [];
   let socketsInUser: Record<string, Array<{ data: { userId: string } }>> = {};
 
@@ -33,9 +36,9 @@ describe('MessengerGateway.deliverNewMessage', () => {
     socketsInConv = [];
     socketsInUser = {};
     const mockServer = {
-      to: (room: string) => ({
+      to: (room: string | string[]) => ({
         emit: (event: string, data: any) => {
-          emitted.push({ room, event, data });
+          emitted.push({ rooms: Array.isArray(room) ? room : [room], event, data });
         },
       }),
       // fanOutToParticipants' online check now passes an array
@@ -122,7 +125,7 @@ describe('MessengerGateway.deliverNewMessage', () => {
   it('emits new_message to the conversation room', async () => {
     await gateway.deliverNewMessage(baseMsg, 'sender', 'conv-1');
     const roomBroadcast = emitted.find(
-      (e) => e.room === 'conv-1' && e.event === 'new_message',
+      (e) => e.rooms.includes('conv-1') && e.event === 'new_message',
     );
     expect(roomBroadcast).toBeDefined();
     expect(roomBroadcast!.data.id).toBe('msg-1');
@@ -132,13 +135,13 @@ describe('MessengerGateway.deliverNewMessage', () => {
   it('emits new_message to each other participant user room (skips sender)', async () => {
     await gateway.deliverNewMessage(baseMsg, 'sender', 'conv-1');
     const perUser = emitted.filter(
-      (e) => e.room === 'user:recipient' && e.event === 'new_message',
+      (e) => e.rooms.includes('user:recipient') && e.event === 'new_message',
     );
     expect(perUser).toHaveLength(1);
     // Sender should NOT receive the per-user new_message (they get room emit
     // if joined, plus their own echo path).
     const senderEmit = emitted.filter(
-      (e) => e.room === 'user:sender' && e.event === 'new_message',
+      (e) => e.rooms.includes('user:sender') && e.event === 'new_message',
     );
     expect(senderEmit).toHaveLength(0);
   });
@@ -150,7 +153,7 @@ describe('MessengerGateway.deliverNewMessage', () => {
     });
     await gateway.deliverNewMessage(baseMsg, 'sender', 'conv-1');
     const perUser = emitted.filter(
-      (e) => e.room === 'user:recipient' && e.event === 'new_message',
+      (e) => e.rooms.includes('user:recipient') && e.event === 'new_message',
     );
     expect(perUser).toHaveLength(0);
     expect(mockFcm.sendNewMessage).not.toHaveBeenCalled();
@@ -162,7 +165,7 @@ describe('MessengerGateway.deliverNewMessage', () => {
     await gateway.deliverNewMessage(baseMsg, 'sender', 'conv-1');
     expect(mockMessenger.markDelivered).toHaveBeenCalledWith('msg-1');
     const updated = emitted.find(
-      (e) => e.event === 'message_updated' && e.room === 'user:sender',
+      (e) => e.event === 'message_updated' && e.rooms.includes('user:sender'),
     );
     expect(updated).toBeDefined();
     expect(updated!.data).toEqual({ id: 'msg-1', isDelivered: true });
@@ -359,7 +362,7 @@ describe('MessengerGateway.deliverNewMessage', () => {
     );
     // recipient всё равно получил per-user emit
     expect(
-      emitted.some((e) => e.room === 'user:recipient' && e.event === 'new_message'),
+      emitted.some((e) => e.rooms.includes('user:recipient') && e.event === 'new_message'),
     ).toBe(true);
   });
 

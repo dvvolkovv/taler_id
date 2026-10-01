@@ -37,6 +37,30 @@ export class PartnerConversationScope {
     }
   }
 
+  /**
+   * Строгая проверка для фильтра сокета (socket-gate.ts): в отличие от
+   * assertConversation выше — которая пропускает неизвестный id, потому что
+   * дальше его встретит REST-обработчик и ответит 404 — у сокета нет такого
+   * обработчика. Там либо true (можно кэшировать и пускать пакет), либо
+   * false на что угодно нештатное: не нашли беседу, тип не DIRECT/GROUP.
+   */
+  async isPartnerConversation(conversationId: string): Promise<boolean> {
+    const conv = await this.prisma.conversation.findUnique({
+      where: { id: conversationId },
+      select: { type: true },
+    });
+    return !!conv && isPartnerConversationType(conv.type);
+  }
+
+  /** То же самое для сообщения — см. isPartnerConversation. */
+  async isPartnerMessage(messageId: string): Promise<boolean> {
+    const msg = await this.prisma.message.findUnique({
+      where: { id: messageId },
+      select: { conversation: { select: { type: true } } },
+    });
+    return !!msg && isPartnerConversationType(msg.conversation.type);
+  }
+
   /** Исходные сообщения пересылки: хоть одно из чужой для партнёра беседы — 403. */
   async assertMessages(messageIds: string[] | undefined): Promise<void> {
     const ids = [...new Set(messageIds ?? [])];

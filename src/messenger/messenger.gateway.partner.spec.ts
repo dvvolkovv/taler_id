@@ -27,15 +27,30 @@ const { privateKey, publicKey } = generateKeyPairSync('rsa', {
 const keyPath = path.join(os.tmpdir(), `messenger-gateway-partner-${process.pid}.pem`);
 fs.writeFileSync(keyPath, publicKey);
 
+/**
+ * Минимальный fake, который всё же ведёт себя как настоящий Socket на двух
+ * пунктах, важных для этого файла: `connected` реально падает и `once`
+ * реально вызывает слушателя, когда сокет "уходит" — иначе тест на очистку
+ * таймера по disconnect ничего не проверяет.
+ */
 function fakeClient(token?: string) {
-  return {
+  const disconnectListeners: Array<() => void> = [];
+  const client: any = {
     handshake: { auth: token ? { token } : {} },
     data: {} as any,
+    connected: true,
     join: jest.fn(),
-    disconnect: jest.fn(),
+    disconnect: jest.fn(() => {
+      client.connected = false;
+      disconnectListeners.slice().forEach((fn) => fn());
+    }),
     emit: jest.fn(),
     use: jest.fn(),
+    once: jest.fn((event: string, fn: () => void) => {
+      if (event === 'disconnect') disconnectListeners.push(fn);
+    }),
   };
+  return client;
 }
 
 describe('MessengerGateway connections', () => {
@@ -85,7 +100,7 @@ describe('MessengerGateway connections', () => {
     expect(partnerTokens.verify).not.toHaveBeenCalled();
   });
 
-  it('accepts a partner token, joins the link room and drops the socket when the token expires', async () => {
+  it('accepts a partner token: joins plink, re-verifies, only then joins puser, and drops the socket when the token expires', async () => {
     jest.useFakeTimers({ now: new Date('2026-10-01T10:00:00Z') });
     const expiresAt = Math.floor(Date.parse('2026-10-01T10:15:00Z') / 1000);
     partnerTokens.verify.mockResolvedValue({ userId: 'u1', partnerId: 'p1', partnerSlug: 'nadi', grantId: 'g1', expiresAt });
@@ -97,6 +112,12 @@ describe('MessengerGateway connections', () => {
     expect(client.join).not.toHaveBeenCalledWith('user:u1');
     expect(client.join).toHaveBeenCalledWith(partnerUserRoom('u1'));
     expect(client.join).toHaveBeenCalledWith('plink:p1:u1');
+    // Order matters: plink first, re-verify in between, puser last — so a
+    // revocation caught by the second verify() never had a window where the
+    // socket sat in puser:<id> able to receive mirrored events.
+    const joinedRooms = client.join.mock.calls.map((c: any[]) => c[0]);
+    expect(joinedRooms.indexOf('plink:p1:u1')).toBeLessThan(joinedRooms.indexOf(partnerUserRoom('u1')));
+    expect(partnerTokens.verify).toHaveBeenCalledTimes(2);
     jest.advanceTimersByTime(15 * 60 * 1000 - 1);
     expect(client.disconnect).not.toHaveBeenCalled();
     jest.advanceTimersByTime(1);
@@ -110,16 +131,31 @@ describe('MessengerGateway connections', () => {
     expect(client.join).not.toHaveBeenCalled();
   });
 
-  it('drops a partner socket whose link was revoked while it was connecting', async () => {
+  it('drops a partner socket whose link was revoked while it was connecting, before it ever joins puser', async () => {
     const principal = { userId: 'u1', partnerId: 'p1', partnerSlug: 'nadi', grantId: 'g1', expiresAt: Math.floor(Date.now() / 1000) + 900 };
     partnerTokens.verify.mockResolvedValueOnce(principal).mockResolvedValueOnce(null);
     const client = fakeClient('opaque');
     await gateway.handleConnection(client as any);
     expect(client.join).toHaveBeenCalledWith('plink:p1:u1');
+    expect(client.join).not.toHaveBeenCalledWith(partnerUserRoom('u1'));
     expect(client.disconnect).toHaveBeenCalled();
   });
 
-  it('clears the expiry timer when the socket goes away first', async () => {
+  it('does not arm the expiry timer if the socket disconnected on its own while the checks were running', async () => {
+    const principal = { userId: 'u1', partnerId: 'p1', partnerSlug: 'nadi', grantId: 'g1', expiresAt: Math.floor(Date.now() / 1000) + 900 };
+    const client = fakeClient('opaque');
+    partnerTokens.verify.mockResolvedValueOnce(principal).mockImplementationOnce(async () => {
+      client.connected = false; // клиент ушёл сам, пока шла вторая проверка
+      return principal;
+    });
+    const result = await (gateway as any).authenticateSocket(client);
+    expect(result).toBe(false);
+    expect(client.join).toHaveBeenCalledWith(partnerUserRoom('u1'));
+    expect(client.once).not.toHaveBeenCalled(); // не повесили слушатель на мёртвый сокет
+    expect(client.disconnect).not.toHaveBeenCalled(); // и не трогали — он уже ушёл
+  });
+
+  it('clears the expiry timer when the socket goes away first (never fires a second disconnect)', async () => {
     jest.useFakeTimers({ now: new Date('2026-10-01T10:00:00Z') });
     partnerTokens.verify.mockResolvedValue({
       userId: 'u1', partnerId: 'p1', partnerSlug: 'nadi', grantId: 'g1',
@@ -127,9 +163,36 @@ describe('MessengerGateway connections', () => {
     });
     const client = fakeClient('opaque');
     await gateway.handleConnection(client as any);
-    gateway.handleDisconnect(client as any);
+    client.disconnect(); // симулируем, что сокет сам закрылся
+    expect(client.disconnect).toHaveBeenCalledTimes(1);
     jest.advanceTimersByTime(120_000);
-    expect(client.disconnect).not.toHaveBeenCalled();
+    // Если бы таймер не очистился при disconnect, он бы вызвал disconnect(true)
+    // ещё раз через 60с.
+    expect(client.disconnect).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * Регрессия (живой two-node review): fetchSockets() с соседней ноды
+   * сериализует client.data в JSON через Redis-адаптер. Timeout —
+   * циклическая структура → `TypeError: Converting circular structure to
+   * JSON` внутри async request-обработчика адаптера → необработанная
+   * ошибка → процесс падает. Один DM человеку с открытым nadi убивал ноду,
+   * державшую его сокет.
+   */
+  it('never puts anything non-JSON-safe into client.data (regression: killed the OTHER node via fetchSockets)', async () => {
+    // Настоящие таймеры: Jest'овский fake-таймер — простой объект без
+    // циклических ссылок и не воспроизводит баг. Настоящий Timeout от
+    // Node — воспроизводит (проверено отдельно: JSON.stringify на нём
+    // падает с "Converting circular structure to JSON").
+    partnerTokens.verify.mockResolvedValue({
+      userId: 'u1', partnerId: 'p1', partnerSlug: 'nadi', grantId: 'g1',
+      expiresAt: Math.floor(Date.now() / 1000) + 900,
+    });
+    const client = fakeClient('opaque');
+    await gateway.handleConnection(client as any);
+    expect(() => JSON.stringify(client.data)).not.toThrow();
+    expect(client.data.partnerExpiryTimer).toBeUndefined();
+    expect(client.data.partnerConversations).toBeUndefined();
   });
 
   it('registers a disconnector that drops every socket of a link', () => {

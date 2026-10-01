@@ -68,6 +68,41 @@ describe('PartnerConversationScope', () => {
     expect(prisma.message.findMany).not.toHaveBeenCalled();
   });
 
+  describe('isPartnerConversation / isPartnerMessage (strict, for the socket gate)', () => {
+    // В отличие от assertConversation/assertMessage (REST — пропускают
+    // неизвестный id, ответит обработчик 404), у сокета нет такого
+    // обработчика: фильтр либо пропускает пакет, либо тихо отказывает.
+    it.each(['DIRECT', 'GROUP'])('true for a confirmed %s conversation', async (type: string) => {
+      prisma.conversation.findUnique.mockResolvedValue({ type });
+      await expect(scope.isPartnerConversation('c1')).resolves.toBe(true);
+    });
+
+    it.each(['CHANNEL', 'SAVED', 'AI_ANALYST'])('false for a %s conversation', async (type: string) => {
+      prisma.conversation.findUnique.mockResolvedValue({ type });
+      await expect(scope.isPartnerConversation('c1')).resolves.toBe(false);
+    });
+
+    it('false for an unknown conversation id (unlike assertConversation, does not pass through)', async () => {
+      prisma.conversation.findUnique.mockResolvedValue(null);
+      await expect(scope.isPartnerConversation('ghost')).resolves.toBe(false);
+    });
+
+    it.each(['DIRECT', 'GROUP'])('true for a message in a confirmed %s conversation', async (type: string) => {
+      prisma.message.findUnique.mockResolvedValue({ conversation: { type } });
+      await expect(scope.isPartnerMessage('m1')).resolves.toBe(true);
+    });
+
+    it('false for a message in a SAVED conversation', async () => {
+      prisma.message.findUnique.mockResolvedValue({ conversation: { type: 'SAVED' } });
+      await expect(scope.isPartnerMessage('m1')).resolves.toBe(false);
+    });
+
+    it('false for an unknown message id', async () => {
+      prisma.message.findUnique.mockResolvedValue(null);
+      await expect(scope.isPartnerMessage('ghost')).resolves.toBe(false);
+    });
+  });
+
   it('names the people who are not contacts', async () => {
     prisma.contactRequest.findMany.mockResolvedValue([
       { senderId: 'u1', receiverId: 'u2' },

@@ -124,15 +124,20 @@ export class MessengerGateway
       client.data.userId = principal.userId;
       client.data.connectedAt = Date.now();
       client.data.partner = principal;
-      // НЕ user:<id> — туда шлётся всё подряд (AI, звонки, биллинг,
-      // «Избранное»). Партнёрский сокет сидит в своей комнате и получает
-      // только то, что явно продублировано через emitToUserInConversation.
-      client.join(partnerUserRoom(principal.userId));
       client.join(partnerLinkRoom(principal.partnerId, principal.userId));
       // Отзыв мог прийти, пока шла проверка: тогда команда «порвать сокеты
       // связки» разошлась раньше, чем этот сокет вошёл в комнату. Проверяем
       // токен ещё раз уже из комнаты — всё, что отзовут дальше, его достанет.
+      // puser:<id> сокет получает только ПОСЛЕ этой проверки (не раньше, не
+      // одновременно с plink) — иначе в промежутке между join(plink) и этой
+      // проверкой он мог бы успеть получить мирорнутое событие, уже будучи
+      // фактически отозванным, но ещё не пойманным.
       if (!(await this.partnerTokens.verify(token))) throw new Error('Revoked while connecting');
+      // НЕ user:<id> — туда шлётся всё подряд (AI, звонки, биллинг,
+      // «Избранное»). Партнёрский сокет сидит в своей комнате и получает
+      // только то, что явно продублировано через emitToUserInConversation.
+      client.join(partnerUserRoom(principal.userId));
+      if (!client.connected) return false; // закрылся, пока шли проверки
       // Дальше клиент переподключается со свежим токеном, а отозванная связка
       // не держит открытым старое соединение.
       const timer = setTimeout(
@@ -140,7 +145,9 @@ export class MessengerGateway
         Math.max(0, principal.expiresAt * 1000 - Date.now()),
       );
       timer.unref?.();
-      client.data.partnerExpiryTimer = timer;
+      // Таймер — не в socket.data: Redis-адаптер сериализует data в JSON по запросу
+      // соседней ноды (fetchSockets), и Timeout с циклическими ссылками ронял её процесс.
+      client.once('disconnect', () => clearTimeout(timer));
       return true;
     } catch {
       client.disconnect();
@@ -159,7 +166,6 @@ export class MessengerGateway
   }
 
   handleDisconnect(client: Socket) {
-    if (client.data.partnerExpiryTimer) clearTimeout(client.data.partnerExpiryTimer);
     if (client.data.userId) {
       this.prisma.user
         .update({
@@ -706,7 +712,10 @@ export class MessengerGateway
           scope: 'all',
         });
       } else {
-        this.server.to(`user:${client.data.userId}`).emit('message_deleted', {
+        // "Удалено у меня" — личное решение автора, но его партнёрский сокет
+        // (та же беседа у него же) должен увидеть собственное скрытие.
+        const convType = await this.conversationType(payload.conversationId);
+        this.emitToUserInConversation(client.data.userId, convType, 'message_deleted', {
           messageId: payload.messageId,
           conversationId: payload.conversationId,
           scope: 'self',
@@ -1274,25 +1283,10 @@ export class MessengerGateway
 
   // ─── Group events broadcast ───
 
-  /** Emit a group event to all participants' personal rooms */
-  async emitToConversationParticipants(
-    conversationId: string,
-    event: string,
-    data: any,
-  ) {
-    const participants = await this.service.getParticipants(conversationId);
-    for (const p of participants) {
-      this.server.to(`user:${p.userId}`).emit(event, data);
-    }
-  }
-
   /**
-   * Type-aware variant of emitToConversationParticipants: additionally
-   * mirrors into each participant's puser:<id> room when conversationType is
-   * partner-visible (DIRECT/GROUP). Kept separate from the plain
-   * emitToConversationParticipants above so its other callers
-   * (group_updated, group_role_changed, group_member_added) keep their
-   * user:-only behaviour unchanged — only call sites that opt in here do.
+   * Type-aware group broadcast: emits to every participant's personal room,
+   * additionally mirroring into puser:<id> when conversationType is
+   * partner-visible (DIRECT/GROUP) — see emitToUserInConversation.
    */
   async emitToConversationParticipantsInConversation(
     conversationId: string,
@@ -1320,6 +1314,10 @@ export class MessengerGateway
    * Событие беседы в личную комнату участника. Партнёрским сокетам того же
    * человека — только если беседа личная или группа (см. partnerUserRoom):
    * `user:<id>` получает всё как раньше, `puser:<id>` — только это.
+   *
+   * Один emit, а не два: Socket.IO сам схлопывает пересечение комнат (сокет,
+   * оказавшийся в обеих, получит событие один раз), а один вызов — это один
+   * publish в Redis-адаптере вместо двух на каждого адресата.
    */
   emitToUserInConversation(
     userId: string,
@@ -1327,10 +1325,10 @@ export class MessengerGateway
     event: string,
     data: any,
   ) {
-    this.server.to(`user:${userId}`).emit(event, data);
-    if (isPartnerConversationType(conversationType)) {
-      this.server.to(partnerUserRoom(userId)).emit(event, data);
-    }
+    const rooms = isPartnerConversationType(conversationType)
+      ? [`user:${userId}`, partnerUserRoom(userId)]
+      : `user:${userId}`;
+    this.server.to(rooms).emit(event, data);
   }
 
   /** Тип беседы для emitToUserInConversation. Нет беседы — null, ответит сам обработчик. */

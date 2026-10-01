@@ -18,12 +18,39 @@ export const PARTNER_SOCKET_EVENTS: ReadonlySet<string> = new Set([
 const MESSAGE_ID_FIELDS = ['messageId', 'threadParentId'] as const;
 
 /**
+ * Беседы, уже подтверждённые для партнёрского сокета как DIRECT/GROUP — не
+ * спрашиваем повторно («печатает…» шлётся часто). По сокету, а не в
+ * client.data: Set не переживает JSON.stringify (Redis-адаптер сериализует
+ * client.data в JSON по запросу fetchSockets() с соседней ноды — Set стал бы
+ * пустым объектом `{}` молча, и кэш перестал бы работать без единой ошибки).
+ * WeakMap не держит сокет живым дольше, чем он нужен где-то ещё.
+ */
+const partnerConversationsSeen = new WeakMap<Socket, Set<string>>();
+
+/**
  * Фильтр входящих пакетов сокета мессенджера:
- *  - пока проверяется токен, пакеты ждут — не теряются и не обгоняют друг друга;
+ *  - пока проверяется токен, пакеты ждут — не теряются;
  *  - проверка не прошла — пакеты выбрасываются (сокет к этому моменту отключён);
  *  - партнёрский сокет пропускает только PARTNER_SOCKET_EVENTS и только к
- *    личным чатам и группам. Новое событие закрыто для партнёров, пока его не
- *    добавят в список, — так же, как @PartnerAllowed в REST.
+ *    личным чатам и группам, закрыто по умолчанию: id беседы или сообщения,
+ *    который присутствует, но не строка, либо не подтверждён как
+ *    DIRECT/GROUP (включая несуществующий id) — отказ, а не пропуск. Это
+ *    отличается от REST (assertConversation/assertMessage), где неизвестный
+ *    id пропускается и 404 отвечает сам обработчик — у сокета обработчика,
+ *    которому можно было бы отдать ответственность, нет. Новое событие
+ *    закрыто для партнёров, пока его не добавят в список, — так же, как
+ *    @PartnerAllowed в REST.
+ *
+ * Очерёдность: next() для пакета вызывается после того, как для него
+ * закончилась проверка (ready + при партнёре — scope), и пакеты одного
+ * сокета попадают в обработчик (`@SubscribeMessage`) в том порядке, в
+ * котором получили next(). Но это НЕ значит, что они проверяются по очереди:
+ * у каждого пакета своя цепочка await — частый случай (беседа уже в кэше)
+ * проверяется мгновенно, редкий (первый пакет на новую беседу) ждёт ответ
+ * базы, и более быстрый пакет может обогнать более медленный. Так что
+ * порядок ВЫЗОВА обработчика не гарантирован относительно порядка ПОЛУЧЕНИЯ
+ * — гарантирован только относительно порядка, в котором каждый пакет прошёл
+ * СВОЮ проверку.
  */
 export function installSocketGate(
   client: Socket,
@@ -49,17 +76,28 @@ async function partnerPayloadAllowed(
   scope: PartnerConversationScope,
 ): Promise<boolean> {
   try {
-    const seen: Set<string> = (client.data.partnerConversations ??= new Set<string>());
-    const conversationId = typeof payload?.conversationId === 'string' ? payload.conversationId : undefined;
-    // Тип беседы не меняется: проверенную один раз больше не спрашиваем
-    // («печатает…» шлётся часто).
-    if (conversationId && !seen.has(conversationId)) {
-      await scope.assertConversation(conversationId);
-      seen.add(conversationId);
+    const obj = payload != null && typeof payload === 'object' ? payload : {};
+    let seen = partnerConversationsSeen.get(client);
+    if (!seen) {
+      seen = new Set<string>();
+      partnerConversationsSeen.set(client, seen);
+    }
+    if ('conversationId' in obj) {
+      const conversationId = obj.conversationId;
+      if (typeof conversationId !== 'string') return false;
+      if (!seen.has(conversationId)) {
+        // Кэшируем только подтверждённые — отказ не запоминается, иначе
+        // второй пакет на тот же чужой id прошёл бы без проверки вовсе.
+        if (!(await scope.isPartnerConversation(conversationId))) return false;
+        seen.add(conversationId);
+      }
     }
     for (const field of MESSAGE_ID_FIELDS) {
-      const messageId = typeof payload?.[field] === 'string' ? payload[field] : undefined;
-      if (messageId) await scope.assertMessage(messageId);
+      if (field in obj) {
+        const messageId = obj[field];
+        if (typeof messageId !== 'string') return false;
+        if (!(await scope.isPartnerMessage(messageId))) return false;
+      }
     }
     return true;
   } catch {

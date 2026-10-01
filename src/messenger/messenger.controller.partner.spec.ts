@@ -105,7 +105,6 @@ describe('MessengerController for partner tokens', () => {
       gateway = {
         emitToUser: jest.fn(),
         emitToUserInConversation: jest.fn(),
-        emitToConversationParticipants: jest.fn(),
         emitToConversationParticipantsInConversation: jest.fn(),
         evictFromConversationRoom: jest.fn(),
         broadcastNewMessage: jest.fn(),
