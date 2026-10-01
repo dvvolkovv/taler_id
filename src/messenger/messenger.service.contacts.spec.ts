@@ -36,3 +36,34 @@ describe('MessengerService.listContacts', () => {
     expect(prisma.user.findMany).not.toHaveBeenCalled();
   });
 });
+
+describe('MessengerService.acceptContactRequest', () => {
+  function make(request: any) {
+    const prisma: any = {
+      contactRequest: {
+        findUnique: jest.fn().mockResolvedValue(request),
+        update: jest.fn().mockResolvedValue({}),
+      },
+    };
+    const service = Object.create(MessengerService.prototype) as MessengerService;
+    (service as any).prisma = prisma;
+    (service as any).getOrCreateDirectConversation = jest.fn().mockResolvedValue({ id: 'conv-1' });
+    return { service, prisma };
+  }
+
+  it('refuses the sender accepting their own request', async () => {
+    const { service, prisma } = make({ id: 'r1', senderId: 'me', receiverId: 'u2', status: 'PENDING' });
+    await expect(service.acceptContactRequest('r1', 'me')).rejects.toThrow('Not your request');
+    expect(prisma.contactRequest.update).not.toHaveBeenCalled();
+  });
+
+  it('lets the receiver accept', async () => {
+    const { service, prisma } = make({ id: 'r1', senderId: 'u2', receiverId: 'me', status: 'PENDING' });
+    await expect(service.acceptContactRequest('r1', 'me')).resolves.toEqual({
+      senderId: 'u2',
+      receiverId: 'me',
+      conversationId: 'conv-1',
+    });
+    expect(prisma.contactRequest.update).toHaveBeenCalledWith({ where: { id: 'r1' }, data: { status: 'ACCEPTED' } });
+  });
+});

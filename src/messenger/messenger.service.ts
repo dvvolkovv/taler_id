@@ -2682,7 +2682,9 @@ export class MessengerService {
       where: { id: requestId },
     });
     if (!request) throw new NotFoundException('Request not found');
-    if (request.receiverId !== userId && request.senderId !== userId) {
+    // Принять запрос может только тот, кому он адресован. Раньше его мог
+    // «принять» и сам отправитель — и стать контактом без согласия второго.
+    if (request.receiverId !== userId) {
       throw new ForbiddenException('Not your request');
     }
     if (request.status !== 'PENDING')
