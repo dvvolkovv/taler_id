@@ -102,15 +102,28 @@ export class PartnerLinkCodeService {
       throw tooManyRequests(day.retryAfter);
     }
 
-    const code = randomInt(0, 1_000_000).toString().padStart(6, '0');
-    await this.prisma.partnerLink.update({
-      where: { id: link.id },
-      data: {
-        codeHash: hashLinkCode(link.id, code),
-        codeExpiresAt: new Date(Date.now() + CODE_TTL_SECONDS * 1000),
-        codeAttempts: 0,
-      },
-    });
+    let code: string;
+    try {
+      code = randomInt(0, 1_000_000).toString().padStart(6, '0');
+      await this.prisma.partnerLink.update({
+        where: { id: link.id },
+        data: {
+          codeHash: hashLinkCode(link.id, code),
+          codeExpiresAt: new Date(Date.now() + CODE_TTL_SECONDS * 1000),
+          codeAttempts: 0,
+        },
+      });
+    } catch (e) {
+      // hashLinkCode падает на сломанном PARTNER_SECRETS_KEY (или БД — на
+      // update выше) — ничего не выдано и не отправлено, а три окна уже
+      // потрачены на проверки выше. Без возврата слотов инфраструктурный сбой
+      // жёг бы человеку бюджет так же, как настоящая попытка.
+      this.giveBackSendSlots(cooldownKey, hourKey, dayKey);
+      this.logger.error(
+        `link code generation failed for ${link.id}: ${(e as Error).message}`,
+      );
+      throw new ServiceUnavailableException('secrets_unavailable');
+    }
     try {
       await this.email.sendPartnerLinkCode(
         to,
@@ -124,16 +137,7 @@ export class PartnerLinkCodeService {
       // окна на человека, ни с суточного бюджета партнёра: иначе пять ретраев
       // за время SMTP-аутажа (документированное «можно сразу повторить»)
       // заперли бы человека на час, хотя письма не доходят не по его вине.
-      // Ответ про почту не держим ради Redis: без ожидания.
-      this.redis.del(cooldownKey).catch(() => undefined);
-      this.redis
-        .getClient()
-        .decr(hourKey)
-        .catch(() => undefined);
-      this.redis
-        .getClient()
-        .decr(dayKey)
-        .catch(() => undefined);
+      this.giveBackSendSlots(cooldownKey, hourKey, dayKey);
       this.logger.error(
         `link code mail failed for ${link.id}: ${(e as Error).message}`,
       );
@@ -267,6 +271,27 @@ export class PartnerLinkCodeService {
         `partner ${partner.slug} exceeded the daily link-code ${capName} cap (${cap}/day)`,
       );
     }
+  }
+
+  /**
+   * Отдаёт все три слота send() (кулдаун, час, сутки) без ожидания: берутся
+   * ДО генерации кода, и любой сбой после них (хэш, БД, письмо) не должен
+   * списываться с бюджета человека или партнёра так же, как настоящая попытка.
+   */
+  private giveBackSendSlots(
+    cooldownKey: string,
+    hourKey: string,
+    dayKey: string,
+  ): void {
+    this.redis.del(cooldownKey).catch(() => undefined);
+    this.redis
+      .getClient()
+      .decr(hourKey)
+      .catch(() => undefined);
+    this.redis
+      .getClient()
+      .decr(dayKey)
+      .catch(() => undefined);
   }
 
   private async pendingLink(partnerId: string, externalId: string) {

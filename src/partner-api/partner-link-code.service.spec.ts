@@ -213,6 +213,25 @@ describe('PartnerLinkCodeService.send', () => {
     expect(decr).toHaveBeenCalledWith('partner:linkcode:h:p1:u1');
     expect(decr).toHaveBeenCalledWith('partner:linkcode:day:p1');
   });
+
+  it('frees all three window slots and answers 503 (not a raw 500) when hashing the code throws (e.g. wrong PARTNER_SECRETS_KEY)', async () => {
+    const { service, redis, email, decr } = make(pending);
+    const savedKeyForThisTest = process.env.PARTNER_SECRETS_KEY;
+    // masterKey() в partner-secrets.util проверяет формат при каждом вызове —
+    // временно портим его, не трогая реальный hashLinkCode моками.
+    process.env.PARTNER_SECRETS_KEY = 'not-64-hex-chars';
+    try {
+      const err = await service.send(partner, 'm-1').catch((e) => e);
+      expect(err.getStatus()).toBe(503);
+      expect(err.message).toBe('secrets_unavailable');
+    } finally {
+      process.env.PARTNER_SECRETS_KEY = savedKeyForThisTest;
+    }
+    expect(redis.del).toHaveBeenCalledWith('partner:linkcode:cd:p1:u1');
+    expect(decr).toHaveBeenCalledWith('partner:linkcode:h:p1:u1');
+    expect(decr).toHaveBeenCalledWith('partner:linkcode:day:p1');
+    expect(email.sendPartnerLinkCode).not.toHaveBeenCalled();
+  });
 });
 
 describe('PartnerLinkCodeService.verify', () => {
