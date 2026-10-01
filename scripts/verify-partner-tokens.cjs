@@ -159,7 +159,7 @@ function makePrisma(partners) {
       if (cond !== null && typeof cond === 'object' && 'not' in cond) return row[key] !== cond.not;
       return row[key] === cond;
     });
-  return {
+  const prisma = {
     links,
     partner: {
       findMany: async () => partners.map((p) => ({ ...p })),
@@ -194,7 +194,13 @@ function makePrisma(partners) {
         return [...links.values()].filter((row) => matches(row, where)).map((row) => pick(row, select));
       },
     },
+    // Таблица в памяти без настоящих транзакций: каждый вызов уже атомарен (как
+    // UPDATE в Postgres — см. шапку файла), поэтому колбэку достаточно того же клиента.
+    async $transaction(fn) {
+      return fn(prisma);
+    },
   };
+  return prisma;
 }
 
 async function main() {
@@ -248,7 +254,7 @@ async function main() {
 
   // ---- помощники ----
   const newLink = (id, userId) => {
-    const row = { id, partnerId: partner.id, userId, status: 'ACTIVE', grantId: null };
+    const row = { id, partnerId: partner.id, userId, status: 'ACTIVE', grantId: null, revokedAt: null };
     prisma.links.set(id, row);
     return row;
   };
@@ -430,11 +436,15 @@ async function main() {
         const disconnectsBefore = disconnects.length;
 
         redis.down = true;
+        let firstRevokedAt;
         try {
           await assert.rejects(revoker.revokeLink({ id: 'l4' }), /redis down/);
           assert.equal(row('l4').status, 'REVOKED');
           assert.equal(row('l4').grantId, t.grantId, 'grant was dropped from the link before it was revoked');
           assert.equal(disconnects.length, disconnectsBefore, 'sockets disconnected before tokens were revoked');
+          // Статус и revokedAt — одной транзакцией ДО Redis: переживают отказ Redis рядом.
+          firstRevokedAt = row('l4').revokedAt;
+          assert.ok(firstRevokedAt, 'revokedAt was not set on the first, Redis-interrupted revocation');
           // пока Redis лежит: партнёрский токен — 503, а не «неверный токен»…
           await assert.rejects(tokens.verify(t.accessToken), ServiceUnavailableException);
           // …а чужой токен в Redis не ходит и получает честный 401
@@ -447,6 +457,8 @@ async function main() {
         assert.equal(await revoker.revokeAllForUser('u4'), 1, 'unfinished link was not picked up by the retry');
         await assertAllRejected([t.accessToken]);
         assertRevokedClean('l4', mark);
+        // Доделка не переписывает время первого отзыва своим, более поздним.
+        assert.equal(row('l4').revokedAt, firstRevokedAt, 'revokedAt was rewritten by the retry that finished the revocation');
         assert.equal(await revoker.revokeAllForUser('u4'), 0, 'finished link is picked up again');
       },
     ],

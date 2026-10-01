@@ -48,6 +48,7 @@ describe('PartnerLinkRevokerService', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         findMany: jest.fn(),
       },
+      $transaction: jest.fn((fn: any) => fn(prisma)),
     };
     tokens = { revokeGrant: jest.fn().mockResolvedValue(undefined) };
     realtime = { disconnectLink: jest.fn().mockResolvedValue(undefined) };
@@ -92,7 +93,9 @@ describe('PartnerLinkRevokerService', () => {
   it('keeps the grant on the link when revoking it fails, so a retry can finish', async () => {
     tokens.revokeGrant.mockRejectedValue(new Error('redis down'));
     await expect(revoker.revokeLink({ id: 'l1' })).rejects.toThrow('redis down');
-    expect(prisma.partnerLink.update).toHaveBeenCalledTimes(1);
+    // Both update() calls (status and, since this is a first revocation, revokedAt) are
+    // inside the transaction that's fully awaited before Redis is ever touched.
+    expect(prisma.partnerLink.update).toHaveBeenCalledTimes(2);
     expect(prisma.partnerLink.updateMany).not.toHaveBeenCalled();
     expect(realtime.disconnectLink).not.toHaveBeenCalled();
   });
@@ -104,16 +107,24 @@ describe('PartnerLinkRevokerService', () => {
     expect(realtime.disconnectLink).toHaveBeenCalledWith('p1', 'u1');
   });
 
-  it('sets revokedAt via the guarded updateMany on first revocation', async () => {
-    prisma.partnerLink.update.mockResolvedValue({ grantId: null, partnerId: 'p1', userId: 'u1', revokedAt: null });
+  it('writes revokedAt inside the transaction, before revokeGrant, on first revocation', async () => {
     await revoker.revokeLink({ id: 'l1' });
-    expect(prisma.partnerLink.updateMany).toHaveBeenCalledWith({
-      where: { id: 'l1', status: 'REVOKED', revokedAt: null },
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    const revokedAtCallIndex = prisma.partnerLink.update.mock.calls.findIndex(
+      ([args]: any[]) => 'revokedAt' in args.data,
+    );
+    expect(revokedAtCallIndex).toBeGreaterThanOrEqual(0);
+    expect(prisma.partnerLink.update.mock.calls[revokedAtCallIndex][0]).toEqual({
+      where: { id: 'l1' },
       data: { revokedAt: expect.any(Date) },
     });
+    // ...and it happens before revokeGrant, i.e. before Redis is touched at all.
+    expect(prisma.partnerLink.update.mock.invocationCallOrder[revokedAtCallIndex]).toBeLessThan(
+      tokens.revokeGrant.mock.invocationCallOrder[0],
+    );
   });
 
-  it('does not rewrite revokedAt when completing an already-revoked row', async () => {
+  it('does not rewrite revokedAt on a REVOKED row that already has one (completing an unfinished revocation)', async () => {
     const firstRevokedAt = new Date('2026-01-01T00:00:00Z');
     prisma.partnerLink.update.mockResolvedValue({
       grantId: 'g-db',
@@ -127,9 +138,19 @@ describe('PartnerLinkRevokerService', () => {
       where: { id: 'l1', grantId: 'g-db' },
       data: { grantId: null },
     });
-    // ...but revokedAt is never touched a second time.
-    const revokedAtWrites = prisma.partnerLink.updateMany.mock.calls.filter(([args]: any[]) => 'revokedAt' in args.data);
+    // ...but revokedAt is never touched a second time: a single update() call, the main one.
+    expect(prisma.partnerLink.update).toHaveBeenCalledTimes(1);
+    const revokedAtWrites = prisma.partnerLink.update.mock.calls.filter(([args]: any[]) => 'revokedAt' in args.data);
     expect(revokedAtWrites).toHaveLength(0);
+  });
+
+  it('keeps revokedAt set even when revokeGrant fails afterwards', async () => {
+    tokens.revokeGrant.mockRejectedValue(new Error('redis down'));
+    await expect(revoker.revokeLink({ id: 'l1' })).rejects.toThrow('redis down');
+    // The transaction (status + revokedAt) is awaited in full before Redis is ever touched,
+    // so a Redis failure here can no longer leave revokedAt unset.
+    const revokedAtWrites = prisma.partnerLink.update.mock.calls.filter(([args]: any[]) => 'revokedAt' in args.data);
+    expect(revokedAtWrites).toHaveLength(1);
   });
 
   describe('revokeAllForUser', () => {
@@ -140,10 +161,10 @@ describe('PartnerLinkRevokerService', () => {
         where: { userId: 'u1', OR: [{ status: { not: 'REVOKED' } }, { grantId: { not: null } }] },
         select: { id: true },
       });
-      expect(prisma.partnerLink.update.mock.calls.map(([args]: any[]) => args.where)).toEqual([
-        { id: 'l1' },
-        { id: 'l2' },
-      ]);
+      // Only the main update() per link (the one with a `select`) — not the extra
+      // revokedAt-only write each first revocation also makes inside the transaction.
+      const mainCalls = prisma.partnerLink.update.mock.calls.filter(([args]: any[]) => !!args.select);
+      expect(mainCalls.map(([args]: any[]) => args.where)).toEqual([{ id: 'l1' }, { id: 'l2' }]);
     });
 
     it('goes on after a failed link and reports every failure at the end', async () => {
@@ -157,7 +178,9 @@ describe('PartnerLinkRevokerService', () => {
 
       expect(err).toBeInstanceOf(Error);
       expect((err as Error).message).toBe('partner link revocation failed: l1: redis down; l3: timeout');
-      expect(prisma.partnerLink.update).toHaveBeenCalledTimes(3);
+      // 2 update() calls per link (status, then revokedAt) — all 3 links get both,
+      // since the transaction completes before revokeGrant is ever attempted.
+      expect(prisma.partnerLink.update).toHaveBeenCalledTimes(6);
       expect(realtime.disconnectLink).toHaveBeenCalledTimes(1);
     });
 
