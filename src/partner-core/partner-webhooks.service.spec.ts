@@ -27,7 +27,13 @@ function make() {
 const flush = () => new Promise((r) => setImmediate(r));
 
 describe('PartnerWebhooksService.planFanOut', () => {
-  const args = { conversationId: 'c1', participantIds: ['u-a', 'u-b', 'u-c'], senderId: 'u-a', systemPost: false };
+  const args = {
+    conversationId: 'c1',
+    participantIds: ['u-a', 'u-b', 'u-c'],
+    senderId: 'u-a',
+    systemPost: false,
+    conversationType: 'DIRECT' as string | null,
+  };
   const input = {
     message: { id: 'm1', senderId: 'u-a', sentAt: new Date('2026-10-01T10:00:00Z') },
     senderName: 'A',
@@ -44,14 +50,14 @@ describe('PartnerWebhooksService.planFanOut', () => {
     process.env.PARTNER_API_ENABLED = 'false';
     const { service, prisma } = make();
     await expect(service.planFanOut(args)).resolves.toBeNull();
-    expect(prisma.conversation.findUnique).not.toHaveBeenCalled();
+    expect(prisma.partnerLink.findMany).not.toHaveBeenCalled();
   });
 
-  it('skips system posts and conversations other than chats and groups', async () => {
+  it('skips system posts and conversation types other than chats and groups, without touching the database', async () => {
     const { service, prisma } = make();
     await expect(service.planFanOut({ ...args, systemPost: true })).resolves.toBeNull();
-    prisma.conversation.findUnique.mockResolvedValue({ type: 'CHANNEL', name: 'News' });
-    await expect(service.planFanOut(args)).resolves.toBeNull();
+    await expect(service.planFanOut({ ...args, conversationType: 'CHANNEL' })).resolves.toBeNull();
+    await expect(service.planFanOut({ ...args, conversationType: null })).resolves.toBeNull();
     expect(prisma.partnerLink.findMany).not.toHaveBeenCalled();
   });
 
@@ -69,14 +75,28 @@ describe('PartnerWebhooksService.planFanOut', () => {
     });
   });
 
-  it("queues one event per linked recipient, with the sender's externalId from the same partner", async () => {
+  it('forces the title to null for a DIRECT conversation without reading the conversation row', async () => {
     const { service, prisma, queue } = make();
-    prisma.conversation.findUnique.mockResolvedValue({ type: 'GROUP', name: 'Громада' });
     prisma.partnerLink.findMany.mockResolvedValue([
       { userId: 'u-a', externalId: 'm-a', partnerId: 'p1' },
       { userId: 'u-b', externalId: 'm-b', partnerId: 'p1' },
     ]);
-    const plan = await service.planFanOut(args);
+    const plan = await service.planFanOut(args); // conversationType: 'DIRECT'
+    plan!.enqueue('u-b', input);
+    await flush();
+    expect(prisma.conversation.findUnique).not.toHaveBeenCalled();
+    const [, data] = queue.add.mock.calls[0];
+    expect(data.event.conversation).toEqual({ id: 'c1', type: 'DIRECT', title: null });
+  });
+
+  it("queues one event per linked recipient, with the sender's externalId from the same partner", async () => {
+    const { service, prisma, queue } = make();
+    prisma.conversation.findUnique.mockResolvedValue({ name: 'Громада' });
+    prisma.partnerLink.findMany.mockResolvedValue([
+      { userId: 'u-a', externalId: 'm-a', partnerId: 'p1' },
+      { userId: 'u-b', externalId: 'm-b', partnerId: 'p1' },
+    ]);
+    const plan = await service.planFanOut({ ...args, conversationType: 'GROUP' });
     plan!.enqueue('u-b', input);
     plan!.enqueue('u-c', input);
     plan!.enqueue('u-a', input);
@@ -95,14 +115,68 @@ describe('PartnerWebhooksService.planFanOut', () => {
       jobId: 'p1_evt_m1_u-b',
       attempts: 7,
       backoff: { type: 'custom' },
-      removeOnComplete: 1000,
-      removeOnFail: 1000,
+      removeOnComplete: { age: 3600, count: 1000 },
+      removeOnFail: { age: 86400, count: 1000 },
     });
   });
 
-  it('never breaks message delivery on a database error', async () => {
+  it("gives the sender's externalId only from the recipient's own partner", async () => {
+    const { service, prisma, queue } = make();
+    prisma.partnerLink.findMany.mockResolvedValue([
+      // sender is linked to a DIFFERENT partner than the recipient
+      { userId: 'u-a', externalId: 'm-a-other', partnerId: 'p2' },
+      { userId: 'u-b', externalId: 'm-b', partnerId: 'p1' },
+    ]);
+    const plan = await service.planFanOut(args);
+    plan!.enqueue('u-b', input);
+    await flush();
+    expect(queue.add).toHaveBeenCalledTimes(1);
+    const [, data] = queue.add.mock.calls[0];
+    expect(data.partnerId).toBe('p1');
+    expect(data.event.message.senderExternalId).toBeNull();
+  });
+
+  it('queues one job per partner when the recipient is linked to two partners', async () => {
+    const { service, prisma, queue } = make();
+    prisma.partnerLink.findMany.mockResolvedValue([
+      { userId: 'u-b', externalId: 'm-b-1', partnerId: 'p1' },
+      { userId: 'u-b', externalId: 'm-b-2', partnerId: 'p2' },
+    ]);
+    const plan = await service.planFanOut(args);
+    plan!.enqueue('u-b', input);
+    await flush();
+    expect(queue.add).toHaveBeenCalledTimes(2);
+    const jobIds = queue.add.mock.calls.map(([, , opts]: any) => opts.jobId);
+    expect(new Set(jobIds).size).toBe(2);
+  });
+
+  it('never breaks message delivery when loading links fails', async () => {
     const { service, prisma } = make();
-    prisma.conversation.findUnique.mockRejectedValue(new Error('db down'));
+    prisma.partnerLink.findMany.mockRejectedValue(new Error('db down'));
     await expect(service.planFanOut(args)).resolves.toBeNull();
+  });
+
+  it('never breaks message delivery when the group-title lookup fails', async () => {
+    const { service, prisma } = make();
+    prisma.partnerLink.findMany.mockResolvedValue([
+      { userId: 'u-a', externalId: 'm-a', partnerId: 'p1' },
+      { userId: 'u-b', externalId: 'm-b', partnerId: 'p1' },
+    ]);
+    prisma.conversation.findUnique.mockRejectedValue(new Error('db down'));
+    await expect(service.planFanOut({ ...args, conversationType: 'GROUP' })).resolves.toBeNull();
+  });
+
+  it('swallows a rejected queue.add (logged)', async () => {
+    const { service, prisma, queue } = make();
+    queue.add.mockRejectedValue(new Error('redis down'));
+    prisma.partnerLink.findMany.mockResolvedValue([
+      { userId: 'u-a', externalId: 'm-a', partnerId: 'p1' },
+      { userId: 'u-b', externalId: 'm-b', partnerId: 'p1' },
+    ]);
+    const warnSpy = jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined as any);
+    const plan = await service.planFanOut(args);
+    expect(() => plan!.enqueue('u-b', input)).not.toThrow();
+    await flush();
+    expect(warnSpy).toHaveBeenCalled();
   });
 });

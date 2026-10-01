@@ -1,9 +1,23 @@
 import { createHmac, randomUUID } from 'crypto';
 
 /** Паузы перед повторами доставки. Дальше событие выбрасывается: пуш через час бессмыслен. */
-export const WEBHOOK_RETRY_DELAYS_MS = [10_000, 30_000, 60_000, 300_000, 900_000, 3_600_000];
+export const WEBHOOK_RETRY_DELAYS_MS: readonly number[] = [10_000, 30_000, 60_000, 300_000, 900_000, 3_600_000];
 export const WEBHOOK_MAX_ATTEMPTS = 1 + WEBHOOK_RETRY_DELAYS_MS.length;
 const PREVIEW_MAX = 200;
+// Intl.Segmenter режет по графемам корректно, но честно проходит по всей
+// строке. Сообщение может быть многомегабайтным, а нужны только первые 200
+// графем — поэтому вход сначала обрезаем по code units (запас x4 с лихвой
+// покрывает и суррогатные пары, и составные эмодзи/комбинируемые символы).
+const PREVIEW_SLICE_UNITS = PREVIEW_MAX * 4;
+const previewSegmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+
+/**
+ * Вид сообщения для вебхука партнёра: по нему партнёр подбирает иконку пуша.
+ * Определение самой функции (messageKind) — в messenger/push-text.util.ts;
+ * тип живёт здесь, а не там, потому что мессенджер зависит от partner-core,
+ * а не наоборот.
+ */
+export type MessageKind = 'text' | 'image' | 'video' | 'audio' | 'file' | 'system';
 
 export interface WebhookEvent {
   id: string;
@@ -16,7 +30,7 @@ export interface MessageCreatedInput {
   message: { id: string; senderId: string; sentAt?: Date | string | null };
   senderName: string;
   preview: string;
-  kind: string;
+  kind: MessageKind;
   mentionsRecipient: boolean;
 }
 
@@ -24,6 +38,21 @@ export interface WebhookConversation {
   id: string;
   type: string;
   title: string | null;
+}
+
+/**
+ * Первые PREVIEW_MAX графем текста. Режет по графемам (Intl.Segmenter), а не
+ * по code points — составной эмодзи или символ с комбинируемыми знаками на
+ * границе не разрезается пополам.
+ */
+function truncatePreview(text: string): string {
+  const bounded = text.slice(0, PREVIEW_SLICE_UNITS);
+  const graphemes: string[] = [];
+  for (const { segment } of previewSegmenter.segment(bounded)) {
+    graphemes.push(segment);
+    if (graphemes.length >= PREVIEW_MAX) break;
+  }
+  return graphemes.join('');
 }
 
 export function buildMessageCreatedEvent(args: {
@@ -47,8 +76,7 @@ export function buildMessageCreatedEvent(args: {
       senderTalerUserId: input.message.senderId,
       senderExternalId,
       senderName: input.senderName,
-      // По символам, а не по UTF-16: эмодзи на границе не разрезается пополам.
-      preview: Array.from(input.preview ?? '').slice(0, PREVIEW_MAX).join(''),
+      preview: truncatePreview(input.preview ?? ''),
       kind: input.kind,
       mentionsRecipient: input.mentionsRecipient,
       createdAt: sentAt.toISOString(),
