@@ -7,8 +7,8 @@
  * В конце удаляет созданные аккаунты.
  *
  * Запуск (Node 20+, в пустом каталоге):
- *   npm i axios socket.io-client typescript ts-node
- *   BASE_URL=https://staging.id.taler.tirol TALERID_PARTNER_KEY=tidp_… npx ts-node example-client.ts
+ *   npm i axios socket.io-client tsx
+ *   BASE_URL=https://staging.id.taler.tirol TALERID_PARTNER_KEY=tidp_… npx tsx example-client.ts
  */
 import axios from 'axios';
 import { io, Socket } from 'socket.io-client';
