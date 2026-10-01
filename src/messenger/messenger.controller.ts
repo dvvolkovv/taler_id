@@ -32,7 +32,10 @@ import { InviteService } from './invite.service';
 import { ReadReceiptsService } from './read-receipts.service';
 import { ScheduledMessageService } from './scheduled-message.service';
 import { MessengerGateway } from './messenger.gateway';
-import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { MessengerAuthGuard } from './messenger-auth.guard';
+import { PartnerAllowed } from './partner-allowed.decorator';
+import { PartnerConversationScope } from './partner-conversation-scope.service';
+import { isPartnerCaller, isPartnerConversationType } from '../partner-core/partner.constants';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { CreateGroupDto } from './dto/create-group.dto';
 import { UpdateGroupDto } from './dto/update-group.dto';
@@ -66,7 +69,7 @@ const MAX_UPLOAD_BYTES = Number(
 const LINK_PREVIEW_RATE_PER_MIN = 60;
 
 @Controller('messenger')
-@UseGuards(JwtAuthGuard)
+@UseGuards(MessengerAuthGuard)
 export class MessengerController {
   private readonly logger = new Logger(MessengerController.name);
 
@@ -84,6 +87,7 @@ export class MessengerController {
     private readonly invites: InviteService,
     private readonly readReceipts: ReadReceiptsService,
     private readonly scheduled: ScheduledMessageService,
+    private readonly partnerScope: PartnerConversationScope,
   ) {}
 
   /**
@@ -109,6 +113,7 @@ export class MessengerController {
   // ─── Direct conversations ───
 
   @Post('conversations')
+  @PartnerAllowed()
   async create(
     @Body('participantId') participantId: string,
     @CurrentUser() user: any,
@@ -138,26 +143,42 @@ export class MessengerController {
   }
 
   @Get('conversations')
-  list(@CurrentUser() user: any) {
-    return this.service.getConversations(user.sub);
+  @PartnerAllowed()
+  async list(@CurrentUser() user: any) {
+    const conversations = await this.service.getConversations(user.sub);
+    if (!isPartnerCaller(user)) return conversations;
+    // Партнёру — только личные чаты и группы: канал новостей TalerID,
+    // «Избранное» и чаты AI в его интерфейс не попадают.
+    return conversations.filter((c) => isPartnerConversationType(c.type));
   }
 
   @Get('sync')
-  sync(
+  @PartnerAllowed()
+  async sync(
     @Query('cursor') cursor: string | undefined,
     @Query('limit') limit: string | undefined,
     @CurrentUser() user: any,
   ) {
     const parsedLimit = limit ? Math.min(Math.max(parseInt(limit, 10) || 200, 1), 500) : 200;
-    return this.service.sync(user.sub, cursor || undefined, parsedLimit);
+    const page = await this.service.sync(user.sub, cursor || undefined, parsedLimit);
+    if (!isPartnerCaller(user)) return page;
+    // Курсор остаётся от полной страницы: отфильтрованные сообщения просто не
+    // отдаются, следующая страница начнётся там же, где и без фильтра.
+    const visible = await this.partnerScope.visibleConversationIds(user.sub);
+    return { ...page, messages: page.messages.filter((m) => visible.has(m.conversationId)) };
   }
 
   @Get('read-state')
-  readState(@CurrentUser() user: any) {
-    return this.service.readStateForUser(user.sub);
+  @PartnerAllowed()
+  async readState(@CurrentUser() user: any) {
+    const state = await this.service.readStateForUser(user.sub);
+    if (!isPartnerCaller(user)) return state;
+    const visible = await this.partnerScope.visibleConversationIds(user.sub);
+    return { conversations: state.conversations.filter((c) => visible.has(c.conversationId)) };
   }
 
   @Get('conversations/:id/read-state')
+  @PartnerAllowed({ conversationParam: 'id' })
   async conversationReadState(
     @Param('id') id: string,
     @CurrentUser() user: any,
@@ -173,6 +194,7 @@ export class MessengerController {
   }
 
   @Get('conversations/:id/messages')
+  @PartnerAllowed({ conversationParam: 'id' })
   async messages(
     @Param('id') id: string,
     @Query('cursor') cursor: string,
@@ -203,11 +225,13 @@ export class MessengerController {
 
   /** Кто дочитал до этого сообщения. */
   @Get('messages/:id/readers')
+  @PartnerAllowed({ messageParam: 'id' })
   readers(@Param('id') id: string, @CurrentUser() user: any) {
     return this.readReceipts.readersOf(id, user.sub);
   }
 
   @Get('conversations/:id/media')
+  @PartnerAllowed({ conversationParam: 'id' })
   sharedMedia(
     @Param('id') id: string,
     @Query('type') type: string,
@@ -228,7 +252,12 @@ export class MessengerController {
   // ─── Group conversations ───
 
   @Post('conversations/group')
+  @PartnerAllowed()
   async createGroup(@Body() dto: CreateGroupDto, @CurrentUser() user: any) {
+    // Партнёр кладёт в группу только свои контакты (у nadi — друзей).
+    if (isPartnerCaller(user)) {
+      await this.partnerScope.assertAllContacts(user.sub, dto.participantIds);
+    }
     const conv = await this.service.createGroupConversation(
       user.sub,
       dto.name,
@@ -245,16 +274,21 @@ export class MessengerController {
   }
 
   @Get('conversations/:id/members')
+  @PartnerAllowed({ conversationParam: 'id' })
   getMembers(@Param('id') id: string, @CurrentUser() user: any) {
     return this.service.getGroupMembers(id, user.sub);
   }
 
   @Post('conversations/:id/members')
+  @PartnerAllowed({ conversationParam: 'id' })
   async addMembers(
     @Param('id') id: string,
     @Body() dto: AddMembersDto,
     @CurrentUser() user: any,
   ) {
+    if (isPartnerCaller(user)) {
+      await this.partnerScope.assertAllContacts(user.sub, dto.userIds);
+    }
     const newIds = await this.service.addGroupMembers(
       id,
       user.sub,
@@ -278,6 +312,7 @@ export class MessengerController {
   }
 
   @Delete('conversations/:id/members/:uid')
+  @PartnerAllowed({ conversationParam: 'id' })
   async removeMember(
     @Param('id') id: string,
     @Param('uid') uid: string,
@@ -303,6 +338,7 @@ export class MessengerController {
   }
 
   @Patch('conversations/:id/members/:uid/role')
+  @PartnerAllowed({ conversationParam: 'id' })
   async changeRole(
     @Param('id') id: string,
     @Param('uid') uid: string,
@@ -328,6 +364,7 @@ export class MessengerController {
   }
 
   @Patch('conversations/:id')
+  @PartnerAllowed({ conversationParam: 'id' })
   async updateGroup(
     @Param('id') id: string,
     @Body() dto: UpdateGroupDto,
@@ -348,6 +385,7 @@ export class MessengerController {
   }
 
   @Post('conversations/:id/mute')
+  @PartnerAllowed({ conversationParam: 'id' })
   async muteConversation(
     @Param('id') id: string,
     @CurrentUser() user: any,
@@ -357,11 +395,13 @@ export class MessengerController {
   }
 
   @Post('conversations/:id/unmute')
+  @PartnerAllowed({ conversationParam: 'id' })
   async unmuteConversation(@Param('id') id: string, @CurrentUser() user: any) {
     return this.service.unmuteConversation(id, user.sub);
   }
 
   @Post('conversations/:id/leave')
+  @PartnerAllowed({ conversationParam: 'id' })
   async leaveGroup(@Param('id') id: string, @CurrentUser() user: any) {
     await this.service.leaveGroup(id, user.sub);
     this.gateway.evictFromConversationRoom(user.sub, id);
@@ -376,6 +416,7 @@ export class MessengerController {
   }
 
   @Delete('conversations/:id')
+  @PartnerAllowed({ conversationParam: 'id' })
   async deleteGroup(@Param('id') id: string, @CurrentUser() user: any) {
     // Get participants before deletion
     const members = await this.service.getGroupMembers(id, user.sub);
@@ -432,6 +473,7 @@ export class MessengerController {
   }
 
   @Get('contacts/check/:userId')
+  @PartnerAllowed()
   getContactStatus(@Param('userId') userId: string, @CurrentUser() user: any) {
     return this.service.getContactStatus(user.sub, userId);
   }
@@ -517,16 +559,19 @@ export class MessengerController {
   }
 
   @Post('contacts/:userId/block')
+  @PartnerAllowed()
   blockUser(@CurrentUser() user: any, @Param('userId') userId: string) {
     return this.service.blockUser(user.sub, userId);
   }
 
   @Delete('contacts/:userId/block')
+  @PartnerAllowed()
   unblockUser(@CurrentUser() user: any, @Param('userId') userId: string) {
     return this.service.unblockUser(user.sub, userId);
   }
 
   @Get('contacts/:userId/block')
+  @PartnerAllowed()
   isBlocked(@CurrentUser() user: any, @Param('userId') userId: string) {
     return this.service
       .isBlockedBy(user.sub, userId)
@@ -536,8 +581,12 @@ export class MessengerController {
   // ─── Message search ───
 
   @Get('messages/search')
-  searchMessages(@Query('q') q: string, @CurrentUser() user: any) {
-    return this.service.searchMessages(q, user.sub);
+  @PartnerAllowed()
+  async searchMessages(@Query('q') q: string, @CurrentUser() user: any) {
+    const found = await this.service.searchMessages(q, user.sub);
+    if (!isPartnerCaller(user)) return found;
+    const visible = await this.partnerScope.visibleConversationIds(user.sub);
+    return found.filter((m: any) => visible.has(m.conversationId));
   }
 
   // ─── User search ───
@@ -551,6 +600,7 @@ export class MessengerController {
   // ─── File upload (S3) ───
 
   @Post('files')
+  @PartnerAllowed()
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
@@ -807,6 +857,7 @@ export class MessengerController {
   // ─── URL refresh (returns public backend URL for a given S3 key) ───
 
   @Get('files/url')
+  @PartnerAllowed()
   getFileUrl(@Query('key') key: string) {
     if (!key) throw new ForbiddenException('key is required');
     return { url: this.fileStorage.getPublicUrl(key) };
@@ -815,6 +866,7 @@ export class MessengerController {
   // ─── Chunked upload (Phase 2) ───
 
   @Post('files/init')
+  @PartnerAllowed()
   async initChunkedUpload(
     @Body() body: { fileName: string; fileSize: number; mimeType: string },
     @CurrentUser() user: any,
@@ -859,6 +911,7 @@ export class MessengerController {
   }
 
   @Post('files/chunk')
+  @PartnerAllowed()
   @UseInterceptors(
     FileInterceptor('chunk', {
       storage: memoryStorage(),
@@ -889,6 +942,7 @@ export class MessengerController {
   }
 
   @Post('files/complete')
+  @PartnerAllowed()
   async completeChunkedUpload(@Body('uploadId') uploadId: string) {
     const raw = await this.redis.get(`chunked:${uploadId}`);
     if (!raw) throw new NotFoundException('Upload not found or expired');
@@ -1092,6 +1146,7 @@ export class MessengerController {
   }
 
   @Delete('files/:uploadId')
+  @PartnerAllowed()
   async abortChunkedUpload(@Param('uploadId') uploadId: string) {
     const raw = await this.redis.get(`chunked:${uploadId}`);
     if (!raw) throw new NotFoundException('Upload not found');
@@ -1276,6 +1331,7 @@ export class MessengerController {
    * бэкенд можно было бы превратить в чужой сканер.
    */
   @Get('link-preview')
+  @PartnerAllowed()
   async linkPreview(@Query('url') url: string, @CurrentUser() user: any) {
     const key = `linkprev:rate:${user.sub}`;
     const hits = await this.redis.incr(key);
@@ -1362,6 +1418,7 @@ export class MessengerController {
    * узнал бы о пересылке только при следующем открытии.
    */
   @Post('conversations/:id/forward')
+  @PartnerAllowed({ conversationParam: 'id' })
   async forwardMessages(
     @Param('id') id: string,
     @Body('messageIds') messageIds: string[],
@@ -1430,6 +1487,7 @@ export class MessengerController {
   // ─── Pinned messages ───
 
   @Post('conversations/:id/messages/:msgId/pin')
+  @PartnerAllowed({ conversationParam: 'id' })
   async pinMessage(
     @Param('id') id: string,
     @Param('msgId') msgId: string,
@@ -1477,6 +1535,7 @@ export class MessengerController {
   }
 
   @Delete('conversations/:id/messages/:msgId/pin')
+  @PartnerAllowed({ conversationParam: 'id' })
   async unpinMessage(
     @Param('id') id: string,
     @Param('msgId') msgId: string,
@@ -1495,6 +1554,7 @@ export class MessengerController {
   }
 
   @Get('conversations/:id/pinned')
+  @PartnerAllowed({ conversationParam: 'id' })
   async listPinned(
     @Param('id') id: string,
     @Query('limit') limit: string | undefined,
@@ -1510,6 +1570,7 @@ export class MessengerController {
   }
 
   @Delete('conversations/:id/pinned')
+  @PartnerAllowed({ conversationParam: 'id' })
   async unpinAll(@Param('id') id: string, @CurrentUser() user: any) {
     const res = await this.service.unpinAll(id, user.sub);
     if (res.unpinned > 0) {
@@ -1519,6 +1580,7 @@ export class MessengerController {
   }
 
   @Post('conversations/:id/pinned/dismiss')
+  @PartnerAllowed({ conversationParam: 'id' })
   async dismissPins(
     @Param('id') id: string,
     @Body() body: { upTo?: string },
@@ -1579,6 +1641,7 @@ export class MessengerController {
   // ─── Threads ───
 
   @Get('conversations/:convId/messages/:msgId/thread')
+  @PartnerAllowed({ conversationParam: 'convId' })
   async getThread(
     @Param('convId') convId: string,
     @Param('msgId') msgId: string,
@@ -1596,6 +1659,7 @@ export class MessengerController {
   }
 
   @Post('conversations/:convId/messages/:msgId/thread')
+  @PartnerAllowed({ conversationParam: 'convId' })
   async sendThreadReply(
     @Param('convId') convId: string,
     @Param('msgId') msgId: string,
