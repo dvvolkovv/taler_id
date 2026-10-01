@@ -135,6 +135,36 @@ describe('installSocketGate', () => {
     expect(scope.isPartnerMessage).not.toHaveBeenCalled();
   });
 
+  it('refuses react_message without a conversationId (only messageId) — before any scope call', async () => {
+    const { socket, send } = fakeSocket({ userId: 'u1', partner: { partnerId: 'p1' } });
+    installSocketGate(socket, Promise.resolve(true), scope);
+    expect(await send(['react_message', { messageId: 'm1', emoji: '👍' }])).not.toHaveBeenCalled();
+    expect(socket.emit).toHaveBeenCalledWith('error', { message: 'not_available_for_partner', event: 'react_message' });
+    expect(scope.isPartnerConversation).not.toHaveBeenCalled();
+    expect(scope.isPartnerMessage).not.toHaveBeenCalled();
+  });
+
+  it('refuses typing without a conversationId', async () => {
+    const { socket, send } = fakeSocket({ userId: 'u1', partner: { partnerId: 'p1' } });
+    installSocketGate(socket, Promise.resolve(true), scope);
+    expect(await send(['typing', { isTyping: true }])).not.toHaveBeenCalled();
+    expect(scope.isPartnerConversation).not.toHaveBeenCalled();
+  });
+
+  it('refuses join without a conversationId', async () => {
+    const { socket, send } = fakeSocket({ userId: 'u1', partner: { partnerId: 'p1' } });
+    installSocketGate(socket, Promise.resolve(true), scope);
+    expect(await send(['join', {}])).not.toHaveBeenCalled();
+    expect(scope.isPartnerConversation).not.toHaveBeenCalled();
+  });
+
+  it('a regular (non-partner) socket is unaffected by the conversationId requirement', async () => {
+    const { socket, send } = fakeSocket({ userId: 'u1' });
+    installSocketGate(socket, Promise.resolve(true), scope);
+    expect(await send(['react_message', { messageId: 'm1', emoji: '👍' }])).toHaveBeenCalled();
+    expect(scope.isPartnerConversation).not.toHaveBeenCalled();
+  });
+
   it('does not keep a per-socket cache on client.data (must not travel through the Redis adapter)', async () => {
     const { socket, send } = fakeSocket({ userId: 'u1', partner: { partnerId: 'p1' } });
     installSocketGate(socket, Promise.resolve(true), scope);

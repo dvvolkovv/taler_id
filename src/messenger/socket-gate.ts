@@ -77,20 +77,24 @@ async function partnerPayloadAllowed(
 ): Promise<boolean> {
   try {
     const obj = payload != null && typeof payload === 'object' ? payload : {};
+    // Все 8 событий из PARTNER_SOCKET_EVENTS несут conversationId — в
+    // отличие от messageId/threadParentId ниже, оно не опциональное.
+    // Раньше отсутствие поля пропускало проверку вовсе: react_message без
+    // conversationId (только messageId) долетал до обработчика, а тот звал
+    // getParticipants(undefined) — Prisma читала весь ConversationParticipant
+    // (~12.7k строк на PROD) и в ответ уходил текст ошибки Prisma.
+    const conversationId = obj.conversationId;
+    if (typeof conversationId !== 'string') return false;
     let seen = partnerConversationsSeen.get(client);
     if (!seen) {
       seen = new Set<string>();
       partnerConversationsSeen.set(client, seen);
     }
-    if ('conversationId' in obj) {
-      const conversationId = obj.conversationId;
-      if (typeof conversationId !== 'string') return false;
-      if (!seen.has(conversationId)) {
-        // Кэшируем только подтверждённые — отказ не запоминается, иначе
-        // второй пакет на тот же чужой id прошёл бы без проверки вовсе.
-        if (!(await scope.isPartnerConversation(conversationId))) return false;
-        seen.add(conversationId);
-      }
+    if (!seen.has(conversationId)) {
+      // Кэшируем только подтверждённые — отказ не запоминается, иначе
+      // второй пакет на тот же чужой id прошёл бы без проверки вовсе.
+      if (!(await scope.isPartnerConversation(conversationId))) return false;
+      seen.add(conversationId);
     }
     for (const field of MESSAGE_ID_FIELDS) {
       if (field in obj) {
