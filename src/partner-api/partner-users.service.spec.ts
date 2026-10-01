@@ -1,6 +1,7 @@
 import { ConflictException } from '@nestjs/common';
 import { countInWindow } from './partner-counter.util';
 import { PartnerUsersService, profileLanguage } from './partner-users.service';
+import { AccountNotManagedError } from '../profile/profile.service';
 
 jest.mock('./partner-counter.util', () => ({
   ...jest.requireActual('./partner-counter.util'),
@@ -963,6 +964,83 @@ describe('PartnerUsersService.provision — daily account-creation cap', () => {
       else process.env.PARTNER_ACCOUNTS_PER_DAY = saved;
     }
   });
+
+  async function withCapEnv(
+    value: string | undefined,
+    fn: (service: PartnerUsersService) => Promise<void>,
+  ) {
+    const saved = process.env.PARTNER_ACCOUNTS_PER_DAY;
+    if (value === undefined) delete process.env.PARTNER_ACCOUNTS_PER_DAY;
+    else process.env.PARTNER_ACCOUNTS_PER_DAY = value;
+    try {
+      const { service } = make();
+      await fn(service);
+    } finally {
+      if (saved === undefined) delete process.env.PARTNER_ACCOUNTS_PER_DAY;
+      else process.env.PARTNER_ACCOUNTS_PER_DAY = saved;
+    }
+  }
+
+  it.each([
+    ['1e4', 'parseInt stops at "e" and would silently read this as 1'],
+    ['5,000', 'parseInt stops at "," and would silently read this as 5'],
+    [
+      '0.5',
+      'parseInt stops at "." and would silently read this as 0, disabling creation',
+    ],
+  ])(
+    'treats %s as invalid rather than the value parseInt would stop at (%s)',
+    async (value) => {
+      await withCapEnv(value, async (service) => {
+        windowCount.mockResolvedValueOnce({ count: 5000, retryAfter: 1234 });
+        await expect(
+          service.provision(partner, dto),
+        ).resolves.toMatchObject({ created: true });
+        windowCount.mockResolvedValueOnce({ count: 5001, retryAfter: 1234 });
+        await expect(service.provision(partner, dto)).rejects.toThrow(
+          'too_many_requests',
+        );
+      });
+    },
+  );
+
+  it('accepts a plain integer surrounded by whitespace', async () => {
+    await withCapEnv('  10  ', async (service) => {
+      windowCount.mockResolvedValueOnce({ count: 10, retryAfter: 1234 });
+      await expect(
+        service.provision(partner, dto),
+      ).resolves.toMatchObject({ created: true });
+      windowCount.mockResolvedValueOnce({ count: 11, retryAfter: 1234 });
+      await expect(service.provision(partner, dto)).rejects.toThrow(
+        'too_many_requests',
+      );
+    });
+  });
+
+  it('warns at most once per instance when the configured value is invalid', async () => {
+    await withCapEnv('1e4', async (service) => {
+      const warnSpy = jest
+        .spyOn((service as any).logger, 'warn')
+        .mockImplementation(() => undefined);
+      windowCount.mockResolvedValue({ count: 1, retryAfter: 1234 });
+      await service.provision(partner, dto);
+      await service.provision(partner, { ...dto, externalId: 'm-2' });
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('never warns when the configured value is a valid plain integer, including 0', async () => {
+    for (const value of ['0', '10', '  5  ']) {
+      await withCapEnv(value, async (service) => {
+        const warnSpy = jest
+          .spyOn((service as any).logger, 'warn')
+          .mockImplementation(() => undefined);
+        windowCount.mockResolvedValueOnce({ count: 1, retryAfter: 1234 });
+        await service.provision(partner, dto).catch(() => undefined);
+        expect(warnSpy).not.toHaveBeenCalled();
+      });
+    }
+  });
 });
 
 describe('profileLanguage', () => {
@@ -1214,10 +1292,25 @@ describe('PartnerUsersService token and lifecycle', () => {
     const { service, prisma, profiles } = make();
     links(prisma, active);
     await service.deleteUser(partner, 'm-1', true);
-    expect(profiles.deleteAccount).toHaveBeenCalledWith('u1');
+    expect(profiles.deleteAccount).toHaveBeenCalledWith('u1', {
+      onlyIfManagedBy: 'p1',
+    });
     expect(prisma.conversationParticipant.deleteMany).toHaveBeenCalledWith({
       where: { userId: 'u1', conversation: { type: 'CHANNEL' } },
     });
+  });
+
+  it('answers 409 and keeps the account when ProfileService finds it is no longer managed under FOR UPDATE (e.g. the person just set a password)', async () => {
+    const { service, prisma, revoker, profiles, audit } = make();
+    links(prisma, active);
+    profiles.deleteAccount.mockRejectedValueOnce(new AccountNotManagedError());
+    await expect(service.deleteUser(partner, 'm-1', true)).rejects.toThrow(
+      'account_not_managed',
+    );
+    // The link is still revoked — only the account deletion itself was refused.
+    expect(revoker.revokeLink).toHaveBeenCalledWith(active);
+    expect(prisma.conversationParticipant.deleteMany).not.toHaveBeenCalled();
+    expect(audit.log).not.toHaveBeenCalled();
   });
 
   it('writes the audit row for a deletion even if the channel cleanup fails afterward', async () => {

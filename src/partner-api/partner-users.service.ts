@@ -10,7 +10,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { ProfileService } from '../profile/profile.service';
+import { AccountNotManagedError, ProfileService } from '../profile/profile.service';
 import { RedisService } from '../redis/redis.service';
 import { SystemChannelService } from '../system-channel/system-channel.service';
 import { PartnerLinkRevokerService } from '../partner-core/partner-link-revoker.service';
@@ -122,6 +122,8 @@ export class PartnerUsersService {
   private readonly logger = new Logger(PartnerUsersService.name);
   /** Когда партнёр последний раз получил лог о превышении суточного потолка (в памяти процесса). */
   private readonly capExceededLoggedAt = new Map<string, number>();
+  /** Один warn за жизнь инстанса на невалидный PARTNER_ACCOUNTS_PER_DAY — не на каждый вызов. */
+  private capParseWarned = false;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -428,7 +430,24 @@ export class PartnerUsersService {
     // REVOKED с грантом — прошлый отзыв не доделан (сбой Redis): доделываем.
     const revokes = link.status !== 'REVOKED' || !!link.grantId;
     if (revokes) await this.revoke(link);
-    if (deletesNow) await this.profiles.deleteAccount(link.userId);
+    if (deletesNow) {
+      try {
+        // isManagedBy выше прочитан не под замком: человек мог успеть задать
+        // первый пароль (resetPassword) между тем чтением и этим вызовом.
+        // onlyIfManagedBy повторяет проверку атомарно под FOR UPDATE внутри
+        // транзакции ProfileService — здесь просто доверяем её вердикту.
+        await this.profiles.deleteAccount(link.userId, {
+          onlyIfManagedBy: partner.id,
+        });
+      } catch (e) {
+        if (e instanceof AccountNotManagedError) {
+          // Связка уже отозвана строкой выше — человек остаётся при своём
+          // аккаунте (и новом пароле), просто без доступа этого партнёра.
+          throw new ConflictException('account_not_managed');
+        }
+        throw e;
+      }
+    }
     // Журнал — сразу после удаления аккаунта и до очистки каналов: если чистка
     // ниже упадёт, повтор (alreadyDeleted уже true, отзывать больше нечего)
     // не должен молча остаться без строки про само удаление.
@@ -493,19 +512,28 @@ export class PartnerUsersService {
   }
 
   /**
-   * PARTNER_ACCOUNTS_PER_DAY: пусто, не число или отрицательное — дефолт
-   * 5000. Ровно 0 — не «не задано», а осознанное «создание выключено»: при
-   * нём ЛЮБАЯ попытка завести аккаунт отвечает 429 (единственное число,
-   * которое `parseInt(...) || DEFAULT` раньше молча подменяло дефолтом —
-   * раньше 0 и «не задано» было одним и тем же, что не давало временно
-   * заглушить создание без удаления переменной).
+   * Только простое неотрицательное целое (пробелы по краям — не в счёт),
+   * иначе дефолт 5000. `parseInt` в одиночку принимает куда больше, чем
+   * администратор, скорее всего, имел в виду, и расхождение незаметно до
+   * первого разбора лога: `'1e4'` → 1, `'5,000'` → 5, `'0.5'` → 0 (последнее
+   * тихо выключило бы создание аккаунтов, хотя человек хотел задать лимит, а
+   * не ноль). Ровно `'0'` — не «не задано», а осознанное «создание
+   * выключено»: при нём ЛЮБАЯ попытка завести аккаунт отвечает 429.
    */
+  private static readonly CAP_ENV_PATTERN = /^\s*\d+\s*$/;
+
   private creationCapLimit(): number {
-    const parsed = parseInt(process.env.PARTNER_ACCOUNTS_PER_DAY ?? '', 10);
-    if (!Number.isInteger(parsed) || parsed < 0) {
-      return DEFAULT_PARTNER_ACCOUNTS_PER_DAY;
+    const raw = process.env.PARTNER_ACCOUNTS_PER_DAY;
+    if (raw !== undefined && PartnerUsersService.CAP_ENV_PATTERN.test(raw)) {
+      return parseInt(raw, 10);
     }
-    return parsed;
+    if (!this.capParseWarned) {
+      this.capParseWarned = true;
+      this.logger.warn(
+        `PARTNER_ACCOUNTS_PER_DAY=${JSON.stringify(raw ?? null)} is not a plain non-negative integer — using the default (${DEFAULT_PARTNER_ACCOUNTS_PER_DAY}/day)`,
+      );
+    }
+    return DEFAULT_PARTNER_ACCOUNTS_PER_DAY;
   }
 
   /** Суточный потолок партнёра на НОВЫЕ аккаунты. Redis недоступен — 503, а не пропуск. */
