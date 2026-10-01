@@ -42,6 +42,7 @@ interface LinkWithUser {
 
 interface EmailOwner extends AccountState {
   id: string;
+  emailVerified: boolean;
 }
 
 /** Сколько раз provision начинает заново, наткнувшись на параллельный запрос. */
@@ -168,6 +169,17 @@ export class PartnerUsersService {
       return { status: 'active', talerUserId: userId, created: true };
     }
 
+    // Без кода снова активен только аккаунт, который завёл этот партнёр и в
+    // котором человек не задал пароль; любой другой — через код из письма.
+    const managed = isManagedBy(partner, owner);
+    // Код из письма доказал бы только владение ящиком, а не аккаунтом: его мог
+    // завести кто угодно на чужой адрес, поскольку TalerID не проверяет почту
+    // при обычной регистрации. Управляемые партнёром аккаунты всегда создаются
+    // с emailVerified=true (newAccount), поэтому это условие их не касается.
+    if (!managed && !owner.emailVerified) {
+      throw new ConflictException('email_unverified');
+    }
+
     const other = await this.prisma.partnerLink.findUnique({
       where: { partnerId_userId: { partnerId: partner.id, userId: owner.id } },
     });
@@ -181,9 +193,6 @@ export class PartnerUsersService {
       if (stale.grantId) await this.revoke(stale);
     }
 
-    // Без кода снова активен только аккаунт, который завёл этот партнёр и в
-    // котором человек не задал пароль; любой другой — через код из письма.
-    const managed = isManagedBy(partner, owner);
     await this.prisma.$transaction(async (tx) => {
       if (stale) {
         // Удаляем только ту отозванную строку, что видели: если её успели
@@ -448,10 +457,10 @@ export class PartnerUsersService {
    */
   private async findOwner(email: string): Promise<EmailOwner | null> {
     const rows = await this.prisma.$queryRaw<EmailOwner[]>`
-      SELECT "id", "passwordHash", "deletedAt", "createdByPartnerId"
+      SELECT "id", "passwordHash", "deletedAt", "createdByPartnerId", "emailVerified"
       FROM "User"
       WHERE lower("email") = lower(${email})
-      ORDER BY ("deletedAt" IS NOT NULL), "createdAt"
+      ORDER BY ("deletedAt" IS NOT NULL), "emailVerified" DESC, "createdAt"
       LIMIT 1`;
     return rows[0] ?? null;
   }

@@ -154,6 +154,7 @@ describe('PartnerUsersService.provision', () => {
         passwordHash: 'hash',
         deletedAt: null,
         createdByPartnerId: null,
+        emailVerified: true,
       },
     ]);
     await expect(service.provision(partner, dto)).resolves.toEqual({
@@ -177,6 +178,7 @@ describe('PartnerUsersService.provision', () => {
         passwordHash: null,
         deletedAt: null,
         createdByPartnerId: null,
+        emailVerified: true,
       },
     ]);
     links(prisma, null, {
@@ -264,6 +266,7 @@ describe('PartnerUsersService.provision', () => {
         passwordHash: 'set',
         deletedAt: null,
         createdByPartnerId: 'p1',
+        emailVerified: true,
       },
     ]);
     await expect(service.provision(partner, dto)).resolves.toEqual({
@@ -337,6 +340,7 @@ describe('PartnerUsersService.provision', () => {
         passwordHash: null,
         deletedAt: null,
         createdByPartnerId: null,
+        emailVerified: true,
       },
     ]);
     const other = {
@@ -423,6 +427,7 @@ describe('PartnerUsersService.provision', () => {
         passwordHash: null,
         deletedAt: null,
         createdByPartnerId: 'p2',
+        emailVerified: true,
       },
     ]);
     await expect(service.provision(partner, dto)).resolves.toEqual({
@@ -469,6 +474,7 @@ describe('PartnerUsersService.provision', () => {
         passwordHash: null,
         deletedAt: null,
         createdByPartnerId: null,
+        emailVerified: true,
       },
     ]);
     const other = {
@@ -482,6 +488,62 @@ describe('PartnerUsersService.provision', () => {
     prisma.partnerLink.deleteMany.mockResolvedValue({ count: 0 });
     await expect(service.provision(partner, dto)).rejects.toThrow('link_busy');
     expect(prisma.partnerLink.deleteMany).toHaveBeenCalledTimes(3);
+  });
+
+  it('refuses to link an account whose email is not verified, and changes nothing', async () => {
+    const { service, prisma } = make();
+    prisma.$queryRaw.mockResolvedValue([
+      {
+        id: 'u-existing',
+        passwordHash: 'hash',
+        deletedAt: null,
+        createdByPartnerId: null,
+        emailVerified: false,
+      },
+    ]);
+    await expect(service.provision(partner, dto)).rejects.toThrow(
+      'email_unverified',
+    );
+    expect(prisma.partnerLink.create).not.toHaveBeenCalled();
+    expect(prisma.partnerLink.updateMany).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('does not require email verification to reactivate its own managed account (managed accounts are always verified by construction, but the gate is scoped to "not managed" anyway)', async () => {
+    const { service, prisma } = make();
+    const revoked = {
+      id: 'l1',
+      userId: 'u1',
+      externalId: 'm-1',
+      status: 'REVOKED',
+      grantId: null,
+      user: liveUser,
+    };
+    links(prisma, revoked, revoked);
+    prisma.$queryRaw.mockResolvedValue([
+      {
+        id: 'u1',
+        passwordHash: null,
+        deletedAt: null,
+        createdByPartnerId: 'p1',
+        emailVerified: false,
+      },
+    ]);
+    await expect(service.provision(partner, dto)).resolves.toEqual({
+      status: 'active',
+      talerUserId: 'u1',
+      created: false,
+    });
+  });
+
+  it('selects and orders by emailVerified so a verified account among case variants wins', async () => {
+    const { service, prisma } = make();
+    await service.provision(partner, dto);
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    const [strings] = prisma.$queryRaw.mock.calls[0];
+    const sql = strings.join('');
+    expect(sql).toContain('"emailVerified"');
+    expect(sql).toContain('"emailVerified" DESC');
   });
 
   it('turns a plain revocation failure into 503', async () => {

@@ -33,6 +33,7 @@ const pending = {
   user: {
     email: 'ivan@example.com',
     deletedAt: null,
+    emailVerified: true,
     profile: { language: 'ru' },
   },
 };
@@ -184,6 +185,18 @@ describe('PartnerLinkCodeService.send', () => {
     await expect(service.send(partner, 'm-1')).rejects.toThrow('not_pending');
   });
 
+  it("refuses with 409 when the linked account's email is not verified, before touching any rate-limit window", async () => {
+    const unverified = {
+      ...pending,
+      user: { ...pending.user, emailVerified: false },
+    };
+    const { service } = make(unverified);
+    await expect(service.send(partner, 'm-1')).rejects.toThrow(
+      'email_unverified',
+    );
+    expect(windowCount).not.toHaveBeenCalled();
+  });
+
   it('404 for an unknown link', async () => {
     const { service } = make(null);
     await expect(service.send(partner, 'm-1')).rejects.toThrow('not_linked');
@@ -221,7 +234,12 @@ describe('PartnerLinkCodeService.verify', () => {
       data: { codeAttempts: { increment: 1 } },
     });
     expect(prisma.partnerLink.updateMany).toHaveBeenLastCalledWith({
-      where: { id: 'l1', status: 'PENDING', codeHash: link.codeHash },
+      where: {
+        id: 'l1',
+        status: 'PENDING',
+        codeHash: link.codeHash,
+        user: { emailVerified: true },
+      },
       data: expect.objectContaining({
         status: 'ACTIVE',
         codeHash: null,
@@ -235,6 +253,31 @@ describe('PartnerLinkCodeService.verify', () => {
     const err = await service.verify(partner, 'm-1', '123456').catch((e) => e);
     expect(err.getStatus()).toBe(410);
     expect(prisma.partnerLink.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("refuses with 409 when the linked account's email is not verified, without spending an attempt", async () => {
+    const link = withCode();
+    const unverified = { ...link, user: { ...link.user, emailVerified: false } };
+    const { service, prisma } = make(unverified);
+    await expect(
+      service.verify(partner, 'm-1', '123456'),
+    ).rejects.toThrow('email_unverified');
+    expect(prisma.partnerLink.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('requires emailVerified:true in the activating updateMany where-clause (closes a race with the account becoming unverified)', async () => {
+    const link = withCode();
+    const { service, prisma } = make(link);
+    await service.verify(partner, 'm-1', '123456');
+    expect(prisma.partnerLink.updateMany).toHaveBeenLastCalledWith({
+      where: {
+        id: 'l1',
+        status: 'PENDING',
+        codeHash: link.codeHash,
+        user: { emailVerified: true },
+      },
+      data: expect.objectContaining({ status: 'ACTIVE' }),
+    });
   });
 
   it('does not revive the link when its code changed meanwhile', async () => {

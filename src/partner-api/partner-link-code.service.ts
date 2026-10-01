@@ -57,6 +57,13 @@ export class PartnerLinkCodeService {
     const link = await this.pendingLink(partner.id, externalId);
     const to = link.user.email;
     if (!to) throw new NotFoundException('not_linked');
+    // Код из письма доказывал бы только владение ящиком, а не аккаунтом —
+    // этот аккаунт мог завести кто угодно на чужой адрес, пока TalerID не
+    // проверяет почту при обычной регистрации. Проверяем до счётчиков в
+    // Redis: неподходящему запросу нет смысла тратить чужой бюджет окон.
+    if (!link.user.emailVerified) {
+      throw new ConflictException('email_unverified');
+    }
 
     // Кулдаун и часовое окно — по человеку (partner.id + userId), а не по id
     // связки: relink под другим externalId переиздаёт строку PartnerLink с
@@ -147,6 +154,9 @@ export class PartnerLinkCodeService {
     ip?: string,
   ): Promise<{ status: 'active'; talerUserId: string }> {
     const link = await this.pendingLink(partner.id, externalId);
+    if (!link.user.emailVerified) {
+      throw new ConflictException('email_unverified');
+    }
     // Кода не отправляли — и попытку тратить не на что.
     if (!link.codeHash) throw new GoneException('code_expired');
     const codeHash = link.codeHash;
@@ -220,7 +230,9 @@ export class PartnerLinkCodeService {
       });
     }
     const activated = await this.prisma.partnerLink.updateMany({
-      where: sameCode,
+      // emailVerified:true снова, уже в самом условии записи: закрывает гонку
+      // между чтением выше и этой записью — активируем только то, что видели.
+      where: { ...sameCode, user: { emailVerified: true } },
       data: {
         status: 'ACTIVE',
         activatedAt: new Date(),
@@ -265,6 +277,7 @@ export class PartnerLinkCodeService {
           select: {
             email: true,
             deletedAt: true,
+            emailVerified: true,
             profile: { select: { language: true } },
           },
         },
