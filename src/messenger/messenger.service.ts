@@ -2960,21 +2960,29 @@ export class MessengerService {
   }
 
   async blockUser(myId: string, targetId: string) {
+    // Запоминаем, были ли контактами: разблокировка вернёт только такой
+    // контакт. Раньше она создавала его всегда, и блок с разблоком делали
+    // контактами людей, которые ими не были.
+    const hadContact = await this.hasContactWith(myId, targetId);
     // Delete contact relationship first
     await this.deleteContact(myId, targetId);
     // Create block record
     try {
       await this.prisma.blockedUser.create({
-        data: { blockerId: myId, blockedId: targetId },
+        data: { blockerId: myId, blockedId: targetId, hadContact },
       });
     } catch (_) {}
     return { ok: true };
   }
 
   async unblockUser(myId: string, targetId: string) {
+    const block = await this.prisma.blockedUser.findFirst({
+      where: { blockerId: myId, blockedId: targetId },
+    });
     await this.prisma.blockedUser.deleteMany({
       where: { blockerId: myId, blockedId: targetId },
     });
+    if (!block?.hadContact) return { ok: true };
     // Restore contact relationship so they don't need to re-add each other
     const existing = await this.prisma.contactRequest.findFirst({
       where: {
