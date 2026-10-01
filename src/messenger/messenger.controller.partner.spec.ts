@@ -96,6 +96,10 @@ describe('MessengerController for partner tokens', () => {
         leaveGroup: jest.fn().mockResolvedValue(undefined),
         forwardMessages: jest.fn().mockResolvedValue([]),
         getUserDisplayName: jest.fn().mockResolvedValue('Name'),
+        isBlockedBy: jest.fn().mockResolvedValue(false),
+        hasContactWith: jest.fn().mockResolvedValue(true),
+        findExistingDirectConversation: jest.fn().mockResolvedValue(null),
+        getOrCreateDirectConversation: jest.fn().mockResolvedValue({ id: 'd1' }),
       };
       scope = {
         visibleConversationIds: jest.fn().mockResolvedValue(new Set(['c1', 'c3'])),
@@ -263,6 +267,61 @@ describe('MessengerController for partner tokens', () => {
           'group_member_removed',
           { conversationId: 'g1', userId: 'u1' },
         );
+      });
+    });
+
+    /**
+     * Follow-up к партнёрскому API: create() отвечал голой русской фразой
+     * независимо от того, кто позвал — партнёрский каллер получал то же
+     * «Нет доступа» / «Нужно сначала отправить запрос на общение», что и
+     * обычный клиент. Теперь партнёр получает машинный код, а обычный клиент —
+     * байт-в-байт прежний текст (см. docs/partner-messenger-api.md).
+     */
+    describe('create (direct chat): machine codes for partner, unchanged text for native', () => {
+      async function captureError(fn: () => Promise<unknown>): Promise<any> {
+        try {
+          await fn();
+        } catch (e) {
+          return e;
+        }
+        throw new Error('expected create() to reject');
+      }
+
+      it('blocked: partner gets the `blocked` code', async () => {
+        service.isBlockedBy.mockResolvedValue(true);
+        const err = await captureError(() => controller.create('u2', partnerUser));
+        expect(err).toBeInstanceOf(ForbiddenException);
+        expect(err.message).toBe('blocked');
+      });
+
+      it('blocked: native keeps the exact previous Russian sentence', async () => {
+        service.isBlockedBy.mockResolvedValue(true);
+        const err = await captureError(() => controller.create('u2', nativeUser));
+        expect(err).toBeInstanceOf(ForbiddenException);
+        expect(err.message).toBe('Нет доступа');
+      });
+
+      it('not a contact (no legacy conversation either): partner gets `not_a_contact`', async () => {
+        service.hasContactWith.mockResolvedValue(false);
+        service.findExistingDirectConversation.mockResolvedValue(null);
+        const err = await captureError(() => controller.create('u2', partnerUser));
+        expect(err).toBeInstanceOf(ForbiddenException);
+        expect(err.message).toBe('not_a_contact');
+      });
+
+      it('not a contact: native keeps the exact previous Russian sentence', async () => {
+        service.hasContactWith.mockResolvedValue(false);
+        service.findExistingDirectConversation.mockResolvedValue(null);
+        const err = await captureError(() => controller.create('u2', nativeUser));
+        expect(err).toBeInstanceOf(ForbiddenException);
+        expect(err.message).toBe('Нужно сначала отправить запрос на общение');
+      });
+
+      it('not a contact but a legacy direct conversation already exists: succeeds for both callers', async () => {
+        service.hasContactWith.mockResolvedValue(false);
+        service.findExistingDirectConversation.mockResolvedValue({ id: 'd-legacy' });
+        await expect(controller.create('u2', partnerUser)).resolves.toEqual({ id: 'd1' });
+        await expect(controller.create('u2', nativeUser)).resolves.toEqual({ id: 'd1' });
       });
     });
   });

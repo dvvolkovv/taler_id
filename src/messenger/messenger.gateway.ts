@@ -187,7 +187,7 @@ export class MessengerGateway
       );
       client.join(payload.conversationId);
     } catch {
-      client.emit('error', { message: 'Not a participant' });
+      this.emitSocketError(client, 'not_a_participant', 'Not a participant');
     }
   }
 
@@ -279,9 +279,7 @@ export class MessengerGateway
             },
           });
           if (blocked) {
-            client.emit('error', {
-              message: 'Вы заблокированы этим пользователем',
-            });
+            this.emitSocketError(client, 'blocked', 'Вы заблокированы этим пользователем');
             return;
           }
           // Check if still contacts
@@ -290,9 +288,7 @@ export class MessengerGateway
             otherParticipant.userId,
           );
           if (!stillContacts) {
-            client.emit('error', {
-              message: 'Пользователь удалил вас из контактов',
-            });
+            this.emitSocketError(client, 'not_a_contact', 'Пользователь удалил вас из контактов');
             return;
           }
         }
@@ -488,7 +484,7 @@ export class MessengerGateway
         `handleMessage failed (user=${client.data?.userId} conv=${payload?.conversationId}): ${(e as Error).message}`,
         (e as Error).stack,
       );
-      client.emit('error', { message: (e as Error).message });
+      this.emitSocketError(client, 'internal_error', (e as Error).message);
     }
   }
 
@@ -694,7 +690,8 @@ export class MessengerGateway
         isEdited: true,
       });
     } catch (e) {
-      client.emit('error', { message: e.message });
+      this.logger.error(`edit_message failed (user=${client.data?.userId} conv=${payload?.conversationId}): ${e.message}`);
+      this.emitSocketError(client, 'internal_error', e.message);
     }
   }
 
@@ -730,7 +727,8 @@ export class MessengerGateway
         });
       }
     } catch (e) {
-      client.emit('error', { message: e.message });
+      this.logger.error(`delete_message failed (user=${client.data?.userId} conv=${payload?.conversationId}): ${e.message}`);
+      this.emitSocketError(client, 'internal_error', e.message);
     }
   }
 
@@ -1247,7 +1245,8 @@ export class MessengerGateway
         });
       }
     } catch (e) {
-      client.emit('error', { message: (e as Error).message });
+      this.logger.error(`react_message failed (user=${client.data?.userId} conv=${payload?.conversationId}): ${(e as Error).message}`);
+      this.emitSocketError(client, 'internal_error', (e as Error).message);
     }
   }
 
@@ -1346,6 +1345,20 @@ export class MessengerGateway
       select: { type: true },
     });
     return conv?.type ?? null;
+  }
+
+  /**
+   * Отказ в сокете одной из восьми ручек, открытых партнёру (join, message,
+   * edit_message, delete_message, typing, react_message, mark_read,
+   * thread_reply): партнёрский сокет (client.data.partner задан — см.
+   * authenticateSocket) получает машинный код вместо русской фразы или
+   * сырого текста исключения Prisma/Error, обычный клиент TalerID получает
+   * ровно то же, что и раньше. Коды — docs/partner-messenger-api.md, раздел
+   * «Сокет: от сервера». Логировать настоящую причину (для internal_error)
+   * должен вызывающий, до вызова этого метода — здесь только emit.
+   */
+  private emitSocketError(client: Socket, code: string, fallbackText: string): void {
+    client.emit('error', { message: client.data.partner ? code : fallbackText });
   }
 
   /**

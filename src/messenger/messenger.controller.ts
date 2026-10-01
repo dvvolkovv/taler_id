@@ -122,9 +122,11 @@ export class MessengerController {
     @Body('participantId') participantId: string,
     @CurrentUser() user: any,
   ) {
-    // Check if either user has blocked the other
+    // Check if either user has blocked the other. Partner callers get a
+    // machine code (docs/partner-messenger-api.md); native clients keep the
+    // exact Russian sentence they always got.
     const isBlocked = await this.service.isBlockedBy(user.sub, participantId);
-    if (isBlocked) throw new ForbiddenException('Нет доступа');
+    if (isBlocked) throw new ForbiddenException(isPartnerCaller(user) ? 'blocked' : 'Нет доступа');
     // Check if there's an existing conversation (bypass contact check)
     // or if they have an accepted contact
     const hasContact = await this.service.hasContactWith(
@@ -139,7 +141,7 @@ export class MessengerController {
       );
       if (!existing) {
         throw new ForbiddenException(
-          'Нужно сначала отправить запрос на общение',
+          isPartnerCaller(user) ? 'not_a_contact' : 'Нужно сначала отправить запрос на общение',
         );
       }
     }
