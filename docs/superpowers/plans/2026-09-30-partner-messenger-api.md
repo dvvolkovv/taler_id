@@ -66,6 +66,14 @@
 
 Код из письма остался в теме письма, как у `sendOtp`: угроза «код продиктуют злоумышленнику» от места кода в письме не зависит, а e2e читает его оттуда.
 
+### Правки по финальному ревью ветки и ревью безопасности (Task 40)
+
+- Безопасность: привязка существующего аккаунта — только при подтверждённой почте (`409 email_unverified`), в `findOwner`, `link-code` и условной активации.
+- Первый пароль на аккаунте, заведённом партнёром, отзывает его связки (защита от «захвата до регистрации»).
+- Суточный потолок на создание аккаунтов партнёром (`PARTNER_ACCOUNTS_PER_DAY`, по умолчанию 5000); тестовый партнёр `e2e` на PROD навсегда ограничен адресом бот-сервера, короткий прогон на PROD — оттуда (Task 43).
+- `/mcp` не принимает партнёрский токен; блокировка администратором отзывает связки; пересылка с не-массивом — 400; контакты пишутся транзакцией; скрипт требует `--out` для секретов; рассылка не ждёт планирования вебхуков и не читает тип беседы при выключенном API; `link-code` возвращает окна при сбое ключа секретов.
+- Отложено отдельными задачами: смена почты управляемого аккаунта через партнёрский API; индекс по `lower(email)` (`CREATE INDEX CONCURRENTLY` отдельной миграцией); метрики очереди вебхуков; не подписывать управляемые аккаунты на системный канал.
+
 ### Правки по ревью задач 29–35 (вебхуки) — код отличается от блоков ниже
 
 Ревью проверило рассылку и доставку вживую на двух нодах с настоящим BullMQ и https-приёмником: условия «кому и когда» совпали с решением о пуше во всех случаях, подпись сходится, повторы идут по расписанию, выключатели останавливают очередь. Исправлено, источник правды — файлы в ветке:
@@ -8265,25 +8273,27 @@ Expected: одинаковый отпечаток на обеих нодах. Р
 
 ```bash
 ssh do-app-1 'mkdir -p -m 700 /root/partner-keys && cd /opt/taler-id && \
-  npx ts-node -r dotenv/config scripts/partner-admin.ts create --slug e2e --name E2E --out /root/partner-keys/e2e.env --var PARTNER_E2E_KEY && \
+  npx ts-node -r dotenv/config scripts/partner-admin.ts create --slug e2e --name E2E --ips 77.73.131.137 --out /root/partner-keys/e2e.env --var PARTNER_E2E_KEY && \
   npx ts-node -r dotenv/config scripts/partner-admin.ts create --slug nadi --name Nadi --ips 165.227.141.149 --out /root/partner-keys/nadi-prod.env && \
   npx ts-node -r dotenv/config scripts/partner-admin.ts show --slug nadi'
 ```
 
 Expected: `show` — `ipAllowlist: ['165.227.141.149']`, вебхука пока нет (его адрес даст команда nadi).
 
+Тестовый партнёр `e2e` на PROD навсегда ограничен адресом бот-сервера: его ключ лежит не только на ноде, и утечка без белого списка позволила бы заводить аккаунты и слать письма с кодом от имени «E2E» кому угодно (финальное ревью ветки). Поэтому короткий прогон на PROD — только с бот-сервера.
+
 - [ ] **Step 6: Короткий прогон и проверки**
 
-С мака:
+На бот-сервере (набор `partner_messenger_test.ts` и скрипты `test:partner*` должны быть в `~/talerid-ws/taler_id_tests`: `git pull`, если коммит набора уже запушен — пушить его только с разрешения пользователя, — иначе скопировать два файла `rsync`-ом с мака):
 
 ```bash
-ssh dvolkov@77.73.131.137 "ssh do-app-1 'cat /root/partner-keys/e2e.env'" >> ~/Downloads/taler_id_tests/.env.talerid
-grep -c "^PARTNER_E2E_KEY=" ~/Downloads/taler_id_tests/.env.talerid
-cd ~/Downloads/taler_id_tests && npm run test:partner:talerid && npm run test:talerid
+ssh do-app-1 'cat /root/partner-keys/e2e.env' >> ~/talerid-ws/taler_id_tests/.env.talerid && chmod 600 ~/talerid-ws/taler_id_tests/.env.talerid
+grep -c "^PARTNER_E2E_KEY=" ~/talerid-ws/taler_id_tests/.env.talerid
+cd ~/talerid-ws/taler_id_tests && npm run test:partner:talerid && npm run test:talerid
 curl -s -o /dev/null -w "sink-on-prod:%{http_code}\n" -X POST https://api.talerid.io/partner/v1/_sink/e2e
 ```
 
-Expected: `1`; оба набора зелёные; `sink-on-prod:404`. Если с мака сыплются `fetch failed` или таймауты — это сеть, не PROD: повторить с бот-сервера после синхронизации набора и `.env.talerid`.
+Expected: `1`; оба набора зелёные; `sink-on-prod:404`.
 
 Две ноды — единственное место, где сокеты партнёра ходят через Redis-адаптер между процессами (ревью задач 27–28 нашло там падение ноды, на одной ноде оно не воспроизводится). На бот-сервере до и после прогона набора:
 
@@ -8304,11 +8314,9 @@ Expected: 13 проверок ✓.
 
 - [ ] **Step 7: Белый список IP видит настоящий адрес за балансировщиком**
 
-У nadi на PROD включён белый список. Убедиться, что `req.ip` за цепочкой LB → nginx → Nest — это адрес клиента, а не прокси. Для проверки на время ограничиваем тестового партнёра адресом бот-сервера. На бот-сервере:
+У nadi на PROD включён белый список. Убедиться, что `req.ip` за цепочкой LB → nginx → Nest — это адрес клиента, а не прокси. Тестовый партнёр уже ограничен адресом бот-сервера (Step 5). На бот-сервере:
 
 ```bash
-ssh do-app-1 'cd /opt/taler-id && npx ts-node -r dotenv/config scripts/partner-admin.ts set-ips --slug e2e --ips 77.73.131.137'
-sleep 35   # кэш партнёров в бэкенде — 30 секунд
 KEY="$(ssh do-app-1 "cut -d= -f2- /root/partner-keys/e2e.env")"
 curl -s -o /dev/null -w "from-bot:%{http_code}\n" -H "Authorization: Bearer $KEY" https://api.talerid.io/partner/v1/users/ip-probe
 unset KEY
@@ -8317,7 +8325,8 @@ unset KEY
 С мака:
 
 ```bash
-curl -s -o /dev/null -w "from-mac:%{http_code}\n" -H "Authorization: Bearer $(grep '^PARTNER_E2E_KEY=' ~/Downloads/taler_id_tests/.env.talerid | cut -d= -f2-)" https://api.talerid.io/partner/v1/users/ip-probe
+K="$(ssh dvolkov@77.73.131.137 "ssh do-app-1 'cut -d= -f2- /root/partner-keys/e2e.env'")"
+curl -s -o /dev/null -w "from-mac:%{http_code}\n" -H "Authorization: Bearer $K" https://api.talerid.io/partner/v1/users/ip-probe
 ```
 
 Expected: `from-bot:404` (ключ и IP приняты, такого `externalId` просто нет), `from-mac:401` (`ip_not_allowed`). Если и с бота 401 — Express видит адрес прокси: разбираться с `TRUST_PROXY` и `real_ip` в nginx до того, как nadi начнёт ходить на PROD.
@@ -8325,7 +8334,6 @@ Expected: `from-bot:404` (ключ и IP приняты, такого `externalI
 Там же, с мака — подделка адреса. Заголовок с адресом бота не должен открывать белый список ни через балансировщик, ни через RU-edge (`ru.talerid.io` проксирует на DO с `Host: api.talerid.io`):
 
 ```bash
-K="$(grep '^PARTNER_E2E_KEY=' ~/Downloads/taler_id_tests/.env.talerid | cut -d= -f2-)"
 for h in api.talerid.io ru.talerid.io; do
   curl -s -o /dev/null -w "spoof-$h:%{http_code}\n" -H "Authorization: Bearer $K" -H "X-Forwarded-For: 77.73.131.137" "https://$h/partner/v1/users/ip-probe"
 done
@@ -8334,12 +8342,7 @@ unset K
 
 Expected: `spoof-api.talerid.io:401` и `spoof-ru.talerid.io:401`. `404` хоть на одном — поддельный заголовок дошёл до `req.ip`: nadi на PROD не пускать, пока не исправлен nginx (на edge — `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for`, на app-нодах — `real_ip_recursive on` с доверием только LB и edge).
 
-Вернуть тестового партнёра без ограничения (на бот-сервере):
-
-```bash
-ssh do-app-1 "cd /opt/taler-id && npx ts-node -r dotenv/config scripts/partner-admin.ts set-ips --slug e2e --clear"
-```
-
+Ограничение тестового партнёра адресом бот-сервера не снимать.
 ---
 
 ## Task 44: CLAUDE.md, память и передача nadi
