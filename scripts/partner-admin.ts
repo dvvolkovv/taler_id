@@ -5,9 +5,10 @@
  * Запуск на сервере окружения из каталога бэкенда:
  *   npx ts-node -r dotenv/config scripts/partner-admin.ts <команда> [флаги]
  *
- * Ключ и секрет вебхука показываются один раз. С --out <файл> [--var ИМЯ] они
- * не печатаются, а дописываются в файл строкой ИМЯ=значение с правами 600 —
- * так секрет не оседает в истории терминала и в логах сессий.
+ * Ключ и секрет вебхука показываются один раз и только в файл: --out <файл>
+ * [--var ИМЯ] обязателен для create/rotate-key/set-webhook — секрет
+ * дописывается в файл строкой ИМЯ=значение с правами 600, печати на экран
+ * нет совсем, так секрет не оседает в истории терминала и в логах сессий.
  * Бэкенд кэширует партнёров 30 секунд — изменения доходят за это время.
  */
 import { PrismaClient } from '@prisma/client';
@@ -30,9 +31,9 @@ const prisma = new PrismaClient();
 type Flags = Record<string, string>;
 
 const USAGE = `Использование: npx ts-node -r dotenv/config scripts/partner-admin.ts <команда> [флаги]
-  create        --slug <slug> --name <имя> [--ips a,b] [--out файл [--var ИМЯ]]
-  rotate-key    --slug <slug> [--out файл [--var ИМЯ]]
-  set-webhook   --slug <slug> --url https://… [--out файл [--var ИМЯ]]
+  create        --slug <slug> --name <имя> [--ips a,b] --out файл [--var ИМЯ]
+  rotate-key    --slug <slug> --out файл [--var ИМЯ]
+  set-webhook   --slug <slug> --url https://… --out файл [--var ИМЯ]
   clear-webhook --slug <slug>
   set-ips       --slug <slug> --ips a,b | --clear   (точные адреса, без CIDR; --clear — без ограничения)
   enable | disable --slug <slug>
@@ -95,14 +96,18 @@ function ipsOf(value: string): string[] {
 }
 
 /**
- * --out/--var — до любого обращения к базе: разбитый путь или опечатка в
- * имени переменной не должны всплывать уже после того, как ключ перевыпущен
- * или вебхук переписан, а секрет — потерян безвозвратно.
+ * --out — до любого обращения к базе: разбитый путь не должен всплыть уже
+ * после того, как ключ перевыпущен или вебхук переписан, а секрет —
+ * потерян безвозвратно. Обязателен: секрет пишется только в файл 600,
+ * печати на экран больше нет — экран виден в истории терминала и в логах
+ * сессий (bot-сервер, Claude Code), а секрет там оседать не должен.
  */
 function validateOutFlags(flags: Flags): void {
-  if ('out' in flags && !flags.out) throw new Error('--out без пути');
-  if ('var' in flags && !('out' in flags))
-    throw new Error('--var только вместе с --out');
+  if (!flags.out) {
+    throw new Error(
+      '--out обязателен: секрет пишется только в файл (права 600), печати на экран нет',
+    );
+  }
   if (flags.var && !/^[A-Z_][A-Z0-9_]*$/.test(flags.var)) {
     throw new Error(
       '--var должен быть ИМЕНЕМ_ПЕРЕМЕННОЙ: заглавные латинские буквы, цифры, подчёркивание',
@@ -119,20 +124,11 @@ interface SecretSink {
  * обнаруживается раньше, чем ключ перевыпущен или вебхук переписан — иначе
  * секрет мог бы потеряться уже после того, как база изменилась (инцидент:
  * rotate-key --out /nonexistent/x.env обновлял keyHash и затем падал —
- * никто не получал новый ключ). С --out — обычный файл, правами 600
- * (существующий 644 тоже чинится тут же, до первой записи). Без --out —
- * печать на экран, и ровно один раз, уже после того как секрет появился.
+ * никто не получал новый ключ). --out уже проверен как обязательный
+ * (validateOutFlags) — здесь он есть всегда. Обычный файл, правами 600
+ * (существующий 644 тоже чинится тут же, до первой записи).
  */
 function openSecretSink(flags: Flags, defaultVar: string): SecretSink {
-  if (!flags.out) {
-    return {
-      write(value, what) {
-        console.log(
-          `${what} (показывается один раз, передавать вне чатов):\n${value}`,
-        );
-      },
-    };
-  }
   const name = flags.var || defaultVar;
   const fd = fs.openSync(flags.out, 'a', 0o600);
   fs.fchmodSync(fd, 0o600);
