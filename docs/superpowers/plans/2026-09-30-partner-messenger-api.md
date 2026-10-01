@@ -7327,7 +7327,7 @@ io.Socket connectMessenger(String baseUrl, String accessToken) {
 
 | Событие | Тело |
 |---|---|
-| `join` | `{conversationId}` — получать события беседы: правки, «печатает…», прочтения |
+| `join` | `{conversationId}` — «этот чат открыт на экране»: события беседы (правки, «печатает…», прочтения) и **никаких вебхуков по нему**, пока сокет не отключится. Делайте `join` только в чат, который сейчас на экране |
 | `message` | `{conversationId, content, clientTempId?, replyToId?, silent?, fileUrl?, fileName?, fileSize?, fileType?, s3Key?, thumbnailSmallUrl?, thumbnailMediumUrl?, thumbnailLargeUrl?}` |
 | `edit_message` | `{conversationId, messageId, content}` |
 | `delete_message` | `{conversationId, messageId, scope}`; `scope` — `self` или `all` |
@@ -7357,6 +7357,11 @@ io.Socket connectMessenger(String baseUrl, String accessToken) {
 ## Вебхуки
 
 Taler ID шлёт `message.created`, когда у получателя с вашей связкой не открыт этот чат (нет `join` в эту беседу), чат не на «без звука» (упоминание пробивает) и отправитель не пометил сообщение «тихим». Только личные чаты и группы.
+
+«Чат открыт» для сервера — это `join` в беседу с любого сокета человека: вашего или приложения Taler ID. Покинуть комнату без отключения нельзя, поэтому:
+- делайте `join` только в чат, который на экране, а не во все чаты сразу — иначе вебхуки по ним не придут вообще;
+- уходя в фон, отключайте сокет, иначе чат так и останется «открытым», и пуша человек не получит;
+- если человек сидит в этом же чате в приложении Taler ID, вебхука тоже не будет: он и так видит сообщение.
 
 ```json
 {
