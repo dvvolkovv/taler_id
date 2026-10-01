@@ -1383,6 +1383,10 @@ export class MessengerService {
       where: {
         id: { not: currentUserId },
         deletedAt: null,
+        // Аккаунты, которые завёл партнёр (nadi) и в которые человек сам не
+        // входил: он не регистрировался в TalerID и не соглашался показывать
+        // почту незнакомым. Задал пароль, чтобы войти в TalerID, — стал виден.
+        NOT: { passwordHash: null, createdByPartnerId: { not: null } },
         ...(isPhone
           ? { phone: query.trim() }
           : {
