@@ -476,6 +476,27 @@ describe('MessengerGateway.deliverNewMessage', () => {
         expect.objectContaining({ mentionsRecipient: true }),
       );
     });
+
+    // Re-review finding: the promise is started without being awaited right
+    // away (latency fix above), and nothing in the per-participant loop ever
+    // touches it when every recipient is already viewing the chat — so a
+    // rejection here had no handler anywhere, i.e. an unhandled rejection.
+    it('never lets a rejecting planFanOut become an unhandled rejection, even when no participant ends up awaiting it', async () => {
+      // Recipient already has the chat open -> recipientInConv is true for
+      // everyone -> the `enqueue`/await branch is skipped entirely, so the
+      // existing per-participant try/catch never gets a chance to catch it.
+      socketsInConv = [{ data: { userId: 'recipient' } }];
+      (mockWebhooks.planFanOut as jest.Mock).mockRejectedValue(
+        new Error('boom'),
+      );
+      const warnSpy = jest.spyOn((gateway as any).logger, 'warn');
+      await expect(
+        gateway.fanOutToParticipants(baseMsg, 'sender', 'conv-1', {}),
+      ).resolves.toBeUndefined();
+      // Дать шанс всплыть необработанному отказу, если он не пойман у истока.
+      await new Promise((r) => setImmediate(r));
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('boom'));
+    });
   });
 
   describe('conversation-type resolution (latency)', () => {

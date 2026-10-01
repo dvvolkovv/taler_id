@@ -578,13 +578,25 @@ export class MessengerGateway
     // остальной работой цикла.
     const partnerFanOutPromise = opts.silent
       ? null
-      : this.partnerWebhooks.planFanOut({
-          conversationId,
-          participantIds: participants.map((p) => p.userId),
-          senderId,
-          systemPost: opts.systemPost === true,
-          conversationType: convType,
-        });
+      : this.partnerWebhooks
+          .planFanOut({
+            conversationId,
+            participantIds: participants.map((p) => p.userId),
+            senderId,
+            systemPost: opts.systemPost === true,
+            conversationType: convType,
+          })
+          .catch((e) => {
+            // Поймано у истока, не у места await: когда у всех участников
+            // recipientInConv=true (все уже смотрят чат) или все приглушены,
+            // этот промис вообще никто не ждёт — без .catch() здесь любой
+            // отказ (planFanOut обещает не бросать, но мало ли) стал бы
+            // необработанным rejection'ом, а не просто пропущенным вебхуком.
+            this.logger.warn(
+              `planFanOut rejected unexpectedly for ${conversationId}: ${(e as Error).message}`,
+            );
+            return null;
+          });
     const pushText = buildPushText(enrichedMsg);
     const kind = messageKind(enrichedMsg);
     for (const p of participants) {
