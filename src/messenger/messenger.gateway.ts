@@ -30,6 +30,11 @@ import * as fs from 'fs';
 import { isApiAccessToken } from '../common/utils/access-token.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
+import { PartnerRealtimeService } from '../partner-core/partner-realtime.service';
+import { PartnerTokensService } from '../partner-core/partner-tokens.service';
+import { partnerLinkRoom } from '../partner-core/partner.constants';
+import { PartnerConversationScope } from './partner-conversation-scope.service';
+import { installSocketGate } from './socket-gate';
 import {
   PHASE_LABELS,
   resolveToolLabel,
@@ -56,6 +61,9 @@ export class MessengerGateway
     private readonly aiAnalyst: AiAnalystService,
     @Inject(forwardRef(() => AssistantChatService))
     private readonly assistantChat: AssistantChatService,
+    private readonly partnerTokens: PartnerTokensService,
+    private readonly partnerRealtime: PartnerRealtimeService,
+    private readonly partnerScope: PartnerConversationScope,
     @Optional() private readonly informerBot?: InformerBotService,
   ) {
     const publicKeyPath =
@@ -78,29 +86,73 @@ export class MessengerGateway
           .emit('call_ai_twin_joined', payload);
       },
     );
+
+    // Отзыв партнёрской связки рвёт её сокеты на всех нодах (Redis-адаптер).
+    this.partnerRealtime.registerDisconnector((partnerId, userId) => {
+      this.server.in(partnerLinkRoom(partnerId, userId)).disconnectSockets(true);
+    });
   }
 
   async handleConnection(client: Socket) {
+    const ready = this.authenticateSocket(client);
+    installSocketGate(client, ready, this.partnerScope);
+    await ready;
+  }
+
+  /**
+   * Опознаёт сокет: сначала собственный токен входа TalerID (синхронно, как
+   * раньше), потом партнёрский OAuth-токен со scope `messenger`. Не опознали —
+   * отключаем. Партнёрский сокет живёт не дольше своего токена.
+   */
+  private async authenticateSocket(client: Socket): Promise<boolean> {
     try {
-      const token = (client.handshake.auth?.token as string)?.replace(
-        'Bearer ',
-        '',
-      );
+      const token = (client.handshake.auth?.token as string)?.replace('Bearer ', '');
       if (!token) throw new Error('No token');
-      const payload = jwt.verify(token, this.publicKey, {
-        algorithms: ['RS256'],
-      }) as any;
-      // OIDC ID tokens are signed with the same key — reject them here too.
-      if (!isApiAccessToken(payload)) throw new Error('Not an access token');
-      client.data.userId = payload.sub;
+      const nativeUserId = this.nativeUserId(token);
+      if (nativeUserId) {
+        client.data.userId = nativeUserId;
+        client.data.connectedAt = Date.now();
+        client.join(`user:${nativeUserId}`);
+        return true;
+      }
+      const principal = await this.partnerTokens.verify(token);
+      if (!principal) throw new Error('Not an access token');
+      client.data.userId = principal.userId;
       client.data.connectedAt = Date.now();
-      client.join(`user:${payload.sub}`);
+      client.data.partner = principal;
+      client.join(`user:${principal.userId}`);
+      client.join(partnerLinkRoom(principal.partnerId, principal.userId));
+      // Отзыв мог прийти, пока шла проверка: тогда команда «порвать сокеты
+      // связки» разошлась раньше, чем этот сокет вошёл в комнату. Проверяем
+      // токен ещё раз уже из комнаты — всё, что отзовут дальше, его достанет.
+      if (!(await this.partnerTokens.verify(token))) throw new Error('Revoked while connecting');
+      // Дальше клиент переподключается со свежим токеном, а отозванная связка
+      // не держит открытым старое соединение.
+      const timer = setTimeout(
+        () => client.disconnect(true),
+        Math.max(0, principal.expiresAt * 1000 - Date.now()),
+      );
+      timer.unref?.();
+      client.data.partnerExpiryTimer = timer;
+      return true;
     } catch {
       client.disconnect();
+      return false;
+    }
+  }
+
+  private nativeUserId(token: string): string | null {
+    try {
+      const payload = jwt.verify(token, this.publicKey, { algorithms: ['RS256'] }) as any;
+      // OIDC ID tokens are signed with the same key — reject them here too.
+      return isApiAccessToken(payload) ? payload.sub : null;
+    } catch {
+      return null;
     }
   }
 
   handleDisconnect(client: Socket) {
+    if (client.data.partnerExpiryTimer) clearTimeout(client.data.partnerExpiryTimer);
     if (client.data.userId) {
       this.prisma.user
         .update({

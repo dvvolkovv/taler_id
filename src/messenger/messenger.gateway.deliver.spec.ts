@@ -9,6 +9,9 @@ import { AssistantChatService } from '../assistant/assistant-chat.service';
 import { FcmService } from '../common/fcm.service';
 import { ApnsService } from '../common/apns.service';
 import { ConfigService } from '@nestjs/config';
+import { PartnerRealtimeService } from '../partner-core/partner-realtime.service';
+import { PartnerTokensService } from '../partner-core/partner-tokens.service';
+import { PartnerConversationScope } from './partner-conversation-scope.service';
 
 /**
  * Tests for the extracted deliverNewMessage(...) method used by both the
@@ -81,6 +84,9 @@ describe('MessengerGateway.deliverNewMessage', () => {
         },
         { provide: ApnsService, useValue: {} },
         { provide: ConfigService, useValue: { get: () => undefined } },
+        { provide: PartnerTokensService, useValue: { verify: jest.fn().mockResolvedValue(null) } },
+        { provide: PartnerRealtimeService, useValue: { registerDisconnector: jest.fn() } },
+        { provide: PartnerConversationScope, useValue: { assertConversation: jest.fn(), assertMessage: jest.fn() } },
       ],
     }).compile();
     gateway = mod.get(MessengerGateway);
