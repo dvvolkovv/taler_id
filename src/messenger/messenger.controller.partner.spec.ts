@@ -91,6 +91,9 @@ describe('MessengerController for partner tokens', () => {
         searchMessages: jest.fn().mockResolvedValue([{ id: 'm1', conversationId: 'c1' }, { id: 'm2', conversationId: 'c4' }]),
         createGroupConversation: jest.fn().mockResolvedValue({ id: 'g1', participantIds: ['u1', 'u2'] }),
         addGroupMembers: jest.fn().mockResolvedValue([]),
+        changeGroupMemberRole: jest.fn().mockResolvedValue({ userId: 'u3', newRole: 'ADMIN' }),
+        updateGroupInfo: jest.fn().mockResolvedValue({ id: 'g1', name: 'New name' }),
+        leaveGroup: jest.fn().mockResolvedValue(undefined),
         forwardMessages: jest.fn().mockResolvedValue([]),
         getUserDisplayName: jest.fn().mockResolvedValue('Name'),
       };
@@ -104,6 +107,7 @@ describe('MessengerController for partner tokens', () => {
         emitToUserInConversation: jest.fn(),
         emitToConversationParticipants: jest.fn(),
         emitToConversationParticipantsInConversation: jest.fn(),
+        evictFromConversationRoom: jest.fn(),
         broadcastNewMessage: jest.fn(),
         fanOutToParticipants: jest.fn(),
       };
@@ -208,6 +212,59 @@ describe('MessengerController for partner tokens', () => {
       scope.assertAllContacts.mockClear();
       await controller.createGroup({ name: 'G', participantIds: ['u9'] } as any, nativeUser);
       expect(scope.assertAllContacts).not.toHaveBeenCalled();
+    });
+
+    /**
+     * group_member_added / group_role_changed / group_updated / leaveGroup's
+     * group_member_removed all sit behind service methods that assert
+     * conv.type === 'GROUP' and throw otherwise (addGroupMembers,
+     * changeGroupMemberRole, updateGroupInfo, leaveGroup) — by the time the
+     * controller reaches the emit, the type can only be GROUP. There is no
+     * CHANNEL case to test here: these endpoints reject non-GROUP beседы
+     * before any emit runs, unlike e.g. conversation_state which handles any
+     * conversation type and genuinely looks the type up.
+     */
+    describe('remaining group events mirror to puser:<id> (GROUP, guaranteed by the service)', () => {
+      it('group_member_added (addMembers)', async () => {
+        service.addGroupMembers.mockResolvedValue(['u3']);
+        await controller.addMembers('g1', { userIds: ['u3'] } as any, nativeUser);
+        expect(gateway.emitToConversationParticipantsInConversation).toHaveBeenCalledWith(
+          'g1',
+          'GROUP',
+          'group_member_added',
+          { conversationId: 'g1', userIds: ['u3'] },
+        );
+      });
+
+      it('group_role_changed (changeRole)', async () => {
+        await controller.changeRole('g1', 'u3', { role: 'ADMIN' } as any, nativeUser);
+        expect(gateway.emitToConversationParticipantsInConversation).toHaveBeenCalledWith(
+          'g1',
+          'GROUP',
+          'group_role_changed',
+          { conversationId: 'g1', userId: 'u3', newRole: 'ADMIN' },
+        );
+      });
+
+      it('group_updated (updateGroup)', async () => {
+        await controller.updateGroup('g1', { name: 'New name' } as any, nativeUser);
+        expect(gateway.emitToConversationParticipantsInConversation).toHaveBeenCalledWith(
+          'g1',
+          'GROUP',
+          'group_updated',
+          expect.objectContaining({ conversationId: 'g1', name: 'New name' }),
+        );
+      });
+
+      it('group_member_removed (leaveGroup, self-leave)', async () => {
+        await controller.leaveGroup('g1', nativeUser);
+        expect(gateway.emitToConversationParticipantsInConversation).toHaveBeenCalledWith(
+          'g1',
+          'GROUP',
+          'group_member_removed',
+          { conversationId: 'g1', userId: 'u1' },
+        );
+      });
     });
   });
 });

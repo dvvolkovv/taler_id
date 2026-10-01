@@ -300,8 +300,11 @@ export class MessengerController {
       dto.userIds,
     );
     if (newIds.length > 0) {
-      await this.gateway.emitToConversationParticipants(
+      // addGroupMembers already asserted conv.type === 'GROUP' (throws
+      // otherwise), so the type is hard-coded rather than looked up again.
+      await this.gateway.emitToConversationParticipantsInConversation(
         id,
+        'GROUP',
         'group_member_added',
         {
           conversationId: id,
@@ -361,8 +364,11 @@ export class MessengerController {
       uid,
       dto.role,
     );
-    await this.gateway.emitToConversationParticipants(
+    // changeGroupMemberRole already asserted conv.type === 'GROUP' (throws
+    // otherwise), so the type is hard-coded rather than looked up again.
+    await this.gateway.emitToConversationParticipantsInConversation(
       id,
+      'GROUP',
       'group_role_changed',
       {
         conversationId: id,
@@ -381,7 +387,9 @@ export class MessengerController {
     @CurrentUser() user: any,
   ) {
     const result = await this.service.updateGroupInfo(id, user.sub, dto);
-    await this.gateway.emitToConversationParticipants(id, 'group_updated', {
+    // updateGroupInfo already asserted conv.type === 'GROUP' (throws
+    // otherwise), so the type is hard-coded rather than looked up again.
+    await this.gateway.emitToConversationParticipantsInConversation(id, 'GROUP', 'group_updated', {
       conversationId: id,
       name: dto.name,
       avatarUrl: dto.avatarUrl,
@@ -415,8 +423,11 @@ export class MessengerController {
   async leaveGroup(@Param('id') id: string, @CurrentUser() user: any) {
     await this.service.leaveGroup(id, user.sub);
     this.gateway.evictFromConversationRoom(user.sub, id);
-    await this.gateway.emitToConversationParticipants(
+    // leaveGroup already asserted conv.type === 'GROUP' (throws otherwise),
+    // so the type is hard-coded rather than looked up again.
+    await this.gateway.emitToConversationParticipantsInConversation(
       id,
+      'GROUP',
       'group_member_removed',
       {
         conversationId: id,
