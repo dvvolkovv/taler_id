@@ -1,4 +1,8 @@
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   isPartnerConversationType,
@@ -62,9 +66,22 @@ export class PartnerConversationScope {
     return !!msg && isPartnerConversationType(msg.conversation.type);
   }
 
-  /** Исходные сообщения пересылки: хоть одно из чужой для партнёра беседы — 403. */
+  /**
+   * Исходные сообщения пересылки: хоть одно из чужой для партнёра беседы —
+   * 403. `messageIds` приходит голым `@Body('messageIds')` без DTO-проверки
+   * (controller.ts), так что партнёрский клиент может прислать что угодно —
+   * строку, число, массив не строк. Раньше это било TypeError'ом в `new
+   * Set(...)`/`.some(...)` (500), теперь — внятный 400.
+   */
   async assertMessages(messageIds: string[] | undefined): Promise<void> {
-    const ids = [...new Set(messageIds ?? [])];
+    if (messageIds == null) return;
+    if (
+      !Array.isArray(messageIds) ||
+      messageIds.some((id) => typeof id !== 'string')
+    ) {
+      throw new BadRequestException('invalid_message_ids');
+    }
+    const ids = [...new Set(messageIds)];
     if (ids.length === 0) return;
     const rows = await this.prisma.message.findMany({
       where: { id: { in: ids } },

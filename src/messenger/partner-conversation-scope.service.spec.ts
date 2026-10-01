@@ -1,4 +1,4 @@
-import { ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PartnerConversationScope } from './partner-conversation-scope.service';
 
 describe('PartnerConversationScope', () => {
@@ -87,6 +87,28 @@ describe('PartnerConversationScope', () => {
   it('skips the query for an empty forward', async () => {
     await expect(scope.assertMessages([])).resolves.toBeUndefined();
     await expect(scope.assertMessages(undefined)).resolves.toBeUndefined();
+    expect(prisma.message.findMany).not.toHaveBeenCalled();
+  });
+
+  it('still treats null the same as undefined (no-op)', async () => {
+    await expect(scope.assertMessages(null as any)).resolves.toBeUndefined();
+    expect(prisma.message.findMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses a non-array messageIds (e.g. a bare string) instead of throwing a raw TypeError', async () => {
+    await expect(scope.assertMessages('m1' as any)).rejects.toThrow(
+      BadRequestException,
+    );
+    await expect(scope.assertMessages('m1' as any)).rejects.toThrow(
+      'invalid_message_ids',
+    );
+    expect(prisma.message.findMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses an array containing a non-string element', async () => {
+    await expect(scope.assertMessages(['m1', 42] as any)).rejects.toThrow(
+      'invalid_message_ids',
+    );
     expect(prisma.message.findMany).not.toHaveBeenCalled();
   });
 
