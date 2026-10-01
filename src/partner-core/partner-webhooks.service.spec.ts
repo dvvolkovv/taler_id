@@ -1,4 +1,15 @@
+jest.mock('axios');
+import axios from 'axios';
+import { encryptWebhookSecret } from './partner-secrets.util';
+import { signWebhook } from './partner-webhook-events';
 import { PartnerWebhooksService } from './partner-webhooks.service';
+
+const savedSecretsKey = process.env.PARTNER_SECRETS_KEY;
+process.env.PARTNER_SECRETS_KEY = 'c'.repeat(64);
+afterAll(() => {
+  if (savedSecretsKey === undefined) delete process.env.PARTNER_SECRETS_KEY;
+  else process.env.PARTNER_SECRETS_KEY = savedSecretsKey;
+});
 
 const savedEnabled = process.env.PARTNER_API_ENABLED;
 afterAll(() => {
@@ -178,5 +189,95 @@ describe('PartnerWebhooksService.planFanOut', () => {
     expect(() => plan!.enqueue('u-b', input)).not.toThrow();
     await flush();
     expect(warnSpy).toHaveBeenCalled();
+  });
+});
+
+describe('PartnerWebhooksService.deliver', () => {
+  const event: any = { id: 'evt_1', type: 'ping', createdAt: '2026-10-01T10:00:00.000Z' };
+  let partner: any;
+
+  beforeEach(() => {
+    process.env.PARTNER_API_ENABLED = 'true';
+    (axios.post as jest.Mock).mockReset();
+    partner = {
+      id: 'p1',
+      slug: 'nadi',
+      enabled: true,
+      webhookUrl: 'https://nadi.example/hook',
+      webhookSecretEnc: encryptWebhookSecret('whsec_test'),
+    };
+  });
+
+  it('posts the signed body and records a 2xx as delivered', async () => {
+    const { service, registry, client } = make();
+    registry.findById.mockResolvedValue(partner);
+    (axios.post as jest.Mock).mockResolvedValue({ status: 204 });
+    const res = await service.deliver('p1', event, 2);
+    expect(res).toMatchObject({ eventId: 'evt_1', type: 'ping', attempt: 2, delivered: true, status: 204, error: null });
+    const [url, body, config] = (axios.post as jest.Mock).mock.calls[0];
+    expect(url).toBe('https://nadi.example/hook');
+    expect(body).toBe(JSON.stringify(event));
+    const t = Number(/t=(\d+)/.exec(config.headers['X-TalerID-Signature'])![1]);
+    expect(config.headers['X-TalerID-Signature']).toBe(signWebhook('whsec_test', t, body));
+    expect(config.headers).toMatchObject({
+      'Content-Type': 'application/json',
+      'X-TalerID-Event': 'ping',
+      'X-TalerID-Delivery': 'evt_1',
+    });
+    expect(config).toMatchObject({ timeout: 5000, maxRedirects: 0 });
+    expect(client.lpush).toHaveBeenCalledWith('partner:webhook:log:p1', expect.any(String));
+    expect(client.ltrim).toHaveBeenCalledWith('partner:webhook:log:p1', 0, 999);
+  });
+
+  it('records non-2xx answers and network errors as failures', async () => {
+    const { service, registry } = make();
+    registry.findById.mockResolvedValue(partner);
+    (axios.post as jest.Mock).mockResolvedValueOnce({ status: 500 });
+    await expect(service.deliver('p1', event)).resolves.toMatchObject({ delivered: false, status: 500, error: 'http_500' });
+    (axios.post as jest.Mock).mockRejectedValueOnce(new Error('ECONNREFUSED'));
+    await expect(service.deliver('p1', event)).resolves.toMatchObject({ delivered: false, status: null, error: 'ECONNREFUSED' });
+  });
+
+  it('calls nobody when the webhook is not configured', async () => {
+    const { service, registry } = make();
+    registry.findById.mockResolvedValue({ ...partner, webhookUrl: null });
+    await expect(service.deliver('p1', event)).resolves.toMatchObject({ delivered: false, error: 'webhook_not_configured' });
+    expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  it('returns the newest deliveries first, clamped to 200', async () => {
+    const { service, registry, client } = make();
+    registry.findById.mockResolvedValue(partner);
+    (axios.post as jest.Mock).mockResolvedValue({ status: 200 });
+    await service.deliver('p1', { ...event, id: 'evt_a' });
+    await service.deliver('p1', { ...event, id: 'evt_b' });
+    const rows = await service.recentDeliveries('p1', 500);
+    expect(rows.map((r) => r.eventId)).toEqual(['evt_b', 'evt_a']);
+    expect(client.lrange).toHaveBeenLastCalledWith('partner:webhook:log:p1', 0, 199);
+  });
+
+  // Adjustment 6: kill switches must stop queued events and their retries
+  // immediately, instead of failing normally and waiting out all 6 backoff
+  // steps (~1.5h) before the worker gives up.
+  it('drops the job without retrying when the partner API is off globally', async () => {
+    process.env.PARTNER_API_ENABLED = 'false';
+    const { service, registry } = make();
+    await expect(service.deliver('p1', event)).resolves.toMatchObject({ delivered: false, error: 'webhook_not_configured' });
+    expect(registry.findById).not.toHaveBeenCalled();
+    expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  it('drops the job without retrying when the partner has been disabled', async () => {
+    const { service, registry } = make();
+    registry.findById.mockResolvedValue({ ...partner, enabled: false });
+    await expect(service.deliver('p1', event)).resolves.toMatchObject({ delivered: false, error: 'webhook_not_configured' });
+    expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  it('drops the job without retrying when the webhook secret was cleared', async () => {
+    const { service, registry } = make();
+    registry.findById.mockResolvedValue({ ...partner, webhookSecretEnc: null });
+    await expect(service.deliver('p1', event)).resolves.toMatchObject({ delivered: false, error: 'webhook_not_configured' });
+    expect(axios.post).not.toHaveBeenCalled();
   });
 });
