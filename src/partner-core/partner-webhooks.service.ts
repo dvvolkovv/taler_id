@@ -30,10 +30,16 @@ export interface DeliveryResult {
   status: number | null;
   error: string | null;
   durationMs: number;
+  /** Для логов воркера (мониторинг простоя партнёра) — не светим ни секрет, ни тело. */
+  partnerSlug: string | null;
   at: string;
 }
 
 const DELIVERY_TIMEOUT_MS = 5_000;
+// Партнёр может ответить чем угодно — нам важен только статус. Предел на
+// размер ответа и text вместо auto-parse не дают случайному гигабайтному
+// телу раздуть память воркера (инцидент: 150 МБ ответа → RSS 172→687 МБ).
+const DELIVERY_RESPONSE_MAX_BYTES = 64 * 1024;
 const DELIVERY_LOG_MAX = 1_000;
 const logKey = (partnerId: string) => `partner:webhook:log:${partnerId}`;
 
@@ -131,10 +137,13 @@ export class PartnerWebhooksService {
         jobId: `${partnerId}_${event.id}`,
         attempts: WEBHOOK_MAX_ATTEMPTS,
         backoff: { type: 'custom' },
-        // Превью сообщений, имена и названия групп не должны висеть в Redis
-        // неделями — хвост очереди ограничен и по возрасту, не только по count.
-        removeOnComplete: { age: 3600, count: 1000 },
-        removeOnFail: { age: 86400, count: 1000 },
+        // BullMQ 5 only age-sweeps a finished set when ANOTHER job finishes
+        // into it — a lone final-failed job (with its message preview) could
+        // sit in Redis forever otherwise. The journal (recentDeliveries) is
+        // the durable attempt record; jobId dedup only needs to cover jobs
+        // still in flight, so removing immediately on either outcome is safe.
+        removeOnComplete: true,
+        removeOnFail: true,
       },
     );
   }
@@ -153,7 +162,7 @@ export class PartnerWebhooksService {
       this.logger.debug(`webhook ${event.id} to ${partnerId} dropped: partner API is off`);
       return this.record(partnerId, {
         eventId: event.id, type: event.type, attempt,
-        delivered: false, status: null, error: 'webhook_not_configured', durationMs: 0,
+        delivered: false, status: null, error: 'webhook_not_configured', durationMs: 0, partnerSlug: null,
       });
     }
     const partner = await this.registry.findById(partnerId);
@@ -162,35 +171,86 @@ export class PartnerWebhooksService {
       return this.record(partnerId, {
         eventId: event.id, type: event.type, attempt,
         delivered: false, status: null, error: 'webhook_not_configured', durationMs: 0,
+        partnerSlug: partner?.slug ?? null,
+      });
+    }
+    // Связку могли отозвать уже после того, как событие встало в очередь
+    // (ретраи растянуты до ~1.5 ч) — слать (и тем более повторять) вебхук про
+    // уже отвязанного человека смысла нет. Применимо только к message.created:
+    // у ping нет конкретного получателя.
+    if (event.type === 'message.created') {
+      const recipientUserId = (event as { recipient?: { talerUserId?: string } }).recipient?.talerUserId;
+      if (recipientUserId) {
+        const link = await this.prisma.partnerLink.findUnique({
+          where: { partnerId_userId: { partnerId, userId: recipientUserId } },
+          select: { status: true },
+        });
+        if (!link || link.status !== 'ACTIVE') {
+          this.logger.debug(`webhook ${event.id} to ${partnerId} dropped: link_not_active`);
+          return this.record(partnerId, {
+            eventId: event.id, type: event.type, attempt,
+            delivered: false, status: null, error: 'link_not_active', durationMs: 0, partnerSlug: partner.slug,
+          });
+        }
+      }
+    }
+    let secret: string;
+    try {
+      secret = decryptWebhookSecret(partner.webhookSecretEnc);
+    } catch {
+      // Секрет шифруется общим для ноды PARTNER_SECRETS_KEY — рассинхрон
+      // ключа на одной ноде не должен ронять доставку без следа в журнале
+      // (и не должен светить ни секрет, ни тело в логе). Ретраится: другая
+      // нода с верным ключом может доставить.
+      this.logger.warn(`webhook secret undecryptable for partner ${partner.slug} (${partnerId})`);
+      return this.record(partnerId, {
+        eventId: event.id, type: event.type, attempt,
+        delivered: false, status: null, error: 'secret_unreadable', durationMs: 0, partnerSlug: partner.slug,
       });
     }
     const body = JSON.stringify(event);
     const timestamp = Math.floor(Date.now() / 1000);
-    const signature = signWebhook(decryptWebhookSecret(partner.webhookSecretEnc), timestamp, body);
+    const signature = signWebhook(secret, timestamp, body);
     const started = Date.now();
     try {
       const res = await axios.post(partner.webhookUrl, body, {
         headers: {
           'Content-Type': 'application/json',
+          'User-Agent': 'TalerID-Webhooks/1',
           'X-TalerID-Event': event.type,
           'X-TalerID-Delivery': event.id,
           'X-TalerID-Signature': signature,
         },
-        timeout: DELIVERY_TIMEOUT_MS,
+        // Общий дедлайн на весь запрос — не только на паузы между байтами.
+        // axios' собственный `timeout` сбрасывается на каждый пришедший байт,
+        // поэтому ответ по байту в секунду держал воркер все 5 с и всё равно
+        // отчитывался как "доставлено" (инцидент: 20 таких подряд заняли все
+        // воркеры на обеих нодах).
+        signal: AbortSignal.timeout(DELIVERY_TIMEOUT_MS),
         maxRedirects: 0,
+        maxContentLength: DELIVERY_RESPONSE_MAX_BYTES,
+        responseType: 'text',
         validateStatus: () => true,
       });
       const delivered = res.status >= 200 && res.status < 300;
       return this.record(partnerId, {
         eventId: event.id, type: event.type, attempt,
         delivered, status: res.status, error: delivered ? null : `http_${res.status}`,
-        durationMs: Date.now() - started,
+        durationMs: Date.now() - started, partnerSlug: partner.slug,
       });
     } catch (e) {
+      const err = e as { name?: string; code?: string; message?: string };
+      // Короткий детерминированный код вместо произвольного текста ошибки —
+      // по нему и журнал читается глазами, и мониторинг может агрегировать.
+      const error =
+        err?.name === 'TimeoutError'
+          ? 'timeout'
+          : err?.code === 'ERR_BAD_RESPONSE'
+            ? 'response_too_large'
+            : (err?.message ?? 'unknown_error').slice(0, 200);
       return this.record(partnerId, {
         eventId: event.id, type: event.type, attempt,
-        delivered: false, status: null, error: (e as Error).message.slice(0, 200),
-        durationMs: Date.now() - started,
+        delivered: false, status: null, error, durationMs: Date.now() - started, partnerSlug: partner.slug,
       });
     }
   }

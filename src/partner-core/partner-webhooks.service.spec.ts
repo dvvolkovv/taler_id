@@ -20,7 +20,10 @@ afterAll(() => {
 function make() {
   const prisma: any = {
     conversation: { findUnique: jest.fn().mockResolvedValue({ type: 'DIRECT', name: null }) },
-    partnerLink: { findMany: jest.fn().mockResolvedValue([]) },
+    partnerLink: {
+      findMany: jest.fn().mockResolvedValue([]),
+      findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }),
+    },
   };
   const registry: any = { findById: jest.fn() };
   const list: string[] = [];
@@ -126,8 +129,12 @@ describe('PartnerWebhooksService.planFanOut', () => {
       jobId: 'p1_evt_m1_u-b',
       attempts: 7,
       backoff: { type: 'custom' },
-      removeOnComplete: { age: 3600, count: 1000 },
-      removeOnFail: { age: 86400, count: 1000 },
+      // BullMQ 5 only age-sweeps a finished set when ANOTHER job finishes
+      // into it — a lone final-failed job with its preview could stay in
+      // Redis forever. The journal (recentDeliveries) is the durable record;
+      // jobId dedup only needs to cover jobs still in flight.
+      removeOnComplete: true,
+      removeOnFail: true,
     });
   });
 
@@ -221,12 +228,93 @@ describe('PartnerWebhooksService.deliver', () => {
     expect(config.headers['X-TalerID-Signature']).toBe(signWebhook('whsec_test', t, body));
     expect(config.headers).toMatchObject({
       'Content-Type': 'application/json',
+      'User-Agent': 'TalerID-Webhooks/1',
       'X-TalerID-Event': 'ping',
       'X-TalerID-Delivery': 'evt_1',
     });
-    expect(config).toMatchObject({ timeout: 5000, maxRedirects: 0 });
+    // Overall deadline via AbortSignal, not axios' inactivity-only `timeout`
+    // (a receiver dripping 1 byte/s never goes idle long enough to trip it).
+    // Response is capped and read as text, not auto-parsed/buffered unbounded.
+    expect(config.signal).toBeInstanceOf(AbortSignal);
+    expect(config).toMatchObject({ maxRedirects: 0, maxContentLength: 64 * 1024, responseType: 'text' });
     expect(client.lpush).toHaveBeenCalledWith('partner:webhook:log:p1', expect.any(String));
     expect(client.ltrim).toHaveBeenCalledWith('partner:webhook:log:p1', 0, 999);
+  });
+
+  it('journals an abort (overall deadline hit) as a short retryable error code', async () => {
+    const { service, registry } = make();
+    registry.findById.mockResolvedValue(partner);
+    const timeoutErr: any = new Error('The operation was aborted due to timeout');
+    timeoutErr.name = 'TimeoutError';
+    (axios.post as jest.Mock).mockRejectedValueOnce(timeoutErr);
+    await expect(service.deliver('p1', event)).resolves.toMatchObject({
+      delivered: false, status: null, error: 'timeout',
+    });
+  });
+
+  it('journals an oversize response as a short retryable error code', async () => {
+    const { service, registry } = make();
+    registry.findById.mockResolvedValue(partner);
+    const tooBig: any = new Error('maxContentLength size of 65536 exceeded');
+    tooBig.code = 'ERR_BAD_RESPONSE';
+    (axios.post as jest.Mock).mockRejectedValueOnce(tooBig);
+    await expect(service.deliver('p1', event)).resolves.toMatchObject({
+      delivered: false, status: null, error: 'response_too_large',
+    });
+  });
+
+  it('journals secret_unreadable (and stays retryable) when the webhook secret cannot be decrypted, without a bare throw', async () => {
+    const { service, registry } = make();
+    registry.findById.mockResolvedValue({ ...partner, webhookSecretEnc: 'not-valid-ciphertext' });
+    const warnSpy = jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined as any);
+    const res = await service.deliver('p1', event);
+    expect(res).toMatchObject({ delivered: false, status: null, error: 'secret_unreadable' });
+    expect(axios.post).not.toHaveBeenCalled();
+    // Only the partner id/slug — never the secret or the event body.
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('nadi'));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('p1'));
+    expect(warnSpy.mock.calls[0][0]).not.toContain('not-valid-ciphertext');
+  });
+
+  it('drops a message.created event without retrying when the recipient link is no longer active', async () => {
+    const { service, registry, prisma } = make();
+    registry.findById.mockResolvedValue(partner);
+    prisma.partnerLink.findUnique.mockResolvedValue({ status: 'REVOKED' });
+    const msgEvent: any = {
+      id: 'evt_m1_u-b', type: 'message.created', createdAt: 'x',
+      recipient: { externalId: 'm-b', talerUserId: 'u-b' },
+    };
+    await expect(service.deliver('p1', msgEvent)).resolves.toMatchObject({ delivered: false, error: 'link_not_active' });
+    expect(axios.post).not.toHaveBeenCalled();
+    expect(prisma.partnerLink.findUnique).toHaveBeenCalledWith({
+      where: { partnerId_userId: { partnerId: 'p1', userId: 'u-b' } },
+      select: { status: true },
+    });
+  });
+
+  it('drops a message.created event without retrying when the recipient link is gone entirely', async () => {
+    const { service, registry, prisma } = make();
+    registry.findById.mockResolvedValue(partner);
+    prisma.partnerLink.findUnique.mockResolvedValue(null);
+    const msgEvent: any = {
+      id: 'evt_m1_u-b', type: 'message.created', createdAt: 'x',
+      recipient: { externalId: 'm-b', talerUserId: 'u-b' },
+    };
+    await expect(service.deliver('p1', msgEvent)).resolves.toMatchObject({ delivered: false, error: 'link_not_active' });
+    expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  it('still delivers a message.created event when the recipient link is active', async () => {
+    const { service, registry, prisma } = make();
+    registry.findById.mockResolvedValue(partner);
+    prisma.partnerLink.findUnique.mockResolvedValue({ status: 'ACTIVE' });
+    (axios.post as jest.Mock).mockResolvedValue({ status: 200 });
+    const msgEvent: any = {
+      id: 'evt_m1_u-b', type: 'message.created', createdAt: 'x',
+      recipient: { externalId: 'm-b', talerUserId: 'u-b' },
+    };
+    await expect(service.deliver('p1', msgEvent)).resolves.toMatchObject({ delivered: true });
+    expect(axios.post).toHaveBeenCalled();
   });
 
   it('records non-2xx answers and network errors as failures', async () => {

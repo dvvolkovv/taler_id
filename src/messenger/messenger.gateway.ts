@@ -555,13 +555,18 @@ export class MessengerGateway
     // Партнёрам (nadi) — вебхук тем же, кому шлём пуш: приложения TalerID у их
     // людей нет, пуш отправит сам партнёр своими ключами. conversationType —
     // тот, что уже вычислен выше: planFanOut не делает по нему второй запрос.
-    const partnerFanOut = await this.partnerWebhooks.planFanOut({
-      conversationId,
-      participantIds: participants.map((p) => p.userId),
-      senderId,
-      systemPost: opts.systemPost === true,
-      conversationType: convType,
-    });
+    // Тихое сообщение не шлёт пуш НИКОМУ (см. opts.silent ниже) — сам план с
+    // его запросами в базу (partnerLink.findMany, при группе ещё и название)
+    // в этом случае не нужен совсем.
+    const partnerFanOut = opts.silent
+      ? null
+      : await this.partnerWebhooks.planFanOut({
+          conversationId,
+          participantIds: participants.map((p) => p.userId),
+          senderId,
+          systemPost: opts.systemPost === true,
+          conversationType: convType,
+        });
     const pushText = buildPushText(enrichedMsg);
     const kind = messageKind(enrichedMsg);
     for (const p of participants) {

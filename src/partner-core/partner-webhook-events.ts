@@ -1,4 +1,4 @@
-import { createHmac, randomUUID } from 'crypto';
+import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 
 /** Паузы перед повторами доставки. Дальше событие выбрасывается: пуш через час бессмыслен. */
 export const WEBHOOK_RETRY_DELAYS_MS: readonly number[] = [10_000, 30_000, 60_000, 300_000, 900_000, 3_600_000];
@@ -46,13 +46,42 @@ export interface WebhookConversation {
  * границе не разрезается пополам.
  */
 function truncatePreview(text: string): string {
+  const wasSliced = text.length > PREVIEW_SLICE_UNITS;
   const bounded = text.slice(0, PREVIEW_SLICE_UNITS);
   const graphemes: string[] = [];
   for (const { segment } of previewSegmenter.segment(bounded)) {
     graphemes.push(segment);
     if (graphemes.length >= PREVIEW_MAX) break;
   }
+  // Предварительный срез режет по code units, а не по границам графем. Если
+  // он действительно что-то обрезал и графем всё равно набралось меньше
+  // лимита — значит, цикл дошёл до самого конца обрезанного хвоста, и
+  // последняя графема могла оказаться разрезанной посередине (составной
+  // эмодзи ZWJ/тон кожи даёт висячий суррогат). Отбрасываем её, а не
+  // показываем мусор партнёру.
+  if (wasSliced && graphemes.length < PREVIEW_MAX) graphemes.pop();
   return graphemes.join('');
+}
+
+/**
+ * Проверка заголовка X-TalerID-Signature над телом, которое реально пришло
+ * (см. тестовый приёмник): разбирает `t=…,v1=…`, пересчитывает HMAC и
+ * сравнивает его constant-time, а не строкой — чтобы не утекало через тайминг.
+ */
+export function verifyWebhookSignature(
+  secret: string,
+  header: string | null | undefined,
+  body: string,
+): boolean {
+  if (!header) return false;
+  const match = /^t=(\d+),v1=([0-9a-f]+)$/.exec(header);
+  if (!match) return false;
+  const [, ts, mac] = match;
+  const expectedMac = /v1=([0-9a-f]+)$/.exec(signWebhook(secret, Number(ts), body))?.[1];
+  if (!expectedMac) return false;
+  const a = Buffer.from(mac, 'hex');
+  const b = Buffer.from(expectedMac, 'hex');
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 export function buildMessageCreatedEvent(args: {

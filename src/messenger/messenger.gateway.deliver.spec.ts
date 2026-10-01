@@ -436,6 +436,15 @@ describe('MessengerGateway.deliverNewMessage', () => {
       expect(enqueue).not.toHaveBeenCalled();
     });
 
+    // A silent message never pushes and never webhooks for ANY participant
+    // (see the opts.silent branch above) — planFanOut's own DB round-trip
+    // (partnerLink.findMany, and conversation.findUnique for a GROUP title)
+    // is pure waste when we already know the answer will be "don't enqueue".
+    it('skips planFanOut entirely for a silent message (no wasted DB query)', async () => {
+      await gateway.deliverNewMessage(baseMsg, 'sender', 'conv-1', { silent: true });
+      expect(mockWebhooks.planFanOut).not.toHaveBeenCalled();
+    });
+
     // Adjustment 7: a mention bypasses mute for the TalerID FCM push (see
     // "a mention pushes through a muted conversation" above) — the partner
     // webhook follows the same rule, since nadi's own push to their person
