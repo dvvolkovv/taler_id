@@ -11,6 +11,7 @@ import { ApnsService } from '../common/apns.service';
 import { ConfigService } from '@nestjs/config';
 import { PartnerRealtimeService } from '../partner-core/partner-realtime.service';
 import { PartnerTokensService } from '../partner-core/partner-tokens.service';
+import { PartnerWebhooksService } from '../partner-core/partner-webhooks.service';
 import { partnerUserRoom } from '../partner-core/partner.constants';
 import { PartnerConversationScope } from './partner-conversation-scope.service';
 
@@ -104,6 +105,7 @@ describe('MessengerGateway partner room isolation', () => {
         { provide: PartnerTokensService, useValue: { verify: jest.fn().mockResolvedValue(null) } },
         { provide: PartnerRealtimeService, useValue: { registerDisconnector: jest.fn() } },
         { provide: PartnerConversationScope, useValue: { assertConversation: jest.fn(), assertMessage: jest.fn() } },
+        { provide: PartnerWebhooksService, useValue: { planFanOut: jest.fn().mockResolvedValue(null) } },
       ],
     }).compile();
     gateway = mod.get(MessengerGateway);

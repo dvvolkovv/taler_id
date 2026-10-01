@@ -22,7 +22,7 @@ import { AiAnalystService } from '../ai-analyst/ai-analyst.service';
 import { InformerBotService } from '../informer-bot/informer-bot.service';
 import { AssistantChatService } from '../assistant/assistant-chat.service';
 import { FcmService } from '../common/fcm.service';
-import { buildPushText } from './push-text.util';
+import { buildPushText, messageKind } from './push-text.util';
 import { sanitizeVoiceMeta } from './voice-meta.util';
 import { ApnsService } from '../common/apns.service';
 import * as jwt from 'jsonwebtoken';
@@ -32,6 +32,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { PartnerRealtimeService } from '../partner-core/partner-realtime.service';
 import { PartnerTokensService } from '../partner-core/partner-tokens.service';
+import { PartnerWebhooksService } from '../partner-core/partner-webhooks.service';
 import {
   isPartnerConversationType,
   partnerLinkRoom,
@@ -68,6 +69,7 @@ export class MessengerGateway
     private readonly partnerTokens: PartnerTokensService,
     private readonly partnerRealtime: PartnerRealtimeService,
     private readonly partnerScope: PartnerConversationScope,
+    private readonly partnerWebhooks: PartnerWebhooksService,
     @Optional() private readonly informerBot?: InformerBotService,
   ) {
     const publicKeyPath =
@@ -550,7 +552,18 @@ export class MessengerGateway
     const userIdsInConv = new Set(
       socketsInConv.map((s) => s.data?.userId).filter(Boolean),
     );
+    // Партнёрам (nadi) — вебхук тем же, кому шлём пуш: приложения TalerID у их
+    // людей нет, пуш отправит сам партнёр своими ключами. conversationType —
+    // тот, что уже вычислен выше: planFanOut не делает по нему второй запрос.
+    const partnerFanOut = await this.partnerWebhooks.planFanOut({
+      conversationId,
+      participantIds: participants.map((p) => p.userId),
+      senderId,
+      systemPost: opts.systemPost === true,
+      conversationType: convType,
+    });
     const pushText = buildPushText(enrichedMsg);
+    const kind = messageKind(enrichedMsg);
     for (const p of participants) {
       if (p.userId === senderId) continue;
       try {
@@ -593,6 +606,13 @@ export class MessengerGateway
         if (muted) {
           this.logger.log(`FCM skipped for ${p.userId}: conversation muted`);
         } else {
+          partnerFanOut?.enqueue(p.userId, {
+            message: { id: enrichedMsg.id, senderId, sentAt: enrichedMsg.sentAt },
+            senderName,
+            preview: pushText,
+            kind,
+            mentionsRecipient: mentionsMe,
+          });
           const fcmTokens = await this.service.getFcmTokens(p.userId);
           if (fcmTokens.length) {
             // Fan out to every logged-in device of the recipient.

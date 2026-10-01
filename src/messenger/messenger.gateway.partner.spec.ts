@@ -11,6 +11,7 @@ import { ApnsService } from '../common/apns.service';
 import { FcmService } from '../common/fcm.service';
 import { PartnerRealtimeService } from '../partner-core/partner-realtime.service';
 import { PartnerTokensService } from '../partner-core/partner-tokens.service';
+import { PartnerWebhooksService } from '../partner-core/partner-webhooks.service';
 import { partnerUserRoom } from '../partner-core/partner.constants';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
@@ -82,6 +83,7 @@ describe('MessengerGateway connections', () => {
           provide: PartnerConversationScope,
           useValue: { assertConversation: jest.fn(), assertMessage: jest.fn() },
         },
+        { provide: PartnerWebhooksService, useValue: { planFanOut: jest.fn().mockResolvedValue(null) } },
       ],
     }).compile();
     gateway = mod.get(MessengerGateway);

@@ -11,6 +11,7 @@ import { ApnsService } from '../common/apns.service';
 import { ConfigService } from '@nestjs/config';
 import { PartnerRealtimeService } from '../partner-core/partner-realtime.service';
 import { PartnerTokensService } from '../partner-core/partner-tokens.service';
+import { PartnerWebhooksService } from '../partner-core/partner-webhooks.service';
 import { PartnerConversationScope } from './partner-conversation-scope.service';
 
 /**
@@ -24,6 +25,7 @@ describe('MessengerGateway.deliverNewMessage', () => {
   let mockMessenger: MessengerService;
   let mockPrisma: PrismaService;
   let mockFcm: FcmService;
+  let mockWebhooks: PartnerWebhooksService;
   // emitToUserInConversation шлёт ОДИН emit с массивом комнат, когда
   // мирорит в puser:<id> (один publish в Redis-адаптере вместо двух) —
   // поэтому rooms всегда массив, даже когда в нём одна комната.
@@ -101,6 +103,7 @@ describe('MessengerGateway.deliverNewMessage', () => {
         { provide: PartnerTokensService, useValue: { verify: jest.fn().mockResolvedValue(null) } },
         { provide: PartnerRealtimeService, useValue: { registerDisconnector: jest.fn() } },
         { provide: PartnerConversationScope, useValue: { assertConversation: jest.fn(), assertMessage: jest.fn() } },
+        { provide: PartnerWebhooksService, useValue: { planFanOut: jest.fn().mockResolvedValue(null) } },
       ],
     }).compile();
     gateway = mod.get(MessengerGateway);
@@ -108,6 +111,7 @@ describe('MessengerGateway.deliverNewMessage', () => {
     mockMessenger = mod.get(MessengerService);
     mockPrisma = mod.get(PrismaService);
     mockFcm = mod.get(FcmService);
+    mockWebhooks = mod.get(PartnerWebhooksService);
   });
 
   const baseMsg = {
@@ -387,5 +391,66 @@ describe('MessengerGateway.deliverNewMessage', () => {
     );
     // FCM ушёл (recipient оффлайн/вне разговора)
     expect(mockFcm.sendNewMessage).toHaveBeenCalled();
+  });
+
+  describe('partner webhooks', () => {
+    let enqueue: jest.Mock;
+
+    beforeEach(() => {
+      enqueue = jest.fn();
+      (mockWebhooks.planFanOut as jest.Mock).mockResolvedValue({ enqueue });
+    });
+
+    it('queues a webhook for a recipient who does not have the chat open', async () => {
+      await gateway.deliverNewMessage(baseMsg, 'sender', 'conv-1');
+      expect(mockWebhooks.planFanOut).toHaveBeenCalledWith({
+        conversationId: 'conv-1',
+        participantIds: ['sender', 'recipient'],
+        senderId: 'sender',
+        systemPost: false,
+        // fanOutToParticipants уже знает тип беседы из своего единственного
+        // conversation.findUnique (см. мок PrismaService выше) — повторного
+        // запроса planFanOut не делает (Правки по ревью задач 29–31).
+        conversationType: 'DIRECT',
+      });
+      expect(enqueue).toHaveBeenCalledWith('recipient', {
+        message: { id: 'msg-1', senderId: 'sender', sentAt: baseMsg.sentAt },
+        senderName: 'Alice',
+        preview: 'hello',
+        kind: 'text',
+        mentionsRecipient: false,
+      });
+    });
+
+    it('does not queue for a recipient who has the chat open', async () => {
+      socketsInConv = [{ data: { userId: 'recipient' } }];
+      await gateway.deliverNewMessage(baseMsg, 'sender', 'conv-1');
+      expect(enqueue).not.toHaveBeenCalled();
+    });
+
+    it('does not queue for a muted chat or a silent message', async () => {
+      (mockMessenger.isParticipantMuted as jest.Mock).mockResolvedValue(true);
+      await gateway.deliverNewMessage(baseMsg, 'sender', 'conv-1');
+      (mockMessenger.isParticipantMuted as jest.Mock).mockResolvedValue(false);
+      await gateway.deliverNewMessage(baseMsg, 'sender', 'conv-1', { silent: true });
+      expect(enqueue).not.toHaveBeenCalled();
+    });
+
+    // Adjustment 7: a mention bypasses mute for the TalerID FCM push (see
+    // "a mention pushes through a muted conversation" above) — the partner
+    // webhook follows the same rule, since nadi's own push to their person
+    // depends on this event arriving.
+    it('queues the webhook with mentionsRecipient:true when the chat is muted but the recipient is mentioned', async () => {
+      (mockMessenger.isParticipantMuted as jest.Mock).mockResolvedValue(true);
+      await gateway.deliverNewMessage(
+        { ...baseMsg, content: 'глянь @bob', mentionedUserIds: ['recipient'] },
+        'sender',
+        'conv-1',
+      );
+      expect(enqueue).toHaveBeenCalledWith(
+        'recipient',
+        expect.objectContaining({ mentionsRecipient: true }),
+      );
+    });
   });
 });
