@@ -6,7 +6,10 @@ import { PARTNER_WEBHOOK_QUEUE } from './partner.constants';
 import { PartnerWebhooksService } from './partner-webhooks.service';
 
 /** Коды deliver(), которые означают «решение принято, повторять не надо» — не обязательно успех (см. link_not_active), просто не исключение. */
-const DROPPED_WITHOUT_RETRY = new Set(['webhook_not_configured', 'link_not_active']);
+const DROPPED_WITHOUT_RETRY = new Set([
+  'webhook_not_configured',
+  'link_not_active',
+]);
 
 /**
  * Воркер `partner-webhooks`. Работает на каждой ноде, очередь общая в Redis.
@@ -15,7 +18,10 @@ const DROPPED_WITHOUT_RETRY = new Set(['webhook_not_configured', 'link_not_activ
  */
 @Processor(PARTNER_WEBHOOK_QUEUE, {
   concurrency: 10,
-  settings: { backoffStrategy: (attemptsMade: number) => partnerWebhookBackoff(attemptsMade) },
+  settings: {
+    backoffStrategy: (attemptsMade: number) =>
+      partnerWebhookBackoff(attemptsMade),
+  },
 })
 export class PartnerWebhooksProcessor extends WorkerHost {
   private readonly logger = new Logger(PartnerWebhooksProcessor.name);
@@ -24,14 +30,26 @@ export class PartnerWebhooksProcessor extends WorkerHost {
     super();
   }
 
-  async process(job: Job<{ partnerId: string; event: WebhookEvent }>): Promise<void> {
+  async process(
+    job: Job<{ partnerId: string; event: WebhookEvent }>,
+  ): Promise<void> {
     if (job.name !== 'deliver') {
-      this.logger.warn(`Unknown job name '${job.name}' on ${PARTNER_WEBHOOK_QUEUE}`);
+      this.logger.warn(
+        `Unknown job name '${job.name}' on ${PARTNER_WEBHOOK_QUEUE}`,
+      );
       return;
     }
     const attempt = job.attemptsMade + 1;
-    const result = await this.webhooks.deliver(job.data.partnerId, job.data.event, attempt);
-    if (result.delivered || (result.error && DROPPED_WITHOUT_RETRY.has(result.error))) return;
+    const result = await this.webhooks.deliver(
+      job.data.partnerId,
+      job.data.event,
+      attempt,
+    );
+    if (
+      result.delivered ||
+      (result.error && DROPPED_WITHOUT_RETRY.has(result.error))
+    )
+      return;
     // Последняя попытка перед тем, как BullMQ сдастся окончательно — отдельная
     // warn-строка для мониторинга простоя партнёра (только slug/id события/код
     // ошибки, без тела и секрета): свой failed-статус в Redis недолговечен
@@ -42,6 +60,8 @@ export class PartnerWebhooksProcessor extends WorkerHost {
         `webhook delivery permanently failed: partner=${result.partnerSlug ?? job.data.partnerId} event=${job.data.event.id} error=${result.error}`,
       );
     }
-    throw new Error(`webhook ${job.data.event.id} to ${job.data.partnerId}: ${result.error}`);
+    throw new Error(
+      `webhook ${job.data.event.id} to ${job.data.partnerId}: ${result.error}`,
+    );
   }
 }

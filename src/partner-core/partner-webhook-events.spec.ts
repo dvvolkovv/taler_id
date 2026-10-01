@@ -10,7 +10,11 @@ import {
 
 describe('partner webhook events', () => {
   const input = {
-    message: { id: 'm1', senderId: 'u-a', sentAt: new Date('2026-10-01T10:00:00Z') },
+    message: {
+      id: 'm1',
+      senderId: 'u-a',
+      sentAt: new Date('2026-10-01T10:00:00Z'),
+    },
     senderName: 'Іван',
     preview: 'x'.repeat(250),
     kind: 'text',
@@ -83,8 +87,13 @@ describe('partner webhook events', () => {
   it('drops a possibly-cut grapheme at the end instead of ending on a lone surrogate', () => {
     const preview = previewFor('a' + EMOJI.repeat(200));
     assertNoLoneSurrogate(preview);
-    expect(Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(preview)).length)
-      .toBeGreaterThan(1);
+    expect(
+      Array.from(
+        new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(
+          preview,
+        ),
+      ).length,
+    ).toBeGreaterThan(1);
   });
 
   // Boundary case: when the 200th (cap-hitting) grapheme is ITSELF the one
@@ -101,14 +110,20 @@ describe('partner webhook events', () => {
   it('never ends the preview on a lone surrogate, across a range of boundary-straddling lengths', () => {
     for (let prefixLen = 95; prefixLen <= 106; prefixLen++) {
       for (let repeats = 96; repeats <= 112; repeats++) {
-        assertNoLoneSurrogate(previewFor('a'.repeat(prefixLen) + EMOJI.repeat(repeats)));
+        assertNoLoneSurrogate(
+          previewFor('a'.repeat(prefixLen) + EMOJI.repeat(repeats)),
+        );
       }
     }
   });
 
   it('signs "t.body" with HMAC-SHA256', () => {
-    const expected = createHmac('sha256', 'whsec_test').update('1700000000.{"a":1}').digest('hex');
-    expect(signWebhook('whsec_test', 1_700_000_000, '{"a":1}')).toBe(`t=1700000000,v1=${expected}`);
+    const expected = createHmac('sha256', 'whsec_test')
+      .update('1700000000.{"a":1}')
+      .digest('hex');
+    expect(signWebhook('whsec_test', 1_700_000_000, '{"a":1}')).toBe(
+      `t=1700000000,v1=${expected}`,
+    );
   });
 
   describe('verifyWebhookSignature', () => {
@@ -125,9 +140,15 @@ describe('partner webhook events', () => {
 
     it('rejects a wrong secret, a tampered body, a malformed header, and a missing header', () => {
       const header = signWebhook(secret, 1_700_000_000, body);
-      expect(verifyWebhookSignature('whsec_other', header, body, now)).toBe(false);
-      expect(verifyWebhookSignature(secret, header, body + 'x', now)).toBe(false);
-      expect(verifyWebhookSignature(secret, 'not-a-signature-header', body, now)).toBe(false);
+      expect(verifyWebhookSignature('whsec_other', header, body, now)).toBe(
+        false,
+      );
+      expect(verifyWebhookSignature(secret, header, body + 'x', now)).toBe(
+        false,
+      );
+      expect(
+        verifyWebhookSignature(secret, 'not-a-signature-header', body, now),
+      ).toBe(false);
       expect(verifyWebhookSignature(secret, undefined, body, now)).toBe(false);
       expect(verifyWebhookSignature(secret, null, body, now)).toBe(false);
     });
@@ -156,8 +177,12 @@ describe('partner webhook events', () => {
   });
 
   it('backs off 10 s → 30 s → 1 min → 5 min → 15 min → 1 h', () => {
-    expect(WEBHOOK_RETRY_DELAYS_MS).toEqual([10_000, 30_000, 60_000, 300_000, 900_000, 3_600_000]);
-    expect([1, 2, 3, 4, 5, 6].map(partnerWebhookBackoff)).toEqual(WEBHOOK_RETRY_DELAYS_MS);
+    expect(WEBHOOK_RETRY_DELAYS_MS).toEqual([
+      10_000, 30_000, 60_000, 300_000, 900_000, 3_600_000,
+    ]);
+    expect([1, 2, 3, 4, 5, 6].map(partnerWebhookBackoff)).toEqual(
+      WEBHOOK_RETRY_DELAYS_MS,
+    );
     expect(partnerWebhookBackoff(9)).toBe(3_600_000);
   });
 });

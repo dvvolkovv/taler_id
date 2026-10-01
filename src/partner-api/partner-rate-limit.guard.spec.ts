@@ -1,6 +1,9 @@
 import { Logger } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { PartnerRateBucket, PartnerRateLimitGuard } from './partner-rate-limit.guard';
+import {
+  PartnerRateBucket,
+  PartnerRateLimitGuard,
+} from './partner-rate-limit.guard';
 
 @PartnerRateBucket('default')
 class DummyController {
@@ -13,7 +16,12 @@ class DummyController {
   }
 }
 
-function ctx(req: any, res: any, handler: (...args: any[]) => unknown, cls: unknown = DummyController) {
+function ctx(
+  req: any,
+  res: any,
+  handler: (...args: any[]) => unknown,
+  cls: unknown = DummyController,
+) {
   return {
     switchToHttp: () => ({ getRequest: () => req, getResponse: () => res }),
     getHandler: () => handler,
@@ -77,7 +85,11 @@ describe('PartnerRateLimitGuard', () => {
     const guard = new PartnerRateLimitGuard(new Reflector(), redis);
     await expect(
       guard.canActivate(
-        ctx({ partner: { id: 'p1' } }, { setHeader: jest.fn() }, DummyController.prototype.tokenMethod),
+        ctx(
+          { partner: { id: 'p1' } },
+          { setHeader: jest.fn() },
+          DummyController.prototype.tokenMethod,
+        ),
       ),
     ).resolves.toBe(true);
     expect(incr).toHaveBeenCalledWith(`partner:rl:p1:token:${minute}`);
@@ -88,7 +100,11 @@ describe('PartnerRateLimitGuard', () => {
     const guard = new PartnerRateLimitGuard(new Reflector(), redis);
     await expect(
       guard.canActivate(
-        ctx({ partner: { id: 'p1' } }, { setHeader: jest.fn() }, DummyController.prototype.plainMethod),
+        ctx(
+          { partner: { id: 'p1' } },
+          { setHeader: jest.fn() },
+          DummyController.prototype.plainMethod,
+        ),
       ),
     ).resolves.toBe(true);
     expect(incr).toHaveBeenCalledWith(`partner:rl:p1:default:${minute}`);
@@ -99,17 +115,32 @@ describe('PartnerRateLimitGuard', () => {
     const guard = new PartnerRateLimitGuard(new Reflector(), redis);
     const req = { partner: { id: 'p1' } };
     for (let i = 0; i < 599; i++) {
-      await guard.canActivate(ctx(req, { setHeader: jest.fn() }, DummyController.prototype.tokenMethod));
+      await guard.canActivate(
+        ctx(
+          req,
+          { setHeader: jest.fn() },
+          DummyController.prototype.tokenMethod,
+        ),
+      );
     }
     await expect(
-      guard.canActivate(ctx(req, { setHeader: jest.fn() }, DummyController.prototype.tokenMethod)),
+      guard.canActivate(
+        ctx(
+          req,
+          { setHeader: jest.fn() },
+          DummyController.prototype.tokenMethod,
+        ),
+      ),
     ).resolves.toBe(true);
     const res = { setHeader: jest.fn() };
     const err = await guard
       .canActivate(ctx(req, res, DummyController.prototype.tokenMethod))
       .catch((e) => e);
     expect(err.getStatus()).toBe(429);
-    expect(err.getResponse()).toEqual({ message: 'rate_limited', retryAfter: 45 });
+    expect(err.getResponse()).toEqual({
+      message: 'rate_limited',
+      retryAfter: 45,
+    });
     expect(res.setHeader).toHaveBeenCalledWith('Retry-After', '45');
   });
 
@@ -118,29 +149,58 @@ describe('PartnerRateLimitGuard', () => {
     const guard = new PartnerRateLimitGuard(new Reflector(), redis);
     const req = { partner: { id: 'p1' } };
     for (let i = 0; i < 119; i++) {
-      await guard.canActivate(ctx(req, { setHeader: jest.fn() }, DummyController.prototype.plainMethod));
+      await guard.canActivate(
+        ctx(
+          req,
+          { setHeader: jest.fn() },
+          DummyController.prototype.plainMethod,
+        ),
+      );
     }
     await expect(
-      guard.canActivate(ctx(req, { setHeader: jest.fn() }, DummyController.prototype.plainMethod)),
+      guard.canActivate(
+        ctx(
+          req,
+          { setHeader: jest.fn() },
+          DummyController.prototype.plainMethod,
+        ),
+      ),
     ).resolves.toBe(true);
     const res = { setHeader: jest.fn() };
     const err = await guard
       .canActivate(ctx(req, res, DummyController.prototype.plainMethod))
       .catch((e) => e);
     expect(err.getStatus()).toBe(429);
-    expect(err.getResponse()).toEqual({ message: 'rate_limited', retryAfter: 45 });
+    expect(err.getResponse()).toEqual({
+      message: 'rate_limited',
+      retryAfter: 45,
+    });
     expect(res.setHeader).toHaveBeenCalledWith('Retry-After', '45');
   });
 
   it('fails open when Redis is unavailable, warning only once within a minute', async () => {
-    const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined as any);
+    const warnSpy = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined as any);
     const guard = new PartnerRateLimitGuard(new Reflector(), downRedis());
     const req = { partner: { id: 'p1' } };
     await expect(
-      guard.canActivate(ctx(req, { setHeader: jest.fn() }, DummyController.prototype.plainMethod)),
+      guard.canActivate(
+        ctx(
+          req,
+          { setHeader: jest.fn() },
+          DummyController.prototype.plainMethod,
+        ),
+      ),
     ).resolves.toBe(true);
     await expect(
-      guard.canActivate(ctx(req, { setHeader: jest.fn() }, DummyController.prototype.plainMethod)),
+      guard.canActivate(
+        ctx(
+          req,
+          { setHeader: jest.fn() },
+          DummyController.prototype.plainMethod,
+        ),
+      ),
     ).resolves.toBe(true);
     expect(warnSpy).toHaveBeenCalledTimes(1);
     warnSpy.mockRestore();
@@ -149,7 +209,13 @@ describe('PartnerRateLimitGuard', () => {
   it('throws when req.partner is missing (guard order violated)', async () => {
     const guard = new PartnerRateLimitGuard(new Reflector(), {} as any);
     await expect(
-      guard.canActivate(ctx({}, { setHeader: jest.fn() }, DummyController.prototype.plainMethod)),
+      guard.canActivate(
+        ctx(
+          {},
+          { setHeader: jest.fn() },
+          DummyController.prototype.plainMethod,
+        ),
+      ),
     ).rejects.toThrow('PartnerRateLimitGuard must run after PartnerKeyGuard');
   });
 });

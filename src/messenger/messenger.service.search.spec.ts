@@ -3,11 +3,15 @@ import { MessengerService } from './messenger.service';
 describe('MessengerService.searchMessages', () => {
   function makeService(conversationsResult: any[] = []) {
     const prisma: any = {
-      conversation: { findMany: jest.fn().mockResolvedValue(conversationsResult) },
+      conversation: {
+        findMany: jest.fn().mockResolvedValue(conversationsResult),
+      },
       message: { findMany: jest.fn().mockResolvedValue([]) },
       user: { findMany: jest.fn().mockResolvedValue([]) },
     };
-    const service = Object.create(MessengerService.prototype) as MessengerService;
+    const service = Object.create(
+      MessengerService.prototype,
+    ) as MessengerService;
     (service as any).prisma = prisma;
     return { service, prisma };
   }
@@ -16,7 +20,10 @@ describe('MessengerService.searchMessages', () => {
     const { service, prisma } = makeService();
     await service.searchMessages('hello', 'u1', ['DIRECT', 'GROUP'] as any);
     expect(prisma.conversation.findMany).toHaveBeenCalledWith({
-      where: { participants: { some: { userId: 'u1' } }, type: { in: ['DIRECT', 'GROUP'] } },
+      where: {
+        participants: { some: { userId: 'u1' } },
+        type: { in: ['DIRECT', 'GROUP'] },
+      },
       select: { id: true },
     });
   });
@@ -34,7 +41,9 @@ describe('MessengerService.searchMessages', () => {
 describe('MessengerService.searchUsers', () => {
   it('hides partner-managed accounts, both by name and by phone', async () => {
     const prisma: any = { user: { findMany: jest.fn().mockResolvedValue([]) } };
-    const service = Object.create(MessengerService.prototype) as MessengerService;
+    const service = Object.create(
+      MessengerService.prototype,
+    ) as MessengerService;
     (service as any).prisma = prisma;
     await service.searchUsers('ivan', 'me');
     await service.searchUsers('+380501234567', 'me');

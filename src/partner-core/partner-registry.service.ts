@@ -1,4 +1,8 @@
-import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import type { Partner } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -46,7 +50,8 @@ export class PartnerRegistryService {
 
   private current(): Promise<Snapshot> {
     const snapshot = this.snapshot;
-    if (snapshot && Date.now() - snapshot.at < SNAPSHOT_TTL_MS) return Promise.resolve(snapshot);
+    if (snapshot && Date.now() - snapshot.at < SNAPSHOT_TTL_MS)
+      return Promise.resolve(snapshot);
     // Все, кто пришёл во время загрузки, ждут её же — второго запроса в базу нет.
     this.loading ??= this.reload().finally(() => {
       this.loading = null;
@@ -72,7 +77,9 @@ export class PartnerRegistryService {
     } catch (e) {
       const stale = this.snapshot;
       if (!stale) {
-        this.logger.warn(`partner registry load failed: ${(e as Error).message}`);
+        this.logger.warn(
+          `partner registry load failed: ${(e as Error).message}`,
+        );
         throw new ServiceUnavailableException('partner registry unavailable');
       }
       this.logger.warn(

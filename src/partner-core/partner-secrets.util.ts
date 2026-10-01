@@ -33,10 +33,16 @@ export function decryptWebhookSecret(payload: string): string {
 
 /** Код привязки храним только как HMAC, привязанный к конкретной связке. */
 export function hashLinkCode(linkId: string, code: string): string {
-  return createHmac('sha256', derive('link-code')).update(`${linkId}:${code}`).digest('hex');
+  return createHmac('sha256', derive('link-code'))
+    .update(`${linkId}:${code}`)
+    .digest('hex');
 }
 
-export function linkCodeMatches(linkId: string, code: string, storedHash: string): boolean {
+export function linkCodeMatches(
+  linkId: string,
+  code: string,
+  storedHash: string,
+): boolean {
   const a = Buffer.from(hashLinkCode(linkId, code), 'hex');
   const b = Buffer.from(storedHash ?? '', 'hex');
   return a.length === b.length && timingSafeEqual(a, b);
@@ -59,7 +65,9 @@ export function reportPartnerSecretsKey(logger: {
 }): void {
   if (process.env.PARTNER_API_ENABLED !== 'true') return;
   try {
-    logger.log(`partner secrets key fingerprint: ${partnerSecretsKeyFingerprint()}`);
+    logger.log(
+      `partner secrets key fingerprint: ${partnerSecretsKeyFingerprint()}`,
+    );
   } catch (e) {
     logger.error(
       `PARTNER_API_ENABLED=true, но ${(e as Error).message} — коды привязки и вебхуки работать не будут`,

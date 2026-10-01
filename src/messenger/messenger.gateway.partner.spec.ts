@@ -25,7 +25,10 @@ const { privateKey, publicKey } = generateKeyPairSync('rsa', {
   publicKeyEncoding: { type: 'spki', format: 'pem' },
   privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
 });
-const keyPath = path.join(os.tmpdir(), `messenger-gateway-partner-${process.pid}.pem`);
+const keyPath = path.join(
+  os.tmpdir(),
+  `messenger-gateway-partner-${process.pid}.pem`,
+);
 fs.writeFileSync(keyPath, publicKey);
 
 /**
@@ -66,7 +69,10 @@ describe('MessengerGateway connections', () => {
       providers: [
         MessengerGateway,
         { provide: MessengerService, useValue: {} },
-        { provide: PrismaService, useValue: { user: { update: jest.fn().mockResolvedValue({}) } } },
+        {
+          provide: PrismaService,
+          useValue: { user: { update: jest.fn().mockResolvedValue({}) } },
+        },
         { provide: RedisService, useValue: {} },
         { provide: AiTwinService, useValue: { registerEmitters: jest.fn() } },
         { provide: AiAnalystService, useValue: {} },
@@ -75,7 +81,10 @@ describe('MessengerGateway connections', () => {
         { provide: ApnsService, useValue: {} },
         {
           provide: ConfigService,
-          useValue: { get: (key: string) => (key === 'jwt.publicKeyPath' ? keyPath : undefined) },
+          useValue: {
+            get: (key: string) =>
+              key === 'jwt.publicKeyPath' ? keyPath : undefined,
+          },
         },
         { provide: PartnerTokensService, useValue: partnerTokens },
         { provide: PartnerRealtimeService, useValue: realtime },
@@ -83,7 +92,10 @@ describe('MessengerGateway connections', () => {
           provide: PartnerConversationScope,
           useValue: { assertConversation: jest.fn(), assertMessage: jest.fn() },
         },
-        { provide: PartnerWebhooksService, useValue: { planFanOut: jest.fn().mockResolvedValue(null) } },
+        {
+          provide: PartnerWebhooksService,
+          useValue: { planFanOut: jest.fn().mockResolvedValue(null) },
+        },
       ],
     }).compile();
     gateway = mod.get(MessengerGateway);
@@ -92,7 +104,10 @@ describe('MessengerGateway connections', () => {
   afterAll(() => fs.unlinkSync(keyPath));
 
   it('joins the personal room for a TalerID access token without asking the partner store', async () => {
-    const token = jwt.sign({ sub: 'u1', typ: 'access' }, privateKey, { algorithm: 'RS256', expiresIn: 60 });
+    const token = jwt.sign({ sub: 'u1', typ: 'access' }, privateKey, {
+      algorithm: 'RS256',
+      expiresIn: 60,
+    });
     const client = fakeClient(token);
     await gateway.handleConnection(client as any);
     expect(client.data.userId).toBe('u1');
@@ -105,10 +120,19 @@ describe('MessengerGateway connections', () => {
   it('accepts a partner token: joins plink, re-verifies, only then joins puser, and drops the socket when the token expires', async () => {
     jest.useFakeTimers({ now: new Date('2026-10-01T10:00:00Z') });
     const expiresAt = Math.floor(Date.parse('2026-10-01T10:15:00Z') / 1000);
-    partnerTokens.verify.mockResolvedValue({ userId: 'u1', partnerId: 'p1', partnerSlug: 'nadi', grantId: 'g1', expiresAt });
+    partnerTokens.verify.mockResolvedValue({
+      userId: 'u1',
+      partnerId: 'p1',
+      partnerSlug: 'nadi',
+      grantId: 'g1',
+      expiresAt,
+    });
     const client = fakeClient('opaque');
     await gateway.handleConnection(client as any);
-    expect(client.data.partner).toMatchObject({ partnerId: 'p1', grantId: 'g1' });
+    expect(client.data.partner).toMatchObject({
+      partnerId: 'p1',
+      grantId: 'g1',
+    });
     // user:<id> is a firehose (AI, calls, billing, "Избранное") — a partner
     // socket must NOT sit there. It gets its own puser:<id> room instead.
     expect(client.join).not.toHaveBeenCalledWith('user:u1');
@@ -118,7 +142,9 @@ describe('MessengerGateway connections', () => {
     // revocation caught by the second verify() never had a window where the
     // socket sat in puser:<id> able to receive mirrored events.
     const joinedRooms = client.join.mock.calls.map((c: any[]) => c[0]);
-    expect(joinedRooms.indexOf('plink:p1:u1')).toBeLessThan(joinedRooms.indexOf(partnerUserRoom('u1')));
+    expect(joinedRooms.indexOf('plink:p1:u1')).toBeLessThan(
+      joinedRooms.indexOf(partnerUserRoom('u1')),
+    );
     expect(partnerTokens.verify).toHaveBeenCalledTimes(2);
     jest.advanceTimersByTime(15 * 60 * 1000 - 1);
     expect(client.disconnect).not.toHaveBeenCalled();
@@ -134,8 +160,16 @@ describe('MessengerGateway connections', () => {
   });
 
   it('drops a partner socket whose link was revoked while it was connecting, before it ever joins puser', async () => {
-    const principal = { userId: 'u1', partnerId: 'p1', partnerSlug: 'nadi', grantId: 'g1', expiresAt: Math.floor(Date.now() / 1000) + 900 };
-    partnerTokens.verify.mockResolvedValueOnce(principal).mockResolvedValueOnce(null);
+    const principal = {
+      userId: 'u1',
+      partnerId: 'p1',
+      partnerSlug: 'nadi',
+      grantId: 'g1',
+      expiresAt: Math.floor(Date.now() / 1000) + 900,
+    };
+    partnerTokens.verify
+      .mockResolvedValueOnce(principal)
+      .mockResolvedValueOnce(null);
     const client = fakeClient('opaque');
     await gateway.handleConnection(client as any);
     expect(client.join).toHaveBeenCalledWith('plink:p1:u1');
@@ -144,12 +178,20 @@ describe('MessengerGateway connections', () => {
   });
 
   it('does not arm the expiry timer if the socket disconnected on its own while the checks were running', async () => {
-    const principal = { userId: 'u1', partnerId: 'p1', partnerSlug: 'nadi', grantId: 'g1', expiresAt: Math.floor(Date.now() / 1000) + 900 };
+    const principal = {
+      userId: 'u1',
+      partnerId: 'p1',
+      partnerSlug: 'nadi',
+      grantId: 'g1',
+      expiresAt: Math.floor(Date.now() / 1000) + 900,
+    };
     const client = fakeClient('opaque');
-    partnerTokens.verify.mockResolvedValueOnce(principal).mockImplementationOnce(async () => {
-      client.connected = false; // клиент ушёл сам, пока шла вторая проверка
-      return principal;
-    });
+    partnerTokens.verify
+      .mockResolvedValueOnce(principal)
+      .mockImplementationOnce(async () => {
+        client.connected = false; // клиент ушёл сам, пока шла вторая проверка
+        return principal;
+      });
     const result = await (gateway as any).authenticateSocket(client);
     expect(result).toBe(false);
     expect(client.join).toHaveBeenCalledWith(partnerUserRoom('u1'));
@@ -160,7 +202,10 @@ describe('MessengerGateway connections', () => {
   it('clears the expiry timer when the socket goes away first (never fires a second disconnect)', async () => {
     jest.useFakeTimers({ now: new Date('2026-10-01T10:00:00Z') });
     partnerTokens.verify.mockResolvedValue({
-      userId: 'u1', partnerId: 'p1', partnerSlug: 'nadi', grantId: 'g1',
+      userId: 'u1',
+      partnerId: 'p1',
+      partnerSlug: 'nadi',
+      grantId: 'g1',
       expiresAt: Math.floor(Date.now() / 1000) + 60,
     });
     const client = fakeClient('opaque');
@@ -187,7 +232,10 @@ describe('MessengerGateway connections', () => {
     // Node — воспроизводит (проверено отдельно: JSON.stringify на нём
     // падает с "Converting circular structure to JSON").
     partnerTokens.verify.mockResolvedValue({
-      userId: 'u1', partnerId: 'p1', partnerSlug: 'nadi', grantId: 'g1',
+      userId: 'u1',
+      partnerId: 'p1',
+      partnerSlug: 'nadi',
+      grantId: 'g1',
       expiresAt: Math.floor(Date.now() / 1000) + 900,
     });
     const client = fakeClient('opaque');
@@ -199,7 +247,10 @@ describe('MessengerGateway connections', () => {
 
   it('registers a disconnector that drops every socket of a link', () => {
     const disconnectSockets = jest.fn();
-    const server = { in: jest.fn().mockReturnValue({ disconnectSockets }), to: jest.fn() };
+    const server = {
+      in: jest.fn().mockReturnValue({ disconnectSockets }),
+      to: jest.fn(),
+    };
     (gateway as any).server = server;
     gateway.onModuleInit();
     const [disconnector] = realtime.registerDisconnector.mock.calls[0];

@@ -23,7 +23,8 @@ export class PartnerConversationScope {
       where: { id: conversationId },
       select: { type: true },
     });
-    if (conv && !isPartnerConversationType(conv.type)) throw new ForbiddenException(PARTNER_FORBIDDEN);
+    if (conv && !isPartnerConversationType(conv.type))
+      throw new ForbiddenException(PARTNER_FORBIDDEN);
   }
 
   async assertMessage(messageId: string | undefined): Promise<void> {
@@ -77,7 +78,10 @@ export class PartnerConversationScope {
   /** Беседы пользователя, видимые партнёрскому токену, — для фильтрации списков. */
   async visibleConversationIds(userId: string): Promise<Set<string>> {
     const rows = await this.prisma.conversationParticipant.findMany({
-      where: { userId, conversation: { type: { in: [...PARTNER_CONVERSATION_TYPES] } } },
+      where: {
+        userId,
+        conversation: { type: { in: [...PARTNER_CONVERSATION_TYPES] } },
+      },
       select: { conversationId: true },
     });
     return new Set(rows.map((r) => r.conversationId));
@@ -97,8 +101,14 @@ export class PartnerConversationScope {
       },
       select: { senderId: true, receiverId: true },
     });
-    const contacts = new Set(rows.map((r) => (r.senderId === userId ? r.receiverId : r.senderId)));
+    const contacts = new Set(
+      rows.map((r) => (r.senderId === userId ? r.receiverId : r.senderId)),
+    );
     const missing = others.filter((id) => !contacts.has(id));
-    if (missing.length > 0) throw new ForbiddenException({ message: 'not_a_contact', userIds: missing });
+    if (missing.length > 0)
+      throw new ForbiddenException({
+        message: 'not_a_contact',
+        userIds: missing,
+      });
   }
 }

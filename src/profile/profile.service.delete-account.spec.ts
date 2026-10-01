@@ -99,14 +99,24 @@ describe('ProfileService.deleteAccount', () => {
   });
 
   it('revokes partner links so partners lose access at once', async () => {
-    mockPrisma.profile.findUnique.mockResolvedValue({ id: 'profile-1', userId: 'user-1' });
+    mockPrisma.profile.findUnique.mockResolvedValue({
+      id: 'profile-1',
+      userId: 'user-1',
+    });
     await service.deleteAccount('user-1');
     expect(mockPartnerLinks.revokeAllForUser).toHaveBeenCalledWith('user-1');
   });
 
   it('still deletes the account when partner revocation fails', async () => {
-    mockPrisma.profile.findUnique.mockResolvedValue({ id: 'profile-1', userId: 'user-1' });
-    mockPartnerLinks.revokeAllForUser.mockRejectedValueOnce(new Error('redis down'));
-    await expect(service.deleteAccount('user-1')).resolves.toEqual({ success: true });
+    mockPrisma.profile.findUnique.mockResolvedValue({
+      id: 'profile-1',
+      userId: 'user-1',
+    });
+    mockPartnerLinks.revokeAllForUser.mockRejectedValueOnce(
+      new Error('redis down'),
+    );
+    await expect(service.deleteAccount('user-1')).resolves.toEqual({
+      success: true,
+    });
   });
 });

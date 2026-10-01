@@ -22,7 +22,9 @@ afterAll(() => {
   else process.env.PARTNER_API_ENABLED = savedEnabled;
 });
 
-function startServer(handler: http.RequestListener): Promise<{ url: string; close: () => Promise<void> }> {
+function startServer(
+  handler: http.RequestListener,
+): Promise<{ url: string; close: () => Promise<void> }> {
   return new Promise((resolve) => {
     const server = http.createServer(handler);
     // Sockets of a destroyed/never-closing connection can keep server.close()
@@ -56,7 +58,10 @@ function make(webhookUrl: string) {
     webhookSecretEnc: encryptWebhookSecret('whsec_test'),
   };
   const registry: any = { findById: jest.fn().mockResolvedValue(partner) };
-  const client: any = { lpush: jest.fn().mockResolvedValue(1), ltrim: jest.fn().mockResolvedValue('OK') };
+  const client: any = {
+    lpush: jest.fn().mockResolvedValue(1),
+    ltrim: jest.fn().mockResolvedValue('OK'),
+  };
   const redis: any = { getClient: () => client };
   const queue: any = { add: jest.fn() };
   return new PartnerWebhooksService(prisma, registry, redis, queue);
@@ -74,7 +79,11 @@ describe('PartnerWebhooksService.deliver against a real server (error-label prec
       const service = make(url);
       const started = Date.now();
       const result = await service.deliver('p1', event, 1, SHORT_DEADLINE_MS);
-      expect(result).toMatchObject({ delivered: false, status: null, error: 'timeout' });
+      expect(result).toMatchObject({
+        delivered: false,
+        status: null,
+        error: 'timeout',
+      });
       expect(Date.now() - started).toBeLessThan(SHORT_DEADLINE_MS + 3000);
     } finally {
       await close();
@@ -89,7 +98,11 @@ describe('PartnerWebhooksService.deliver against a real server (error-label prec
     try {
       const service = make(url);
       const result = await service.deliver('p1', event);
-      expect(result).toMatchObject({ delivered: false, status: null, error: 'response_too_large' });
+      expect(result).toMatchObject({
+        delivered: false,
+        status: null,
+        error: 'response_too_large',
+      });
     } finally {
       await close();
     }

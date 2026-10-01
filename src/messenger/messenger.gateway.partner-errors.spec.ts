@@ -26,7 +26,13 @@ describe('MessengerGateway socket errors: machine codes for partner, unchanged t
   let prisma: any;
 
   function partnerClient() {
-    return { data: { userId: 'sender', partner: { partnerId: 'p1', partnerSlug: 'nadi' } }, emit: jest.fn() };
+    return {
+      data: {
+        userId: 'sender',
+        partner: { partnerId: 'p1', partnerSlug: 'nadi' },
+      },
+      emit: jest.fn(),
+    };
   }
   function nativeClient() {
     return { data: { userId: 'sender' }, emit: jest.fn() };
@@ -36,9 +42,13 @@ describe('MessengerGateway socket errors: machine codes for partner, unchanged t
     service = {
       assertParticipant: jest.fn().mockResolvedValue(undefined),
       getConversationType: jest.fn().mockResolvedValue('GROUP'),
-      getParticipants: jest.fn().mockResolvedValue([{ userId: 'sender' }, { userId: 'recipient' }]),
+      getParticipants: jest
+        .fn()
+        .mockResolvedValue([{ userId: 'sender' }, { userId: 'recipient' }]),
       hasContactWith: jest.fn().mockResolvedValue(true),
-      createMessage: jest.fn().mockResolvedValue({ id: 'm1', conversationId: 'conv-1' }),
+      createMessage: jest
+        .fn()
+        .mockResolvedValue({ id: 'm1', conversationId: 'conv-1' }),
       getUserDisplayName: jest.fn().mockResolvedValue('Sender'),
       loadReplyPreview: jest.fn().mockResolvedValue(null),
       editMessage: jest.fn().mockResolvedValue({ id: 'm1', content: 'edited' }),
@@ -47,7 +57,9 @@ describe('MessengerGateway socket errors: machine codes for partner, unchanged t
     };
     prisma = {
       blockedUser: { findFirst: jest.fn().mockResolvedValue(null) },
-      conversation: { findUnique: jest.fn().mockResolvedValue({ type: 'DIRECT' }) },
+      conversation: {
+        findUnique: jest.fn().mockResolvedValue({ type: 'DIRECT' }),
+      },
     };
     const mod = await Test.createTestingModule({
       providers: [
@@ -61,15 +73,32 @@ describe('MessengerGateway socket errors: machine codes for partner, unchanged t
         { provide: FcmService, useValue: {} },
         { provide: ApnsService, useValue: {} },
         { provide: ConfigService, useValue: { get: () => undefined } },
-        { provide: PartnerTokensService, useValue: { verify: jest.fn().mockResolvedValue(null) } },
-        { provide: PartnerRealtimeService, useValue: { registerDisconnector: jest.fn() } },
-        { provide: PartnerConversationScope, useValue: { assertConversation: jest.fn(), assertMessage: jest.fn() } },
-        { provide: PartnerWebhooksService, useValue: { planFanOut: jest.fn().mockResolvedValue(null) } },
+        {
+          provide: PartnerTokensService,
+          useValue: { verify: jest.fn().mockResolvedValue(null) },
+        },
+        {
+          provide: PartnerRealtimeService,
+          useValue: { registerDisconnector: jest.fn() },
+        },
+        {
+          provide: PartnerConversationScope,
+          useValue: { assertConversation: jest.fn(), assertMessage: jest.fn() },
+        },
+        {
+          provide: PartnerWebhooksService,
+          useValue: { planFanOut: jest.fn().mockResolvedValue(null) },
+        },
       ],
     }).compile();
     gateway = mod.get(MessengerGateway);
-    (gateway as any).server = { to: jest.fn().mockReturnValue({ emit: jest.fn() }), in: jest.fn() };
-    jest.spyOn((gateway as any).logger, 'error').mockImplementation(() => undefined);
+    (gateway as any).server = {
+      to: jest.fn().mockReturnValue({ emit: jest.fn() }),
+      in: jest.fn(),
+    };
+    jest
+      .spyOn((gateway as any).logger, 'error')
+      .mockImplementation(() => undefined);
   });
 
   describe('join: not a participant', () => {
@@ -80,13 +109,17 @@ describe('MessengerGateway socket errors: machine codes for partner, unchanged t
     it('partner socket gets the code', async () => {
       const client = partnerClient();
       await gateway.handleJoin(client as any, { conversationId: 'conv-1' });
-      expect(client.emit).toHaveBeenCalledWith('error', { message: 'not_a_participant' });
+      expect(client.emit).toHaveBeenCalledWith('error', {
+        message: 'not_a_participant',
+      });
     });
 
     it('native socket keeps the exact previous text', async () => {
       const client = nativeClient();
       await gateway.handleJoin(client as any, { conversationId: 'conv-1' });
-      expect(client.emit).toHaveBeenCalledWith('error', { message: 'Not a participant' });
+      expect(client.emit).toHaveBeenCalledWith('error', {
+        message: 'Not a participant',
+      });
     });
   });
 
@@ -98,15 +131,25 @@ describe('MessengerGateway socket errors: machine codes for partner, unchanged t
 
     it('partner socket gets `blocked`, not the Russian sentence', async () => {
       const client = partnerClient();
-      await gateway.handleMessage(client as any, { conversationId: 'conv-1', content: 'hi' } as any);
+      await gateway.handleMessage(
+        client as any,
+        { conversationId: 'conv-1', content: 'hi' } as any,
+      );
       expect(client.emit).toHaveBeenCalledWith('error', { message: 'blocked' });
-      expect(client.emit).not.toHaveBeenCalledWith('error', { message: 'Вы заблокированы этим пользователем' });
+      expect(client.emit).not.toHaveBeenCalledWith('error', {
+        message: 'Вы заблокированы этим пользователем',
+      });
     });
 
     it('native socket keeps the exact previous text', async () => {
       const client = nativeClient();
-      await gateway.handleMessage(client as any, { conversationId: 'conv-1', content: 'hi' } as any);
-      expect(client.emit).toHaveBeenCalledWith('error', { message: 'Вы заблокированы этим пользователем' });
+      await gateway.handleMessage(
+        client as any,
+        { conversationId: 'conv-1', content: 'hi' } as any,
+      );
+      expect(client.emit).toHaveBeenCalledWith('error', {
+        message: 'Вы заблокированы этим пользователем',
+      });
     });
   });
 
@@ -119,15 +162,27 @@ describe('MessengerGateway socket errors: machine codes for partner, unchanged t
 
     it('partner socket gets `not_a_contact`, not the Russian sentence', async () => {
       const client = partnerClient();
-      await gateway.handleMessage(client as any, { conversationId: 'conv-1', content: 'hi' } as any);
-      expect(client.emit).toHaveBeenCalledWith('error', { message: 'not_a_contact' });
-      expect(client.emit).not.toHaveBeenCalledWith('error', { message: 'Пользователь удалил вас из контактов' });
+      await gateway.handleMessage(
+        client as any,
+        { conversationId: 'conv-1', content: 'hi' } as any,
+      );
+      expect(client.emit).toHaveBeenCalledWith('error', {
+        message: 'not_a_contact',
+      });
+      expect(client.emit).not.toHaveBeenCalledWith('error', {
+        message: 'Пользователь удалил вас из контактов',
+      });
     });
 
     it('native socket keeps the exact previous text', async () => {
       const client = nativeClient();
-      await gateway.handleMessage(client as any, { conversationId: 'conv-1', content: 'hi' } as any);
-      expect(client.emit).toHaveBeenCalledWith('error', { message: 'Пользователь удалил вас из контактов' });
+      await gateway.handleMessage(
+        client as any,
+        { conversationId: 'conv-1', content: 'hi' } as any,
+      );
+      expect(client.emit).toHaveBeenCalledWith('error', {
+        message: 'Пользователь удалил вас из контактов',
+      });
     });
   });
 
@@ -136,25 +191,42 @@ describe('MessengerGateway socket errors: machine codes for partner, unchanged t
       // GROUP skips the DIRECT-only blocked/contact checks above, isolating
       // the generic catch-all.
       service.getConversationType.mockResolvedValue('GROUP');
-      service.createMessage.mockRejectedValue(new Error('column "foo" does not exist'));
+      service.createMessage.mockRejectedValue(
+        new Error('column "foo" does not exist'),
+      );
     });
 
     it('partner socket gets `internal_error`, never the raw Error/Prisma text', async () => {
       const client = partnerClient();
-      await gateway.handleMessage(client as any, { conversationId: 'conv-1', content: 'hi' } as any);
-      expect(client.emit).toHaveBeenCalledWith('error', { message: 'internal_error' });
-      expect(client.emit).not.toHaveBeenCalledWith('error', { message: 'column "foo" does not exist' });
+      await gateway.handleMessage(
+        client as any,
+        { conversationId: 'conv-1', content: 'hi' } as any,
+      );
+      expect(client.emit).toHaveBeenCalledWith('error', {
+        message: 'internal_error',
+      });
+      expect(client.emit).not.toHaveBeenCalledWith('error', {
+        message: 'column "foo" does not exist',
+      });
     });
 
     it('native socket keeps getting the raw message, exactly as before', async () => {
       const client = nativeClient();
-      await gateway.handleMessage(client as any, { conversationId: 'conv-1', content: 'hi' } as any);
-      expect(client.emit).toHaveBeenCalledWith('error', { message: 'column "foo" does not exist' });
+      await gateway.handleMessage(
+        client as any,
+        { conversationId: 'conv-1', content: 'hi' } as any,
+      );
+      expect(client.emit).toHaveBeenCalledWith('error', {
+        message: 'column "foo" does not exist',
+      });
     });
 
     it('logs the real error server-side regardless of caller', async () => {
       const client = partnerClient();
-      await gateway.handleMessage(client as any, { conversationId: 'conv-1', content: 'hi' } as any);
+      await gateway.handleMessage(
+        client as any,
+        { conversationId: 'conv-1', content: 'hi' } as any,
+      );
       expect((gateway as any).logger.error).toHaveBeenCalledWith(
         expect.stringContaining('column "foo" does not exist'),
         expect.anything(),
@@ -169,21 +241,41 @@ describe('MessengerGateway socket errors: machine codes for partner, unchanged t
 
     it('partner socket gets `internal_error`', async () => {
       const client = partnerClient();
-      await gateway.handleEditMessage(client as any, { conversationId: 'conv-1', messageId: 'm1', content: 'x' });
-      expect(client.emit).toHaveBeenCalledWith('error', { message: 'internal_error' });
-      expect(client.emit).not.toHaveBeenCalledWith('error', { message: 'edit exploded' });
+      await gateway.handleEditMessage(client as any, {
+        conversationId: 'conv-1',
+        messageId: 'm1',
+        content: 'x',
+      });
+      expect(client.emit).toHaveBeenCalledWith('error', {
+        message: 'internal_error',
+      });
+      expect(client.emit).not.toHaveBeenCalledWith('error', {
+        message: 'edit exploded',
+      });
     });
 
     it('native socket keeps the raw message, exactly as before', async () => {
       const client = nativeClient();
-      await gateway.handleEditMessage(client as any, { conversationId: 'conv-1', messageId: 'm1', content: 'x' });
-      expect(client.emit).toHaveBeenCalledWith('error', { message: 'edit exploded' });
+      await gateway.handleEditMessage(client as any, {
+        conversationId: 'conv-1',
+        messageId: 'm1',
+        content: 'x',
+      });
+      expect(client.emit).toHaveBeenCalledWith('error', {
+        message: 'edit exploded',
+      });
     });
 
     it('logs the real error server-side (previously not logged at all)', async () => {
       const client = partnerClient();
-      await gateway.handleEditMessage(client as any, { conversationId: 'conv-1', messageId: 'm1', content: 'x' });
-      expect((gateway as any).logger.error).toHaveBeenCalledWith(expect.stringContaining('edit exploded'));
+      await gateway.handleEditMessage(client as any, {
+        conversationId: 'conv-1',
+        messageId: 'm1',
+        content: 'x',
+      });
+      expect((gateway as any).logger.error).toHaveBeenCalledWith(
+        expect.stringContaining('edit exploded'),
+      );
     });
   });
 
@@ -194,21 +286,41 @@ describe('MessengerGateway socket errors: machine codes for partner, unchanged t
 
     it('partner socket gets `internal_error`', async () => {
       const client = partnerClient();
-      await gateway.handleDeleteMessage(client as any, { conversationId: 'conv-1', messageId: 'm1', scope: 'all' });
-      expect(client.emit).toHaveBeenCalledWith('error', { message: 'internal_error' });
-      expect(client.emit).not.toHaveBeenCalledWith('error', { message: 'delete exploded' });
+      await gateway.handleDeleteMessage(client as any, {
+        conversationId: 'conv-1',
+        messageId: 'm1',
+        scope: 'all',
+      });
+      expect(client.emit).toHaveBeenCalledWith('error', {
+        message: 'internal_error',
+      });
+      expect(client.emit).not.toHaveBeenCalledWith('error', {
+        message: 'delete exploded',
+      });
     });
 
     it('native socket keeps the raw message, exactly as before', async () => {
       const client = nativeClient();
-      await gateway.handleDeleteMessage(client as any, { conversationId: 'conv-1', messageId: 'm1', scope: 'all' });
-      expect(client.emit).toHaveBeenCalledWith('error', { message: 'delete exploded' });
+      await gateway.handleDeleteMessage(client as any, {
+        conversationId: 'conv-1',
+        messageId: 'm1',
+        scope: 'all',
+      });
+      expect(client.emit).toHaveBeenCalledWith('error', {
+        message: 'delete exploded',
+      });
     });
 
     it('logs the real error server-side (previously not logged at all)', async () => {
       const client = partnerClient();
-      await gateway.handleDeleteMessage(client as any, { conversationId: 'conv-1', messageId: 'm1', scope: 'all' });
-      expect((gateway as any).logger.error).toHaveBeenCalledWith(expect.stringContaining('delete exploded'));
+      await gateway.handleDeleteMessage(client as any, {
+        conversationId: 'conv-1',
+        messageId: 'm1',
+        scope: 'all',
+      });
+      expect((gateway as any).logger.error).toHaveBeenCalledWith(
+        expect.stringContaining('delete exploded'),
+      );
     });
   });
 
@@ -219,21 +331,41 @@ describe('MessengerGateway socket errors: machine codes for partner, unchanged t
 
     it('partner socket gets `internal_error`', async () => {
       const client = partnerClient();
-      await gateway.handleReactMessage(client as any, { conversationId: 'conv-1', messageId: 'm1', emoji: '👍' });
-      expect(client.emit).toHaveBeenCalledWith('error', { message: 'internal_error' });
-      expect(client.emit).not.toHaveBeenCalledWith('error', { message: 'react exploded' });
+      await gateway.handleReactMessage(client as any, {
+        conversationId: 'conv-1',
+        messageId: 'm1',
+        emoji: '👍',
+      });
+      expect(client.emit).toHaveBeenCalledWith('error', {
+        message: 'internal_error',
+      });
+      expect(client.emit).not.toHaveBeenCalledWith('error', {
+        message: 'react exploded',
+      });
     });
 
     it('native socket keeps the raw message, exactly as before', async () => {
       const client = nativeClient();
-      await gateway.handleReactMessage(client as any, { conversationId: 'conv-1', messageId: 'm1', emoji: '👍' });
-      expect(client.emit).toHaveBeenCalledWith('error', { message: 'react exploded' });
+      await gateway.handleReactMessage(client as any, {
+        conversationId: 'conv-1',
+        messageId: 'm1',
+        emoji: '👍',
+      });
+      expect(client.emit).toHaveBeenCalledWith('error', {
+        message: 'react exploded',
+      });
     });
 
     it('logs the real error server-side (previously not logged at all)', async () => {
       const client = partnerClient();
-      await gateway.handleReactMessage(client as any, { conversationId: 'conv-1', messageId: 'm1', emoji: '👍' });
-      expect((gateway as any).logger.error).toHaveBeenCalledWith(expect.stringContaining('react exploded'));
+      await gateway.handleReactMessage(client as any, {
+        conversationId: 'conv-1',
+        messageId: 'm1',
+        emoji: '👍',
+      });
+      expect((gateway as any).logger.error).toHaveBeenCalledWith(
+        expect.stringContaining('react exploded'),
+      );
     });
   });
 });

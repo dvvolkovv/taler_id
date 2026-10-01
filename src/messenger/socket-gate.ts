@@ -62,7 +62,10 @@ export function installSocketGate(
       if (!ok) return;
       if (!client.data.partner) return next();
       const [event, payload] = packet as unknown as [string, any];
-      if (PARTNER_SOCKET_EVENTS.has(event) && (await partnerPayloadAllowed(client, payload, scope))) {
+      if (
+        PARTNER_SOCKET_EVENTS.has(event) &&
+        (await partnerPayloadAllowed(client, payload, scope))
+      ) {
         return next();
       }
       client.emit('error', { message: PARTNER_FORBIDDEN, event });

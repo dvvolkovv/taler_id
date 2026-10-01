@@ -8,7 +8,10 @@ import {
 } from '@nestjs/common';
 import { OIDC_PROVIDER } from '../oidc/oidc.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { PartnerRecord, PartnerRegistryService } from './partner-registry.service';
+import {
+  PartnerRecord,
+  PartnerRegistryService,
+} from './partner-registry.service';
 import {
   MESSENGER_SCOPE,
   PARTNER_ACCESS_TOKEN_TTL_SECONDS,
@@ -53,10 +56,15 @@ export class PartnerTokensService {
     retried = false,
   ): Promise<{ accessToken: string; expiresIn: number; grantId: string }> {
     const client = await this.provider.Client.find(partner.oauthClientId);
-    if (!client) throw new InternalServerErrorException('partner oauth client not configured');
+    if (!client)
+      throw new InternalServerErrorException(
+        'partner oauth client not configured',
+      );
 
     const now = Math.floor(Date.now() / 1000);
-    const live = link.grantId ? await this.provider.Grant.find(link.grantId) : undefined;
+    const live = link.grantId
+      ? await this.provider.Grant.find(link.grantId)
+      : undefined;
     const usable =
       !!live &&
       live.accountId === link.userId &&
@@ -65,7 +73,10 @@ export class PartnerTokensService {
 
     let grantId = link.grantId;
     if (!usable) {
-      const grant = new this.provider.Grant({ accountId: link.userId, clientId: partner.oauthClientId });
+      const grant = new this.provider.Grant({
+        accountId: link.userId,
+        clientId: partner.oauthClientId,
+      });
       grant.addOIDCScope(MESSENGER_SCOPE);
       const fresh: string = await grant.save();
       // Сравнение с обменом: грант меняем, только если связка всё ещё ACTIVE, за тем
@@ -75,7 +86,12 @@ export class PartnerTokensService {
       // грант удалённого на ту же строку, заново привязанную к новому аккаунту
       // (перепривязка той же externalId обнуляет grantId).
       const { count } = await this.prisma.partnerLink.updateMany({
-        where: { id: link.id, status: 'ACTIVE', grantId: link.grantId, userId: link.userId },
+        where: {
+          id: link.id,
+          status: 'ACTIVE',
+          grantId: link.grantId,
+          userId: link.userId,
+        },
         data: { grantId: fresh },
       });
       if (count === 0) {
@@ -88,7 +104,11 @@ export class PartnerTokensService {
         });
         // Отозвана, удалена или уже за другим человеком — для этого пользователя
         // связки больше нет.
-        if (!current || current.status !== 'ACTIVE' || current.userId !== link.userId) {
+        if (
+          !current ||
+          current.status !== 'ACTIVE' ||
+          current.userId !== link.userId
+        ) {
           throw new NotFoundException('not_linked');
         }
         return this.issueAccessToken(
@@ -115,12 +135,15 @@ export class PartnerTokensService {
     });
     // Токен не должен пережить свой грант: verify требует живой грант, и токен,
     // выданный «на 15 минут», умер бы молча раньше срока.
-    if (live && usable && live.exp - now < at.expiration) at.expiresIn = live.exp - now;
+    if (live && usable && live.exp - now < at.expiration)
+      at.expiresIn = live.exp - now;
     const accessToken: string = await at.save();
     // Срок — из настроек провайдера (ttl.AccessToken), а не из своей копии:
     // поменяют TTL глобально — партнёр получит правду, а не старые 900 секунд.
     const expiresIn =
-      typeof at.expiration === 'number' ? at.expiration : PARTNER_ACCESS_TOKEN_TTL_SECONDS;
+      typeof at.expiration === 'number'
+        ? at.expiration
+        : PARTNER_ACCESS_TOKEN_TTL_SECONDS;
     return { accessToken, expiresIn, grantId: grantId as string };
   }
 
@@ -144,21 +167,35 @@ export class PartnerTokensService {
     // Чужой токен (прежде всего истёкший JWT приложения TalerID — самый частый 401)
     // не должен ходить в Redis: иначе при сбое Redis он получит 503 вместо 401,
     // и приложение так и не станет обновлять токен.
-    if (process.env.PARTNER_API_ENABLED !== 'true' || !PARTNER_TOKEN_FORMAT.test(token ?? '')) return null;
+    if (
+      process.env.PARTNER_API_ENABLED !== 'true' ||
+      !PARTNER_TOKEN_FORMAT.test(token ?? '')
+    )
+      return null;
     let at: any;
     let grant: any;
     try {
       at = await this.provider.AccessToken.find(token);
-      grant = at?.grantId ? await this.provider.Grant.find(at.grantId) : undefined;
+      grant = at?.grantId
+        ? await this.provider.Grant.find(at.grantId)
+        : undefined;
     } catch (err) {
-      this.logger.warn(`partner token lookup failed: ${(err as Error).message}`);
+      this.logger.warn(
+        `partner token lookup failed: ${(err as Error).message}`,
+      );
       throw new ServiceUnavailableException('Token validation unavailable');
     }
-    if (!at?.accountId || at.isExpired || at.gty !== PARTNER_TOKEN_GTY) return null;
+    if (!at?.accountId || at.isExpired || at.gty !== PARTNER_TOKEN_GTY)
+      return null;
     // Грант жив и принадлежит тому же человеку и клиенту — то же правило, что
     // oidc-provider применяет в userinfo и introspection. Отзыв связки уничтожает
     // её грант, поэтому все её токены перестают приниматься разом.
-    if (!grant || grant.accountId !== at.accountId || grant.clientId !== at.clientId) return null;
+    if (
+      !grant ||
+      grant.accountId !== at.accountId ||
+      grant.clientId !== at.clientId
+    )
+      return null;
     const scopes = String(at.scope ?? '').split(' ');
     if (!scopes.includes(MESSENGER_SCOPE)) return null;
     const partner = await this.registry.findByClientId(at.clientId);

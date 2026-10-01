@@ -143,6 +143,12 @@ export class EmailService {
 }
 
 function escapeHtml(value: string): string {
-  const map: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+  const map: Record<string, string> = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  };
   return value.replace(/[&<>"']/g, (ch) => map[ch]);
 }

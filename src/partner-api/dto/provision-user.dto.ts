@@ -1,4 +1,10 @@
-import { IsEmail, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
+import {
+  IsEmail,
+  IsOptional,
+  IsString,
+  Matches,
+  MaxLength,
+} from 'class-validator';
 import { EXTERNAL_ID_RE } from '../external-id.util';
 
 export class ProvisionUserDto {

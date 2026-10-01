@@ -9,10 +9,16 @@ class Dummy {}
 
 describe('PartnerApi', () => {
   it('applies PartnerKeyGuard then PartnerRateLimitGuard, in that order', () => {
-    expect(Reflect.getMetadata(GUARDS_METADATA, Dummy)).toEqual([PartnerKeyGuard, PartnerRateLimitGuard]);
+    expect(Reflect.getMetadata(GUARDS_METADATA, Dummy)).toEqual([
+      PartnerKeyGuard,
+      PartnerRateLimitGuard,
+    ]);
   });
 
-  it.each(['short', 'medium', 'long'])('skips the named %s throttle', (name: string) => {
-    expect(Reflect.getMetadata('THROTTLER:SKIP' + name, Dummy)).toBe(true);
-  });
+  it.each(['short', 'medium', 'long'])(
+    'skips the named %s throttle',
+    (name: string) => {
+      expect(Reflect.getMetadata('THROTTLER:SKIP' + name, Dummy)).toBe(true);
+    },
+  );
 });

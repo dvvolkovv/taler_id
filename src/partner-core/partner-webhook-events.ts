@@ -1,7 +1,9 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 
 /** Паузы перед повторами доставки. Дальше событие выбрасывается: пуш через час бессмыслен. */
-export const WEBHOOK_RETRY_DELAYS_MS: readonly number[] = [10_000, 30_000, 60_000, 300_000, 900_000, 3_600_000];
+export const WEBHOOK_RETRY_DELAYS_MS: readonly number[] = [
+  10_000, 30_000, 60_000, 300_000, 900_000, 3_600_000,
+];
 export const WEBHOOK_MAX_ATTEMPTS = 1 + WEBHOOK_RETRY_DELAYS_MS.length;
 const PREVIEW_MAX = 200;
 // Intl.Segmenter режет по графемам корректно, но честно проходит по всей
@@ -9,7 +11,9 @@ const PREVIEW_MAX = 200;
 // графем — поэтому вход сначала обрезаем по code units (запас x4 с лихвой
 // покрывает и суррогатные пары, и составные эмодзи/комбинируемые символы).
 const PREVIEW_SLICE_UNITS = PREVIEW_MAX * 4;
-const previewSegmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+const previewSegmenter = new Intl.Segmenter(undefined, {
+  granularity: 'grapheme',
+});
 
 /**
  * Вид сообщения для вебхука партнёра: по нему партнёр подбирает иконку пуша.
@@ -17,7 +21,13 @@ const previewSegmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme'
  * тип живёт здесь, а не там, потому что мессенджер зависит от partner-core,
  * а не наоборот.
  */
-export type MessageKind = 'text' | 'image' | 'video' | 'audio' | 'file' | 'system';
+export type MessageKind =
+  | 'text'
+  | 'image'
+  | 'video'
+  | 'audio'
+  | 'file'
+  | 'system';
 
 export interface WebhookEvent {
   id: string;
@@ -88,8 +98,11 @@ export function verifyWebhookSignature(
   if (!match) return false;
   const [, ts, mac] = match;
   const timestamp = Number(ts);
-  if (Math.abs(now / 1000 - timestamp) > SIGNATURE_TOLERANCE_SECONDS) return false;
-  const expectedMac = /v1=([0-9a-f]+)$/.exec(signWebhook(secret, timestamp, body))?.[1];
+  if (Math.abs(now / 1000 - timestamp) > SIGNATURE_TOLERANCE_SECONDS)
+    return false;
+  const expectedMac = /v1=([0-9a-f]+)$/.exec(
+    signWebhook(secret, timestamp, body),
+  )?.[1];
   if (!expectedMac) return false;
   const a = Buffer.from(mac, 'hex');
   const b = Buffer.from(expectedMac, 'hex');
@@ -103,14 +116,19 @@ export function buildMessageCreatedEvent(args: {
   input: MessageCreatedInput;
 }): WebhookEvent {
   const { recipient, senderExternalId, conversation, input } = args;
-  const sentAt = input.message.sentAt ? new Date(input.message.sentAt) : new Date();
+  const sentAt = input.message.sentAt
+    ? new Date(input.message.sentAt)
+    : new Date();
   return {
     // Одно сообщение одному получателю — одно событие: по id партнёр
     // отбрасывает повторные доставки.
     id: `evt_${input.message.id}_${recipient.userId}`,
     type: 'message.created',
     createdAt: new Date().toISOString(),
-    recipient: { externalId: recipient.externalId, talerUserId: recipient.userId },
+    recipient: {
+      externalId: recipient.externalId,
+      talerUserId: recipient.userId,
+    },
     conversation,
     message: {
       id: input.message.id,
@@ -126,17 +144,28 @@ export function buildMessageCreatedEvent(args: {
 }
 
 export function pingEvent(): WebhookEvent {
-  return { id: `evt_ping_${randomUUID()}`, type: 'ping', createdAt: new Date().toISOString() };
+  return {
+    id: `evt_ping_${randomUUID()}`,
+    type: 'ping',
+    createdAt: new Date().toISOString(),
+  };
 }
 
 /** Заголовок X-TalerID-Signature: t=<unix-время>,v1=<hex HMAC-SHA256(секрет, "t.тело")>. */
-export function signWebhook(secret: string, timestamp: number, body: string): string {
-  const mac = createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex');
+export function signWebhook(
+  secret: string,
+  timestamp: number,
+  body: string,
+): string {
+  const mac = createHmac('sha256', secret)
+    .update(`${timestamp}.${body}`)
+    .digest('hex');
   return `t=${timestamp},v1=${mac}`;
 }
 
 /** Пауза перед повтором № attemptsMade (BullMQ считает с 1). */
 export function partnerWebhookBackoff(attemptsMade: number): number {
-  const index = Math.min(Math.max(attemptsMade, 1), WEBHOOK_RETRY_DELAYS_MS.length) - 1;
+  const index =
+    Math.min(Math.max(attemptsMade, 1), WEBHOOK_RETRY_DELAYS_MS.length) - 1;
   return WEBHOOK_RETRY_DELAYS_MS[index];
 }

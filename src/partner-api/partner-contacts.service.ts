@@ -1,4 +1,8 @@
-import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { PartnerRecord } from '../partner-core/partner-registry.service';
 import { assertExternalId } from './external-id.util';
@@ -34,7 +38,8 @@ export class PartnerContactsService {
     } catch (e: any) {
       // Тот же PUT пришёл дважды одновременно (оба друга подтвердили дружбу):
       // второй упирается в уникальный индекс. Первый уже всё записал — перечитываем.
-      if (e?.code === 'P2002' && !retried) return this.put(partner, extA, extB, ip, true);
+      if (e?.code === 'P2002' && !retried)
+        return this.put(partner, extA, extB, ip, true);
       throw e;
     }
   }
@@ -83,13 +88,26 @@ export class PartnerContactsService {
     // ON CONFLICT DO UPDATE. Оба атомарны на стороне БД.
     if (wasContact) {
       await this.prisma.partnerContact.createMany({
-        data: [{ partnerId: partner.id, userAId, userBId, createdContact: false }],
+        data: [
+          { partnerId: partner.id, userAId, userBId, createdContact: false },
+        ],
         skipDuplicates: true,
       });
     } else {
       await this.prisma.partnerContact.upsert({
-        where: { partnerId_userAId_userBId: { partnerId: partner.id, userAId, userBId } },
-        create: { partnerId: partner.id, userAId, userBId, createdContact: true },
+        where: {
+          partnerId_userAId_userBId: {
+            partnerId: partner.id,
+            userAId,
+            userBId,
+          },
+        },
+        create: {
+          partnerId: partner.id,
+          userAId,
+          userBId,
+          createdContact: true,
+        },
         update: { createdContact: true },
       });
     }
@@ -104,17 +122,26 @@ export class PartnerContactsService {
     return { contact: true, created: !wasContact };
   }
 
-  async remove(partner: PartnerRecord, extA: string, extB: string, ip?: string): Promise<{ contact: boolean }> {
+  async remove(
+    partner: PartnerRecord,
+    extA: string,
+    extB: string,
+    ip?: string,
+  ): Promise<{ contact: boolean }> {
     const [userAId, userBId] = await this.pair(partner, extA, extB);
     const record = await this.prisma.partnerContact.findUnique({
-      where: { partnerId_userAId_userBId: { partnerId: partner.id, userAId, userBId } },
+      where: {
+        partnerId_userAId_userBId: { partnerId: partner.id, userAId, userBId },
+      },
     });
     if (record) {
       // deleteMany: повторный или параллельный DELETE не падает на уже удалённой строке.
       await this.prisma.partnerContact.deleteMany({ where: { id: record.id } });
       // Снимаем только контакт, который завёл сам партнёр, и только если его
       // не держит другой партнёр. Дружба, бывшая в TalerID раньше, остаётся.
-      const heldByOthers = await this.prisma.partnerContact.count({ where: { userAId, userBId } });
+      const heldByOthers = await this.prisma.partnerContact.count({
+        where: { userAId, userBId },
+      });
       if (record.createdContact && heldByOthers === 0) {
         await this.prisma.contactRequest.deleteMany({
           where: {
@@ -154,7 +181,11 @@ export class PartnerContactsService {
    * подтвердил код из письма) отвечал бы, контакты ли эти двое на самом деле —
    * утечка о произвольной паре чужих аккаунтов.
    */
-  private async pair(partner: PartnerRecord, extA: string, extB: string): Promise<[string, string]> {
+  private async pair(
+    partner: PartnerRecord,
+    extA: string,
+    extB: string,
+  ): Promise<[string, string]> {
     assertExternalId(extA);
     assertExternalId(extB);
     if (extA === extB) throw new BadRequestException('same_user');

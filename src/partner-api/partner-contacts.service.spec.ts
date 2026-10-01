@@ -5,8 +5,18 @@ const partner: any = { id: 'p1', slug: 'nadi' };
 // Внешние id нарочно «перевёрнуты» относительно userId: пара хранится
 // упорядоченной по userId, а не по порядку аргументов.
 const activeLinks = [
-  { externalId: 'a', userId: 'u-b', status: 'ACTIVE', user: { deletedAt: null } },
-  { externalId: 'b', userId: 'u-a', status: 'ACTIVE', user: { deletedAt: null } },
+  {
+    externalId: 'a',
+    userId: 'u-b',
+    status: 'ACTIVE',
+    user: { deletedAt: null },
+  },
+  {
+    externalId: 'b',
+    userId: 'u-a',
+    status: 'ACTIVE',
+    user: { deletedAt: null },
+  },
 ];
 
 function make(links: any[] = activeLinks) {
@@ -20,10 +30,14 @@ function make(links: any[] = activeLinks) {
         const rows = links.filter(
           (l) =>
             ids.includes(l.externalId) &&
-            (args.where.status === undefined || l.status === args.where.status) &&
-            (args.where.user === undefined || l.user.deletedAt === args.where.user.deletedAt),
+            (args.where.status === undefined ||
+              l.status === args.where.status) &&
+            (args.where.user === undefined ||
+              l.user.deletedAt === args.where.user.deletedAt),
         );
-        return Promise.resolve(rows.map(({ externalId, userId }) => ({ externalId, userId })));
+        return Promise.resolve(
+          rows.map(({ externalId, userId }) => ({ externalId, userId })),
+        );
       }),
     },
     blockedUser: {
@@ -51,14 +65,28 @@ function make(links: any[] = activeLinks) {
 describe('PartnerContactsService.put', () => {
   it('creates an accepted contact and remembers that the partner created it', async () => {
     const { service, prisma } = make();
-    await expect(service.put(partner, 'a', 'b')).resolves.toEqual({ contact: true, created: true });
+    await expect(service.put(partner, 'a', 'b')).resolves.toEqual({
+      contact: true,
+      created: true,
+    });
     expect(prisma.contactRequest.create).toHaveBeenCalledWith({
       data: { senderId: 'u-a', receiverId: 'u-b', status: 'ACCEPTED' },
     });
     // !wasContact → upsert с непустым update: атомарный ON CONFLICT DO UPDATE.
     expect(prisma.partnerContact.upsert).toHaveBeenCalledWith({
-      where: { partnerId_userAId_userBId: { partnerId: 'p1', userAId: 'u-a', userBId: 'u-b' } },
-      create: { partnerId: 'p1', userAId: 'u-a', userBId: 'u-b', createdContact: true },
+      where: {
+        partnerId_userAId_userBId: {
+          partnerId: 'p1',
+          userAId: 'u-a',
+          userBId: 'u-b',
+        },
+      },
+      create: {
+        partnerId: 'p1',
+        userAId: 'u-a',
+        userBId: 'u-b',
+        createdContact: true,
+      },
       update: { createdContact: true },
     });
     expect(prisma.partnerContact.createMany).not.toHaveBeenCalled();
@@ -66,14 +94,26 @@ describe('PartnerContactsService.put', () => {
 
   it('records a contact that existed before the partner as not its own', async () => {
     const { service, prisma } = make();
-    prisma.contactRequest.findMany.mockResolvedValue([{ id: 'c1', status: 'ACCEPTED' }]);
-    await expect(service.put(partner, 'a', 'b')).resolves.toEqual({ contact: true, created: false });
+    prisma.contactRequest.findMany.mockResolvedValue([
+      { id: 'c1', status: 'ACCEPTED' },
+    ]);
+    await expect(service.put(partner, 'a', 'b')).resolves.toEqual({
+      contact: true,
+      created: false,
+    });
     expect(prisma.contactRequest.create).not.toHaveBeenCalled();
     expect(prisma.contactRequest.updateMany).not.toHaveBeenCalled();
     // wasContact → createMany+skipDuplicates: атомарный ON CONFLICT DO NOTHING,
     // а не upsert с пустым update (Prisma эмулирует его как SELECT+INSERT).
     expect(prisma.partnerContact.createMany).toHaveBeenCalledWith({
-      data: [{ partnerId: 'p1', userAId: 'u-a', userBId: 'u-b', createdContact: false }],
+      data: [
+        {
+          partnerId: 'p1',
+          userAId: 'u-a',
+          userBId: 'u-b',
+          createdContact: false,
+        },
+      ],
       skipDuplicates: true,
     });
     expect(prisma.partnerContact.upsert).not.toHaveBeenCalled();
@@ -99,37 +139,67 @@ describe('PartnerContactsService.put', () => {
     // Запросы были (значит, PartnerContact мог остаться в базе с прошлым
     // значением флага), но ни один не ACCEPTED — пара сейчас не контакты.
     const { service, prisma } = make();
-    prisma.contactRequest.findMany.mockResolvedValue([{ id: 'c1', status: 'REJECTED' }]);
+    prisma.contactRequest.findMany.mockResolvedValue([
+      { id: 'c1', status: 'REJECTED' },
+    ]);
     await service.put(partner, 'a', 'b');
     expect(prisma.partnerContact.upsert).toHaveBeenCalledWith({
-      where: { partnerId_userAId_userBId: { partnerId: 'p1', userAId: 'u-a', userBId: 'u-b' } },
-      create: { partnerId: 'p1', userAId: 'u-a', userBId: 'u-b', createdContact: true },
+      where: {
+        partnerId_userAId_userBId: {
+          partnerId: 'p1',
+          userAId: 'u-a',
+          userBId: 'u-b',
+        },
+      },
+      create: {
+        partnerId: 'p1',
+        userAId: 'u-a',
+        userBId: 'u-b',
+        createdContact: true,
+      },
       update: { createdContact: true },
     });
   });
 
   it('a repeat PUT racing on the PartnerContact row does not throw — skipDuplicates absorbs the conflict', async () => {
     const { service, prisma } = make();
-    prisma.contactRequest.findMany.mockResolvedValue([{ id: 'c1', status: 'ACCEPTED' }]);
+    prisma.contactRequest.findMany.mockResolvedValue([
+      { id: 'c1', status: 'ACCEPTED' },
+    ]);
     // count: 0 — строка уже была (гонка с параллельным PUT), skipDuplicates
     // молча пропустил вставку; Prisma в этом случае не бросает P2002.
     prisma.partnerContact.createMany.mockResolvedValue({ count: 0 });
-    await expect(service.put(partner, 'a', 'b')).resolves.toEqual({ contact: true, created: false });
+    await expect(service.put(partner, 'a', 'b')).resolves.toEqual({
+      contact: true,
+      created: false,
+    });
   });
 
   it('answers the same PUT sent twice at once instead of failing on the unique index', async () => {
     const { service, prisma } = make();
-    prisma.contactRequest.create.mockRejectedValueOnce(Object.assign(new Error('dup'), { code: 'P2002' }));
+    prisma.contactRequest.create.mockRejectedValueOnce(
+      Object.assign(new Error('dup'), { code: 'P2002' }),
+    );
     // К повтору параллельный запрос уже всё записал: на ретрае wasContact уже
     // true, и запись PartnerContact идёт атомарным createMany, а не upsert —
     // второй гонки (уже без бюджета на повтор) здесь просто не может случиться.
     prisma.contactRequest.findMany
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ id: 'c1', status: 'ACCEPTED' }]);
-    await expect(service.put(partner, 'a', 'b')).resolves.toEqual({ contact: true, created: false });
+    await expect(service.put(partner, 'a', 'b')).resolves.toEqual({
+      contact: true,
+      created: false,
+    });
     expect(prisma.partnerContact.createMany).toHaveBeenCalledTimes(1);
     expect(prisma.partnerContact.createMany).toHaveBeenCalledWith({
-      data: [{ partnerId: 'p1', userAId: 'u-a', userBId: 'u-b', createdContact: false }],
+      data: [
+        {
+          partnerId: 'p1',
+          userAId: 'u-a',
+          userBId: 'u-b',
+          createdContact: false,
+        },
+      ],
       skipDuplicates: true,
     });
     expect(prisma.partnerContact.upsert).not.toHaveBeenCalled();
@@ -137,27 +207,49 @@ describe('PartnerContactsService.put', () => {
 
   it('never overrides a block', async () => {
     const { service, prisma } = make();
-    prisma.blockedUser.findFirst.mockResolvedValue({ blockerId: 'u-b', blockedId: 'u-a' });
+    prisma.blockedUser.findFirst.mockResolvedValue({
+      blockerId: 'u-b',
+      blockedId: 'u-a',
+    });
     await expect(service.put(partner, 'a', 'b')).rejects.toThrow('blocked');
     expect(prisma.contactRequest.create).not.toHaveBeenCalled();
   });
 
   it('needs both links to be active', async () => {
     const { service } = make([activeLinks[0]]);
-    await expect(service.put(partner, 'a', 'b')).rejects.toThrow('link_not_active');
+    await expect(service.put(partner, 'a', 'b')).rejects.toThrow(
+      'link_not_active',
+    );
   });
 
   it('a PENDING (not yet confirmed) link does not count as active', async () => {
-    const { service } = make([activeLinks[0], { externalId: 'b', userId: 'u-a', status: 'PENDING', user: { deletedAt: null } }]);
-    await expect(service.put(partner, 'a', 'b')).rejects.toThrow('link_not_active');
+    const { service } = make([
+      activeLinks[0],
+      {
+        externalId: 'b',
+        userId: 'u-a',
+        status: 'PENDING',
+        user: { deletedAt: null },
+      },
+    ]);
+    await expect(service.put(partner, 'a', 'b')).rejects.toThrow(
+      'link_not_active',
+    );
   });
 
   it('an ACTIVE link of a deleted account does not count as active either', async () => {
     const { service } = make([
       activeLinks[0],
-      { externalId: 'b', userId: 'u-a', status: 'ACTIVE', user: { deletedAt: new Date() } },
+      {
+        externalId: 'b',
+        userId: 'u-a',
+        status: 'ACTIVE',
+        user: { deletedAt: new Date() },
+      },
     ]);
-    await expect(service.put(partner, 'a', 'b')).rejects.toThrow('link_not_active');
+    await expect(service.put(partner, 'a', 'b')).rejects.toThrow(
+      'link_not_active',
+    );
   });
 
   it('refuses a contact with oneself', async () => {
@@ -169,15 +261,25 @@ describe('PartnerContactsService.put', () => {
 describe('PartnerContactsService.remove', () => {
   it('removes a contact the partner created when nobody else holds it', async () => {
     const { service, prisma } = make();
-    prisma.partnerContact.findUnique.mockResolvedValue({ id: 'pc1', createdContact: true });
-    await expect(service.remove(partner, 'a', 'b')).resolves.toEqual({ contact: false });
-    expect(prisma.partnerContact.deleteMany).toHaveBeenCalledWith({ where: { id: 'pc1' } });
+    prisma.partnerContact.findUnique.mockResolvedValue({
+      id: 'pc1',
+      createdContact: true,
+    });
+    await expect(service.remove(partner, 'a', 'b')).resolves.toEqual({
+      contact: false,
+    });
+    expect(prisma.partnerContact.deleteMany).toHaveBeenCalledWith({
+      where: { id: 'pc1' },
+    });
     expect(prisma.contactRequest.deleteMany).toHaveBeenCalled();
   });
 
   it('clears hadContact on blocks of the pair when the partner-created contact is actually removed', async () => {
     const { service, prisma } = make();
-    prisma.partnerContact.findUnique.mockResolvedValue({ id: 'pc1', createdContact: true });
+    prisma.partnerContact.findUnique.mockResolvedValue({
+      id: 'pc1',
+      createdContact: true,
+    });
     await service.remove(partner, 'a', 'b');
     // Иначе снятая партнёром дружба может вернуться следующей же разблокировкой.
     expect(prisma.blockedUser.updateMany).toHaveBeenCalledWith({
@@ -194,7 +296,10 @@ describe('PartnerContactsService.remove', () => {
   it('does not touch hadContact when the contact survives the DELETE', async () => {
     const { service, prisma } = make();
     // held by another partner — createdContact true, but heldByOthers > 0
-    prisma.partnerContact.findUnique.mockResolvedValue({ id: 'pc1', createdContact: true });
+    prisma.partnerContact.findUnique.mockResolvedValue({
+      id: 'pc1',
+      createdContact: true,
+    });
     prisma.partnerContact.count.mockResolvedValue(1);
     await service.remove(partner, 'a', 'b');
     expect(prisma.blockedUser.updateMany).not.toHaveBeenCalled();
@@ -202,15 +307,25 @@ describe('PartnerContactsService.remove', () => {
 
   it('keeps a contact that existed before the partner', async () => {
     const { service, prisma } = make();
-    prisma.partnerContact.findUnique.mockResolvedValue({ id: 'pc1', createdContact: false });
-    prisma.contactRequest.findMany.mockResolvedValue([{ id: 'c1', status: 'ACCEPTED' }]);
-    await expect(service.remove(partner, 'a', 'b')).resolves.toEqual({ contact: true });
+    prisma.partnerContact.findUnique.mockResolvedValue({
+      id: 'pc1',
+      createdContact: false,
+    });
+    prisma.contactRequest.findMany.mockResolvedValue([
+      { id: 'c1', status: 'ACCEPTED' },
+    ]);
+    await expect(service.remove(partner, 'a', 'b')).resolves.toEqual({
+      contact: true,
+    });
     expect(prisma.contactRequest.deleteMany).not.toHaveBeenCalled();
   });
 
   it('keeps a contact another partner still holds', async () => {
     const { service, prisma } = make();
-    prisma.partnerContact.findUnique.mockResolvedValue({ id: 'pc1', createdContact: true });
+    prisma.partnerContact.findUnique.mockResolvedValue({
+      id: 'pc1',
+      createdContact: true,
+    });
     prisma.partnerContact.count.mockResolvedValue(1);
     await service.remove(partner, 'a', 'b');
     expect(prisma.contactRequest.deleteMany).not.toHaveBeenCalled();
@@ -218,13 +333,25 @@ describe('PartnerContactsService.remove', () => {
 
   it('does nothing but report when the partner never made them contacts', async () => {
     const { service, prisma } = make();
-    await expect(service.remove(partner, 'a', 'b')).resolves.toEqual({ contact: false });
+    await expect(service.remove(partner, 'a', 'b')).resolves.toEqual({
+      contact: false,
+    });
     expect(prisma.partnerContact.deleteMany).not.toHaveBeenCalled();
   });
 
   it('requires ACTIVE links too — a PENDING link must not leak whether the pair are contacts', async () => {
-    const { service, prisma } = make([activeLinks[0], { externalId: 'b', userId: 'u-a', status: 'PENDING', user: { deletedAt: null } }]);
-    await expect(service.remove(partner, 'a', 'b')).rejects.toThrow('link_not_active');
+    const { service, prisma } = make([
+      activeLinks[0],
+      {
+        externalId: 'b',
+        userId: 'u-a',
+        status: 'PENDING',
+        user: { deletedAt: null },
+      },
+    ]);
+    await expect(service.remove(partner, 'a', 'b')).rejects.toThrow(
+      'link_not_active',
+    );
     expect(prisma.partnerContact.deleteMany).not.toHaveBeenCalled();
   });
 });

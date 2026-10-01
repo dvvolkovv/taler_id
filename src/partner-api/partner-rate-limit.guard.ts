@@ -1,7 +1,17 @@
-import { CanActivate, ExecutionContext, Injectable, Logger, SetMetadata } from '@nestjs/common';
+import {
+  CanActivate,
+  ExecutionContext,
+  Injectable,
+  Logger,
+  SetMetadata,
+} from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { RedisService } from '../redis/redis.service';
-import { currentMinute, incrementCounter, throwTooManyRequests } from './partner-counter.util';
+import {
+  currentMinute,
+  incrementCounter,
+  throwTooManyRequests,
+} from './partner-counter.util';
 
 export type PartnerRateBucketName = 'token' | 'default';
 
@@ -45,10 +55,10 @@ export class PartnerRateLimitGuard implements CanActivate {
       throw new Error('PartnerRateLimitGuard must run after PartnerKeyGuard');
     }
     const bucket =
-      this.reflector.getAllAndOverride<PartnerRateBucketName>(PARTNER_RATE_BUCKET, [
-        context.getHandler(),
-        context.getClass(),
-      ]) ?? 'default';
+      this.reflector.getAllAndOverride<PartnerRateBucketName>(
+        PARTNER_RATE_BUCKET,
+        [context.getHandler(), context.getClass()],
+      ) ?? 'default';
     const { minute, retryAfter } = currentMinute();
     const key = `partner:rl:${partner.id}:${bucket}:${minute}`;
     const count = await incrementCounter(this.redis, key, 120);
@@ -56,12 +66,18 @@ export class PartnerRateLimitGuard implements CanActivate {
       const now = Date.now();
       if (now - this.lastOutageWarnAt > 60_000) {
         this.lastOutageWarnAt = now;
-        this.logger.warn('partner rate limit: counter unavailable, letting the request through');
+        this.logger.warn(
+          'partner rate limit: counter unavailable, letting the request through',
+        );
       }
       return true;
     }
     if (count > PARTNER_RATE_LIMITS[bucket]) {
-      throwTooManyRequests(context.switchToHttp().getResponse(), 'rate_limited', retryAfter);
+      throwTooManyRequests(
+        context.switchToHttp().getResponse(),
+        'rate_limited',
+        retryAfter,
+      );
     }
     return true;
   }

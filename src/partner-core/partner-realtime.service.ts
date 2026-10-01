@@ -29,7 +29,9 @@ export class PartnerRealtimeService {
     try {
       await this.disconnector(partnerId, userId);
     } catch (e) {
-      this.logger.warn(`disconnect partner link ${partnerId}:${userId} failed: ${(e as Error).message}`);
+      this.logger.warn(
+        `disconnect partner link ${partnerId}:${userId} failed: ${(e as Error).message}`,
+      );
     }
   }
 }

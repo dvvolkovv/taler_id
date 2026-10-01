@@ -15,15 +15,23 @@ describe('PartnerConversationScope', () => {
     scope = new PartnerConversationScope(prisma);
   });
 
-  it.each(['DIRECT', 'GROUP'])('allows %s conversations', async (type: string) => {
-    prisma.conversation.findUnique.mockResolvedValue({ type });
-    await expect(scope.assertConversation('c1')).resolves.toBeUndefined();
-  });
+  it.each(['DIRECT', 'GROUP'])(
+    'allows %s conversations',
+    async (type: string) => {
+      prisma.conversation.findUnique.mockResolvedValue({ type });
+      await expect(scope.assertConversation('c1')).resolves.toBeUndefined();
+    },
+  );
 
-  it.each(['CHANNEL', 'SAVED', 'AI_ANALYST', 'AI_ASSISTANT'])('refuses %s conversations', async (type: string) => {
-    prisma.conversation.findUnique.mockResolvedValue({ type });
-    await expect(scope.assertConversation('c1')).rejects.toThrow(ForbiddenException);
-  });
+  it.each(['CHANNEL', 'SAVED', 'AI_ANALYST', 'AI_ASSISTANT'])(
+    'refuses %s conversations',
+    async (type: string) => {
+      prisma.conversation.findUnique.mockResolvedValue({ type });
+      await expect(scope.assertConversation('c1')).rejects.toThrow(
+        ForbiddenException,
+      );
+    },
+  );
 
   it('leaves unknown ids and missing params to the handler', async () => {
     prisma.conversation.findUnique.mockResolvedValue(null);
@@ -33,17 +41,29 @@ describe('PartnerConversationScope', () => {
   });
 
   it('checks the conversation of a message', async () => {
-    prisma.message.findUnique.mockResolvedValue({ conversation: { type: 'SAVED' } });
+    prisma.message.findUnique.mockResolvedValue({
+      conversation: { type: 'SAVED' },
+    });
     await expect(scope.assertMessage('m1')).rejects.toThrow(ForbiddenException);
-    prisma.message.findUnique.mockResolvedValue({ conversation: { type: 'GROUP' } });
+    prisma.message.findUnique.mockResolvedValue({
+      conversation: { type: 'GROUP' },
+    });
     await expect(scope.assertMessage('m2')).resolves.toBeUndefined();
   });
 
   it('lists only direct chats and groups as visible', async () => {
-    prisma.conversationParticipant.findMany.mockResolvedValue([{ conversationId: 'c1' }, { conversationId: 'c3' }]);
-    await expect(scope.visibleConversationIds('u1')).resolves.toEqual(new Set(['c1', 'c3']));
+    prisma.conversationParticipant.findMany.mockResolvedValue([
+      { conversationId: 'c1' },
+      { conversationId: 'c3' },
+    ]);
+    await expect(scope.visibleConversationIds('u1')).resolves.toEqual(
+      new Set(['c1', 'c3']),
+    );
     expect(prisma.conversationParticipant.findMany).toHaveBeenCalledWith({
-      where: { userId: 'u1', conversation: { type: { in: ['DIRECT', 'GROUP'] } } },
+      where: {
+        userId: 'u1',
+        conversation: { type: { in: ['DIRECT', 'GROUP'] } },
+      },
       select: { conversationId: true },
     });
   });
@@ -59,7 +79,9 @@ describe('PartnerConversationScope', () => {
       { conversation: { type: 'DIRECT' } },
       { conversation: { type: 'SAVED' } },
     ]);
-    await expect(scope.assertMessages(['m1', 'm3'])).rejects.toThrow(ForbiddenException);
+    await expect(scope.assertMessages(['m1', 'm3'])).rejects.toThrow(
+      ForbiddenException,
+    );
   });
 
   it('skips the query for an empty forward', async () => {
@@ -72,28 +94,39 @@ describe('PartnerConversationScope', () => {
     // В отличие от assertConversation/assertMessage (REST — пропускают
     // неизвестный id, ответит обработчик 404), у сокета нет такого
     // обработчика: фильтр либо пропускает пакет, либо тихо отказывает.
-    it.each(['DIRECT', 'GROUP'])('true for a confirmed %s conversation', async (type: string) => {
-      prisma.conversation.findUnique.mockResolvedValue({ type });
-      await expect(scope.isPartnerConversation('c1')).resolves.toBe(true);
-    });
+    it.each(['DIRECT', 'GROUP'])(
+      'true for a confirmed %s conversation',
+      async (type: string) => {
+        prisma.conversation.findUnique.mockResolvedValue({ type });
+        await expect(scope.isPartnerConversation('c1')).resolves.toBe(true);
+      },
+    );
 
-    it.each(['CHANNEL', 'SAVED', 'AI_ANALYST'])('false for a %s conversation', async (type: string) => {
-      prisma.conversation.findUnique.mockResolvedValue({ type });
-      await expect(scope.isPartnerConversation('c1')).resolves.toBe(false);
-    });
+    it.each(['CHANNEL', 'SAVED', 'AI_ANALYST'])(
+      'false for a %s conversation',
+      async (type: string) => {
+        prisma.conversation.findUnique.mockResolvedValue({ type });
+        await expect(scope.isPartnerConversation('c1')).resolves.toBe(false);
+      },
+    );
 
     it('false for an unknown conversation id (unlike assertConversation, does not pass through)', async () => {
       prisma.conversation.findUnique.mockResolvedValue(null);
       await expect(scope.isPartnerConversation('ghost')).resolves.toBe(false);
     });
 
-    it.each(['DIRECT', 'GROUP'])('true for a message in a confirmed %s conversation', async (type: string) => {
-      prisma.message.findUnique.mockResolvedValue({ conversation: { type } });
-      await expect(scope.isPartnerMessage('m1')).resolves.toBe(true);
-    });
+    it.each(['DIRECT', 'GROUP'])(
+      'true for a message in a confirmed %s conversation',
+      async (type: string) => {
+        prisma.message.findUnique.mockResolvedValue({ conversation: { type } });
+        await expect(scope.isPartnerMessage('m1')).resolves.toBe(true);
+      },
+    );
 
     it('false for a message in a SAVED conversation', async () => {
-      prisma.message.findUnique.mockResolvedValue({ conversation: { type: 'SAVED' } });
+      prisma.message.findUnique.mockResolvedValue({
+        conversation: { type: 'SAVED' },
+      });
       await expect(scope.isPartnerMessage('m1')).resolves.toBe(false);
     });
 
@@ -108,10 +141,19 @@ describe('PartnerConversationScope', () => {
       { senderId: 'u1', receiverId: 'u2' },
       { senderId: 'u3', receiverId: 'u1' },
     ]);
-    await expect(scope.assertAllContacts('u1', ['u2', 'u3'])).resolves.toBeUndefined();
-    prisma.contactRequest.findMany.mockResolvedValue([{ senderId: 'u1', receiverId: 'u2' }]);
-    const err = await scope.assertAllContacts('u1', ['u2', 'u4', 'u1']).catch((e) => e);
+    await expect(
+      scope.assertAllContacts('u1', ['u2', 'u3']),
+    ).resolves.toBeUndefined();
+    prisma.contactRequest.findMany.mockResolvedValue([
+      { senderId: 'u1', receiverId: 'u2' },
+    ]);
+    const err = await scope
+      .assertAllContacts('u1', ['u2', 'u4', 'u1'])
+      .catch((e) => e);
     expect(err).toBeInstanceOf(ForbiddenException);
-    expect(err.getResponse()).toEqual({ message: 'not_a_contact', userIds: ['u4'] });
+    expect(err.getResponse()).toEqual({
+      message: 'not_a_contact',
+      userIds: ['u4'],
+    });
   });
 });

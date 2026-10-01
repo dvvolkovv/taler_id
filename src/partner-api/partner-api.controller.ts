@@ -66,7 +66,12 @@ export class PartnerApiController {
     @Param('externalId') externalId: string,
     @Body() dto: PatchUserDto,
   ) {
-    return this.users.patchUser(req.partner, assertExternalId(externalId), dto, req.ip);
+    return this.users.patchUser(
+      req.partner,
+      assertExternalId(externalId),
+      dto,
+      req.ip,
+    );
   }
 
   @Delete('users/:externalId')
@@ -76,12 +81,20 @@ export class PartnerApiController {
     @Param('externalId') externalId: string,
     @Query() query: DeleteUserQueryDto,
   ): Promise<void> {
-    await this.users.deleteUser(req.partner, assertExternalId(externalId), query.deleteAccount === 'true', req.ip);
+    await this.users.deleteUser(
+      req.partner,
+      assertExternalId(externalId),
+      query.deleteAccount === 'true',
+      req.ip,
+    );
   }
 
   @Post('users/:externalId/link-code')
   @HttpCode(200)
-  sendLinkCode(@Req() req: PartnerRequest, @Param('externalId') externalId: string) {
+  sendLinkCode(
+    @Req() req: PartnerRequest,
+    @Param('externalId') externalId: string,
+  ) {
     return this.codes.send(req.partner, assertExternalId(externalId), req.ip);
   }
 
@@ -92,7 +105,12 @@ export class PartnerApiController {
     @Param('externalId') externalId: string,
     @Body() dto: VerifyLinkCodeDto,
   ) {
-    return this.codes.verify(req.partner, assertExternalId(externalId), dto.code, req.ip);
+    return this.codes.verify(
+      req.partner,
+      assertExternalId(externalId),
+      dto.code,
+      req.ip,
+    );
   }
 
   @Post('users/:externalId/token')
@@ -103,12 +121,20 @@ export class PartnerApiController {
   }
 
   @Put('contacts/:a/:b')
-  putContact(@Req() req: PartnerRequest, @Param('a') a: string, @Param('b') b: string) {
+  putContact(
+    @Req() req: PartnerRequest,
+    @Param('a') a: string,
+    @Param('b') b: string,
+  ) {
     return this.contacts.put(req.partner, a, b, req.ip);
   }
 
   @Delete('contacts/:a/:b')
-  removeContact(@Req() req: PartnerRequest, @Param('a') a: string, @Param('b') b: string) {
+  removeContact(
+    @Req() req: PartnerRequest,
+    @Param('a') a: string,
+    @Param('b') b: string,
+  ) {
     return this.contacts.remove(req.partner, a, b, req.ip);
   }
 

@@ -30,7 +30,9 @@ export class PartnerWebhookSinkStore {
   }
 
   async list(slug: string): Promise<SinkEntry[]> {
-    const rows = await this.redis.getClient().lrange(sinkKey(slug), 0, SINK_MAX - 1);
+    const rows = await this.redis
+      .getClient()
+      .lrange(sinkKey(slug), 0, SINK_MAX - 1);
     return rows.map((row) => JSON.parse(row) as SinkEntry);
   }
 }

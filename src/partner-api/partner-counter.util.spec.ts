@@ -13,13 +13,20 @@ function fakeRedis(exec: () => Promise<any>) {
   chain.incr = jest.fn(() => chain);
   chain.expire = jest.fn(() => chain);
   chain.exec = exec;
-  return { redis: { getClient: () => ({ multi: () => chain }) } as any, incr: chain.incr, expire: chain.expire };
+  return {
+    redis: { getClient: () => ({ multi: () => chain }) } as any,
+    incr: chain.incr,
+    expire: chain.expire,
+  };
 }
 
 describe('currentMinute', () => {
   it('computes the minute bucket and the seconds left in it', () => {
     const nowMs = new Date('2026-10-01T10:00:15Z').getTime();
-    expect(currentMinute(nowMs)).toEqual({ minute: Math.floor(nowMs / 60_000), retryAfter: 45 });
+    expect(currentMinute(nowMs)).toEqual({
+      minute: Math.floor(nowMs / 60_000),
+      retryAfter: 45,
+    });
   });
 });
 
@@ -39,7 +46,11 @@ describe('incrementCounter', () => {
 
   it('returns null when exec() rejects (e.g. EXECABORT against a read-only replica right after failover)', async () => {
     const { redis } = fakeRedis(() =>
-      Promise.reject(new Error('EXECABORT Transaction discarded because of previous errors.')),
+      Promise.reject(
+        new Error(
+          'EXECABORT Transaction discarded because of previous errors.',
+        ),
+      ),
     );
     await expect(incrementCounter(redis, 'k', 60)).resolves.toBeNull();
   });
@@ -101,7 +112,10 @@ describe('throwTooManyRequests', () => {
     expect(res.setHeader).toHaveBeenCalledWith('Retry-After', '45');
     expect(caught).toBeInstanceOf(HttpException);
     expect(caught.getStatus()).toBe(429);
-    expect(caught.getResponse()).toEqual({ message: 'rate_limited', retryAfter: 45 });
+    expect(caught.getResponse()).toEqual({
+      message: 'rate_limited',
+      retryAfter: 45,
+    });
   });
 });
 
@@ -114,7 +128,11 @@ describe('countInWindow', () => {
     chain.ttl = jest.fn(() => chain);
     chain.exec = exec;
     const expire = jest.fn().mockResolvedValue(1);
-    return { redis: { getClient: () => ({ multi: () => chain, expire }) } as any, chain, expire };
+    return {
+      redis: { getClient: () => ({ multi: () => chain, expire }) } as any,
+      chain,
+      expire,
+    };
   }
 
   it('opens the window with SET NX EX, counts with INCR and reports the time left', async () => {
@@ -125,7 +143,10 @@ describe('countInWindow', () => {
         [null, 1795],
       ]),
     );
-    await expect(countInWindow(redis, 'w', 3600)).resolves.toEqual({ count: 3, retryAfter: 1795 });
+    await expect(countInWindow(redis, 'w', 3600)).resolves.toEqual({
+      count: 3,
+      retryAfter: 1795,
+    });
     expect(chain.set).toHaveBeenCalledWith('w', '0', 'EX', 3600, 'NX');
     expect(chain.incr).toHaveBeenCalledWith('w');
     expect(chain.ttl).toHaveBeenCalledWith('w');
@@ -141,7 +162,11 @@ describe('countInWindow', () => {
     );
     await expect(countInWindow(failed.redis, 'w', 60)).resolves.toBeNull();
     const rejected = fakeWindowRedis(() =>
-      Promise.reject(new Error('EXECABORT Transaction discarded because of previous errors.')),
+      Promise.reject(
+        new Error(
+          'EXECABORT Transaction discarded because of previous errors.',
+        ),
+      ),
     );
     await expect(countInWindow(rejected.redis, 'w', 60)).resolves.toBeNull();
     const hung = fakeWindowRedis(() => new Promise(() => {}));
@@ -156,7 +181,10 @@ describe('countInWindow', () => {
         [null, -1], // ключ жив, но без срока — вручную переписан мимо SET NX EX
       ]),
     );
-    await expect(countInWindow(redis, 'w', 3600)).resolves.toEqual({ count: 4, retryAfter: 3600 });
+    await expect(countInWindow(redis, 'w', 3600)).resolves.toEqual({
+      count: 4,
+      retryAfter: 3600,
+    });
     expect(expire).toHaveBeenCalledWith('w', 3600);
   });
 });

@@ -17,7 +17,12 @@ function make() {
 describe('EmailService.sendPartnerLinkCode', () => {
   it('sends a Russian letter to ru accounts with the code in the subject', async () => {
     const { service, sendMail } = make();
-    await service.sendPartnerLinkCode('ivan@example.com', '123456', 'Nadi', 'ru');
+    await service.sendPartnerLinkCode(
+      'ivan@example.com',
+      '123456',
+      'Nadi',
+      'ru',
+    );
     const mail = sendMail.mock.calls[0][0];
     expect(mail.to).toBe('ivan@example.com');
     expect(mail.subject).toBe('Код для подключения Nadi к Taler ID: 123456');
@@ -27,13 +32,25 @@ describe('EmailService.sendPartnerLinkCode', () => {
 
   it('writes in English to everyone else', async () => {
     const { service, sendMail } = make();
-    await service.sendPartnerLinkCode('ivan@example.com', '123456', 'Nadi', 'uk');
-    expect(sendMail.mock.calls[0][0].subject).toBe('Code to connect Nadi to Taler ID: 123456');
+    await service.sendPartnerLinkCode(
+      'ivan@example.com',
+      '123456',
+      'Nadi',
+      'uk',
+    );
+    expect(sendMail.mock.calls[0][0].subject).toBe(
+      'Code to connect Nadi to Taler ID: 123456',
+    );
   });
 
   it('escapes the partner name in HTML', async () => {
     const { service, sendMail } = make();
-    await service.sendPartnerLinkCode('ivan@example.com', '123456', '<b>X</b>', 'en');
+    await service.sendPartnerLinkCode(
+      'ivan@example.com',
+      '123456',
+      '<b>X</b>',
+      'en',
+    );
     const html = sendMail.mock.calls[0][0].html as string;
     expect(html).not.toContain('<b>X</b>');
     expect(html).toContain('&lt;b&gt;X&lt;/b&gt;');

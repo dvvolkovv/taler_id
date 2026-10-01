@@ -37,7 +37,11 @@ describe('MessengerGateway partner room isolation', () => {
   function makeMockServer() {
     const to = jest.fn((room: string | string[]) => ({
       emit: (event: string, data: any) => {
-        emitted.push({ rooms: Array.isArray(room) ? room : [room], event, data });
+        emitted.push({
+          rooms: Array.isArray(room) ? room : [room],
+          event,
+          data,
+        });
       },
     }));
     return {
@@ -53,7 +57,10 @@ describe('MessengerGateway partner room isolation', () => {
   }
 
   function emittedTo(room: string, event?: string) {
-    return emitted.some((e) => e.rooms.includes(room) && (event === undefined || e.event === event));
+    return emitted.some(
+      (e) =>
+        e.rooms.includes(room) && (event === undefined || e.event === event),
+    );
   }
 
   beforeEach(async () => {
@@ -65,15 +72,19 @@ describe('MessengerGateway partner room isolation', () => {
         {
           provide: MessengerService,
           useValue: {
-            getParticipants: jest.fn().mockResolvedValue([
-              { userId: 'sender' },
-              { userId: 'recipient' },
-            ]),
+            getParticipants: jest
+              .fn()
+              .mockResolvedValue([
+                { userId: 'sender' },
+                { userId: 'recipient' },
+              ]),
             markDelivered: jest.fn().mockResolvedValue(undefined),
             isParticipantMuted: jest.fn().mockResolvedValue(false),
             getFcmTokens: jest.fn().mockResolvedValue([]),
             getFcmTokensForUser: jest.fn().mockResolvedValue([]),
-            toggleReaction: jest.fn().mockResolvedValue([{ emoji: '👍', count: 1 }]),
+            toggleReaction: jest
+              .fn()
+              .mockResolvedValue([{ emoji: '👍', count: 1 }]),
             advanceReadHorizon: jest.fn().mockResolvedValue({
               lastReadAt: new Date('2026-10-01T00:00:00Z'),
               lastReadMessageId: 'm1',
@@ -85,8 +96,12 @@ describe('MessengerGateway partner room isolation', () => {
           provide: PrismaService,
           useValue: {
             blockedUser: { findFirst: jest.fn().mockResolvedValue(null) },
-            profile: { findUnique: jest.fn().mockResolvedValue({ language: 'ru' }) },
-            conversation: { findUnique: jest.fn().mockResolvedValue({ type: 'DIRECT' }) },
+            profile: {
+              findUnique: jest.fn().mockResolvedValue({ language: 'ru' }),
+            },
+            conversation: {
+              findUnique: jest.fn().mockResolvedValue({ type: 'DIRECT' }),
+            },
           },
         },
         { provide: RedisService, useValue: {} },
@@ -102,10 +117,22 @@ describe('MessengerGateway partner room isolation', () => {
         },
         { provide: ApnsService, useValue: {} },
         { provide: ConfigService, useValue: { get: () => undefined } },
-        { provide: PartnerTokensService, useValue: { verify: jest.fn().mockResolvedValue(null) } },
-        { provide: PartnerRealtimeService, useValue: { registerDisconnector: jest.fn() } },
-        { provide: PartnerConversationScope, useValue: { assertConversation: jest.fn(), assertMessage: jest.fn() } },
-        { provide: PartnerWebhooksService, useValue: { planFanOut: jest.fn().mockResolvedValue(null) } },
+        {
+          provide: PartnerTokensService,
+          useValue: { verify: jest.fn().mockResolvedValue(null) },
+        },
+        {
+          provide: PartnerRealtimeService,
+          useValue: { registerDisconnector: jest.fn() },
+        },
+        {
+          provide: PartnerConversationScope,
+          useValue: { assertConversation: jest.fn(), assertMessage: jest.fn() },
+        },
+        {
+          provide: PartnerWebhooksService,
+          useValue: { planFanOut: jest.fn().mockResolvedValue(null) },
+        },
       ],
     }).compile();
     gateway = mod.get(MessengerGateway);
@@ -115,7 +142,9 @@ describe('MessengerGateway partner room isolation', () => {
   });
 
   function setConvType(type: string | null) {
-    mockPrisma.conversation.findUnique.mockResolvedValue(type ? { type } : null);
+    mockPrisma.conversation.findUnique.mockResolvedValue(
+      type ? { type } : null,
+    );
   }
 
   describe('emitToUserInConversation (helper)', () => {
@@ -132,17 +161,23 @@ describe('MessengerGateway partner room isolation', () => {
 
     it('does NOT mirror for CHANNEL', () => {
       gateway.emitToUserInConversation('u1', 'CHANNEL', 'evt', { x: 1 });
-      expect(emitted).toEqual([{ rooms: ['user:u1'], event: 'evt', data: { x: 1 } }]);
+      expect(emitted).toEqual([
+        { rooms: ['user:u1'], event: 'evt', data: { x: 1 } },
+      ]);
     });
 
     it('does NOT mirror for SAVED', () => {
       gateway.emitToUserInConversation('u1', 'SAVED', 'evt', { x: 1 });
-      expect(emitted).toEqual([{ rooms: ['user:u1'], event: 'evt', data: { x: 1 } }]);
+      expect(emitted).toEqual([
+        { rooms: ['user:u1'], event: 'evt', data: { x: 1 } },
+      ]);
     });
 
     it('does NOT mirror when the conversation type is unknown (null)', () => {
       gateway.emitToUserInConversation('u1', null, 'evt', { x: 1 });
-      expect(emitted).toEqual([{ rooms: ['user:u1'], event: 'evt', data: { x: 1 } }]);
+      expect(emitted).toEqual([
+        { rooms: ['user:u1'], event: 'evt', data: { x: 1 } },
+      ]);
     });
 
     it('emits ONCE (not twice) when mirroring — one Redis publish, Socket.IO de-dupes the room overlap', () => {
@@ -187,7 +222,9 @@ describe('MessengerGateway partner room isolation', () => {
       setConvType('DIRECT');
       socketsByRoom['user:recipient'] = [{ data: { userId: 'recipient' } }];
       await gateway.fanOutToParticipants(enrichedMsg, 'sender', 'conv-1', {});
-      expect(emittedTo(partnerUserRoom('sender'), 'message_updated')).toBe(true);
+      expect(emittedTo(partnerUserRoom('sender'), 'message_updated')).toBe(
+        true,
+      );
     });
 
     it('online check counts a recipient socket that only holds the puser: room', async () => {
@@ -195,7 +232,9 @@ describe('MessengerGateway partner room isolation', () => {
       // Recipient has NO socket in user:recipient — only a partner socket in
       // puser:recipient. Delivery must still be marked, or a partner-only
       // reader would never flip the sender's message to "delivered".
-      socketsByRoom[partnerUserRoom('recipient')] = [{ data: { userId: 'recipient' } }];
+      socketsByRoom[partnerUserRoom('recipient')] = [
+        { data: { userId: 'recipient' } },
+      ];
       await gateway.fanOutToParticipants(enrichedMsg, 'sender', 'conv-1', {});
       expect(mockMessenger.markDelivered).toHaveBeenCalledWith('msg-1');
       expect(emittedTo('user:sender', 'message_updated')).toBe(true);
@@ -209,13 +248,17 @@ describe('MessengerGateway partner room isolation', () => {
     it('DIRECT: mirrors to puser: for each participant', async () => {
       setConvType('DIRECT');
       await gateway.handleReactMessage(client as any, payload);
-      expect(emittedTo(partnerUserRoom('recipient'), 'message_reaction_updated')).toBe(true);
+      expect(
+        emittedTo(partnerUserRoom('recipient'), 'message_reaction_updated'),
+      ).toBe(true);
     });
 
     it('CHANNEL: stays user:-only', async () => {
       setConvType('CHANNEL');
       await gateway.handleReactMessage(client as any, payload);
-      expect(emittedTo('user:recipient', 'message_reaction_updated')).toBe(true);
+      expect(emittedTo('user:recipient', 'message_reaction_updated')).toBe(
+        true,
+      );
       expect(emittedTo(partnerUserRoom('recipient'))).toBe(false);
     });
   });
@@ -227,7 +270,9 @@ describe('MessengerGateway partner room isolation', () => {
     it('DIRECT: conversation_read to participants and messages_read to the reader both mirror', async () => {
       setConvType('DIRECT');
       await gateway.handleMarkRead(client as any, payload as any);
-      expect(emittedTo(partnerUserRoom('recipient'), 'conversation_read')).toBe(true);
+      expect(emittedTo(partnerUserRoom('recipient'), 'conversation_read')).toBe(
+        true,
+      );
       expect(emittedTo(partnerUserRoom('sender'), 'messages_read')).toBe(true);
     });
 
@@ -235,7 +280,9 @@ describe('MessengerGateway partner room isolation', () => {
       setConvType('SAVED');
       await gateway.handleMarkRead(client as any, payload as any);
       expect(emittedTo('user:recipient', 'conversation_read')).toBe(true);
-      expect(emitted.some((e) => e.rooms.some((r) => r.startsWith('puser:')))).toBe(false);
+      expect(
+        emitted.some((e) => e.rooms.some((r) => r.startsWith('puser:'))),
+      ).toBe(false);
     });
   });
 
@@ -244,20 +291,34 @@ describe('MessengerGateway partner room isolation', () => {
 
     it('DIRECT: "deleted for me" mirrors into the author\'s own puser:', async () => {
       setConvType('DIRECT');
-      await gateway.handleDeleteMessage(client as any, { conversationId: 'conv-1', messageId: 'm1', scope: 'self' });
+      await gateway.handleDeleteMessage(client as any, {
+        conversationId: 'conv-1',
+        messageId: 'm1',
+        scope: 'self',
+      });
       expect(emittedTo('user:sender', 'message_deleted')).toBe(true);
-      expect(emittedTo(partnerUserRoom('sender'), 'message_deleted')).toBe(true);
+      expect(emittedTo(partnerUserRoom('sender'), 'message_deleted')).toBe(
+        true,
+      );
     });
 
     it('CHANNEL: "deleted for me" stays user:-only', async () => {
       setConvType('CHANNEL');
-      await gateway.handleDeleteMessage(client as any, { conversationId: 'conv-1', messageId: 'm1', scope: 'self' });
+      await gateway.handleDeleteMessage(client as any, {
+        conversationId: 'conv-1',
+        messageId: 'm1',
+        scope: 'self',
+      });
       expect(emittedTo('user:sender', 'message_deleted')).toBe(true);
       expect(emittedTo(partnerUserRoom('sender'))).toBe(false);
     });
 
     it('scope "all" still broadcasts to the conversation room, untouched by this change', async () => {
-      await gateway.handleDeleteMessage(client as any, { conversationId: 'conv-1', messageId: 'm1', scope: 'all' });
+      await gateway.handleDeleteMessage(client as any, {
+        conversationId: 'conv-1',
+        messageId: 'm1',
+        scope: 'all',
+      });
       expect(emittedTo('conv-1', 'message_deleted')).toBe(true);
     });
   });

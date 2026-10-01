@@ -10,7 +10,10 @@ import type { RedisService } from '../redis/redis.service';
 export const PARTNER_COUNTER_TIMEOUT_MS = 250;
 
 /** Текущая минута для ключа счётчика и сколько секунд осталось до её конца (Retry-After). */
-export function currentMinute(nowMs: number = Date.now()): { minute: number; retryAfter: number } {
+export function currentMinute(nowMs: number = Date.now()): {
+  minute: number;
+  retryAfter: number;
+} {
   const nowSec = Math.floor(nowMs / 1000);
   return { minute: Math.floor(nowSec / 60), retryAfter: 60 - (nowSec % 60) };
 }
@@ -20,7 +23,10 @@ export function currentMinute(nowMs: number = Date.now()): { minute: number; ret
  * Redis и синхронная ошибка клиента — это null, а что делать без ответа,
  * решает вызывающий.
  */
-async function bounded<T>(run: () => Promise<T | null>, timeoutMs: number): Promise<T | null> {
+async function bounded<T>(
+  run: () => Promise<T | null>,
+  timeoutMs: number,
+): Promise<T | null> {
   let timer!: ReturnType<typeof setTimeout>;
   const timeout = new Promise<null>((resolve) => {
     timer = setTimeout(() => resolve(null), timeoutMs);
@@ -51,7 +57,12 @@ export function incrementCounter(
   timeoutMs: number = PARTNER_COUNTER_TIMEOUT_MS,
 ): Promise<number | null> {
   return bounded(async () => {
-    const results = await redis.getClient().multi().incr(key).expire(key, ttlSeconds).exec();
+    const results = await redis
+      .getClient()
+      .multi()
+      .incr(key)
+      .expire(key, ttlSeconds)
+      .exec();
     if (!results) return null;
     const [err, value] = results[0];
     return err ? null : Number(value);
@@ -102,5 +113,8 @@ export function throwTooManyRequests(
   retryAfter: number,
 ): never {
   res.setHeader('Retry-After', String(retryAfter));
-  throw new HttpException({ message, retryAfter }, HttpStatus.TOO_MANY_REQUESTS);
+  throw new HttpException(
+    { message, retryAfter },
+    HttpStatus.TOO_MANY_REQUESTS,
+  );
 }

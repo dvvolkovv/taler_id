@@ -1,7 +1,10 @@
 import { ForbiddenException } from '@nestjs/common';
 import { MessengerAuthGuard } from './messenger-auth.guard';
 import { MessengerController } from './messenger.controller';
-import { PARTNER_ALLOWED_KEY, PartnerAllowedOptions } from './partner-allowed.decorator';
+import {
+  PARTNER_ALLOWED_KEY,
+  PartnerAllowedOptions,
+} from './partner-allowed.decorator';
 import { PARTNER_CONVERSATION_TYPES } from '../partner-core/partner.constants';
 
 /** Ровно этот набор обработчиков открыт партнёрам — спека, раздел «Что открыто». */
@@ -63,7 +66,9 @@ describe('MessengerController for partner tokens', () => {
   });
 
   it('guards the whole controller with MessengerAuthGuard', () => {
-    expect(Reflect.getMetadata('__guards__', MessengerController)).toEqual([MessengerAuthGuard]);
+    expect(Reflect.getMetadata('__guards__', MessengerController)).toEqual([
+      MessengerAuthGuard,
+    ]);
   });
 
   describe('lists and groups', () => {
@@ -83,26 +88,44 @@ describe('MessengerController for partner tokens', () => {
           { id: 'c4', type: 'SAVED' },
         ]),
         sync: jest.fn().mockResolvedValue({
-          messages: [{ id: 'm1', conversationId: 'c1' }, { id: 'm2', conversationId: 'c2' }],
+          messages: [
+            { id: 'm1', conversationId: 'c1' },
+            { id: 'm2', conversationId: 'c2' },
+          ],
           nextCursor: 'x',
           hasMore: false,
         }),
-        readStateForUser: jest.fn().mockResolvedValue({ conversations: [{ conversationId: 'c1' }, { conversationId: 'c2' }] }),
-        searchMessages: jest.fn().mockResolvedValue([{ id: 'm1', conversationId: 'c1' }, { id: 'm2', conversationId: 'c4' }]),
-        createGroupConversation: jest.fn().mockResolvedValue({ id: 'g1', participantIds: ['u1', 'u2'] }),
+        readStateForUser: jest.fn().mockResolvedValue({
+          conversations: [{ conversationId: 'c1' }, { conversationId: 'c2' }],
+        }),
+        searchMessages: jest.fn().mockResolvedValue([
+          { id: 'm1', conversationId: 'c1' },
+          { id: 'm2', conversationId: 'c4' },
+        ]),
+        createGroupConversation: jest
+          .fn()
+          .mockResolvedValue({ id: 'g1', participantIds: ['u1', 'u2'] }),
         addGroupMembers: jest.fn().mockResolvedValue([]),
-        changeGroupMemberRole: jest.fn().mockResolvedValue({ userId: 'u3', newRole: 'ADMIN' }),
-        updateGroupInfo: jest.fn().mockResolvedValue({ id: 'g1', name: 'New name' }),
+        changeGroupMemberRole: jest
+          .fn()
+          .mockResolvedValue({ userId: 'u3', newRole: 'ADMIN' }),
+        updateGroupInfo: jest
+          .fn()
+          .mockResolvedValue({ id: 'g1', name: 'New name' }),
         leaveGroup: jest.fn().mockResolvedValue(undefined),
         forwardMessages: jest.fn().mockResolvedValue([]),
         getUserDisplayName: jest.fn().mockResolvedValue('Name'),
         isBlockedBy: jest.fn().mockResolvedValue(false),
         hasContactWith: jest.fn().mockResolvedValue(true),
         findExistingDirectConversation: jest.fn().mockResolvedValue(null),
-        getOrCreateDirectConversation: jest.fn().mockResolvedValue({ id: 'd1' }),
+        getOrCreateDirectConversation: jest
+          .fn()
+          .mockResolvedValue({ id: 'd1' }),
       };
       scope = {
-        visibleConversationIds: jest.fn().mockResolvedValue(new Set(['c1', 'c3'])),
+        visibleConversationIds: jest
+          .fn()
+          .mockResolvedValue(new Set(['c1', 'c3'])),
         assertAllContacts: jest.fn().mockResolvedValue(undefined),
         assertMessages: jest.fn().mockResolvedValue(undefined),
       };
@@ -116,8 +139,20 @@ describe('MessengerController for partner tokens', () => {
       };
       const unused: any = {};
       controller = new MessengerController(
-        service, gateway, unused, unused, unused, unused, unused,
-        unused, unused, unused, unused, unused, unused, scope,
+        service,
+        gateway,
+        unused,
+        unused,
+        unused,
+        unused,
+        unused,
+        unused,
+        unused,
+        unused,
+        unused,
+        unused,
+        unused,
+        scope,
       );
     });
 
@@ -130,7 +165,9 @@ describe('MessengerController for partner tokens', () => {
     });
 
     it('still filters read state by visible conversations for partners', async () => {
-      await expect(controller.readState(partnerUser)).resolves.toEqual({ conversations: [{ conversationId: 'c1' }] });
+      await expect(controller.readState(partnerUser)).resolves.toEqual({
+        conversations: [{ conversationId: 'c1' }],
+      });
       await expect(controller.readState(nativeUser)).resolves.toEqual({
         conversations: [{ conversationId: 'c1' }, { conversationId: 'c2' }],
       });
@@ -141,27 +178,52 @@ describe('MessengerController for partner tokens', () => {
       // Фильтрация теперь — в самом запросе сервиса (курсор иначе протекал по
       // скрытым беседам), контроллер просто передаёт список типов и отдаёт
       // страницу как есть.
-      await expect(controller.sync(undefined, undefined, partnerUser)).resolves.toEqual({
-        messages: [{ id: 'm1', conversationId: 'c1' }, { id: 'm2', conversationId: 'c2' }],
+      await expect(
+        controller.sync(undefined, undefined, partnerUser),
+      ).resolves.toEqual({
+        messages: [
+          { id: 'm1', conversationId: 'c1' },
+          { id: 'm2', conversationId: 'c2' },
+        ],
         nextCursor: 'x',
         hasMore: false,
       });
-      expect(service.sync).toHaveBeenCalledWith('u1', undefined, 200, PARTNER_CONVERSATION_TYPES);
+      expect(service.sync).toHaveBeenCalledWith(
+        'u1',
+        undefined,
+        200,
+        PARTNER_CONVERSATION_TYPES,
+      );
 
       await controller.sync(undefined, undefined, nativeUser);
-      expect(service.sync).toHaveBeenLastCalledWith('u1', undefined, 200, undefined);
+      expect(service.sync).toHaveBeenLastCalledWith(
+        'u1',
+        undefined,
+        200,
+        undefined,
+      );
       expect(scope.visibleConversationIds).not.toHaveBeenCalled();
     });
 
     it('asks the service to restrict message search to partner-visible conversation types, unfiltered by the controller', async () => {
-      await expect(controller.searchMessages('hi', partnerUser)).resolves.toEqual([
+      await expect(
+        controller.searchMessages('hi', partnerUser),
+      ).resolves.toEqual([
         { id: 'm1', conversationId: 'c1' },
         { id: 'm2', conversationId: 'c4' },
       ]);
-      expect(service.searchMessages).toHaveBeenCalledWith('hi', 'u1', PARTNER_CONVERSATION_TYPES);
+      expect(service.searchMessages).toHaveBeenCalledWith(
+        'hi',
+        'u1',
+        PARTNER_CONVERSATION_TYPES,
+      );
 
       await controller.searchMessages('hi', nativeUser);
-      expect(service.searchMessages).toHaveBeenLastCalledWith('hi', 'u1', undefined);
+      expect(service.searchMessages).toHaveBeenLastCalledWith(
+        'hi',
+        'u1',
+        undefined,
+      );
       expect(scope.visibleConversationIds).not.toHaveBeenCalled();
     });
 
@@ -183,37 +245,63 @@ describe('MessengerController for partner tokens', () => {
       });
 
       it('a rejecting scope stops the forward before the service is called', async () => {
-        scope.assertMessages.mockRejectedValue(new ForbiddenException('not_available_for_partner'));
+        scope.assertMessages.mockRejectedValue(
+          new ForbiddenException('not_available_for_partner'),
+        );
 
-        await expect(controller.forwardMessages('c1', ['m1'], partnerUser)).rejects.toThrow(ForbiddenException);
+        await expect(
+          controller.forwardMessages('c1', ['m1'], partnerUser),
+        ).rejects.toThrow(ForbiddenException);
         expect(service.forwardMessages).not.toHaveBeenCalled();
       });
 
       it('does not check source messages for a native caller', async () => {
         await controller.forwardMessages('c1', ['m1'], nativeUser);
         expect(scope.assertMessages).not.toHaveBeenCalled();
-        expect(service.forwardMessages).toHaveBeenCalledWith('c1', 'u1', ['m1']);
+        expect(service.forwardMessages).toHaveBeenCalledWith('c1', 'u1', [
+          'm1',
+        ]);
       });
     });
 
     it('lets partners put only their contacts into groups', async () => {
-      await controller.createGroup({ name: 'G', participantIds: ['u2'] } as any, partnerUser);
+      await controller.createGroup(
+        { name: 'G', participantIds: ['u2'] } as any,
+        partnerUser,
+      );
       expect(scope.assertAllContacts).toHaveBeenCalledWith('u1', ['u2']);
       // group_created is announced through the type-aware helper so a partner
       // socket of the same user also gets it (puser:<id>), hard-coded to
       // GROUP since createGroupConversation never produces anything else.
-      expect(gateway.emitToUserInConversation).toHaveBeenCalledWith('u1', 'GROUP', 'group_created', {
-        conversationId: 'g1',
-        name: 'G',
-      });
-      expect(gateway.emitToUserInConversation).toHaveBeenCalledWith('u2', 'GROUP', 'group_created', {
-        conversationId: 'g1',
-        name: 'G',
-      });
-      await controller.addMembers('g1', { userIds: ['u3'] } as any, partnerUser);
+      expect(gateway.emitToUserInConversation).toHaveBeenCalledWith(
+        'u1',
+        'GROUP',
+        'group_created',
+        {
+          conversationId: 'g1',
+          name: 'G',
+        },
+      );
+      expect(gateway.emitToUserInConversation).toHaveBeenCalledWith(
+        'u2',
+        'GROUP',
+        'group_created',
+        {
+          conversationId: 'g1',
+          name: 'G',
+        },
+      );
+      await controller.addMembers(
+        'g1',
+        { userIds: ['u3'] } as any,
+        partnerUser,
+      );
       expect(scope.assertAllContacts).toHaveBeenCalledWith('u1', ['u3']);
       scope.assertAllContacts.mockClear();
-      await controller.createGroup({ name: 'G', participantIds: ['u9'] } as any, nativeUser);
+      await controller.createGroup(
+        { name: 'G', participantIds: ['u9'] } as any,
+        nativeUser,
+      );
       expect(scope.assertAllContacts).not.toHaveBeenCalled();
     });
 
@@ -230,28 +318,44 @@ describe('MessengerController for partner tokens', () => {
     describe('remaining group events mirror to puser:<id> (GROUP, guaranteed by the service)', () => {
       it('group_member_added (addMembers)', async () => {
         service.addGroupMembers.mockResolvedValue(['u3']);
-        await controller.addMembers('g1', { userIds: ['u3'] } as any, nativeUser);
-        expect(gateway.emitToConversationParticipantsInConversation).toHaveBeenCalledWith(
+        await controller.addMembers(
           'g1',
-          'GROUP',
-          'group_member_added',
-          { conversationId: 'g1', userIds: ['u3'] },
+          { userIds: ['u3'] } as any,
+          nativeUser,
         );
+        expect(
+          gateway.emitToConversationParticipantsInConversation,
+        ).toHaveBeenCalledWith('g1', 'GROUP', 'group_member_added', {
+          conversationId: 'g1',
+          userIds: ['u3'],
+        });
       });
 
       it('group_role_changed (changeRole)', async () => {
-        await controller.changeRole('g1', 'u3', { role: 'ADMIN' } as any, nativeUser);
-        expect(gateway.emitToConversationParticipantsInConversation).toHaveBeenCalledWith(
+        await controller.changeRole(
           'g1',
-          'GROUP',
-          'group_role_changed',
-          { conversationId: 'g1', userId: 'u3', newRole: 'ADMIN' },
+          'u3',
+          { role: 'ADMIN' } as any,
+          nativeUser,
         );
+        expect(
+          gateway.emitToConversationParticipantsInConversation,
+        ).toHaveBeenCalledWith('g1', 'GROUP', 'group_role_changed', {
+          conversationId: 'g1',
+          userId: 'u3',
+          newRole: 'ADMIN',
+        });
       });
 
       it('group_updated (updateGroup)', async () => {
-        await controller.updateGroup('g1', { name: 'New name' } as any, nativeUser);
-        expect(gateway.emitToConversationParticipantsInConversation).toHaveBeenCalledWith(
+        await controller.updateGroup(
+          'g1',
+          { name: 'New name' } as any,
+          nativeUser,
+        );
+        expect(
+          gateway.emitToConversationParticipantsInConversation,
+        ).toHaveBeenCalledWith(
           'g1',
           'GROUP',
           'group_updated',
@@ -261,12 +365,12 @@ describe('MessengerController for partner tokens', () => {
 
       it('group_member_removed (leaveGroup, self-leave)', async () => {
         await controller.leaveGroup('g1', nativeUser);
-        expect(gateway.emitToConversationParticipantsInConversation).toHaveBeenCalledWith(
-          'g1',
-          'GROUP',
-          'group_member_removed',
-          { conversationId: 'g1', userId: 'u1' },
-        );
+        expect(
+          gateway.emitToConversationParticipantsInConversation,
+        ).toHaveBeenCalledWith('g1', 'GROUP', 'group_member_removed', {
+          conversationId: 'g1',
+          userId: 'u1',
+        });
       });
     });
 
@@ -289,14 +393,18 @@ describe('MessengerController for partner tokens', () => {
 
       it('blocked: partner gets the `blocked` code', async () => {
         service.isBlockedBy.mockResolvedValue(true);
-        const err = await captureError(() => controller.create('u2', partnerUser));
+        const err = await captureError(() =>
+          controller.create('u2', partnerUser),
+        );
         expect(err).toBeInstanceOf(ForbiddenException);
         expect(err.message).toBe('blocked');
       });
 
       it('blocked: native keeps the exact previous Russian sentence', async () => {
         service.isBlockedBy.mockResolvedValue(true);
-        const err = await captureError(() => controller.create('u2', nativeUser));
+        const err = await captureError(() =>
+          controller.create('u2', nativeUser),
+        );
         expect(err).toBeInstanceOf(ForbiddenException);
         expect(err.message).toBe('Нет доступа');
       });
@@ -304,7 +412,9 @@ describe('MessengerController for partner tokens', () => {
       it('not a contact (no legacy conversation either): partner gets `not_a_contact`', async () => {
         service.hasContactWith.mockResolvedValue(false);
         service.findExistingDirectConversation.mockResolvedValue(null);
-        const err = await captureError(() => controller.create('u2', partnerUser));
+        const err = await captureError(() =>
+          controller.create('u2', partnerUser),
+        );
         expect(err).toBeInstanceOf(ForbiddenException);
         expect(err.message).toBe('not_a_contact');
       });
@@ -312,16 +422,24 @@ describe('MessengerController for partner tokens', () => {
       it('not a contact: native keeps the exact previous Russian sentence', async () => {
         service.hasContactWith.mockResolvedValue(false);
         service.findExistingDirectConversation.mockResolvedValue(null);
-        const err = await captureError(() => controller.create('u2', nativeUser));
+        const err = await captureError(() =>
+          controller.create('u2', nativeUser),
+        );
         expect(err).toBeInstanceOf(ForbiddenException);
         expect(err.message).toBe('Нужно сначала отправить запрос на общение');
       });
 
       it('not a contact but a legacy direct conversation already exists: succeeds for both callers', async () => {
         service.hasContactWith.mockResolvedValue(false);
-        service.findExistingDirectConversation.mockResolvedValue({ id: 'd-legacy' });
-        await expect(controller.create('u2', partnerUser)).resolves.toEqual({ id: 'd1' });
-        await expect(controller.create('u2', nativeUser)).resolves.toEqual({ id: 'd1' });
+        service.findExistingDirectConversation.mockResolvedValue({
+          id: 'd-legacy',
+        });
+        await expect(controller.create('u2', partnerUser)).resolves.toEqual({
+          id: 'd1',
+        });
+        await expect(controller.create('u2', nativeUser)).resolves.toEqual({
+          id: 'd1',
+        });
       });
     });
   });

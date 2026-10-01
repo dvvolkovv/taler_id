@@ -15,7 +15,8 @@ export function isValidPartnerSlug(slug: string): boolean {
  * первое подчёркивание после префикса однозначно отделяет его от секрета.
  */
 export function generatePartnerKey(slug: string): string {
-  if (!isValidPartnerSlug(slug)) throw new Error(`invalid partner slug: ${slug}`);
+  if (!isValidPartnerSlug(slug))
+    throw new Error(`invalid partner slug: ${slug}`);
   return `${KEY_PREFIX}${slug}_${randomBytes(32).toString('base64url')}`;
 }
 
@@ -27,7 +28,8 @@ export function parsePartnerKey(key: string): { slug: string } | null {
   if (sep <= 0) return null;
   const slug = rest.slice(0, sep);
   const secret = rest.slice(sep + 1);
-  if (!isValidPartnerSlug(slug) || secret.length < MIN_SECRET_LENGTH) return null;
+  if (!isValidPartnerSlug(slug) || secret.length < MIN_SECRET_LENGTH)
+    return null;
   return { slug };
 }
 

@@ -19,7 +19,9 @@ afterAll(() => {
 
 function make() {
   const prisma: any = {
-    conversation: { findUnique: jest.fn().mockResolvedValue({ type: 'DIRECT', name: null }) },
+    conversation: {
+      findUnique: jest.fn().mockResolvedValue({ type: 'DIRECT', name: null }),
+    },
     partnerLink: {
       findMany: jest.fn().mockResolvedValue([]),
       findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }),
@@ -30,7 +32,9 @@ function make() {
   const client: any = {
     lpush: jest.fn(async (_key: string, value: string) => list.unshift(value)),
     ltrim: jest.fn().mockResolvedValue('OK'),
-    lrange: jest.fn(async (_key: string, start: number, stop: number) => list.slice(start, stop + 1)),
+    lrange: jest.fn(async (_key: string, start: number, stop: number) =>
+      list.slice(start, stop + 1),
+    ),
   };
   const redis: any = { getClient: () => client };
   const queue: any = { add: jest.fn().mockResolvedValue({}) };
@@ -49,7 +53,11 @@ describe('PartnerWebhooksService.planFanOut', () => {
     conversationType: 'DIRECT' as string | null,
   };
   const input = {
-    message: { id: 'm1', senderId: 'u-a', sentAt: new Date('2026-10-01T10:00:00Z') },
+    message: {
+      id: 'm1',
+      senderId: 'u-a',
+      sentAt: new Date('2026-10-01T10:00:00Z'),
+    },
     senderName: 'A',
     preview: 'hi',
     kind: 'text',
@@ -69,9 +77,15 @@ describe('PartnerWebhooksService.planFanOut', () => {
 
   it('skips system posts and conversation types other than chats and groups, without touching the database', async () => {
     const { service, prisma } = make();
-    await expect(service.planFanOut({ ...args, systemPost: true })).resolves.toBeNull();
-    await expect(service.planFanOut({ ...args, conversationType: 'CHANNEL' })).resolves.toBeNull();
-    await expect(service.planFanOut({ ...args, conversationType: null })).resolves.toBeNull();
+    await expect(
+      service.planFanOut({ ...args, systemPost: true }),
+    ).resolves.toBeNull();
+    await expect(
+      service.planFanOut({ ...args, conversationType: 'CHANNEL' }),
+    ).resolves.toBeNull();
+    await expect(
+      service.planFanOut({ ...args, conversationType: null }),
+    ).resolves.toBeNull();
     expect(prisma.partnerLink.findMany).not.toHaveBeenCalled();
   });
 
@@ -100,7 +114,11 @@ describe('PartnerWebhooksService.planFanOut', () => {
     await flush();
     expect(prisma.conversation.findUnique).not.toHaveBeenCalled();
     const [, data] = queue.add.mock.calls[0];
-    expect(data.event.conversation).toEqual({ id: 'c1', type: 'DIRECT', title: null });
+    expect(data.event.conversation).toEqual({
+      id: 'c1',
+      type: 'DIRECT',
+      title: null,
+    });
   });
 
   it("queues one event per linked recipient, with the sender's externalId from the same partner", async () => {
@@ -110,7 +128,10 @@ describe('PartnerWebhooksService.planFanOut', () => {
       { userId: 'u-a', externalId: 'm-a', partnerId: 'p1' },
       { userId: 'u-b', externalId: 'm-b', partnerId: 'p1' },
     ]);
-    const plan = await service.planFanOut({ ...args, conversationType: 'GROUP' });
+    const plan = await service.planFanOut({
+      ...args,
+      conversationType: 'GROUP',
+    });
     plan!.enqueue('u-b', input);
     plan!.enqueue('u-c', input);
     plan!.enqueue('u-a', input);
@@ -181,7 +202,9 @@ describe('PartnerWebhooksService.planFanOut', () => {
       { userId: 'u-b', externalId: 'm-b', partnerId: 'p1' },
     ]);
     prisma.conversation.findUnique.mockRejectedValue(new Error('db down'));
-    await expect(service.planFanOut({ ...args, conversationType: 'GROUP' })).resolves.toBeNull();
+    await expect(
+      service.planFanOut({ ...args, conversationType: 'GROUP' }),
+    ).resolves.toBeNull();
   });
 
   it('swallows a rejected queue.add (logged)', async () => {
@@ -191,7 +214,9 @@ describe('PartnerWebhooksService.planFanOut', () => {
       { userId: 'u-a', externalId: 'm-a', partnerId: 'p1' },
       { userId: 'u-b', externalId: 'm-b', partnerId: 'p1' },
     ]);
-    const warnSpy = jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined as any);
+    const warnSpy = jest
+      .spyOn((service as any).logger, 'warn')
+      .mockImplementation(() => undefined as any);
     const plan = await service.planFanOut(args);
     expect(() => plan!.enqueue('u-b', input)).not.toThrow();
     await flush();
@@ -200,7 +225,11 @@ describe('PartnerWebhooksService.planFanOut', () => {
 });
 
 describe('PartnerWebhooksService.deliver', () => {
-  const event: any = { id: 'evt_1', type: 'ping', createdAt: '2026-10-01T10:00:00.000Z' };
+  const event: any = {
+    id: 'evt_1',
+    type: 'ping',
+    createdAt: '2026-10-01T10:00:00.000Z',
+  };
   let partner: any;
 
   beforeEach(() => {
@@ -220,12 +249,21 @@ describe('PartnerWebhooksService.deliver', () => {
     registry.findById.mockResolvedValue(partner);
     (axios.post as jest.Mock).mockResolvedValue({ status: 204 });
     const res = await service.deliver('p1', event, 2);
-    expect(res).toMatchObject({ eventId: 'evt_1', type: 'ping', attempt: 2, delivered: true, status: 204, error: null });
+    expect(res).toMatchObject({
+      eventId: 'evt_1',
+      type: 'ping',
+      attempt: 2,
+      delivered: true,
+      status: 204,
+      error: null,
+    });
     const [url, body, config] = (axios.post as jest.Mock).mock.calls[0];
     expect(url).toBe('https://nadi.example/hook');
     expect(body).toBe(JSON.stringify(event));
     const t = Number(/t=(\d+)/.exec(config.headers['X-TalerID-Signature'])![1]);
-    expect(config.headers['X-TalerID-Signature']).toBe(signWebhook('whsec_test', t, body));
+    expect(config.headers['X-TalerID-Signature']).toBe(
+      signWebhook('whsec_test', t, body),
+    );
     expect(config.headers).toMatchObject({
       'Content-Type': 'application/json',
       'User-Agent': 'TalerID-Webhooks/1',
@@ -236,8 +274,15 @@ describe('PartnerWebhooksService.deliver', () => {
     // (a receiver dripping 1 byte/s never goes idle long enough to trip it).
     // Response is capped and read as text, not auto-parsed/buffered unbounded.
     expect(config.signal).toBeInstanceOf(AbortSignal);
-    expect(config).toMatchObject({ maxRedirects: 0, maxContentLength: 64 * 1024, responseType: 'text' });
-    expect(client.lpush).toHaveBeenCalledWith('partner:webhook:log:p1', expect.any(String));
+    expect(config).toMatchObject({
+      maxRedirects: 0,
+      maxContentLength: 64 * 1024,
+      responseType: 'text',
+    });
+    expect(client.lpush).toHaveBeenCalledWith(
+      'partner:webhook:log:p1',
+      expect.any(String),
+    );
     expect(client.ltrim).toHaveBeenCalledWith('partner:webhook:log:p1', 0, 999);
   });
 
@@ -254,16 +299,27 @@ describe('PartnerWebhooksService.deliver', () => {
     const tooBig = new Error('maxContentLength size of 65536 exceeded');
     (axios.post as jest.Mock).mockRejectedValueOnce(tooBig);
     await expect(service.deliver('p1', event)).resolves.toMatchObject({
-      delivered: false, status: null, error: 'response_too_large',
+      delivered: false,
+      status: null,
+      error: 'response_too_large',
     });
   });
 
   it('journals secret_unreadable (and stays retryable) when the webhook secret cannot be decrypted, without a bare throw', async () => {
     const { service, registry } = make();
-    registry.findById.mockResolvedValue({ ...partner, webhookSecretEnc: 'not-valid-ciphertext' });
-    const warnSpy = jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined as any);
+    registry.findById.mockResolvedValue({
+      ...partner,
+      webhookSecretEnc: 'not-valid-ciphertext',
+    });
+    const warnSpy = jest
+      .spyOn((service as any).logger, 'warn')
+      .mockImplementation(() => undefined as any);
     const res = await service.deliver('p1', event);
-    expect(res).toMatchObject({ delivered: false, status: null, error: 'secret_unreadable' });
+    expect(res).toMatchObject({
+      delivered: false,
+      status: null,
+      error: 'secret_unreadable',
+    });
     expect(axios.post).not.toHaveBeenCalled();
     // Only the partner id/slug — never the secret or the event body.
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('nadi'));
@@ -276,10 +332,15 @@ describe('PartnerWebhooksService.deliver', () => {
     registry.findById.mockResolvedValue(partner);
     prisma.partnerLink.findUnique.mockResolvedValue({ status: 'REVOKED' });
     const msgEvent: any = {
-      id: 'evt_m1_u-b', type: 'message.created', createdAt: 'x',
+      id: 'evt_m1_u-b',
+      type: 'message.created',
+      createdAt: 'x',
       recipient: { externalId: 'm-b', talerUserId: 'u-b' },
     };
-    await expect(service.deliver('p1', msgEvent)).resolves.toMatchObject({ delivered: false, error: 'link_not_active' });
+    await expect(service.deliver('p1', msgEvent)).resolves.toMatchObject({
+      delivered: false,
+      error: 'link_not_active',
+    });
     expect(axios.post).not.toHaveBeenCalled();
     expect(prisma.partnerLink.findUnique).toHaveBeenCalledWith({
       where: { partnerId_userId: { partnerId: 'p1', userId: 'u-b' } },
@@ -292,10 +353,15 @@ describe('PartnerWebhooksService.deliver', () => {
     registry.findById.mockResolvedValue(partner);
     prisma.partnerLink.findUnique.mockResolvedValue(null);
     const msgEvent: any = {
-      id: 'evt_m1_u-b', type: 'message.created', createdAt: 'x',
+      id: 'evt_m1_u-b',
+      type: 'message.created',
+      createdAt: 'x',
       recipient: { externalId: 'm-b', talerUserId: 'u-b' },
     };
-    await expect(service.deliver('p1', msgEvent)).resolves.toMatchObject({ delivered: false, error: 'link_not_active' });
+    await expect(service.deliver('p1', msgEvent)).resolves.toMatchObject({
+      delivered: false,
+      error: 'link_not_active',
+    });
     expect(axios.post).not.toHaveBeenCalled();
   });
 
@@ -305,10 +371,14 @@ describe('PartnerWebhooksService.deliver', () => {
     prisma.partnerLink.findUnique.mockResolvedValue({ status: 'ACTIVE' });
     (axios.post as jest.Mock).mockResolvedValue({ status: 200 });
     const msgEvent: any = {
-      id: 'evt_m1_u-b', type: 'message.created', createdAt: 'x',
+      id: 'evt_m1_u-b',
+      type: 'message.created',
+      createdAt: 'x',
       recipient: { externalId: 'm-b', talerUserId: 'u-b' },
     };
-    await expect(service.deliver('p1', msgEvent)).resolves.toMatchObject({ delivered: true });
+    await expect(service.deliver('p1', msgEvent)).resolves.toMatchObject({
+      delivered: true,
+    });
     expect(axios.post).toHaveBeenCalled();
   });
 
@@ -316,15 +386,26 @@ describe('PartnerWebhooksService.deliver', () => {
     const { service, registry } = make();
     registry.findById.mockResolvedValue(partner);
     (axios.post as jest.Mock).mockResolvedValueOnce({ status: 500 });
-    await expect(service.deliver('p1', event)).resolves.toMatchObject({ delivered: false, status: 500, error: 'http_500' });
+    await expect(service.deliver('p1', event)).resolves.toMatchObject({
+      delivered: false,
+      status: 500,
+      error: 'http_500',
+    });
     (axios.post as jest.Mock).mockRejectedValueOnce(new Error('ECONNREFUSED'));
-    await expect(service.deliver('p1', event)).resolves.toMatchObject({ delivered: false, status: null, error: 'ECONNREFUSED' });
+    await expect(service.deliver('p1', event)).resolves.toMatchObject({
+      delivered: false,
+      status: null,
+      error: 'ECONNREFUSED',
+    });
   });
 
   it('calls nobody when the webhook is not configured', async () => {
     const { service, registry } = make();
     registry.findById.mockResolvedValue({ ...partner, webhookUrl: null });
-    await expect(service.deliver('p1', event)).resolves.toMatchObject({ delivered: false, error: 'webhook_not_configured' });
+    await expect(service.deliver('p1', event)).resolves.toMatchObject({
+      delivered: false,
+      error: 'webhook_not_configured',
+    });
     expect(axios.post).not.toHaveBeenCalled();
   });
 
@@ -336,7 +417,11 @@ describe('PartnerWebhooksService.deliver', () => {
     await service.deliver('p1', { ...event, id: 'evt_b' });
     const rows = await service.recentDeliveries('p1', 500);
     expect(rows.map((r) => r.eventId)).toEqual(['evt_b', 'evt_a']);
-    expect(client.lrange).toHaveBeenLastCalledWith('partner:webhook:log:p1', 0, 199);
+    expect(client.lrange).toHaveBeenLastCalledWith(
+      'partner:webhook:log:p1',
+      0,
+      199,
+    );
   });
 
   // Adjustment 6: kill switches must stop queued events and their retries
@@ -345,7 +430,10 @@ describe('PartnerWebhooksService.deliver', () => {
   it('drops the job without retrying when the partner API is off globally', async () => {
     process.env.PARTNER_API_ENABLED = 'false';
     const { service, registry } = make();
-    await expect(service.deliver('p1', event)).resolves.toMatchObject({ delivered: false, error: 'webhook_not_configured' });
+    await expect(service.deliver('p1', event)).resolves.toMatchObject({
+      delivered: false,
+      error: 'webhook_not_configured',
+    });
     expect(registry.findById).not.toHaveBeenCalled();
     expect(axios.post).not.toHaveBeenCalled();
   });
@@ -353,14 +441,20 @@ describe('PartnerWebhooksService.deliver', () => {
   it('drops the job without retrying when the partner has been disabled', async () => {
     const { service, registry } = make();
     registry.findById.mockResolvedValue({ ...partner, enabled: false });
-    await expect(service.deliver('p1', event)).resolves.toMatchObject({ delivered: false, error: 'webhook_not_configured' });
+    await expect(service.deliver('p1', event)).resolves.toMatchObject({
+      delivered: false,
+      error: 'webhook_not_configured',
+    });
     expect(axios.post).not.toHaveBeenCalled();
   });
 
   it('drops the job without retrying when the webhook secret was cleared', async () => {
     const { service, registry } = make();
     registry.findById.mockResolvedValue({ ...partner, webhookSecretEnc: null });
-    await expect(service.deliver('p1', event)).resolves.toMatchObject({ delivered: false, error: 'webhook_not_configured' });
+    await expect(service.deliver('p1', event)).resolves.toMatchObject({
+      delivered: false,
+      error: 'webhook_not_configured',
+    });
     expect(axios.post).not.toHaveBeenCalled();
   });
 
@@ -374,7 +468,16 @@ describe('PartnerWebhooksService.deliver', () => {
     expect(stored).not.toHaveProperty('partnerSlug');
     // Ровно документированные поля GET webhooks/deliveries — ни полем больше.
     expect(Object.keys(stored).sort()).toEqual(
-      ['at', 'attempt', 'delivered', 'durationMs', 'error', 'eventId', 'status', 'type'].sort(),
+      [
+        'at',
+        'attempt',
+        'delivered',
+        'durationMs',
+        'error',
+        'eventId',
+        'status',
+        'type',
+      ].sort(),
     );
     const rows = await service.recentDeliveries('p1', 10);
     expect(rows[0]).not.toHaveProperty('partnerSlug');

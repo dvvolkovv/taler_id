@@ -17,7 +17,11 @@ describe('push text', () => {
   it('decodes system messages instead of showing JSON', () => {
     const msg = {
       isSystem: true,
-      content: JSON.stringify({ action: 'message_pinned', actor: 'Alice', preview: 'Встреча' }),
+      content: JSON.stringify({
+        action: 'message_pinned',
+        actor: 'Alice',
+        preview: 'Встреча',
+      }),
     };
     expect(buildPushText(msg)).not.toContain('{');
     expect(messageKind(msg)).toBe('system');

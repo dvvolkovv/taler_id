@@ -23,7 +23,10 @@ function make() {
 describe('MessengerService block and unblock', () => {
   it('remembers that they were contacts when blocking', async () => {
     const { service, prisma } = make();
-    prisma.contactRequest.findFirst.mockResolvedValue({ id: 'c1', status: 'ACCEPTED' });
+    prisma.contactRequest.findFirst.mockResolvedValue({
+      id: 'c1',
+      status: 'ACCEPTED',
+    });
     await service.blockUser('me', 'u2');
     expect(prisma.contactRequest.deleteMany).toHaveBeenCalled();
     expect(prisma.blockedUser.create).toHaveBeenCalledWith({
@@ -49,8 +52,12 @@ describe('MessengerService block and unblock', () => {
 
   it('does nothing when there was no block row to remove (P2025)', async () => {
     const { service, prisma } = make();
-    prisma.blockedUser.delete.mockRejectedValue(Object.assign(new Error('not found'), { code: 'P2025' }));
-    await expect(service.unblockUser('me', 'u2')).resolves.toEqual({ ok: true });
+    prisma.blockedUser.delete.mockRejectedValue(
+      Object.assign(new Error('not found'), { code: 'P2025' }),
+    );
+    await expect(service.unblockUser('me', 'u2')).resolves.toEqual({
+      ok: true,
+    });
     expect(prisma.blockedUser.updateMany).not.toHaveBeenCalled();
     expect(prisma.contactRequest.create).not.toHaveBeenCalled();
     expect(prisma.contactRequest.update).not.toHaveBeenCalled();
@@ -86,7 +93,10 @@ describe('MessengerService block and unblock', () => {
   it('updates a PENDING request to ACCEPTED instead of creating a duplicate row', async () => {
     const { service, prisma } = make();
     prisma.blockedUser.delete.mockResolvedValue({ hadContact: true });
-    prisma.contactRequest.findFirst.mockResolvedValue({ id: 'c1', status: 'PENDING' });
+    prisma.contactRequest.findFirst.mockResolvedValue({
+      id: 'c1',
+      status: 'PENDING',
+    });
     await service.unblockUser('me', 'u2');
     expect(prisma.contactRequest.update).toHaveBeenCalledWith({
       where: { id: 'c1' },

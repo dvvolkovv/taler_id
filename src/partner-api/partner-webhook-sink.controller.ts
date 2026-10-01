@@ -1,4 +1,13 @@
-import { Controller, Headers, HttpCode, NotFoundException, Param, PayloadTooLargeException, Post, Req } from '@nestjs/common';
+import {
+  Controller,
+  Headers,
+  HttpCode,
+  NotFoundException,
+  Param,
+  PayloadTooLargeException,
+  Post,
+  Req,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { decryptWebhookSecret } from '../partner-core/partner-secrets.util';
 import { verifyWebhookSignature } from '../partner-core/partner-webhook-events';
@@ -54,13 +63,16 @@ export class PartnerWebhookSinkController {
     } catch {
       throw new NotFoundException();
     }
-    if (!verifyWebhookSignature(secret, headers['x-talerid-signature'], bodyText)) {
+    if (
+      !verifyWebhookSignature(secret, headers['x-talerid-signature'], bodyText)
+    ) {
       throw new NotFoundException();
     }
     // Подпись уже проверена — неизвестный отправитель узнаёт из ответа
     // только "нет" (404), ничего больше. Партнёр с верным секретом, чьё тело
     // оказалось больше предела, получает честный 413 — это не скрывается.
-    if (rawBody.byteLength > SINK_BODY_MAX_BYTES) throw new PayloadTooLargeException();
+    if (rawBody.byteLength > SINK_BODY_MAX_BYTES)
+      throw new PayloadTooLargeException();
     await this.store.push(slug, {
       receivedAt: new Date().toISOString(),
       event: headers['x-talerid-event'] ?? null,

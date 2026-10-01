@@ -6,10 +6,17 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
-import { parsePartnerKey, partnerKeyMatches } from '../partner-core/partner-key.util';
+import {
+  parsePartnerKey,
+  partnerKeyMatches,
+} from '../partner-core/partner-key.util';
 import { PartnerRegistryService } from '../partner-core/partner-registry.service';
 import { RedisService } from '../redis/redis.service';
-import { currentMinute, incrementCounter, throwTooManyRequests } from './partner-counter.util';
+import {
+  currentMinute,
+  incrementCounter,
+  throwTooManyRequests,
+} from './partner-counter.util';
 
 /** Адрес клиента, как его видит Express за нашим nginx, без префикса IPv4-in-IPv6. */
 export function clientIp(req: { ip?: string }): string {
@@ -55,7 +62,11 @@ export class PartnerKeyGuard implements CanActivate {
     const key = `partner:authfail:${clientIp(req)}:${minute}`;
     const count = await incrementCounter(this.redis, key, 120);
     if (count !== null && count > PARTNER_AUTH_FAILURES_PER_MINUTE) {
-      throwTooManyRequests(context.switchToHttp().getResponse(), 'too_many_auth_failures', retryAfter);
+      throwTooManyRequests(
+        context.switchToHttp().getResponse(),
+        'too_many_auth_failures',
+        retryAfter,
+      );
     }
     throw rejection;
   }
@@ -66,11 +77,17 @@ export class PartnerKeyGuard implements CanActivate {
    * на 429. Исключение НЕ из этого метода (например 503 реестра партнёров)
    * улетает прямо из canActivate, минуя счётчик — оно не отказ по ключу.
    */
-  private async authenticate(req: { headers?: Record<string, unknown>; ip?: string }): Promise<HttpException | null> {
+  private async authenticate(req: {
+    headers?: Record<string, unknown>;
+    ip?: string;
+  }): Promise<HttpException | null> {
     if (process.env.PARTNER_API_ENABLED !== 'true') {
       return new ForbiddenException('partner_api_disabled');
     }
-    const match = /^Bearer\s+(\S+)$/i.exec(String(req.headers?.authorization ?? ''));
+    const header: unknown = req.headers?.authorization;
+    const match = /^Bearer\s+(\S+)$/i.exec(
+      typeof header === 'string' ? header : '',
+    );
     const key = match?.[1] ?? '';
     const parsed = parsePartnerKey(key);
     const partner = parsed ? await this.registry.findBySlug(parsed.slug) : null;
@@ -78,7 +95,10 @@ export class PartnerKeyGuard implements CanActivate {
       return new UnauthorizedException('invalid_partner_key');
     }
     if (!partner.enabled) return new ForbiddenException('partner_disabled');
-    if (partner.ipAllowlist.length > 0 && !partner.ipAllowlist.includes(clientIp(req))) {
+    if (
+      partner.ipAllowlist.length > 0 &&
+      !partner.ipAllowlist.includes(clientIp(req))
+    ) {
       return new UnauthorizedException('ip_not_allowed');
     }
     (req as { partner?: unknown }).partner = partner;

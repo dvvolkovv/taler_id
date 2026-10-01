@@ -1,7 +1,12 @@
 import { ForbiddenException } from '@nestjs/common';
 import { MessengerService } from './messenger.service';
 
-function make(conv: any, participant: any, participants: any[] = [], users: any[] = []) {
+function make(
+  conv: any,
+  participant: any,
+  participants: any[] = [],
+  users: any[] = [],
+) {
   const prisma: any = {
     conversationParticipant: {
       findUnique: jest.fn().mockResolvedValue(participant),
@@ -24,8 +29,13 @@ function make(conv: any, participant: any, participants: any[] = [], users: any[
 // включая управляемые партнёром аккаунты, которых спека обещает не светить.
 describe('MessengerService.getGroupMembers', () => {
   it('refuses a channel SUBSCRIBER', async () => {
-    const { service, prisma } = make({ id: 'ch1', type: 'CHANNEL' }, { role: 'SUBSCRIBER' });
-    await expect(service.getGroupMembers('ch1', 'u1')).rejects.toThrow(ForbiddenException);
+    const { service, prisma } = make(
+      { id: 'ch1', type: 'CHANNEL' },
+      { role: 'SUBSCRIBER' },
+    );
+    await expect(service.getGroupMembers('ch1', 'u1')).rejects.toThrow(
+      ForbiddenException,
+    );
     expect(prisma.conversationParticipant.findMany).not.toHaveBeenCalled();
   });
 

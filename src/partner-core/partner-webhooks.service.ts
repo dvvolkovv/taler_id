@@ -1,6 +1,5 @@
 import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, Logger } from '@nestjs/common';
-import type { ConvType } from '@prisma/client';
 import axios from 'axios';
 import { Queue } from 'bullmq';
 import { PrismaService } from '../prisma/prisma.service';
@@ -14,7 +13,10 @@ import {
   WEBHOOK_MAX_ATTEMPTS,
   WebhookEvent,
 } from './partner-webhook-events';
-import { isPartnerConversationType, PARTNER_WEBHOOK_QUEUE } from './partner.constants';
+import {
+  isPartnerConversationType,
+  PARTNER_WEBHOOK_QUEUE,
+} from './partner.constants';
 
 /** Что шлюз мессенджера делает с планом: ставит событие получателю, если нужно. */
 export interface PartnerFanOut {
@@ -80,9 +82,11 @@ export class PartnerWebhooksService {
     participantIds: string[];
     senderId: string;
     systemPost: boolean;
-    conversationType: ConvType | string | null;
+    /** Тип беседы из `ConvType`; шлюз уже знает его, повторно не читаем. */
+    conversationType: string | null;
   }): Promise<PartnerFanOut | null> {
-    if (process.env.PARTNER_API_ENABLED !== 'true' || args.systemPost) return null;
+    if (process.env.PARTNER_API_ENABLED !== 'true' || args.systemPost)
+      return null;
     const conversationType = args.conversationType ?? '';
     if (!isPartnerConversationType(conversationType)) return null;
     try {
@@ -103,14 +107,21 @@ export class PartnerWebhooksService {
         });
         title = conv?.name ?? null;
       }
-      const conversation = { id: args.conversationId, type: conversationType, title };
+      const conversation = {
+        id: args.conversationId,
+        type: conversationType,
+        title,
+      };
       return {
         enqueue: (recipientUserId, input) => {
           try {
             if (recipientUserId === args.senderId) return;
             for (const link of links) {
               if (link.userId !== recipientUserId) continue;
-              const senderLink = links.find((l) => l.userId === args.senderId && l.partnerId === link.partnerId);
+              const senderLink = links.find(
+                (l) =>
+                  l.userId === args.senderId && l.partnerId === link.partnerId,
+              );
               const event = buildMessageCreatedEvent({
                 recipient: link,
                 senderExternalId: senderLink?.externalId ?? null,
@@ -118,7 +129,9 @@ export class PartnerWebhooksService {
                 input,
               });
               this.enqueueEvent(link.partnerId, event).catch((e) =>
-                this.logger.warn(`enqueue ${event.id} failed: ${(e as Error).message}`),
+                this.logger.warn(
+                  `enqueue ${event.id} failed: ${(e as Error).message}`,
+                ),
               );
             }
           } catch (e) {
@@ -126,12 +139,16 @@ export class PartnerWebhooksService {
             // Task 34 этот вызов стоит прямо перед getFcmTokens внутри
             // per-recipient try шлюза, и падение здесь стоило бы человеку
             // его обычного TalerID-пуша.
-            this.logger.warn(`enqueue to ${recipientUserId} failed: ${(e as Error).message}`);
+            this.logger.warn(
+              `enqueue to ${recipientUserId} failed: ${(e as Error).message}`,
+            );
           }
         },
       };
     } catch (e) {
-      this.logger.warn(`planFanOut failed for ${args.conversationId}: ${(e as Error).message}`);
+      this.logger.warn(
+        `planFanOut failed for ${args.conversationId}: ${(e as Error).message}`,
+      );
       return null;
     }
   }
@@ -176,18 +193,33 @@ export class PartnerWebhooksService {
     deliveryTimeoutMs: number = DELIVERY_TIMEOUT_MS,
   ): Promise<DeliveryAttempt> {
     if (process.env.PARTNER_API_ENABLED !== 'true') {
-      this.logger.debug(`webhook ${event.id} to ${partnerId} dropped: partner API is off`);
+      this.logger.debug(
+        `webhook ${event.id} to ${partnerId} dropped: partner API is off`,
+      );
       return this.record(partnerId, {
-        eventId: event.id, type: event.type, attempt,
-        delivered: false, status: null, error: 'webhook_not_configured', durationMs: 0, partnerSlug: null,
+        eventId: event.id,
+        type: event.type,
+        attempt,
+        delivered: false,
+        status: null,
+        error: 'webhook_not_configured',
+        durationMs: 0,
+        partnerSlug: null,
       });
     }
     const partner = await this.registry.findById(partnerId);
     if (!partner?.enabled || !partner.webhookUrl || !partner.webhookSecretEnc) {
-      this.logger.debug(`webhook ${event.id} to ${partnerId} dropped: partner disabled or webhook not configured`);
+      this.logger.debug(
+        `webhook ${event.id} to ${partnerId} dropped: partner disabled or webhook not configured`,
+      );
       return this.record(partnerId, {
-        eventId: event.id, type: event.type, attempt,
-        delivered: false, status: null, error: 'webhook_not_configured', durationMs: 0,
+        eventId: event.id,
+        type: event.type,
+        attempt,
+        delivered: false,
+        status: null,
+        error: 'webhook_not_configured',
+        durationMs: 0,
         partnerSlug: partner?.slug ?? null,
       });
     }
@@ -196,17 +228,27 @@ export class PartnerWebhooksService {
     // уже отвязанного человека смысла нет. Применимо только к message.created:
     // у ping нет конкретного получателя.
     if (event.type === 'message.created') {
-      const recipientUserId = (event as { recipient?: { talerUserId?: string } }).recipient?.talerUserId;
+      const recipientUserId = (
+        event as { recipient?: { talerUserId?: string } }
+      ).recipient?.talerUserId;
       if (recipientUserId) {
         const link = await this.prisma.partnerLink.findUnique({
           where: { partnerId_userId: { partnerId, userId: recipientUserId } },
           select: { status: true },
         });
         if (!link || link.status !== 'ACTIVE') {
-          this.logger.debug(`webhook ${event.id} to ${partnerId} dropped: link_not_active`);
+          this.logger.debug(
+            `webhook ${event.id} to ${partnerId} dropped: link_not_active`,
+          );
           return this.record(partnerId, {
-            eventId: event.id, type: event.type, attempt,
-            delivered: false, status: null, error: 'link_not_active', durationMs: 0, partnerSlug: partner.slug,
+            eventId: event.id,
+            type: event.type,
+            attempt,
+            delivered: false,
+            status: null,
+            error: 'link_not_active',
+            durationMs: 0,
+            partnerSlug: partner.slug,
           });
         }
       }
@@ -219,10 +261,18 @@ export class PartnerWebhooksService {
       // ключа на одной ноде не должен ронять доставку без следа в журнале
       // (и не должен светить ни секрет, ни тело в логе). Ретраится: другая
       // нода с верным ключом может доставить.
-      this.logger.warn(`webhook secret undecryptable for partner ${partner.slug} (${partnerId})`);
+      this.logger.warn(
+        `webhook secret undecryptable for partner ${partner.slug} (${partnerId})`,
+      );
       return this.record(partnerId, {
-        eventId: event.id, type: event.type, attempt,
-        delivered: false, status: null, error: 'secret_unreadable', durationMs: 0, partnerSlug: partner.slug,
+        eventId: event.id,
+        type: event.type,
+        attempt,
+        delivered: false,
+        status: null,
+        error: 'secret_unreadable',
+        durationMs: 0,
+        partnerSlug: partner.slug,
       });
     }
     const body = JSON.stringify(event);
@@ -253,9 +303,14 @@ export class PartnerWebhooksService {
       });
       const delivered = res.status >= 200 && res.status < 300;
       return this.record(partnerId, {
-        eventId: event.id, type: event.type, attempt,
-        delivered, status: res.status, error: delivered ? null : `http_${res.status}`,
-        durationMs: Date.now() - started, partnerSlug: partner.slug,
+        eventId: event.id,
+        type: event.type,
+        attempt,
+        delivered,
+        status: res.status,
+        error: delivered ? null : `http_${res.status}`,
+        durationMs: Date.now() - started,
+        partnerSlug: partner.slug,
       });
     } catch (e) {
       const message = (e as { message?: string })?.message ?? '';
@@ -276,16 +331,27 @@ export class PartnerWebhooksService {
           ? 'response_too_large'
           : (message || 'unknown_error').slice(0, 200);
       return this.record(partnerId, {
-        eventId: event.id, type: event.type, attempt,
-        delivered: false, status: null, error, durationMs: Date.now() - started, partnerSlug: partner.slug,
+        eventId: event.id,
+        type: event.type,
+        attempt,
+        delivered: false,
+        status: null,
+        error,
+        durationMs: Date.now() - started,
+        partnerSlug: partner.slug,
       });
     }
   }
 
   /** Последние попытки доставки, новые сначала. */
-  async recentDeliveries(partnerId: string, limit: number): Promise<DeliveryResult[]> {
+  async recentDeliveries(
+    partnerId: string,
+    limit: number,
+  ): Promise<DeliveryResult[]> {
     const count = Math.min(Math.max(Math.floor(limit) || 50, 1), 200);
-    const rows = await this.redis.getClient().lrange(logKey(partnerId), 0, count - 1);
+    const rows = await this.redis
+      .getClient()
+      .lrange(logKey(partnerId), 0, count - 1);
     return rows.map((row) => JSON.parse(row) as DeliveryResult);
   }
 
@@ -294,7 +360,10 @@ export class PartnerWebhooksService {
     result: Omit<DeliveryAttempt, 'at'>,
   ): Promise<DeliveryAttempt> {
     const { partnerSlug, ...journaled } = result;
-    const entry: DeliveryResult = { ...journaled, at: new Date().toISOString() };
+    const entry: DeliveryResult = {
+      ...journaled,
+      at: new Date().toISOString(),
+    };
     try {
       const client = this.redis.getClient();
       // partnerSlug нарочно не входит в entry — он только для предупреждения
@@ -302,7 +371,9 @@ export class PartnerWebhooksService {
       await client.lpush(logKey(partnerId), JSON.stringify(entry));
       await client.ltrim(logKey(partnerId), 0, DELIVERY_LOG_MAX - 1);
     } catch (e) {
-      this.logger.warn(`webhook log write failed for ${partnerId}: ${(e as Error).message}`);
+      this.logger.warn(
+        `webhook log write failed for ${partnerId}: ${(e as Error).message}`,
+      );
     }
     return { ...entry, partnerSlug };
   }

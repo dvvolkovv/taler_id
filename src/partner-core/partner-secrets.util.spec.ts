@@ -57,8 +57,12 @@ describe('partner secrets', () => {
 
   it('fails closed on encrypt/decrypt without a proper master key too', () => {
     process.env.PARTNER_SECRETS_KEY = 'short';
-    expect(() => encryptWebhookSecret('whsec_x')).toThrow('PARTNER_SECRETS_KEY');
-    expect(() => decryptWebhookSecret('whatever')).toThrow('PARTNER_SECRETS_KEY');
+    expect(() => encryptWebhookSecret('whsec_x')).toThrow(
+      'PARTNER_SECRETS_KEY',
+    );
+    expect(() => decryptWebhookSecret('whatever')).toThrow(
+      'PARTNER_SECRETS_KEY',
+    );
   });
 
   it('gives a short non-secret fingerprint that changes with the key', () => {
@@ -72,10 +76,14 @@ describe('partner secrets', () => {
     const logger = { log: jest.fn(), error: jest.fn() };
     process.env.PARTNER_API_ENABLED = 'true';
     reportPartnerSecretsKey(logger);
-    expect(logger.log).toHaveBeenCalledWith(`partner secrets key fingerprint: ${partnerSecretsKeyFingerprint()}`);
+    expect(logger.log).toHaveBeenCalledWith(
+      `partner secrets key fingerprint: ${partnerSecretsKeyFingerprint()}`,
+    );
     process.env.PARTNER_SECRETS_KEY = 'short';
     expect(() => reportPartnerSecretsKey(logger)).not.toThrow();
-    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('PARTNER_SECRETS_KEY'));
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('PARTNER_SECRETS_KEY'),
+    );
   });
 
   it('stays silent at startup while the partner API is off', () => {

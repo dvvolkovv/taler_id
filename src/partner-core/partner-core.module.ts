@@ -17,7 +17,10 @@ import { PARTNER_WEBHOOK_QUEUE } from './partner.constants';
  * PrismaModule и RedisModule глобальные, подключение BullMQ — в AppModule.
  */
 @Module({
-  imports: [OidcModule, BullModule.registerQueue({ name: PARTNER_WEBHOOK_QUEUE })],
+  imports: [
+    OidcModule,
+    BullModule.registerQueue({ name: PARTNER_WEBHOOK_QUEUE }),
+  ],
   providers: [
     PartnerRegistryService,
     PartnerTokensService,

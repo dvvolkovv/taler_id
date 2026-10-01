@@ -9,9 +9,14 @@ import type { ConvType } from '@prisma/client';
 export const MESSENGER_SCOPE = 'messenger';
 
 /** Какие беседы видит и может трогать партнёрский токен. */
-export const PARTNER_CONVERSATION_TYPES = ['DIRECT', 'GROUP'] as const satisfies readonly ConvType[];
+export const PARTNER_CONVERSATION_TYPES = [
+  'DIRECT',
+  'GROUP',
+] as const satisfies readonly ConvType[];
 
-export function isPartnerConversationType(type: string | null | undefined): boolean {
+export function isPartnerConversationType(
+  type: string | null | undefined,
+): boolean {
   return (PARTNER_CONVERSATION_TYPES as readonly string[]).includes(type ?? '');
 }
 
@@ -46,6 +51,8 @@ export interface PartnerPrincipal {
 }
 
 /** Пришёл ли запрос мессенджера по партнёрскому токену (см. MessengerAuthGuard). */
-export function isPartnerCaller(user: unknown): user is { sub: string; partner: PartnerPrincipal } {
+export function isPartnerCaller(
+  user: unknown,
+): user is { sub: string; partner: PartnerPrincipal } {
   return !!(user as { partner?: unknown } | null | undefined)?.partner;
 }

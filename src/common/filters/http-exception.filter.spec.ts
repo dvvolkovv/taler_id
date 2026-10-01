@@ -1,7 +1,9 @@
 import { HttpException, HttpStatus } from '@nestjs/common';
 import { HttpExceptionFilter } from './http-exception.filter';
 
-function makeHost(request: any = { method: 'POST', url: '/partner/v1/users/m-1/link-code' }) {
+function makeHost(
+  request: any = { method: 'POST', url: '/partner/v1/users/m-1/link-code' },
+) {
   const response: any = {
     setHeader: jest.fn(),
     status: jest.fn().mockReturnThis(),
@@ -34,7 +36,10 @@ describe('HttpExceptionFilter', () => {
   it('does not set Retry-After for a 429 without a numeric retryAfter', () => {
     const filter = new HttpExceptionFilter();
     const { host, response } = makeHost();
-    const exception = new HttpException('too_many_requests', HttpStatus.TOO_MANY_REQUESTS);
+    const exception = new HttpException(
+      'too_many_requests',
+      HttpStatus.TOO_MANY_REQUESTS,
+    );
     filter.catch(exception, host);
     expect(response.setHeader).not.toHaveBeenCalled();
   });
@@ -42,7 +47,10 @@ describe('HttpExceptionFilter', () => {
   it('does not set Retry-After for a non-429 status even when the body has a retryAfter field', () => {
     const filter = new HttpExceptionFilter();
     const { host, response } = makeHost();
-    const exception = new HttpException({ message: 'conflict', retryAfter: 5 }, HttpStatus.CONFLICT);
+    const exception = new HttpException(
+      { message: 'conflict', retryAfter: 5 },
+      HttpStatus.CONFLICT,
+    );
     filter.catch(exception, host);
     expect(response.setHeader).not.toHaveBeenCalled();
     expect(response.status).toHaveBeenCalledWith(409);
@@ -54,7 +62,10 @@ describe('HttpExceptionFilter', () => {
     // PartnerKeyGuard/PartnerRateLimitGuard already call throwTooManyRequests(),
     // which sets the header itself before throwing — the filter just repeats it.
     response.setHeader('Retry-After', '60');
-    const exception = new HttpException({ message: 'rate_limited', retryAfter: 60 }, HttpStatus.TOO_MANY_REQUESTS);
+    const exception = new HttpException(
+      { message: 'rate_limited', retryAfter: 60 },
+      HttpStatus.TOO_MANY_REQUESTS,
+    );
     filter.catch(exception, host);
     expect(response.setHeader).toHaveBeenLastCalledWith('Retry-After', '60');
   });

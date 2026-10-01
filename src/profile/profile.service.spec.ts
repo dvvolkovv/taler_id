@@ -71,7 +71,10 @@ describe('ProfileService', () => {
         // ProfileService перешёл на FileStorageService; спека продолжала
         // подставлять S3Service и потому не поднималась вовсе.
         { provide: FileStorageService, useValue: mockS3 },
-        { provide: PartnerLinkRevokerService, useValue: { revokeAllForUser: jest.fn().mockResolvedValue(0) } },
+        {
+          provide: PartnerLinkRevokerService,
+          useValue: { revokeAllForUser: jest.fn().mockResolvedValue(0) },
+        },
       ],
     }).compile();
     service = module.get<ProfileService>(ProfileService);

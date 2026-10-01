@@ -14,8 +14,15 @@ import { PrismaClient } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import * as fs from 'fs';
 import { isIP } from 'net';
-import { generatePartnerKey, hashPartnerKey, isValidPartnerSlug } from '../src/partner-core/partner-key.util';
-import { encryptWebhookSecret, generateWebhookSecret } from '../src/partner-core/partner-secrets.util';
+import {
+  generatePartnerKey,
+  hashPartnerKey,
+  isValidPartnerSlug,
+} from '../src/partner-core/partner-key.util';
+import {
+  encryptWebhookSecret,
+  generateWebhookSecret,
+} from '../src/partner-core/partner-secrets.util';
 import { MESSENGER_SCOPE } from '../src/partner-core/partner.constants';
 
 const prisma = new PrismaClient();
@@ -41,7 +48,8 @@ function parseFlags(argv: string[], allowed: readonly string[]): Flags {
     const arg = argv[i];
     if (!arg.startsWith('--')) throw new Error(`непонятный аргумент: ${arg}`);
     const name = arg.slice(2);
-    if (!allowed.includes(name)) throw new Error(`флаг --${name} этой команде неизвестен`);
+    if (!allowed.includes(name))
+      throw new Error(`флаг --${name} этой команде неизвестен`);
     const next = argv[i + 1];
     if (next !== undefined && !next.startsWith('--')) {
       flags[name] = next;
@@ -55,7 +63,8 @@ function parseFlags(argv: string[], allowed: readonly string[]): Flags {
 
 function slugOf(flags: Flags): string {
   const slug = flags.slug ?? '';
-  if (!isValidPartnerSlug(slug)) throw new Error('--slug обязателен: a-z, 0-9 и дефис, 2–32 символа');
+  if (!isValidPartnerSlug(slug))
+    throw new Error('--slug обязателен: a-z, 0-9 и дефис, 2–32 символа');
   return slug;
 }
 
@@ -70,11 +79,16 @@ function ipsOf(value: string): string[] {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)
-    .map((ip) => (isIP(ip) === 6 ? new URL(`http://[${ip}]`).hostname.slice(1, -1) : ip));
-  if (ips.length === 0) throw new Error('--ips без адресов; снять ограничение — set-ips --clear');
+    .map((ip) =>
+      isIP(ip) === 6 ? new URL(`http://[${ip}]`).hostname.slice(1, -1) : ip,
+    );
+  if (ips.length === 0)
+    throw new Error('--ips без адресов; снять ограничение — set-ips --clear');
   for (const ip of ips) {
     if (isIP(ip) === 0 || /^::ffff:/i.test(ip)) {
-      throw new Error(`не IP-адрес: ${ip} (нужен точный IPv4 или IPv6, без маски и без ::ffff:)`);
+      throw new Error(
+        `не IP-адрес: ${ip} (нужен точный IPv4 или IPv6, без маски и без ::ffff:)`,
+      );
     }
   }
   return ips;
@@ -87,9 +101,12 @@ function ipsOf(value: string): string[] {
  */
 function validateOutFlags(flags: Flags): void {
   if ('out' in flags && !flags.out) throw new Error('--out без пути');
-  if ('var' in flags && !('out' in flags)) throw new Error('--var только вместе с --out');
+  if ('var' in flags && !('out' in flags))
+    throw new Error('--var только вместе с --out');
   if (flags.var && !/^[A-Z_][A-Z0-9_]*$/.test(flags.var)) {
-    throw new Error('--var должен быть ИМЕНЕМ_ПЕРЕМЕННОЙ: заглавные латинские буквы, цифры, подчёркивание');
+    throw new Error(
+      '--var должен быть ИМЕНЕМ_ПЕРЕМЕННОЙ: заглавные латинские буквы, цифры, подчёркивание',
+    );
   }
 }
 
@@ -110,7 +127,9 @@ function openSecretSink(flags: Flags, defaultVar: string): SecretSink {
   if (!flags.out) {
     return {
       write(value, what) {
-        console.log(`${what} (показывается один раз, передавать вне чатов):\n${value}`);
+        console.log(
+          `${what} (показывается один раз, передавать вне чатов):\n${value}`,
+        );
       },
     };
   }
@@ -136,7 +155,10 @@ async function create(flags: Flags): Promise<void> {
   validateOutFlags(flags);
   const slug = slugOf(flags);
   const name = flags.name;
-  if (!name) throw new Error('--name обязателен: так партнёр называется в письмах людям');
+  if (!name)
+    throw new Error(
+      '--name обязателен: так партнёр называется в письмах людям',
+    );
   const ips = flags.ips === undefined ? [] : ipsOf(flags.ips);
   if (await prisma.partner.findUnique({ where: { slug } })) {
     throw new Error(`партнёр ${slug} уже есть — для нового ключа rotate-key`);
@@ -146,7 +168,9 @@ async function create(flags: Flags): Promise<void> {
   // Чужой клиент не трогаем: `--slug linkeon` иначе переписал бы живой клиент
   // linkeon-partner и сломал бы Linkeon на PROD.
   if (await prisma.oAuthClient.findUnique({ where: { clientId } })) {
-    throw new Error(`OAuth-клиент ${clientId} уже существует — это не наш клиент, выберите другой slug`);
+    throw new Error(
+      `OAuth-клиент ${clientId} уже существует — это не наш клиент, выберите другой slug`,
+    );
   }
   const sink = openSecretSink(flags, 'TALERID_PARTNER_KEY');
   const key = generatePartnerKey(slug);
@@ -166,11 +190,19 @@ async function create(flags: Flags): Promise<void> {
       },
     }),
     prisma.partner.create({
-      data: { slug, name, keyHash: hashPartnerKey(key), ipAllowlist: ips, oauthClientId: clientId },
+      data: {
+        slug,
+        name,
+        keyHash: hashPartnerKey(key),
+        ipAllowlist: ips,
+        oauthClientId: clientId,
+      },
     }),
   ]);
   console.log(`Партнёр ${slug} создан (OAuth-клиент ${clientId}).`);
-  console.log('Новый ключ заработает на каждой ноде окружения в течение 30 секунд.');
+  console.log(
+    'Новый ключ заработает на каждой ноде окружения в течение 30 секунд.',
+  );
   sink.write(key, 'Ключ партнёра');
 }
 
@@ -180,7 +212,10 @@ async function rotateKey(flags: Flags): Promise<void> {
   await partnerOrFail(slug);
   const sink = openSecretSink(flags, 'TALERID_PARTNER_KEY');
   const key = generatePartnerKey(slug);
-  await prisma.partner.update({ where: { slug }, data: { keyHash: hashPartnerKey(key) } });
+  await prisma.partner.update({
+    where: { slug },
+    data: { keyHash: hashPartnerKey(key) },
+  });
   console.log(
     `Новый ключ ${slug} заработает, а старый перестанет работать — на каждой ноде окружения в течение 30 ` +
       'секунд. Переключать партнёра на новый ключ стоит с запасом в минуту, чтобы захватить оба.',
@@ -203,7 +238,10 @@ async function setWebhook(flags: Flags): Promise<void> {
   const secret = generateWebhookSecret();
   await prisma.partner.update({
     where: { slug },
-    data: { webhookUrl: url.toString(), webhookSecretEnc: encryptWebhookSecret(secret) },
+    data: {
+      webhookUrl: url.toString(),
+      webhookSecretEnc: encryptWebhookSecret(secret),
+    },
   });
   console.log(`Вебхук ${slug} → ${url.toString()}`);
   sink.write(secret, 'Секрет вебхука');
@@ -212,7 +250,10 @@ async function setWebhook(flags: Flags): Promise<void> {
 async function clearWebhook(flags: Flags): Promise<void> {
   const slug = slugOf(flags);
   await partnerOrFail(slug);
-  await prisma.partner.update({ where: { slug }, data: { webhookUrl: null, webhookSecretEnc: null } });
+  await prisma.partner.update({
+    where: { slug },
+    data: { webhookUrl: null, webhookSecretEnc: null },
+  });
   console.log(`Вебхук ${slug} снят.`);
 }
 
@@ -233,7 +274,9 @@ async function setEnabled(flags: Flags, enabled: boolean): Promise<void> {
   const slug = slugOf(flags);
   await partnerOrFail(slug);
   await prisma.partner.update({ where: { slug }, data: { enabled } });
-  console.log(`Партнёр ${slug} ${enabled ? 'включён' : 'выключен'} (бэкенд увидит за 30 с).`);
+  console.log(
+    `Партнёр ${slug} ${enabled ? 'включён' : 'выключен'} (бэкенд увидит за 30 с).`,
+  );
 }
 
 async function show(flags: Flags): Promise<void> {
@@ -256,7 +299,10 @@ async function show(flags: Flags): Promise<void> {
 }
 
 const OUT = ['out', 'var'];
-const COMMANDS: Record<string, { flags: readonly string[]; run: (flags: Flags) => Promise<void> }> = {
+const COMMANDS: Record<
+  string,
+  { flags: readonly string[]; run: (flags: Flags) => Promise<void> }
+> = {
   create: { flags: ['slug', 'name', 'ips', ...OUT], run: create },
   'rotate-key': { flags: ['slug', ...OUT], run: rotateKey },
   'set-webhook': { flags: ['slug', 'url', ...OUT], run: setWebhook },
@@ -270,7 +316,9 @@ const COMMANDS: Record<string, { flags: readonly string[]; run: (flags: Flags) =
 async function main(): Promise<void> {
   const [command, ...rest] = process.argv.slice(2);
   const entry =
-    command && Object.prototype.hasOwnProperty.call(COMMANDS, command) ? COMMANDS[command] : undefined;
+    command && Object.prototype.hasOwnProperty.call(COMMANDS, command)
+      ? COMMANDS[command]
+      : undefined;
   if (!entry) {
     console.log(USAGE);
     process.exitCode = command && command !== 'help' ? 1 : 0;

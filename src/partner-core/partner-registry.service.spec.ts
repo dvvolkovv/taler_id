@@ -12,7 +12,12 @@ const partner = {
   oauthClientId: 'nadi-partner',
   enabled: true,
 };
-const other = { ...partner, id: 'p2', slug: 'acme', oauthClientId: 'acme-partner' };
+const other = {
+  ...partner,
+  id: 'p2',
+  slug: 'acme',
+  oauthClientId: 'acme-partner',
+};
 
 const T0 = new Date('2026-10-01T10:00:00Z').getTime();
 const at = (seconds: number) => new Date(T0 + seconds * 1000);
@@ -34,7 +39,9 @@ describe('PartnerRegistryService', () => {
 
   beforeEach(() => {
     jest.useFakeTimers({ now: at(0) });
-    warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    warn = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
     prisma = {
       partner: {
         findMany: jest.fn().mockResolvedValue([partner, other]),
@@ -50,8 +57,12 @@ describe('PartnerRegistryService', () => {
 
   it('serves lookups by slug and by client id from one load of the table', async () => {
     await expect(registry.findBySlug('nadi')).resolves.toEqual(partner);
-    await expect(registry.findByClientId('acme-partner')).resolves.toEqual(other);
-    await expect(registry.findByClientId('nadi-partner')).resolves.toEqual(partner);
+    await expect(registry.findByClientId('acme-partner')).resolves.toEqual(
+      other,
+    );
+    await expect(registry.findByClientId('nadi-partner')).resolves.toEqual(
+      partner,
+    );
     expect(prisma.partner.findMany).toHaveBeenCalledTimes(1);
     expect(prisma.partner.findUnique).not.toHaveBeenCalled();
   });
@@ -60,7 +71,9 @@ describe('PartnerRegistryService', () => {
     await registry.findBySlug('nadi');
     for (let i = 0; i < 1000; i++) {
       await expect(registry.findBySlug(`ghost-${i}`)).resolves.toBeNull();
-      await expect(registry.findByClientId(`ghost-${i}-partner`)).resolves.toBeNull();
+      await expect(
+        registry.findByClientId(`ghost-${i}-partner`),
+      ).resolves.toBeNull();
     }
     expect(prisma.partner.findMany).toHaveBeenCalledTimes(1);
     expect(prisma.partner.findUnique).not.toHaveBeenCalled();
@@ -72,9 +85,13 @@ describe('PartnerRegistryService', () => {
     await registry.findBySlug('nadi');
     expect(prisma.partner.findMany).toHaveBeenCalledTimes(1);
 
-    prisma.partner.findMany.mockResolvedValueOnce([{ ...partner, enabled: false }]);
+    prisma.partner.findMany.mockResolvedValueOnce([
+      { ...partner, enabled: false },
+    ]);
     jest.setSystemTime(at(31));
-    await expect(registry.findBySlug('nadi')).resolves.toMatchObject({ enabled: false });
+    await expect(registry.findBySlug('nadi')).resolves.toMatchObject({
+      enabled: false,
+    });
     await expect(registry.findByClientId('acme-partner')).resolves.toBeNull();
     await registry.findBySlug('ghost');
     expect(prisma.partner.findMany).toHaveBeenCalledTimes(2);
@@ -96,7 +113,10 @@ describe('PartnerRegistryService', () => {
     jest.setSystemTime(at(31));
     const reload = deferred<any[]>();
     prisma.partner.findMany.mockReturnValueOnce(reload.promise);
-    const again = Promise.all([registry.findBySlug('nadi'), registry.findByClientId('nadi-partner')]);
+    const again = Promise.all([
+      registry.findBySlug('nadi'),
+      registry.findByClientId('nadi-partner'),
+    ]);
     reload.resolve([partner]);
     await again;
     expect(prisma.partner.findMany).toHaveBeenCalledTimes(2);
@@ -110,13 +130,17 @@ describe('PartnerRegistryService', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('db down'));
 
     // снимок так и остался старым — следующий запрос снова пробует перечитать
-    await expect(registry.findByClientId('nadi-partner')).resolves.toEqual(partner);
+    await expect(registry.findByClientId('nadi-partner')).resolves.toEqual(
+      partner,
+    );
     expect(prisma.partner.findMany).toHaveBeenCalledTimes(3);
   });
 
   it('answers 503 when the first load fails, and recovers on the next call', async () => {
     prisma.partner.findMany.mockRejectedValueOnce(new Error('db down'));
-    await expect(registry.findBySlug('nadi')).rejects.toThrow(ServiceUnavailableException);
+    await expect(registry.findBySlug('nadi')).rejects.toThrow(
+      ServiceUnavailableException,
+    );
     await expect(registry.findBySlug('nadi')).resolves.toEqual(partner);
     expect(prisma.partner.findMany).toHaveBeenCalledTimes(2);
   });
@@ -125,7 +149,9 @@ describe('PartnerRegistryService', () => {
     await registry.findById('p1');
     await registry.findById('p1');
     expect(prisma.partner.findUnique).toHaveBeenCalledTimes(2);
-    expect(prisma.partner.findUnique).toHaveBeenCalledWith({ where: { id: 'p1' } });
+    expect(prisma.partner.findUnique).toHaveBeenCalledWith({
+      where: { id: 'p1' },
+    });
     expect(prisma.partner.findMany).not.toHaveBeenCalled();
   });
 });

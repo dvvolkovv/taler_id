@@ -37,11 +37,24 @@ export class PartnerLinkRevokerService {
     const row = await this.prisma.$transaction(async (tx) => {
       const r = await tx.partnerLink.update({
         where: { id: link.id },
-        data: { status: 'REVOKED', codeHash: null, codeExpiresAt: null, codeAttempts: 0 },
-        select: { grantId: true, partnerId: true, userId: true, revokedAt: true },
+        data: {
+          status: 'REVOKED',
+          codeHash: null,
+          codeExpiresAt: null,
+          codeAttempts: 0,
+        },
+        select: {
+          grantId: true,
+          partnerId: true,
+          userId: true,
+          revokedAt: true,
+        },
       });
       if (!r.revokedAt) {
-        await tx.partnerLink.update({ where: { id: link.id }, data: { revokedAt: now } });
+        await tx.partnerLink.update({
+          where: { id: link.id },
+          data: { revokedAt: now },
+        });
       }
       return r;
     });
@@ -62,7 +75,10 @@ export class PartnerLinkRevokerService {
    */
   async revokeAllForUser(userId: string): Promise<number> {
     const links = await this.prisma.partnerLink.findMany({
-      where: { userId, OR: [{ status: { not: 'REVOKED' } }, { grantId: { not: null } }] },
+      where: {
+        userId,
+        OR: [{ status: { not: 'REVOKED' } }, { grantId: { not: null } }],
+      },
       select: { id: true },
     });
     const failures: string[] = [];
