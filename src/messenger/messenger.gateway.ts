@@ -22,7 +22,7 @@ import { AiAnalystService } from '../ai-analyst/ai-analyst.service';
 import { InformerBotService } from '../informer-bot/informer-bot.service';
 import { AssistantChatService } from '../assistant/assistant-chat.service';
 import { FcmService } from '../common/fcm.service';
-import { systemMessagePushText } from './system-message-text.util';
+import { buildPushText } from './push-text.util';
 import { sanitizeVoiceMeta } from './voice-meta.util';
 import { ApnsService } from '../common/apns.service';
 import * as jwt from 'jsonwebtoken';
@@ -550,6 +550,7 @@ export class MessengerGateway
     const userIdsInConv = new Set(
       socketsInConv.map((s) => s.data?.userId).filter(Boolean),
     );
+    const pushText = buildPushText(enrichedMsg);
     for (const p of participants) {
       if (p.userId === senderId) continue;
       try {
@@ -594,24 +595,6 @@ export class MessengerGateway
         } else {
           const fcmTokens = await this.service.getFcmTokens(p.userId);
           if (fcmTokens.length) {
-            const pushText = (() => {
-              const c = (enrichedMsg?.content as string | null) ?? '';
-              // У служебных сообщений в content лежит JSON, который
-              // расшифровывает клиент при отрисовке ленты. В пуше
-              // расшифровывать некому — без этой ветки в шторку прилетало
-              // «{"action":"member_added",…}».
-              if (enrichedMsg?.isSystem) return systemMessagePushText(c);
-              if (c.startsWith('[CONTACT]')) return '📇 Контакт';
-              if (c.startsWith('[POLL]')) return '📊 Опрос';
-              if (enrichedMsg?.fileUrl) {
-                const ft = (enrichedMsg?.fileType as string | null) ?? '';
-                if (ft === 'image') return '🖼 Фото';
-                if (ft === 'video') return '🎥 Видео';
-                if (ft === 'audio') return '🎵 Аудио';
-                return '📎 Файл';
-              }
-              return c;
-            })();
             // Fan out to every logged-in device of the recipient.
             for (const fcmToken of fcmTokens) {
               this.fcmService
