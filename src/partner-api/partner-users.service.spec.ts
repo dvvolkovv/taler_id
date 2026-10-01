@@ -874,6 +874,95 @@ describe('PartnerUsersService.provision — daily account-creation cap', () => {
     });
     expect(decr).toHaveBeenCalledWith('partner:create:day:p1');
   });
+
+  it('gives the slot back for a refused (429) request — a rejection should not keep counting against the cap', async () => {
+    const { service, decr } = make();
+    windowCount.mockResolvedValueOnce({ count: 5001, retryAfter: 1234 });
+    await expect(service.provision(partner, dto)).rejects.toThrow(
+      'too_many_requests',
+    );
+    expect(decr).toHaveBeenCalledWith('partner:create:day:p1');
+  });
+
+  it('logs the cap-exceeded error at most once per hour per partner (in-memory timestamp), regardless of the exact count', async () => {
+    const { service } = make();
+    const logSpy = jest
+      .spyOn((service as any).logger, 'error')
+      .mockImplementation(() => undefined);
+    const nowSpy = jest.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(1_000_000);
+      windowCount.mockResolvedValueOnce({ count: 5001, retryAfter: 1234 });
+      await service.provision(partner, dto).catch(() => undefined);
+      expect(logSpy).toHaveBeenCalledTimes(1);
+
+      // 10 minutes later, a much higher count (not limit+1) — still within
+      // the hour, so no second log no matter how far over the cap we are.
+      nowSpy.mockReturnValue(1_000_000 + 10 * 60 * 1000);
+      windowCount.mockResolvedValueOnce({ count: 9000, retryAfter: 1234 });
+      await service.provision(partner, dto).catch(() => undefined);
+      expect(logSpy).toHaveBeenCalledTimes(1);
+
+      // just over an hour after the FIRST log — logs again.
+      nowSpy.mockReturnValue(1_000_000 + 61 * 60 * 1000);
+      windowCount.mockResolvedValueOnce({ count: 9500, retryAfter: 1234 });
+      await service.provision(partner, dto).catch(() => undefined);
+      expect(logSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('logs separately per partner (one partner exceeding the cap does not suppress the log for another)', async () => {
+    const { service } = make();
+    const logSpy = jest
+      .spyOn((service as any).logger, 'error')
+      .mockImplementation(() => undefined);
+    const otherPartner: any = { id: 'p2', slug: 'other', name: 'Other' };
+    windowCount.mockResolvedValueOnce({ count: 5001, retryAfter: 1234 });
+    await service.provision(partner, dto).catch(() => undefined);
+    windowCount.mockResolvedValueOnce({ count: 5001, retryAfter: 1234 });
+    await service.provision(otherPartner, dto).catch(() => undefined);
+    expect(logSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('parses PARTNER_ACCOUNTS_PER_DAY strictly: unset, empty, non-numeric, or negative all fall back to the 5000 default', async () => {
+    for (const value of [undefined, '', 'abc', '-5', '-1']) {
+      const saved = process.env.PARTNER_ACCOUNTS_PER_DAY;
+      if (value === undefined) delete process.env.PARTNER_ACCOUNTS_PER_DAY;
+      else process.env.PARTNER_ACCOUNTS_PER_DAY = value;
+      try {
+        const under = make();
+        windowCount.mockResolvedValueOnce({ count: 5000, retryAfter: 1234 });
+        await expect(
+          under.service.provision(partner, dto),
+        ).resolves.toMatchObject({ created: true });
+        windowCount.mockResolvedValueOnce({ count: 5001, retryAfter: 1234 });
+        await expect(under.service.provision(partner, dto)).rejects.toThrow(
+          'too_many_requests',
+        );
+      } finally {
+        if (saved === undefined) delete process.env.PARTNER_ACCOUNTS_PER_DAY;
+        else process.env.PARTNER_ACCOUNTS_PER_DAY = saved;
+      }
+    }
+  });
+
+  it('PARTNER_ACCOUNTS_PER_DAY=0 disables account creation entirely (not "unset", a real zero)', async () => {
+    const saved = process.env.PARTNER_ACCOUNTS_PER_DAY;
+    process.env.PARTNER_ACCOUNTS_PER_DAY = '0';
+    try {
+      const { service, prisma } = make();
+      windowCount.mockResolvedValueOnce({ count: 1, retryAfter: 1234 });
+      await expect(service.provision(partner, dto)).rejects.toThrow(
+        'too_many_requests',
+      );
+      expect(prisma.user.create).not.toHaveBeenCalled();
+    } finally {
+      if (saved === undefined) delete process.env.PARTNER_ACCOUNTS_PER_DAY;
+      else process.env.PARTNER_ACCOUNTS_PER_DAY = saved;
+    }
+  });
 });
 
 describe('profileLanguage', () => {

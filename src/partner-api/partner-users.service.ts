@@ -29,6 +29,9 @@ import { ProvisionUserDto } from './dto/provision-user.dto';
  */
 const DEFAULT_PARTNER_ACCOUNTS_PER_DAY = 5000;
 
+/** Как часто максимум один раз логировать превышение суточного потолка — на партнёра. */
+const CAP_LOG_INTERVAL_MS = 60 * 60 * 1000;
+
 export type ProvisionResult =
   | { status: 'active'; talerUserId: string; created: boolean }
   | { status: 'confirmation_required'; talerUserId: null };
@@ -117,6 +120,8 @@ export function isForeignUnclaimedManaged(
 @Injectable()
 export class PartnerUsersService {
   private readonly logger = new Logger(PartnerUsersService.name);
+  /** Когда партнёр последний раз получил лог о превышении суточного потолка (в памяти процесса). */
+  private readonly capExceededLoggedAt = new Map<string, number>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -487,22 +492,36 @@ export class PartnerUsersService {
     return `partner:create:day:${partnerId}`;
   }
 
+  /**
+   * PARTNER_ACCOUNTS_PER_DAY: пусто, не число или отрицательное — дефолт
+   * 5000. Ровно 0 — не «не задано», а осознанное «создание выключено»: при
+   * нём ЛЮБАЯ попытка завести аккаунт отвечает 429 (единственное число,
+   * которое `parseInt(...) || DEFAULT` раньше молча подменяло дефолтом —
+   * раньше 0 и «не задано» было одним и тем же, что не давало временно
+   * заглушить создание без удаления переменной).
+   */
+  private creationCapLimit(): number {
+    const parsed = parseInt(process.env.PARTNER_ACCOUNTS_PER_DAY ?? '', 10);
+    if (!Number.isInteger(parsed) || parsed < 0) {
+      return DEFAULT_PARTNER_ACCOUNTS_PER_DAY;
+    }
+    return parsed;
+  }
+
   /** Суточный потолок партнёра на НОВЫЕ аккаунты. Redis недоступен — 503, а не пропуск. */
   private async checkCreationCap(partner: PartnerRecord): Promise<void> {
     const key = this.creationCapKey(partner.id);
     const day = await countInWindow(this.redis, key, 86400);
     if (!day) throw new ServiceUnavailableException('rate_limiter_unavailable');
-    const limit =
-      parseInt(process.env.PARTNER_ACCOUNTS_PER_DAY ?? '', 10) ||
-      DEFAULT_PARTNER_ACCOUNTS_PER_DAY;
+    const limit = this.creationCapLimit();
     if (day.count > limit) {
-      // Первое превышение за окно — сигнал человеку (утёкший ключ или
-      // сломанный клиент); дальше по тому же окну лог не становится громче.
-      if (day.count === limit + 1) {
-        this.logger.error(
-          `partner ${partner.slug} exceeded the daily account-creation cap (${limit}/day)`,
-        );
-      }
+      // Отказ не создаёт аккаунт — слот, который countInWindow только что
+      // засчитал, ему не принадлежит. Без возврата каждый повтор того же
+      // партнёра (а в худшем случае — просто обычный день, упёршийся в
+      // лимит) бесконечно раздувал бы счётчик без всякого смысла: он нужен
+      // только настоящим созданиям.
+      this.giveBackCreationSlot(partner.id);
+      this.logCapExceededOnce(partner, limit);
       throw new HttpException(
         { message: 'too_many_requests', retryAfter: day.retryAfter },
         HttpStatus.TOO_MANY_REQUESTS,
@@ -510,7 +529,26 @@ export class PartnerUsersService {
     }
   }
 
-  /** Слот checkCreationCap уже засчитан, а аккаунт не создался — вернуть его. */
+  /**
+   * Не чаще раза в час на партнёра (в памяти процесса, не в Redis — сигнал
+   * для логов/алёртов этого инстанса, не распределённый лимит) — сигнал
+   * человеку, что что-то не так (утёкший ключ или сломанный клиент), без
+   * захлёбывания лога повтором одного и того же на каждый запрос поверх
+   * лимита. Раньше логировалось строго на count===limit+1 — тот же утёкший
+   * ключ, догнавший лимит ПОСЛЕ перезапуска процесса (счётчик уже далеко за
+   * limit+1 в Redis), не логировался вовсе.
+   */
+  private logCapExceededOnce(partner: PartnerRecord, limit: number): void {
+    const now = Date.now();
+    const last = this.capExceededLoggedAt.get(partner.id);
+    if (last !== undefined && now - last < CAP_LOG_INTERVAL_MS) return;
+    this.capExceededLoggedAt.set(partner.id, now);
+    this.logger.error(
+      `partner ${partner.slug} exceeded the daily account-creation cap (${limit}/day)`,
+    );
+  }
+
+  /** Слот checkCreationCap уже засчитан, а аккаунт не создался (или отказан) — вернуть его. */
   private giveBackCreationSlot(partnerId: string): void {
     this.redis
       .getClient()
