@@ -124,6 +124,18 @@ export class PartnerContactsService {
             ],
           },
         });
+        // Дружбу, которую снял партнёр, не должна воскресить случайная разблокировка:
+        // без этого PUT → block → DELETE → unblock возвращает контакт, который партнёр
+        // только что явно снял, и повторный DELETE бьёт по пустому месту.
+        await this.prisma.blockedUser.updateMany({
+          where: {
+            OR: [
+              { blockerId: userAId, blockedId: userBId },
+              { blockerId: userBId, blockedId: userAId },
+            ],
+          },
+          data: { hadContact: false },
+        });
       }
       await this.audit.log(partner, 'CONTACT_REMOVED', {
         externalId: `${extA},${extB}`,

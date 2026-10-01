@@ -26,7 +26,10 @@ function make(links: any[] = activeLinks) {
         return Promise.resolve(rows.map(({ externalId, userId }) => ({ externalId, userId })));
       }),
     },
-    blockedUser: { findFirst: jest.fn().mockResolvedValue(null) },
+    blockedUser: {
+      findFirst: jest.fn().mockResolvedValue(null),
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+    },
     partnerContact: {
       findUnique: jest.fn().mockResolvedValue(null),
       upsert: jest.fn().mockResolvedValue({}),
@@ -170,6 +173,31 @@ describe('PartnerContactsService.remove', () => {
     await expect(service.remove(partner, 'a', 'b')).resolves.toEqual({ contact: false });
     expect(prisma.partnerContact.deleteMany).toHaveBeenCalledWith({ where: { id: 'pc1' } });
     expect(prisma.contactRequest.deleteMany).toHaveBeenCalled();
+  });
+
+  it('clears hadContact on blocks of the pair when the partner-created contact is actually removed', async () => {
+    const { service, prisma } = make();
+    prisma.partnerContact.findUnique.mockResolvedValue({ id: 'pc1', createdContact: true });
+    await service.remove(partner, 'a', 'b');
+    // Иначе снятая партнёром дружба может вернуться следующей же разблокировкой.
+    expect(prisma.blockedUser.updateMany).toHaveBeenCalledWith({
+      where: {
+        OR: [
+          { blockerId: 'u-a', blockedId: 'u-b' },
+          { blockerId: 'u-b', blockedId: 'u-a' },
+        ],
+      },
+      data: { hadContact: false },
+    });
+  });
+
+  it('does not touch hadContact when the contact survives the DELETE', async () => {
+    const { service, prisma } = make();
+    // held by another partner — createdContact true, but heldByOthers > 0
+    prisma.partnerContact.findUnique.mockResolvedValue({ id: 'pc1', createdContact: true });
+    prisma.partnerContact.count.mockResolvedValue(1);
+    await service.remove(partner, 'a', 'b');
+    expect(prisma.blockedUser.updateMany).not.toHaveBeenCalled();
   });
 
   it('keeps a contact that existed before the partner', async () => {
