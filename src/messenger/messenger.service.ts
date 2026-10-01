@@ -365,7 +365,16 @@ export class MessengerService {
   }
 
   async getGroupMembers(conversationId: string, userId: string) {
-    await this.assertParticipant(conversationId, userId);
+    const me = await this.assertParticipant(conversationId, userId);
+    const conv = await this._getConversationOrThrow(conversationId);
+    // Список участников канала — это id+имя каждого подписчика. Канал
+    // подписывает автоматически всех пользователей (системный канал новостей —
+    // 12 665 на PROD), поэтому рядовой подписчик не должен уметь его выкачать:
+    // в нём видны и управляемые партнёром аккаунты, которых спека обещает не
+    // светить в адресной книге. В группе список участников нужен всем, как раньше.
+    if (conv.type === 'CHANNEL' && me.role !== 'OWNER' && me.role !== 'ADMIN') {
+      throw new ForbiddenException('Список подписчиков канала доступен только его администраторам');
+    }
     const participants = await this.prisma.conversationParticipant.findMany({
       where: { conversationId },
       orderBy: [{ role: 'asc' }, { joinedAt: 'asc' }],
@@ -2523,6 +2532,19 @@ export class MessengerService {
       where: { blockerId: receiverId, blockedId: senderId },
     });
     if (blocked) throw new ForbiddenException('Не удалось отправить запрос');
+
+    // Управляемый партнёром аккаунт, в который человек сам не входил (нет
+    // своего пароля TalerID), никогда не пользуется приложением и не может
+    // принять запрос — его контакты заводит только партнёр (PartnerContactsService.put).
+    // Тот же нейтральный ответ, что и для блокировки: не намекаем, чем этот
+    // аккаунт отличается от обычного.
+    const receiver = await this.prisma.user.findUnique({
+      where: { id: receiverId },
+      select: { createdByPartnerId: true, passwordHash: true },
+    });
+    if (receiver?.createdByPartnerId && receiver.passwordHash === null) {
+      throw new ForbiddenException('Не удалось отправить запрос');
+    }
 
     // Check if there's already an accepted contact or existing conversation
     const existing = await this.prisma.contactRequest.findUnique({

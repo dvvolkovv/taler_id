@@ -67,3 +67,44 @@ describe('MessengerService.acceptContactRequest', () => {
     expect(prisma.contactRequest.update).toHaveBeenCalledWith({ where: { id: 'r1' }, data: { status: 'ACCEPTED' } });
   });
 });
+
+describe('MessengerService.sendContactRequest', () => {
+  function make(receiver: any) {
+    const prisma: any = {
+      blockedUser: { findFirst: jest.fn().mockResolvedValue(null) },
+      user: {
+        // id 'u2' — получатель (управляемый аккаунт или обычный, по тесту);
+        // любой другой id — отправитель, нужен только для текста уведомления.
+        findUnique: jest.fn((args: any) =>
+          Promise.resolve(args.where.id === 'u2' ? receiver : { username: 'me', profile: null }),
+        ),
+      },
+      contactRequest: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        upsert: jest.fn().mockResolvedValue({ id: 'r1', senderId: 'me', receiverId: 'u2', status: 'PENDING' }),
+      },
+    };
+    const service = Object.create(MessengerService.prototype) as MessengerService;
+    (service as any).prisma = prisma;
+    return { service, prisma };
+  }
+
+  it('refuses a request to a partner-managed account that never set a TalerID password', async () => {
+    const { service, prisma } = make({ createdByPartnerId: 'p1', passwordHash: null });
+    await expect(service.sendContactRequest('me', 'u2')).rejects.toThrow('Не удалось отправить запрос');
+    expect(prisma.contactRequest.findUnique).not.toHaveBeenCalled();
+    expect(prisma.contactRequest.upsert).not.toHaveBeenCalled();
+  });
+
+  it('proceeds for an account the partner created but which set its own password', async () => {
+    const { service, prisma } = make({ createdByPartnerId: 'p1', passwordHash: 'hash' });
+    await expect(service.sendContactRequest('me', 'u2')).resolves.toBeTruthy();
+    expect(prisma.contactRequest.upsert).toHaveBeenCalled();
+  });
+
+  it('proceeds for a normal user', async () => {
+    const { service, prisma } = make({ createdByPartnerId: null, passwordHash: 'hash' });
+    await expect(service.sendContactRequest('me', 'u2')).resolves.toBeTruthy();
+    expect(prisma.contactRequest.upsert).toHaveBeenCalled();
+  });
+});
