@@ -122,6 +122,8 @@ export class PartnerUsersService {
   private readonly logger = new Logger(PartnerUsersService.name);
   /** Когда партнёр последний раз получил лог о превышении суточного потолка (в памяти процесса). */
   private readonly capExceededLoggedAt = new Map<string, number>();
+  /** Один warn за жизнь инстанса на невалидный PARTNER_ACCOUNTS_PER_DAY — не на каждый вызов. */
+  private capParseWarned = false;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -510,19 +512,28 @@ export class PartnerUsersService {
   }
 
   /**
-   * PARTNER_ACCOUNTS_PER_DAY: пусто, не число или отрицательное — дефолт
-   * 5000. Ровно 0 — не «не задано», а осознанное «создание выключено»: при
-   * нём ЛЮБАЯ попытка завести аккаунт отвечает 429 (единственное число,
-   * которое `parseInt(...) || DEFAULT` раньше молча подменяло дефолтом —
-   * раньше 0 и «не задано» было одним и тем же, что не давало временно
-   * заглушить создание без удаления переменной).
+   * Только простое неотрицательное целое (пробелы по краям — не в счёт),
+   * иначе дефолт 5000. `parseInt` в одиночку принимает куда больше, чем
+   * администратор, скорее всего, имел в виду, и расхождение незаметно до
+   * первого разбора лога: `'1e4'` → 1, `'5,000'` → 5, `'0.5'` → 0 (последнее
+   * тихо выключило бы создание аккаунтов, хотя человек хотел задать лимит, а
+   * не ноль). Ровно `'0'` — не «не задано», а осознанное «создание
+   * выключено»: при нём ЛЮБАЯ попытка завести аккаунт отвечает 429.
    */
+  private static readonly CAP_ENV_PATTERN = /^\s*\d+\s*$/;
+
   private creationCapLimit(): number {
-    const parsed = parseInt(process.env.PARTNER_ACCOUNTS_PER_DAY ?? '', 10);
-    if (!Number.isInteger(parsed) || parsed < 0) {
-      return DEFAULT_PARTNER_ACCOUNTS_PER_DAY;
+    const raw = process.env.PARTNER_ACCOUNTS_PER_DAY;
+    if (raw !== undefined && PartnerUsersService.CAP_ENV_PATTERN.test(raw)) {
+      return parseInt(raw, 10);
     }
-    return parsed;
+    if (!this.capParseWarned) {
+      this.capParseWarned = true;
+      this.logger.warn(
+        `PARTNER_ACCOUNTS_PER_DAY=${JSON.stringify(raw ?? null)} is not a plain non-negative integer — using the default (${DEFAULT_PARTNER_ACCOUNTS_PER_DAY}/day)`,
+      );
+    }
+    return DEFAULT_PARTNER_ACCOUNTS_PER_DAY;
   }
 
   /** Суточный потолок партнёра на НОВЫЕ аккаунты. Redis недоступен — 503, а не пропуск. */

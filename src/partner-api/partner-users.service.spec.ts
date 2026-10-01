@@ -964,6 +964,83 @@ describe('PartnerUsersService.provision — daily account-creation cap', () => {
       else process.env.PARTNER_ACCOUNTS_PER_DAY = saved;
     }
   });
+
+  async function withCapEnv(
+    value: string | undefined,
+    fn: (service: PartnerUsersService) => Promise<void>,
+  ) {
+    const saved = process.env.PARTNER_ACCOUNTS_PER_DAY;
+    if (value === undefined) delete process.env.PARTNER_ACCOUNTS_PER_DAY;
+    else process.env.PARTNER_ACCOUNTS_PER_DAY = value;
+    try {
+      const { service } = make();
+      await fn(service);
+    } finally {
+      if (saved === undefined) delete process.env.PARTNER_ACCOUNTS_PER_DAY;
+      else process.env.PARTNER_ACCOUNTS_PER_DAY = saved;
+    }
+  }
+
+  it.each([
+    ['1e4', 'parseInt stops at "e" and would silently read this as 1'],
+    ['5,000', 'parseInt stops at "," and would silently read this as 5'],
+    [
+      '0.5',
+      'parseInt stops at "." and would silently read this as 0, disabling creation',
+    ],
+  ])(
+    'treats %s as invalid rather than the value parseInt would stop at (%s)',
+    async (value) => {
+      await withCapEnv(value, async (service) => {
+        windowCount.mockResolvedValueOnce({ count: 5000, retryAfter: 1234 });
+        await expect(
+          service.provision(partner, dto),
+        ).resolves.toMatchObject({ created: true });
+        windowCount.mockResolvedValueOnce({ count: 5001, retryAfter: 1234 });
+        await expect(service.provision(partner, dto)).rejects.toThrow(
+          'too_many_requests',
+        );
+      });
+    },
+  );
+
+  it('accepts a plain integer surrounded by whitespace', async () => {
+    await withCapEnv('  10  ', async (service) => {
+      windowCount.mockResolvedValueOnce({ count: 10, retryAfter: 1234 });
+      await expect(
+        service.provision(partner, dto),
+      ).resolves.toMatchObject({ created: true });
+      windowCount.mockResolvedValueOnce({ count: 11, retryAfter: 1234 });
+      await expect(service.provision(partner, dto)).rejects.toThrow(
+        'too_many_requests',
+      );
+    });
+  });
+
+  it('warns at most once per instance when the configured value is invalid', async () => {
+    await withCapEnv('1e4', async (service) => {
+      const warnSpy = jest
+        .spyOn((service as any).logger, 'warn')
+        .mockImplementation(() => undefined);
+      windowCount.mockResolvedValue({ count: 1, retryAfter: 1234 });
+      await service.provision(partner, dto);
+      await service.provision(partner, { ...dto, externalId: 'm-2' });
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('never warns when the configured value is a valid plain integer, including 0', async () => {
+    for (const value of ['0', '10', '  5  ']) {
+      await withCapEnv(value, async (service) => {
+        const warnSpy = jest
+          .spyOn((service as any).logger, 'warn')
+          .mockImplementation(() => undefined);
+        windowCount.mockResolvedValueOnce({ count: 1, retryAfter: 1234 });
+        await service.provision(partner, dto).catch(() => undefined);
+        expect(warnSpy).not.toHaveBeenCalled();
+      });
+    }
+  });
 });
 
 describe('profileLanguage', () => {
