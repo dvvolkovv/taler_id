@@ -49,35 +49,47 @@ function truncatePreview(text: string): string {
   const wasSliced = text.length > PREVIEW_SLICE_UNITS;
   const bounded = text.slice(0, PREVIEW_SLICE_UNITS);
   const graphemes: string[] = [];
+  let unitsConsumed = 0;
   for (const { segment } of previewSegmenter.segment(bounded)) {
     graphemes.push(segment);
+    unitsConsumed += segment.length; // UTF-16 code units this grapheme covers
     if (graphemes.length >= PREVIEW_MAX) break;
   }
   // Предварительный срез режет по code units, а не по границам графем. Если
-  // он действительно что-то обрезал и графем всё равно набралось меньше
-  // лимита — значит, цикл дошёл до самого конца обрезанного хвоста, и
-  // последняя графема могла оказаться разрезанной посередине (составной
-  // эмодзи ZWJ/тон кожи даёт висячий суррогат). Отбрасываем её, а не
-  // показываем мусор партнёру.
-  if (wasSliced && graphemes.length < PREVIEW_MAX) graphemes.pop();
+  // он действительно что-то обрезал, а собранные графемы исчерпали ВЕСЬ
+  // обрезанный хвост (consumed дошло до конца bounded) — последняя графема
+  // могла быть разрезана посередине (составной эмодзи ZWJ/тон кожи даёт
+  // висячий суррогат), даже если по счётчику мы ровно попали в PREVIEW_MAX:
+  // «не хватило графем» и «обрыв ровно на границе лимита» — разные условия,
+  // первое не ловит второе.
+  if (wasSliced && unitsConsumed >= bounded.length) graphemes.pop();
   return graphemes.join('');
 }
 
+/** Допуск по времени для X-TalerID-Signature — тот же, что в документации для nadi. */
+const SIGNATURE_TOLERANCE_SECONDS = 300;
+
 /**
  * Проверка заголовка X-TalerID-Signature над телом, которое реально пришло
- * (см. тестовый приёмник): разбирает `t=…,v1=…`, пересчитывает HMAC и
- * сравнивает его constant-time, а не строкой — чтобы не утекало через тайминг.
+ * (см. тестовый приёмник): разбирает `t=…,v1=…`, отвергает `t` дальше
+ * ±5 минут от `now` (иначе перехваченный или просто протухший в логе
+ * заголовок проверялся бы вечно — сам HMAC по времени ничего не знает), и
+ * только потом пересчитывает HMAC и сравнивает его constant-time, а не
+ * строкой — чтобы не утекало через тайминг.
  */
 export function verifyWebhookSignature(
   secret: string,
   header: string | null | undefined,
   body: string,
+  now: number = Date.now(),
 ): boolean {
   if (!header) return false;
   const match = /^t=(\d+),v1=([0-9a-f]+)$/.exec(header);
   if (!match) return false;
   const [, ts, mac] = match;
-  const expectedMac = /v1=([0-9a-f]+)$/.exec(signWebhook(secret, Number(ts), body))?.[1];
+  const timestamp = Number(ts);
+  if (Math.abs(now / 1000 - timestamp) > SIGNATURE_TOLERANCE_SECONDS) return false;
+  const expectedMac = /v1=([0-9a-f]+)$/.exec(signWebhook(secret, timestamp, body))?.[1];
   if (!expectedMac) return false;
   const a = Buffer.from(mac, 'hex');
   const b = Buffer.from(expectedMac, 'hex');

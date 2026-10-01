@@ -22,6 +22,7 @@ export interface PartnerFanOut {
   enqueue(recipientUserId: string, input: MessageCreatedInput): void;
 }
 
+/** Ровно то, что хранится в журнале Redis и что отдаёт GET webhooks/deliveries партнёру. */
 export interface DeliveryResult {
   eventId: string;
   type: string;
@@ -30,9 +31,17 @@ export interface DeliveryResult {
   status: number | null;
   error: string | null;
   durationMs: number;
-  /** Для логов воркера (мониторинг простоя партнёра) — не светим ни секрет, ни тело. */
-  partnerSlug: string | null;
   at: string;
+}
+
+/**
+ * То, что deliver() отдаёт напрямую своему вызывающему (воркеру очереди) —
+ * плюс slug партнёра для его предупреждающей строки на финальный провал
+ * (мониторинг простоя). В журнал (и в deliveries() партнёру) slug не
+ * попадает — никто за пределами воркера его не документирует и не ждёт.
+ */
+export interface DeliveryAttempt extends DeliveryResult {
+  partnerSlug: string | null;
 }
 
 const DELIVERY_TIMEOUT_MS = 5_000;
@@ -157,7 +166,15 @@ export class PartnerWebhooksService {
    * backoff): иначе выключение партнёра или всего партнёрского API не
    * видно сразу.
    */
-  async deliver(partnerId: string, event: WebhookEvent, attempt = 1): Promise<DeliveryResult> {
+  async deliver(
+    partnerId: string,
+    event: WebhookEvent,
+    attempt = 1,
+    // Простой параметр метода, а не поле конструктора/DI-токен: deliver()
+    // уже и так вызывается напрямую в спеках (без Nest-контейнера), и тесту
+    // на реальный сервер нужен короткий дедлайн, не дожидаясь настоящих 5 с.
+    deliveryTimeoutMs: number = DELIVERY_TIMEOUT_MS,
+  ): Promise<DeliveryAttempt> {
     if (process.env.PARTNER_API_ENABLED !== 'true') {
       this.logger.debug(`webhook ${event.id} to ${partnerId} dropped: partner API is off`);
       return this.record(partnerId, {
@@ -212,6 +229,13 @@ export class PartnerWebhooksService {
     const timestamp = Math.floor(Date.now() / 1000);
     const signature = signWebhook(secret, timestamp, body);
     const started = Date.now();
+    // Общий дедлайн на весь запрос — не только на паузы между байтами.
+    // axios' собственный `timeout` сбрасывается на каждый пришедший байт,
+    // поэтому ответ по байту в секунду держал воркер все 5 с и всё равно
+    // отчитывался как "доставлено" (инцидент: 20 таких подряд заняли все
+    // воркеры на обеих нодах). Держим сигнал в переменной: по нему и узнаём,
+    // ЧТО оборвало запрос — дедлайн или что-то другое (см. catch ниже).
+    const deadline = AbortSignal.timeout(deliveryTimeoutMs);
     try {
       const res = await axios.post(partner.webhookUrl, body, {
         headers: {
@@ -221,12 +245,7 @@ export class PartnerWebhooksService {
           'X-TalerID-Delivery': event.id,
           'X-TalerID-Signature': signature,
         },
-        // Общий дедлайн на весь запрос — не только на паузы между байтами.
-        // axios' собственный `timeout` сбрасывается на каждый пришедший байт,
-        // поэтому ответ по байту в секунду держал воркер все 5 с и всё равно
-        // отчитывался как "доставлено" (инцидент: 20 таких подряд заняли все
-        // воркеры на обеих нодах).
-        signal: AbortSignal.timeout(DELIVERY_TIMEOUT_MS),
+        signal: deadline,
         maxRedirects: 0,
         maxContentLength: DELIVERY_RESPONSE_MAX_BYTES,
         responseType: 'text',
@@ -239,15 +258,23 @@ export class PartnerWebhooksService {
         durationMs: Date.now() - started, partnerSlug: partner.slug,
       });
     } catch (e) {
-      const err = e as { name?: string; code?: string; message?: string };
+      const message = (e as { message?: string })?.message ?? '';
       // Короткий детерминированный код вместо произвольного текста ошибки —
       // по нему и журнал читается глазами, и мониторинг может агрегировать.
-      const error =
-        err?.name === 'TimeoutError'
-          ? 'timeout'
-          : err?.code === 'ERR_BAD_RESPONSE'
-            ? 'response_too_large'
-            : (err?.message ?? 'unknown_error').slice(0, 200);
+      //
+      // Не судим по имени/коду ошибки: axios заворачивает обрыв по
+      // AbortSignal в CanceledError (имя не 'TimeoutError', а сообщение —
+      // просто "canceled"), поэтому единственный надёжный признак именно
+      // НАШЕГО дедлайна — то, что сам signal реально сработал (deadline.aborted).
+      // А ERR_BAD_RESPONSE бывает не только при превышении maxContentLength:
+      // "Request stream has been aborted" (приёмник оборвал соединение
+      // посреди тела) — тот же код, но это не превышение лимита; отличаем по
+      // тексту, который для maxContentLength детерминированный.
+      const error = deadline.aborted
+        ? 'timeout'
+        : message.startsWith('maxContentLength')
+          ? 'response_too_large'
+          : (message || 'unknown_error').slice(0, 200);
       return this.record(partnerId, {
         eventId: event.id, type: event.type, attempt,
         delivered: false, status: null, error, durationMs: Date.now() - started, partnerSlug: partner.slug,
@@ -262,15 +289,21 @@ export class PartnerWebhooksService {
     return rows.map((row) => JSON.parse(row) as DeliveryResult);
   }
 
-  private async record(partnerId: string, result: Omit<DeliveryResult, 'at'>): Promise<DeliveryResult> {
-    const entry: DeliveryResult = { ...result, at: new Date().toISOString() };
+  private async record(
+    partnerId: string,
+    result: Omit<DeliveryAttempt, 'at'>,
+  ): Promise<DeliveryAttempt> {
+    const { partnerSlug, ...journaled } = result;
+    const entry: DeliveryResult = { ...journaled, at: new Date().toISOString() };
     try {
       const client = this.redis.getClient();
+      // partnerSlug нарочно не входит в entry — он только для предупреждения
+      // воркера в памяти, в журнале (и в deliveries() партнёру) его не будет.
       await client.lpush(logKey(partnerId), JSON.stringify(entry));
       await client.ltrim(logKey(partnerId), 0, DELIVERY_LOG_MAX - 1);
     } catch (e) {
       this.logger.warn(`webhook log write failed for ${partnerId}: ${(e as Error).message}`);
     }
-    return entry;
+    return { ...entry, partnerSlug };
   }
 }

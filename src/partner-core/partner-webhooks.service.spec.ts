@@ -241,22 +241,17 @@ describe('PartnerWebhooksService.deliver', () => {
     expect(client.ltrim).toHaveBeenCalledWith('partner:webhook:log:p1', 0, 999);
   });
 
-  it('journals an abort (overall deadline hit) as a short retryable error code', async () => {
-    const { service, registry } = make();
-    registry.findById.mockResolvedValue(partner);
-    const timeoutErr: any = new Error('The operation was aborted due to timeout');
-    timeoutErr.name = 'TimeoutError';
-    (axios.post as jest.Mock).mockRejectedValueOnce(timeoutErr);
-    await expect(service.deliver('p1', event)).resolves.toMatchObject({
-      delivered: false, status: null, error: 'timeout',
-    });
-  });
+  // Timeout/abort and the reset-mid-body-is-NOT-response_too_large distinction
+  // are exercised against a REAL local HTTP server in
+  // partner-webhooks.service.network.spec.ts — axios actually wraps an
+  // AbortSignal abort as a CanceledError (not a 'TimeoutError'-named error, as
+  // a first guess here assumed), so a hand-built mock error risks asserting
+  // our own wrong assumption instead of what axios really throws.
 
-  it('journals an oversize response as a short retryable error code', async () => {
+  it('journals an oversize response as a short retryable error code, by the message prefix axios uses for it', async () => {
     const { service, registry } = make();
     registry.findById.mockResolvedValue(partner);
-    const tooBig: any = new Error('maxContentLength size of 65536 exceeded');
-    tooBig.code = 'ERR_BAD_RESPONSE';
+    const tooBig = new Error('maxContentLength size of 65536 exceeded');
     (axios.post as jest.Mock).mockRejectedValueOnce(tooBig);
     await expect(service.deliver('p1', event)).resolves.toMatchObject({
       delivered: false, status: null, error: 'response_too_large',
@@ -367,5 +362,21 @@ describe('PartnerWebhooksService.deliver', () => {
     registry.findById.mockResolvedValue({ ...partner, webhookSecretEnc: null });
     await expect(service.deliver('p1', event)).resolves.toMatchObject({ delivered: false, error: 'webhook_not_configured' });
     expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  it('keeps partnerSlug only in the in-memory result (for the processor warn line), never in the journal', async () => {
+    const { service, registry, client } = make();
+    registry.findById.mockResolvedValue(partner);
+    (axios.post as jest.Mock).mockResolvedValue({ status: 200 });
+    const result = await service.deliver('p1', event);
+    expect((result as any).partnerSlug).toBe('nadi');
+    const stored = JSON.parse(client.lpush.mock.calls[0][1]);
+    expect(stored).not.toHaveProperty('partnerSlug');
+    // Ровно документированные поля GET webhooks/deliveries — ни полем больше.
+    expect(Object.keys(stored).sort()).toEqual(
+      ['at', 'attempt', 'delivered', 'durationMs', 'error', 'eventId', 'status', 'type'].sort(),
+    );
+    const rows = await service.recentDeliveries('p1', 10);
+    expect(rows[0]).not.toHaveProperty('partnerSlug');
   });
 });

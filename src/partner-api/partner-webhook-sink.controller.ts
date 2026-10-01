@@ -1,5 +1,5 @@
 import { Controller, Headers, HttpCode, NotFoundException, Param, PayloadTooLargeException, Post, Req } from '@nestjs/common';
-import { PartnerRegistryService } from '../partner-core/partner-registry.service';
+import { PrismaService } from '../prisma/prisma.service';
 import { decryptWebhookSecret } from '../partner-core/partner-secrets.util';
 import { verifyWebhookSignature } from '../partner-core/partner-webhook-events';
 import { PartnerWebhookSinkStore } from './partner-webhook-sink.store';
@@ -27,7 +27,7 @@ const SINK_BODY_MAX_BYTES = 64 * 1024;
 @Controller('partner/v1/_sink')
 export class PartnerWebhookSinkController {
   constructor(
-    private readonly registry: PartnerRegistryService,
+    private readonly prisma: PrismaService,
     private readonly store: PartnerWebhookSinkStore,
   ) {}
 
@@ -39,7 +39,12 @@ export class PartnerWebhookSinkController {
     @Req() req: RawBodyRequest,
   ): Promise<{ ok: true }> {
     if (!PartnerWebhookSinkStore.enabled()) throw new NotFoundException();
-    const partner = await this.registry.findBySlug(slug);
+    // Не через PartnerRegistryService (снимок таблицы раз в 30 с) — сразу
+    // после ротации секрета (set-webhook) живые доставки получали бы здесь
+    // 404 ещё до получаса, хотя deliver() на стороне отправителя уже видит
+    // свежий секрет (registry.findById там тоже без кэша). Это тестовый
+    // эндпоинт на пару запросов в e2e-прогоне — лишний поход в базу не в счёт.
+    const partner = await this.prisma.partner.findUnique({ where: { slug } });
     if (!partner?.webhookSecretEnc) throw new NotFoundException();
     const rawBody = req.rawBody ?? Buffer.alloc(0);
     const bodyText = rawBody.toString('utf8');
@@ -52,9 +57,9 @@ export class PartnerWebhookSinkController {
     if (!verifyWebhookSignature(secret, headers['x-talerid-signature'], bodyText)) {
       throw new NotFoundException();
     }
-    // Подпись проверена до предела размера: партнёр с верным секретом не
-    // должен узнавать из кода ответа, что тело ограничено по размеру — тело
-    // просто не сохранится.
+    // Подпись уже проверена — неизвестный отправитель узнаёт из ответа
+    // только "нет" (404), ничего больше. Партнёр с верным секретом, чьё тело
+    // оказалось больше предела, получает честный 413 — это не скрывается.
     if (rawBody.byteLength > SINK_BODY_MAX_BYTES) throw new PayloadTooLargeException();
     await this.store.push(slug, {
       receivedAt: new Date().toISOString(),

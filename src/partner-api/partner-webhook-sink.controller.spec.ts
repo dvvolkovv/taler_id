@@ -22,8 +22,12 @@ function make(partner: any = { slug: 'e2e', webhookSecretEnc: encryptWebhookSecr
     lrange: jest.fn().mockResolvedValue([]),
   };
   const store = new PartnerWebhookSinkStore({ getClient: () => client } as any);
-  const registry: any = { findBySlug: jest.fn().mockResolvedValue(partner) };
-  return { controller: new PartnerWebhookSinkController(registry, store), client };
+  // Direct, uncached Prisma read — NOT PartnerRegistryService.findBySlug,
+  // which snapshots the table for 30s. Right after a secret rotation, a
+  // cached lookup here would 404 genuinely-signed deliveries for up to half
+  // a minute (flaky e2e).
+  const prisma: any = { partner: { findUnique: jest.fn().mockResolvedValue(partner) } };
+  return { controller: new PartnerWebhookSinkController(prisma, store), client, prisma };
 }
 
 /** Headers + a fake Express request carrying the raw bytes our own sender would have signed. */
@@ -110,5 +114,14 @@ describe('PartnerWebhookSinkController', () => {
     const { headers, req } = signedReq(bodyText);
     await expect(controller.receive('e2e', headers, req)).rejects.toThrow(PayloadTooLargeException);
     expect(client.lpush).not.toHaveBeenCalled();
+  });
+
+  it('reads the partner by a direct Prisma query, not the 30s registry snapshot', async () => {
+    process.env.PARTNER_WEBHOOK_SINK = 'true';
+    const { controller, prisma } = make();
+    const bodyText = '{"id":"evt_1"}';
+    const { headers, req } = signedReq(bodyText);
+    await controller.receive('e2e', headers, req);
+    expect(prisma.partner.findUnique).toHaveBeenCalledWith({ where: { slug: 'e2e' } });
   });
 });
