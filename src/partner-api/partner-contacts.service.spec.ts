@@ -58,6 +58,9 @@ function make(links: any[] = activeLinks) {
       deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
   };
+  // Мок транзакции просто выполняет колбэк на том же prisma — настоящий откат
+  // при ошибке внутри проверяет e2e-набор на реальной базе, не этот мок.
+  prisma.$transaction = jest.fn((fn: any) => fn(prisma));
   const audit: any = { log: jest.fn().mockResolvedValue(undefined) };
   return { service: new PartnerContactsService(prisma, audit), prisma };
 }
@@ -256,6 +259,31 @@ describe('PartnerContactsService.put', () => {
     const { service } = make();
     await expect(service.put(partner, 'a', 'a')).rejects.toThrow('same_user');
   });
+
+  it('wraps the contactRequest.create + partnerContact.upsert writes in a single transaction (new contact)', async () => {
+    const { service, prisma } = make();
+    await service.put(partner, 'a', 'b');
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    // Обе записи случились внутри колбэка транзакции, а не до него.
+    expect(prisma.$transaction.mock.invocationCallOrder[0]).toBeLessThan(
+      prisma.contactRequest.create.mock.invocationCallOrder[0],
+    );
+    expect(prisma.$transaction.mock.invocationCallOrder[0]).toBeLessThan(
+      prisma.partnerContact.upsert.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('wraps the contactRequest.updateMany + partnerContact.createMany writes in a single transaction (pre-existing contact)', async () => {
+    const { service, prisma } = make();
+    prisma.contactRequest.findMany.mockResolvedValue([
+      { id: 'c1', status: 'ACCEPTED' },
+    ]);
+    await service.put(partner, 'a', 'b');
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.$transaction.mock.invocationCallOrder[0]).toBeLessThan(
+      prisma.partnerContact.createMany.mock.invocationCallOrder[0],
+    );
+  });
 });
 
 describe('PartnerContactsService.remove', () => {
@@ -353,5 +381,27 @@ describe('PartnerContactsService.remove', () => {
       'link_not_active',
     );
     expect(prisma.partnerContact.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('wraps the deleteMany + hadContact reset writes in a single transaction', async () => {
+    const { service, prisma } = make();
+    prisma.partnerContact.findUnique.mockResolvedValue({
+      id: 'pc1',
+      createdContact: true,
+    });
+    await service.remove(partner, 'a', 'b');
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.$transaction.mock.invocationCallOrder[0]).toBeLessThan(
+      prisma.partnerContact.deleteMany.mock.invocationCallOrder[0],
+    );
+    expect(prisma.$transaction.mock.invocationCallOrder[0]).toBeLessThan(
+      prisma.blockedUser.updateMany.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('does not open a transaction when there is nothing to delete', async () => {
+    const { service, prisma } = make();
+    await service.remove(partner, 'a', 'b');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 });

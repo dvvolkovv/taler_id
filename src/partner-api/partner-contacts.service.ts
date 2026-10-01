@@ -63,54 +63,63 @@ export class PartnerContactsService {
 
     const rows = await this.pairRows(userAId, userBId);
     const wasContact = rows.some((r) => r.status === 'ACCEPTED');
-    if (!wasContact) {
-      if (rows.length > 0) {
-        // Все запросы пары, а не первый: висящий встречный запрос иначе
-        // остался бы «входящим» от человека, который уже в контактах.
-        await this.prisma.contactRequest.updateMany({
-          where: { id: { in: rows.map((r) => r.id) } },
-          data: { status: 'ACCEPTED' },
+    // Обе записи — одной транзакцией: крах между ними (сбой процесса, обрыв
+    // соединения) не должен оставить ContactRequest принятым, а
+    // createdContact — ещё со старым значением (или наоборот).
+    await this.prisma.$transaction(async (tx) => {
+      if (!wasContact) {
+        if (rows.length > 0) {
+          // Все запросы пары, а не первый: висящий встречный запрос иначе
+          // остался бы «входящим» от человека, который уже в контактах.
+          await tx.contactRequest.updateMany({
+            where: { id: { in: rows.map((r) => r.id) } },
+            data: { status: 'ACCEPTED' },
+          });
+        } else {
+          await tx.contactRequest.create({
+            data: {
+              senderId: userAId,
+              receiverId: userBId,
+              status: 'ACCEPTED',
+            },
+          });
+        }
+      }
+      // Флаг сверяется при каждом PUT: контакт сейчас завёл партнёр — true; контакт
+      // уже был — прежний флаг не трогаем (повтор PUT по своему же контакту не
+      // делает его «чужим»), а новая запись получает false. Два разных запроса,
+      // а не один upsert с тернарным update: пустой update Prisma эмулирует как
+      // SELECT, затем INSERT — не атомарно, и гонка двух одинаковых PUT могла бы
+      // упасть на уникальном индексе мимо единственного повтора put() (тот уже
+      // потрачен на гонку ContactRequest выше). createMany+skipDuplicates —
+      // настоящий ON CONFLICT DO NOTHING; upsert с непустым update — настоящий
+      // ON CONFLICT DO UPDATE. Оба атомарны на стороне БД.
+      if (wasContact) {
+        await tx.partnerContact.createMany({
+          data: [
+            { partnerId: partner.id, userAId, userBId, createdContact: false },
+          ],
+          skipDuplicates: true,
         });
       } else {
-        await this.prisma.contactRequest.create({
-          data: { senderId: userAId, receiverId: userBId, status: 'ACCEPTED' },
-        });
-      }
-    }
-    // Флаг сверяется при каждом PUT: контакт сейчас завёл партнёр — true; контакт
-    // уже был — прежний флаг не трогаем (повтор PUT по своему же контакту не
-    // делает его «чужим»), а новая запись получает false. Два разных запроса,
-    // а не один upsert с тернарным update: пустой update Prisma эмулирует как
-    // SELECT, затем INSERT — не атомарно, и гонка двух одинаковых PUT могла бы
-    // упасть на уникальном индексе мимо единственного повтора put() (тот уже
-    // потрачен на гонку ContactRequest выше). createMany+skipDuplicates —
-    // настоящий ON CONFLICT DO NOTHING; upsert с непустым update — настоящий
-    // ON CONFLICT DO UPDATE. Оба атомарны на стороне БД.
-    if (wasContact) {
-      await this.prisma.partnerContact.createMany({
-        data: [
-          { partnerId: partner.id, userAId, userBId, createdContact: false },
-        ],
-        skipDuplicates: true,
-      });
-    } else {
-      await this.prisma.partnerContact.upsert({
-        where: {
-          partnerId_userAId_userBId: {
+        await tx.partnerContact.upsert({
+          where: {
+            partnerId_userAId_userBId: {
+              partnerId: partner.id,
+              userAId,
+              userBId,
+            },
+          },
+          create: {
             partnerId: partner.id,
             userAId,
             userBId,
+            createdContact: true,
           },
-        },
-        create: {
-          partnerId: partner.id,
-          userAId,
-          userBId,
-          createdContact: true,
-        },
-        update: { createdContact: true },
-      });
-    }
+          update: { createdContact: true },
+        });
+      }
+    });
     if (!wasContact) {
       await this.audit.log(partner, 'CONTACT_CREATED', {
         externalId: `${extA},${extB}`,
@@ -135,35 +144,40 @@ export class PartnerContactsService {
       },
     });
     if (record) {
-      // deleteMany: повторный или параллельный DELETE не падает на уже удалённой строке.
-      await this.prisma.partnerContact.deleteMany({ where: { id: record.id } });
-      // Снимаем только контакт, который завёл сам партнёр, и только если его
-      // не держит другой партнёр. Дружба, бывшая в TalerID раньше, остаётся.
-      const heldByOthers = await this.prisma.partnerContact.count({
-        where: { userAId, userBId },
+      // Все три шага — одной транзакцией: крах между ними не должен оставить
+      // contactRequest «принятым», пока снятая дружба уже удалена, или
+      // наоборот оставить hadContact нетронутым после настоящего удаления.
+      await this.prisma.$transaction(async (tx) => {
+        // deleteMany: повторный или параллельный DELETE не падает на уже удалённой строке.
+        await tx.partnerContact.deleteMany({ where: { id: record.id } });
+        // Снимаем только контакт, который завёл сам партнёр, и только если его
+        // не держит другой партнёр. Дружба, бывшая в TalerID раньше, остаётся.
+        const heldByOthers = await tx.partnerContact.count({
+          where: { userAId, userBId },
+        });
+        if (record.createdContact && heldByOthers === 0) {
+          await tx.contactRequest.deleteMany({
+            where: {
+              OR: [
+                { senderId: userAId, receiverId: userBId },
+                { senderId: userBId, receiverId: userAId },
+              ],
+            },
+          });
+          // Дружбу, которую снял партнёр, не должна воскресить случайная разблокировка:
+          // без этого PUT → block → DELETE → unblock возвращает контакт, который партнёр
+          // только что явно снял, и повторный DELETE бьёт по пустому месту.
+          await tx.blockedUser.updateMany({
+            where: {
+              OR: [
+                { blockerId: userAId, blockedId: userBId },
+                { blockerId: userBId, blockedId: userAId },
+              ],
+            },
+            data: { hadContact: false },
+          });
+        }
       });
-      if (record.createdContact && heldByOthers === 0) {
-        await this.prisma.contactRequest.deleteMany({
-          where: {
-            OR: [
-              { senderId: userAId, receiverId: userBId },
-              { senderId: userBId, receiverId: userAId },
-            ],
-          },
-        });
-        // Дружбу, которую снял партнёр, не должна воскресить случайная разблокировка:
-        // без этого PUT → block → DELETE → unblock возвращает контакт, который партнёр
-        // только что явно снял, и повторный DELETE бьёт по пустому месту.
-        await this.prisma.blockedUser.updateMany({
-          where: {
-            OR: [
-              { blockerId: userAId, blockedId: userBId },
-              { blockerId: userBId, blockedId: userAId },
-            ],
-          },
-          data: { hadContact: false },
-        });
-      }
       await this.audit.log(partner, 'CONTACT_REMOVED', {
         externalId: `${extA},${extB}`,
         userId: userAId,
