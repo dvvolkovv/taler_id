@@ -257,11 +257,14 @@ describe('PartnerLinkCodeService.verify', () => {
 
   it("refuses with 409 when the linked account's email is not verified, without spending an attempt", async () => {
     const link = withCode();
-    const unverified = { ...link, user: { ...link.user, emailVerified: false } };
+    const unverified = {
+      ...link,
+      user: { ...link.user, emailVerified: false },
+    };
     const { service, prisma } = make(unverified);
-    await expect(
-      service.verify(partner, 'm-1', '123456'),
-    ).rejects.toThrow('email_unverified');
+    await expect(service.verify(partner, 'm-1', '123456')).rejects.toThrow(
+      'email_unverified',
+    );
     expect(prisma.partnerLink.updateMany).not.toHaveBeenCalled();
   });
 
