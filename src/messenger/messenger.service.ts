@@ -11,8 +11,12 @@ import { FileStorageService } from '../common/file-storage.service';
 import { resolveUserIdOrUsername } from '../common/utils/user-id.util';
 import { extractMentionHandles, resolveMentions } from './mention.util';
 
-/** Потолок на пачку пересылки; совпадает с потолком выделения в клиенте. */
-const FORWARD_BATCH_LIMIT = 50;
+/**
+ * Потолок на пачку пересылки; совпадает с потолком выделения в клиенте.
+ * Экспортирован — partner-conversation-scope.service.ts проверяет этот же
+ * потолок до похода в БД, когда partner-API пересылает сообщения.
+ */
+export const FORWARD_BATCH_LIMIT = 50;
 
 /** Сколько символов оригинала уезжает в превью цитаты. */
 const REPLY_PREVIEW_LIMIT = 200;

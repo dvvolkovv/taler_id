@@ -9,6 +9,7 @@ import {
   PARTNER_CONVERSATION_TYPES,
   PARTNER_FORBIDDEN,
 } from '../partner-core/partner.constants';
+import { FORWARD_BATCH_LIMIT } from './messenger.service';
 
 /**
  * Что можно партнёрскому токену в мессенджере сверх обычных прав участника:
@@ -80,6 +81,12 @@ export class PartnerConversationScope {
       messageIds.some((id) => typeof id !== 'string')
     ) {
       throw new BadRequestException('invalid_message_ids');
+    }
+    // Тот же потолок, что forwardMessages() применяет к самой пересылке —
+    // до похода в БД: иначе partner-клиент мог бы прислать произвольно
+    // длинный список id и заставить findMany тащить его целиком.
+    if (messageIds.length > FORWARD_BATCH_LIMIT) {
+      throw new BadRequestException('too_many_messages');
     }
     const ids = [...new Set(messageIds)];
     if (ids.length === 0) return;

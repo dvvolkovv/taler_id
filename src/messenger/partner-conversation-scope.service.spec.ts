@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PartnerConversationScope } from './partner-conversation-scope.service';
+import { FORWARD_BATCH_LIMIT } from './messenger.service';
 
 describe('PartnerConversationScope', () => {
   let prisma: any;
@@ -110,6 +111,32 @@ describe('PartnerConversationScope', () => {
       'invalid_message_ids',
     );
     expect(prisma.message.findMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses more ids than the forward batch limit, without querying the DB', async () => {
+    const tooMany = Array.from(
+      { length: FORWARD_BATCH_LIMIT + 1 },
+      (_, i) => `m${i}`,
+    );
+    await expect(scope.assertMessages(tooMany)).rejects.toThrow(
+      BadRequestException,
+    );
+    await expect(scope.assertMessages(tooMany)).rejects.toThrow(
+      'too_many_messages',
+    );
+    expect(prisma.message.findMany).not.toHaveBeenCalled();
+  });
+
+  it('queries the DB for exactly the forward batch limit', async () => {
+    const atLimit = Array.from(
+      { length: FORWARD_BATCH_LIMIT },
+      (_, i) => `m${i}`,
+    );
+    prisma.message.findMany.mockResolvedValue(
+      atLimit.map(() => ({ conversation: { type: 'DIRECT' } })),
+    );
+    await expect(scope.assertMessages(atLimit)).resolves.toBeUndefined();
+    expect(prisma.message.findMany).toHaveBeenCalledTimes(1);
   });
 
   describe('isPartnerConversation / isPartnerMessage (strict, for the socket gate)', () => {
