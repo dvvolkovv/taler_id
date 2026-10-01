@@ -779,10 +779,25 @@ export class AuthService {
     const passwordHash = await bcrypt.hash(newPassword, bcryptRounds);
 
     const isFirstPassword = user.passwordHash === null;
+    const revokesPartnerLinks = isFirstPassword && !!user.createdByPartnerId;
 
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: { passwordHash },
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: user.id },
+        data: { passwordHash },
+      });
+      // Статус и revokedAt — в ТОЙ ЖЕ транзакции, что пароль: крах сразу
+      // после неё не оставит связки ACTIVE на аккаунте, у которого уже есть
+      // «настоящий» пароль. grantId не трогаем — его отзыв в Redis/OIDC и
+      // разрыв сокетов — отдельная, не откатываемая с БД работа; её делает
+      // revokeAllForUser ниже, best-effort, и revokeLink сам доводит до
+      // конца REVOKED-строки с висящим грантом (как после сбоя Redis).
+      if (revokesPartnerLinks) {
+        await tx.partnerLink.updateMany({
+          where: { userId: user.id, status: { not: 'REVOKED' } },
+          data: { status: 'REVOKED', revokedAt: new Date() },
+        });
+      }
     });
 
     // A partner (nadi) may have created this account on an address it never
@@ -791,7 +806,7 @@ export class AuthService {
     // the partner's access must not survive that. Logged, not fatal: the
     // password change itself must succeed regardless (same pattern as
     // ProfileService.deleteAccount).
-    if (isFirstPassword && user.createdByPartnerId) {
+    if (revokesPartnerLinks) {
       try {
         await this.partnerLinks.revokeAllForUser(user.id);
       } catch (e) {

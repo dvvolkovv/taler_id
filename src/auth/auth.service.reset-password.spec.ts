@@ -43,9 +43,13 @@ describe('AuthService.resetPassword — revokes partner links on first password'
           .fn()
           .mockResolvedValue({ ...user, passwordHash: 'new-hash' }),
       },
+      partnerLink: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       session: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
     };
+    // Мок транзакции просто выполняет колбэк на том же prisma — настоящий
+    // откат при ошибке внутри проверяет e2e-набор на реальной базе, не этот мок.
+    prisma.$transaction = jest.fn((fn: any) => fn(prisma));
     const jwtService: any = {
       verify: jest
         .fn()
@@ -119,6 +123,55 @@ describe('AuthService.resetPassword — revokes partner links on first password'
     const { service, partnerLinks, prisma } = makeService();
     await service.resetPassword('tok', 'NewPass123!');
     expect(prisma.user.update.mock.invocationCallOrder[0]).toBeLessThan(
+      partnerLinks.revokeAllForUser.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('marks non-REVOKED partner links REVOKED with revokedAt, in the SAME transaction as the password write, keeping grantId for revokeAllForUser to finish', async () => {
+    const { service, prisma } = makeService();
+    await service.resetPassword('tok', 'NewPass123!');
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.partnerLink.updateMany).toHaveBeenCalledWith({
+      where: { userId: 'u1', status: { not: 'REVOKED' } },
+      data: { status: 'REVOKED', revokedAt: expect.any(Date) },
+    });
+    // grantId не упомянут вовсе — его отзыв (Redis/OIDC) остаётся за
+    // revokeAllForUser, у этой записи нет доступа к стороне, которая не
+    // откатывается вместе с транзакцией.
+    const call = (prisma.partnerLink.updateMany as jest.Mock).mock.calls[0][0];
+    expect(call.data).not.toHaveProperty('grantId');
+  });
+
+  it('does not touch partner links for an account that already had a password', async () => {
+    const { service, prisma } = makeService({
+      user: {
+        id: 'u2',
+        email: 'ivan@example.com',
+        passwordHash: 'already-set',
+        createdByPartnerId: 'p1',
+      },
+    });
+    await service.resetPassword('tok', 'NewPass123!');
+    expect(prisma.partnerLink.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('does not touch partner links for an account no partner ever created', async () => {
+    const { service, prisma } = makeService({
+      user: {
+        id: 'u3',
+        email: 'ivan@example.com',
+        passwordHash: null,
+        createdByPartnerId: null,
+      },
+    });
+    await service.resetPassword('tok', 'NewPass123!');
+    expect(prisma.partnerLink.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('commits the password+link-status transaction before calling revokeAllForUser (grant teardown is best-effort afterward)', async () => {
+    const { service, prisma, partnerLinks } = makeService();
+    await service.resetPassword('tok', 'NewPass123!');
+    expect(prisma.$transaction.mock.invocationCallOrder[0]).toBeLessThan(
       partnerLinks.revokeAllForUser.mock.invocationCallOrder[0],
     );
   });

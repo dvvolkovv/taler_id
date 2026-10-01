@@ -644,6 +644,116 @@ describe('PartnerUsersService.provision', () => {
   });
 });
 
+describe('PartnerUsersService.provision — FOR UPDATE re-check on managed relink', () => {
+  const revoked = {
+    id: 'l1',
+    userId: 'u1',
+    externalId: 'm-1',
+    status: 'REVOKED',
+    grantId: null,
+    user: liveUser,
+  };
+
+  it('locks the user row and re-checks it before activating a managed relink', async () => {
+    const { service, prisma } = make();
+    links(prisma, revoked, revoked);
+    prisma.$queryRaw
+      // findOwner: still managed at read time.
+      .mockResolvedValueOnce([
+        {
+          id: 'u1',
+          passwordHash: null,
+          deletedAt: null,
+          createdByPartnerId: 'p1',
+          emailVerified: true,
+        },
+      ])
+      // FOR UPDATE re-check inside the transaction: still managed.
+      .mockResolvedValueOnce([
+        { passwordHash: null, createdByPartnerId: 'p1', deletedAt: null },
+      ]);
+    await expect(service.provision(partner, dto)).resolves.toEqual({
+      status: 'active',
+      talerUserId: 'u1',
+      created: false,
+    });
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
+    const [strings] = prisma.$queryRaw.mock.calls[1];
+    expect(strings.join('')).toContain('FOR UPDATE');
+  });
+
+  it('restarts provisioning (ending PENDING, not a stale ACTIVE) when the account stops being managed between the read and the write', async () => {
+    const { service, prisma } = make();
+    links(prisma, revoked, revoked);
+    prisma.$queryRaw
+      // attempt 1: findOwner — still managed.
+      .mockResolvedValueOnce([
+        {
+          id: 'u1',
+          passwordHash: null,
+          deletedAt: null,
+          createdByPartnerId: 'p1',
+          emailVerified: true,
+        },
+      ])
+      // attempt 1: FOR UPDATE re-check — a concurrent resetPassword just
+      // claimed the account (first password set) while we were waiting.
+      .mockResolvedValueOnce([
+        {
+          passwordHash: 'set-concurrently',
+          createdByPartnerId: 'p1',
+          deletedAt: null,
+        },
+      ])
+      // attempt 2 (provision()'s retry): findOwner again, now fresh.
+      .mockResolvedValueOnce([
+        {
+          id: 'u1',
+          passwordHash: 'set-concurrently',
+          deletedAt: null,
+          createdByPartnerId: 'p1',
+          emailVerified: true,
+        },
+      ]);
+    await expect(service.provision(partner, dto)).resolves.toEqual({
+      status: 'confirmation_required',
+      talerUserId: null,
+    });
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(3);
+    // Only one FOR UPDATE re-check happened (attempt 2 is no longer
+    // "managed", so it never re-enters the locked branch at all).
+    expect(
+      prisma.$queryRaw.mock.calls.filter(([strings]) =>
+        strings.join('').includes('FOR UPDATE'),
+      ),
+    ).toHaveLength(1);
+    expect(prisma.partnerLink.updateMany).toHaveBeenLastCalledWith({
+      where: { id: 'l1', userId: 'u1', status: 'REVOKED', grantId: null },
+      data: expect.objectContaining({ status: 'PENDING' }),
+    });
+  });
+
+  it('does not lock or re-check for the PENDING (not-managed) relink path', async () => {
+    const { service, prisma } = make();
+    prisma.$queryRaw.mockResolvedValue([
+      {
+        id: 'u-existing',
+        passwordHash: 'hash',
+        deletedAt: null,
+        createdByPartnerId: null,
+        emailVerified: true,
+      },
+    ]);
+    await expect(service.provision(partner, dto)).resolves.toEqual({
+      status: 'confirmation_required',
+      talerUserId: null,
+    });
+    // Только findOwner — PENDING-связке лок не нужен: сама по себе она
+    // ничего не открывает, пока не пройдёт код из письма.
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('PartnerUsersService.provision — daily account-creation cap', () => {
   it('checks the cap, via Redis, before creating the account', async () => {
     const { service, prisma, redis } = make();

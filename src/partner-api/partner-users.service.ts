@@ -245,6 +245,27 @@ export class PartnerUsersService {
     }
 
     await this.prisma.$transaction(async (tx) => {
+      if (managed) {
+        // «managed» прочитан ДО транзакции — пока шли проверки stale/revoke
+        // выше, владелец мог успеть задать первый пароль (resetPassword
+        // отзывает связки партнёра именно на этот случай). FOR UPDATE не даёт
+        // строке измениться незамеченно между этой проверкой и записью ниже:
+        // перестал быть managed — начинаем provisionOnce заново (см. isRace),
+        // а не активируем связку без кода мимо уже случившегося отзыва.
+        // Эмпирически проверено на отдельной (throwaway) таблице: конкурентный
+        // SELECT…FOR UPDATE блокируется до COMMIT другой транзакции и видит
+        // уже закоммиченные данные, а не снимок на момент своего вызова.
+        const [fresh] = await tx.$queryRaw<
+          {
+            passwordHash: string | null;
+            createdByPartnerId: string | null;
+            deletedAt: Date | null;
+          }[]
+        >`SELECT "passwordHash", "createdByPartnerId", "deletedAt" FROM "User" WHERE id = ${owner.id} FOR UPDATE`;
+        if (!fresh || !isManagedBy(partner, fresh)) {
+          throw new LinkChangedError();
+        }
+      }
       if (stale) {
         // Удаляем только ту отозванную строку, что видели: если её успели
         // оживить, повтор ответит 409.
