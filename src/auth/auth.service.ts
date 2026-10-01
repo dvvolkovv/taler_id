@@ -23,6 +23,7 @@ import { SYSTEM_USER_EMAIL } from '../system-channel/system-channel.constants';
 import { SystemChannelService } from '../system-channel/system-channel.service';
 import { DeviceApprovalService } from './device-approval.service';
 import { NEW_DEVICE_APPROVAL_DEFAULT } from './device-approval.constants';
+import { PartnerLinkRevokerService } from '../partner-core/partner-link-revoker.service';
 
 /**
  * How long a spent refresh token is remembered so that replaying it is
@@ -48,6 +49,7 @@ export class AuthService {
     private emailService: EmailService,
     private readonly systemChannel: SystemChannelService,
     private readonly deviceApproval: DeviceApprovalService,
+    private readonly partnerLinks: PartnerLinkRevokerService,
   ) {
     const privatePath =
       this.configService.get<string>('jwt.privateKeyPath') ?? '';
@@ -776,10 +778,28 @@ export class AuthService {
       this.configService.get<number>('security.bcryptRounds') ?? 12;
     const passwordHash = await bcrypt.hash(newPassword, bcryptRounds);
 
+    const isFirstPassword = user.passwordHash === null;
+
     await this.prisma.user.update({
       where: { id: user.id },
       data: { passwordHash },
     });
+
+    // A partner (nadi) may have created this account on an address it never
+    // actually verified. If this is its first password, the real mailbox
+    // owner just proved control of the address via the reset-token email —
+    // the partner's access must not survive that. Logged, not fatal: the
+    // password change itself must succeed regardless (same pattern as
+    // ProfileService.deleteAccount).
+    if (isFirstPassword && user.createdByPartnerId) {
+      try {
+        await this.partnerLinks.revokeAllForUser(user.id);
+      } catch (e) {
+        this.logger.error(
+          `partner links not fully revoked for ${user.id}: ${(e as Error).message}`,
+        );
+      }
+    }
 
     // A reset is the recovery path for an account the user may have lost
     // control of, so every existing session goes — there is no "current"

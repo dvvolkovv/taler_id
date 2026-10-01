@@ -14,6 +14,7 @@ import * as bcrypt from 'bcrypt';
 import { SystemChannelService } from '../system-channel/system-channel.service';
 import { EmailService } from '../email/email.service';
 import { DeviceApprovalService } from './device-approval.service';
+import { PartnerLinkRevokerService } from '../partner-core/partner-link-revoker.service';
 
 // Mock all ESM/native modules that can't be loaded in Jest
 jest.mock('fs', () => ({
@@ -117,6 +118,10 @@ describe('AuthService', () => {
             touch: jest.fn().mockResolvedValue(undefined),
             createPending: jest.fn(),
           },
+        },
+        {
+          provide: PartnerLinkRevokerService,
+          useValue: { revokeAllForUser: jest.fn().mockResolvedValue(0) },
         },
       ],
     }).compile();
