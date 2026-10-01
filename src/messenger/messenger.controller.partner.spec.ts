@@ -71,6 +71,15 @@ describe('MessengerController for partner tokens', () => {
     ]);
   });
 
+  it('never carries a class-level @PartnerAllowed (that would open every handler at once)', () => {
+    // Reflector.getAllAndOverride() checks the handler first, then falls back
+    // to the class — a class-level @PartnerAllowed would make EVERY method
+    // look allowed to a partner caller, even ones deliberately left closed.
+    expect(
+      Reflect.getMetadata(PARTNER_ALLOWED_KEY, MessengerController),
+    ).toBeUndefined();
+  });
+
   describe('lists and groups', () => {
     const partnerUser = { sub: 'u1', partner: { partnerId: 'p1' } };
     const nativeUser = { sub: 'u1' };
