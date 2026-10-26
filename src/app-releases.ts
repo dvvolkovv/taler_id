@@ -11,6 +11,28 @@ export interface AppRelease {
 // Keep notes user-facing (no internal jargon, no commit hashes).
 export const APP_RELEASES: AppRelease[] = [
   {
+    version: '1.1.36',
+    build: 237,
+    date: '2026-10-26',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.36 — открыв приложение во время звонка, вы сами решаете, отвечать ли.\n\n' +
+      '📞 Если открыть приложение, пока звонят, — с иконки или из уведомления «Входящий звонок», — ' +
+      'оно покажет звонок с кнопками «Принять» и «Отклонить» и не соединит само. Раньше на Android ' +
+      'так можно было ответить, ничего не нажав, или попасть в пустой разговор, если собеседник уже положил трубку.\n' +
+      '🔔 Оставшееся в шторке уведомление «Входящий звонок» больше не открывает разговор — только приложение.\n' +
+      '📅 Повторяющиеся события календаря видны в каждый день повтора, а не только в одну дату, ' +
+      'и в списке дня стоят по своему времени.',
+    notes_en:
+      'Release 1.1.36 — opening the app during a call leaves the answer up to you.\n\n' +
+      '📞 If you open the app while a call is ringing — from its icon or from the "Incoming call" notification — ' +
+      'it shows the call with Accept and Decline and does not connect on its own. Before, on Android you could ' +
+      'answer without tapping anything, or end up in an empty call after the caller had already hung up.\n' +
+      '🔔 A leftover "Incoming call" notification no longer opens a call — just the app.\n' +
+      '📅 Recurring calendar events show on every day they repeat, not just one date, ' +
+      'and sit at their own time in the day\'s list.',
+  },
+  {
     version: '1.1.35',
     build: 236,
     date: '2026-09-30',
