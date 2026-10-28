@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { BlockchainService } from '../blockchain/blockchain.service';
 import { ConfigService } from '@nestjs/config';
+import { frAuthHeadersOrEmpty } from './fr-auth.util';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import * as crypto from 'crypto';
@@ -55,6 +56,14 @@ export class KycService {
   // DEFAULT_PROJECT ("trientes"). Kept as its own getter to mirror levelName.
   private get projectId(): string {
     return process.env.SUMSUB_PROJECT_ID || 'taler';
+  }
+
+  private get appToken(): string {
+    return this.configService.get<string>('sumsub.appToken') ?? '';
+  }
+
+  private get appSecret(): string {
+    return this.configService.get<string>('sumsub.appSecret') ?? '';
   }
 
   private get ttlInSecs(): number {
@@ -461,7 +470,8 @@ export class KycService {
   }
 
   private async issueAccessToken(externalUserId: string): Promise<string> {
-    const url = `${this.baseUrl}/resources/accessTokens/sdk`;
+    const urlPath = '/resources/accessTokens/sdk';
+    const url = `${this.baseUrl}${urlPath}`;
     const body = JSON.stringify({
       userId: externalUserId,
       levelName: this.levelName,
@@ -469,9 +479,21 @@ export class KycService {
       ttlInSecs: this.ttlInSecs,
     });
 
+    // ⚠️ Этот вызов НЕ покрывается обходом по X-Access-Token (welid !121/!127):
+    // токена ещё нет, за ним и идём. Значит он обязан быть подписан, иначе
+    // после включения SUMSUB_APP_SECRETS вернётся 401 и KYC встанет.
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...frAuthHeadersOrEmpty({
+          appToken: this.appToken,
+          appSecret: this.appSecret,
+          method: 'POST',
+          pathWithQuery: urlPath,
+          body,
+        }),
+      },
       body,
     });
 
@@ -493,8 +515,20 @@ export class KycService {
   }
 
   private async apiGet(urlPath: string): Promise<any> {
+    // ⚠️ Подписывается РОВНО тот путь, что уходит в сеть: welID берёт сырой
+    // raw_path и не декодирует проценты. urlPath уже собран с
+    // encodeURIComponent — декодировать перед подписью нельзя, подпись не
+    // сойдётся.
     const response = await fetch(this.baseUrl + urlPath, {
       method: 'GET',
+      headers: {
+        ...frAuthHeadersOrEmpty({
+          appToken: this.appToken,
+          appSecret: this.appSecret,
+          method: 'GET',
+          pathWithQuery: urlPath,
+        }),
+      },
       signal: AbortSignal.timeout(8000),
     });
     const data = await response.json();
