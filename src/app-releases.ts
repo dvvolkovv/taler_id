@@ -11,6 +11,30 @@ export interface AppRelease {
 // Keep notes user-facing (no internal jargon, no commit hashes).
 export const APP_RELEASES: AppRelease[] = [
   {
+    version: '1.1.37',
+    build: 238,
+    date: '2026-10-28',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.37 — обновления приложения больше не мешают.\n\n' +
+      '📲 Предложение обновиться теперь — карточка внизу главного экрана, а не полоса над всеми разделами: ' +
+      'экран больше не сдвигается, в чатах и других разделах карточки нет.\n' +
+      '⬇️ На Android обновление скачивается в фоне: можно свернуть приложение, связь может пропадать — ' +
+      'загрузка продолжится с того же места. Когда файл готов, установка предлагается сама, ' +
+      'а если приложение свёрнуто — придёт уведомление «Обновление скачано».\n' +
+      '📞 Установка никогда не всплывает посреди звонка или разговора с ассистентом — дождётся, пока вы закончите.\n' +
+      'ℹ️ Фоновое скачивание заработает со следующего обновления: на 1.1.37 вы переходите ещё по-старому.',
+    notes_en:
+      'Release 1.1.37 — app updates no longer get in the way.\n\n' +
+      '📲 The update offer is now a card at the bottom of the home screen instead of a strip above every section: ' +
+      'nothing shifts any more, and chats and other sections show no card.\n' +
+      '⬇️ On Android the update downloads in the background: you can minimise the app and the connection may drop — ' +
+      'the download picks up where it stopped. When the file is ready, the install is offered by itself, ' +
+      'and if the app is minimised you get an "Update downloaded" notification.\n' +
+      '📞 The installer never pops up in the middle of a call or a conversation with the assistant — it waits until you are done.\n' +
+      'ℹ️ Background downloading starts with the next update: you get to 1.1.37 the old way.',
+  },
+  {
     version: '1.1.36',
     build: 237,
     date: '2026-10-26',
