@@ -6,6 +6,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { frAuthHeadersOrEmpty } from '../kyc/fr-auth.util';
 import { ConfigService } from '@nestjs/config';
 import { TenantRole, KycStatus } from '@prisma/client';
 import {
@@ -123,15 +124,28 @@ export class TenantService {
     // project_id_captured="taler" instead of welID's DEFAULT_PROJECT fallback.
     const projectId = this.config.get<string>('sumsub.projectId') ?? 'taler';
 
-    const tokenResp = await fetch(`${baseUrl}/resources/accessTokens/sdk`, {
+    const tokenPath = '/resources/accessTokens/sdk';
+    const tokenBody = JSON.stringify({
+      userId: tenantId,
+      levelName: kybLevel,
+      projectId,
+      ttlInSecs,
+    });
+    // Подпись FR-AUTH — как в KYC-пути (exchange/common #1271): выдача токена
+    // под обход по X-Access-Token не попадает, токена ещё нет.
+    const tokenResp = await fetch(`${baseUrl}${tokenPath}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        userId: tenantId,
-        levelName: kybLevel,
-        projectId,
-        ttlInSecs,
-      }),
+      headers: {
+        'Content-Type': 'application/json',
+        ...frAuthHeadersOrEmpty({
+          appToken: this.config.get<string>('sumsub.appToken') ?? '',
+          appSecret: this.config.get<string>('sumsub.appSecret') ?? '',
+          method: 'POST',
+          pathWithQuery: tokenPath,
+          body: tokenBody,
+        }),
+      },
+      body: tokenBody,
     });
     if (!tokenResp.ok) {
       const err: any = await tokenResp.json().catch(() => ({}));
