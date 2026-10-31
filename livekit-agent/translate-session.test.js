@@ -110,7 +110,7 @@ test('the server dropping the socket is unexpected', () => {
 
 test('selftest passes on session.updated', async () => {
   const { factory, last } = fakeWsFactory();
-  const result = selftestTranslate({ apiKey: 'k', wsFactory: factory, timeoutMs: 1000, quietMs: 1000 });
+  const result = selftestTranslate({ apiKey: 'k', wsFactory: factory, timeoutMs: 1000, quietMs: 1000, appendCheckMs: 10 });
   last().open();
   last().serverSends({ type: 'session.updated' });
   assert.deepStrictEqual(await result, { ok: true, reason: 'session.updated received' });
@@ -128,7 +128,7 @@ test('selftest passes when session.created is followed by quiet', async () => {
 
 test('selftest sends a session.update and a little silence', async () => {
   const { factory, last } = fakeWsFactory();
-  const result = selftestTranslate({ apiKey: 'k', wsFactory: factory, timeoutMs: 1000, quietMs: 1000 });
+  const result = selftestTranslate({ apiKey: 'k', wsFactory: factory, timeoutMs: 1000, quietMs: 1000, appendCheckMs: 10 });
   last().open();
   assert.deepStrictEqual(last().sent.map((m) => m.type), ['session.update', 'session.input_audio_buffer.append']);
   last().serverSends({ type: 'session.updated' });
@@ -269,7 +269,7 @@ for (const [transcribeModel, noiseReduction] of [[undefined, undefined], [null, 
     const live = session({ transcribeModel, noiseReduction });
     live.fake.open();
     const { factory, last } = fakeWsFactory();
-    const result = selftestTranslate({ apiKey: 'k', wsFactory: factory, timeoutMs: 1000, transcribeModel, noiseReduction });
+    const result = selftestTranslate({ apiKey: 'k', wsFactory: factory, timeoutMs: 1000, appendCheckMs: 10, transcribeModel, noiseReduction });
     last().open();
     assert.deepStrictEqual(last().sentOfType('session.update')[0].session.audio.input, live.fake.sent[0].session.audio.input);
     last().serverSends({ type: 'session.updated' });
@@ -303,4 +303,60 @@ test('selftest fails when the echo dropped what we asked for', async () => {
   const r = await result;
   assert.strictEqual(r.ok, false);
   assert.match(r.reason, /transcription/);
+});
+
+// ── after re-review (task 10c) ──
+
+test('a confirmed session outlives the ready timeout', async () => {
+  const { fake, seen } = session({ readyTimeoutMs: 20 });
+  fake.open();
+  fake.serverSends({ type: 'session.updated' });
+  await new Promise((r) => setTimeout(r, 40));
+  assert.deepStrictEqual(seen.closes, []);
+  assert.strictEqual(fake.readyState, 1);
+});
+
+test('selftest fails when the echo answers in another language or drops noise reduction, and survives a null frame', async () => {
+  for (const [echo, why] of [
+    [{ audio: { input: { transcription: { model: 'x' }, noise_reduction: { type: 'near_field' } }, output: { language: 'es' } } }, /language es/],
+    [{ audio: { input: { transcription: { model: 'x' }, noise_reduction: null }, output: { language: 'en' } } }, /noise reduction/],
+  ]) {
+    const { factory, last } = fakeWsFactory();
+    const result = selftestTranslate({ apiKey: 'k', wsFactory: factory, timeoutMs: 1000 });
+    last().open();
+    assert.doesNotThrow(() => last().emit('message', Buffer.from('null')));
+    last().serverSends({ type: 'session.updated', session: echo });
+    const r = await result;
+    assert.strictEqual(r.ok, false);
+    assert.match(r.reason, why);
+  }
+});
+
+test('frames read after fail() count for nothing', () => {
+  const { fake, seen } = session();
+  fake.open();
+  fake.serverSends({ type: 'error', error: { message: 'refused' } });
+  fake.readyState = 1; // real ws still parses what came in the same read (re-review, exp-f)
+  fake.serverSends({ type: 'session.updated' });
+  fake.serverSends({ type: 'session.output_audio.delta', delta: 'AAAA' });
+  assert.strictEqual(seen.ready, 0);
+  assert.strictEqual(seen.audio.length, 0);
+});
+
+test('a regional form of the asked language is the same answer', () => {
+  const { fake, seen } = session();
+  fake.open();
+  fake.serverSends({ type: 'session.updated', session: { audio: { output: { language: 'de-DE' } } } });
+  assert.strictEqual(seen.ready, 1);
+});
+
+test('selftest fails on an error that follows session.updated within the append check', async () => {
+  const { factory, last } = fakeWsFactory();
+  const result = selftestTranslate({ apiKey: 'k', wsFactory: factory, timeoutMs: 1000, appendCheckMs: 200 });
+  last().open();
+  last().serverSends({ type: 'session.updated' });
+  last().serverSends({ type: 'error', error: { message: 'unknown event session.input_audio_buffer.append' } });
+  const r = await result;
+  assert.strictEqual(r.ok, false);
+  assert.match(r.reason, /unknown event/);
 });

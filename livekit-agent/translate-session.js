@@ -42,6 +42,9 @@ const MAX_BUFFERED_BYTES = 1 << 20; // ~16 s of base64 audio at 64 KB/s
 // error counts instead — the selftest's rule.
 const CREATED_GRACE_MS = 1500;
 
+// 'pt' and 'pt-BR' are the same answer; only a different language is a refusal.
+const baseLang = (lang) => String(lang).toLowerCase().split(/[-_]/)[0];
+
 function defaultWsFactory(url, options) {
   return new WebSocket(url, { ...options, handshakeTimeout: HANDSHAKE_TIMEOUT_MS });
 }
@@ -106,6 +109,7 @@ function createTranslateSession(opts) {
   });
   let ready = false;
   let closedByUs = false;
+  let dropped = false; // fail() decided; frames already read must not count
   let readyTimer = null;
   let graceTimer = null;
   const queue = [];
@@ -121,7 +125,8 @@ function createTranslateSession(opts) {
   // unexpected, so the reconnecting wrapper retries and, past its limits,
   // the interpreter ends instead of running a broken direction.
   function fail(reason) {
-    if (closedByUs) return;
+    if (closedByUs || dropped) return;
+    dropped = true;
     log.error(`[INTERPRETER] translate →${targetLang}: ${reason}, dropping the socket`);
     clearTimers();
     try {
@@ -146,7 +151,7 @@ function createTranslateSession(opts) {
   });
 
   ws.on('message', (raw) => {
-    if (closedByUs) return; // what was still in flight after close()
+    if (closedByUs || dropped) return; // in flight after close() or fail()
     let event;
     try {
       event = JSON.parse(raw.toString());
@@ -167,7 +172,7 @@ function createTranslateSession(opts) {
       case 'session.updated': {
         const lang = event.session && event.session.audio && event.session.audio.output
           && event.session.audio.output.language;
-        if (lang && lang !== targetLang) fail(`session answers in ${lang}, asked for ${targetLang}`);
+        if (lang && baseLang(lang) !== baseLang(targetLang)) fail(`session answers in ${lang}, asked for ${targetLang}`);
         else becomeReady();
         break;
       }
@@ -244,7 +249,7 @@ function echoProblem(echo, asked) {
   const audio = (echo && echo.audio) || {};
   const out = audio.output || {};
   const input = audio.input || {};
-  if (out.language !== undefined && out.language !== asked.audio.output.language) return `has language ${out.language}`;
+  if (out.language !== undefined && baseLang(out.language) !== baseLang(asked.audio.output.language)) return `has language ${out.language}`;
   const want = asked.audio.input || {};
   if (want.transcription && audio.input && !input.transcription) return 'dropped input transcription';
   if (want.noise_reduction && audio.input && !input.noise_reduction) return 'dropped noise reduction';
@@ -266,6 +271,7 @@ function selftestTranslate({
   wsFactory = defaultWsFactory,
   timeoutMs = 10000,
   quietMs = 1500,
+  appendCheckMs = 500,
 } = {}) {
   if (!apiKey) return Promise.resolve({ ok: false, reason: 'OPENAI_API_KEY not set' });
   return new Promise((resolve) => {
@@ -304,7 +310,14 @@ function selftestTranslate({
         finish({ ok: false, reason: `OpenAI error: ${JSON.stringify(event.error || event)}` });
       } else if (event.type === 'session.updated') {
         const problem = echoProblem(event.session, asked);
-        finish(problem ? { ok: false, reason: `session.updated ${problem}` } : { ok: true, reason: 'session.updated received' });
+        if (problem) {
+          finish({ ok: false, reason: `session.updated ${problem}` });
+        } else {
+          // The silence appended on 'open' is read after the update: an error
+          // about it (say, a renamed append event) arrives within this window.
+          clearTimeout(quietTimer);
+          quietTimer = setTimeout(() => finish({ ok: true, reason: 'session.updated received' }), appendCheckMs);
+        }
       } else if (event.type === 'session.created' && !quietTimer) {
         quietTimer = setTimeout(() => finish({ ok: true, reason: `session.created, no error within ${quietMs} ms` }), quietMs);
       }
