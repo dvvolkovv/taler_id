@@ -5,6 +5,8 @@ const WebSocket = require('ws');
 const { startRecording, stopRecording, getRecordingStatus } = require('./recorder');
 const { startTranslator, stopTranslator, updateParticipantLang, getTranslatorStatus, getTranslatorLanguages, selftest: translatorSelftest } = require('./translator');
 const { startHoldMusic, stopHoldMusic, getHoldMusicStatus } = require('./hold-music');
+const interpreter = require('./interpreter');
+const { registerInterpreterRoutes } = require('./interpreter-routes');
 const { createAudioMixer } = require('./audio-mixer');
 
 let livekitRtc = null;
@@ -148,6 +150,18 @@ app.get('/translator/selftest', async (req, res) => {
   } catch (e) {
     res.status(500).json({ ok: false, reason: e.message });
   }
+});
+
+// ═══════════════════════════════════════════
+// ── FACE-TO-FACE INTERPRETER ──
+// ═══════════════════════════════════════════
+
+registerInterpreterRoutes(app, {
+  secret: process.env.INTERPRETER_SHARED_SECRET,
+  start: (body) => interpreter.startInterpreter(body),
+  stop: (roomName) => interpreter.stopInterpreter(roomName),
+  status: (roomName) => interpreter.getInterpreterStatus(roomName),
+  selftest: () => interpreter.selftest(),
 });
 
 // ═══════════════════════════════════════════
