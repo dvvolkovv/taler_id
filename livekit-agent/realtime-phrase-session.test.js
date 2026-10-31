@@ -98,6 +98,7 @@ test('only real hallucinations are filtered, ordinary phrases are not', () => {
     'нет, нет, нет',
     'Спасибо за просмотр квартиры',
     'Thanks for watching the kids',
+    'Мы закончили, продолжение следует',
   ]) {
     assert.strictEqual(isHallucination(speech), false, speech);
   }
