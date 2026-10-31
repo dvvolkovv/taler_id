@@ -15,10 +15,12 @@ test('gain scales in place and clamps at full scale', () => {
   assert.deepStrictEqual(Array.from(s), [2000, -2000, 32767, -32768]);
 });
 
-test('frames reach captureFrame one at a time, in order', async () => {
+test('frames reach captureFrame one at a time, in order', { timeout: 2000 }, async () => {
   const started = [];
   let active = 0;
   let maxActive = 0;
+  let drained;
+  const done = new Promise((resolve) => { drained = resolve; });
   const source = {
     async captureFrame(frame) {
       active += 1;
@@ -26,13 +28,14 @@ test('frames reach captureFrame one at a time, in order', async () => {
       started.push(frame);
       await new Promise((r) => setImmediate(r));
       active -= 1;
+      if (started.length === 3) drained();
     },
   };
   const queue = createFrameQueue(source, 'en');
   queue.push('a');
   queue.push('b');
   queue.push('c');
-  await new Promise((r) => setTimeout(r, 20));
+  await done;
   assert.deepStrictEqual(started, ['a', 'b', 'c']);
   assert.strictEqual(maxActive, 1);
 });

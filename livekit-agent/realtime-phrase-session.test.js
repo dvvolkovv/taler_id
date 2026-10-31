@@ -68,7 +68,7 @@ test('another model can be asked for', () => {
   assert.strictEqual(fake.url, 'wss://api.openai.com/v1/realtime?model=gpt-realtime-2025-08-28');
 });
 
-test('audio sent before the session is configured waits for session.updated', () => {
+test('audio sent while the socket is still connecting waits for session.updated', () => {
   const { factory, last } = fakeWsFactory();
   const ws = createRealtimeSession('ru', 'de', () => {}, () => {}, { wsFactory: factory, apiKey: 'k' });
   const fake = last();
