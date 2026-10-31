@@ -90,12 +90,21 @@ test('translated audio deltas reach the callback as bytes', () => {
 const { isHallucination } = require('./realtime-phrase-session');
 
 test('only real hallucinations are filtered, ordinary phrases are not', () => {
-  assert.strictEqual(isHallucination('Добрый день'), false);
-  assert.strictEqual(isHallucination('Guten Tag, wie geht es Ihnen?'), false);
-  assert.strictEqual(isHallucination('thank you for watching'), true);
-  assert.strictEqual(isHallucination('да да да'), true);
-  assert.strictEqual(isHallucination('ok ok ok ok'), true);
-  assert.strictEqual(isHallucination(' '), true);
+  for (const speech of ['Добрый день', 'Guten Tag, wie geht es Ihnen?', 'да да да', 'Да, да, да.', 'нет, нет, нет']) {
+    assert.strictEqual(isHallucination(speech), false, speech);
+  }
+  for (const loop of [
+    ' ',
+    'ok ok ok ok',
+    'Субтитры сделал DimaTorzok',
+    'Продолжение следует...',
+    'Спасибо за просмотр!',
+    'Thanks for watching!',
+    'thank you for watching',
+    'Я не знаю, что делать. Я не знаю, что делать. Я не знаю, что делать. Я не знаю, что делать.',
+  ]) {
+    assert.strictEqual(isHallucination(loop), true, loop);
+  }
 });
 
 test('onReady fires once the session is configured', () => {
@@ -158,4 +167,17 @@ test('without pruneHistory nothing is deleted', () => {
   fake.serverSends({ type: 'response.created', response: { id: 'r1' } });
   fake.serverSends({ type: 'response.done', response: { id: 'r1', status: 'completed', output: [{ id: 'out1' }] } });
   assert.strictEqual(fake.sentOfType('conversation.item.delete').length, 0);
+});
+
+test('a callback that throws is logged and does not escape the socket handlers', (t) => {
+  const errors = [];
+  t.mock.method(console, 'error', (...args) => errors.push(args.join(' ')));
+  const { fake } = open('ru', 'sk', {
+    onReady: () => { throw new Error('ready boom'); },
+    onClose: () => { throw new Error('close boom'); },
+  });
+  assert.doesNotThrow(() => fake.serverSends({ type: 'session.updated' }));
+  assert.doesNotThrow(() => fake.serverCloses(1006));
+  assert.ok(errors.some((l) => l.includes('onReady callback failed') && l.includes('ready boom')));
+  assert.ok(errors.some((l) => l.includes('onClose callback failed') && l.includes('close boom')));
 });
