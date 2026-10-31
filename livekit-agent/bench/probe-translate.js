@@ -24,7 +24,7 @@ function args(name) {
 
 require('dotenv').config({ path: arg('env', path.join(__dirname, '..', '.env')) });
 const WebSocket = require('ws');
-const { readWav } = require('../wav');
+const { readWav, rms } = require('../wav');
 
 const model = arg('model', 'gpt-realtime-translate');
 const { sampleRate, samples } = readWav(fs.readFileSync(arg('wav')));
@@ -52,6 +52,7 @@ async function probe(target) {
   });
   const shapes = new Map();
   let audioBytes = 0;
+  let voicedFrames = 0;
   let firstAudioMs = null;
   let inText = '';
   let outText = '';
@@ -65,16 +66,25 @@ async function probe(target) {
     const ev = JSON.parse(raw.toString());
     if (!shapes.has(ev.type)) shapes.set(ev.type, shape(ev));
     if (ev.type === 'session.output_audio.delta') {
-      const bytes = Buffer.from(ev.delta || '', 'base64').length;
+      const buf = Buffer.from(ev.delta || '', 'base64');
+      const bytes = buf.length;
       if (bytes && firstAudioMs === null) firstAudioMs = Date.now() - t0;
       audioBytes += bytes;
+      const pcm = new Int16Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength - (buf.byteLength % 2)));
+      for (let i = 0; i + 240 <= pcm.length; i += 240) if (rms(pcm.subarray(i, i + 240)) >= 300) voicedFrames += 1;
     }
     if (ev.type === 'session.output_transcript.delta') outText += ev.delta || '';
     if (ev.type === 'session.input_transcript.delta') inText += ev.delta || '';
     if (ev.type === 'error') console.log('ERROR', JSON.stringify(ev));
   });
   await new Promise((resolve) => ws.once('open', resolve));
-  ws.send(JSON.stringify({ type: 'session.update', session: { audio: { output: { language: target } } } }));
+  const session = { audio: { output: { language: target } } };
+  const transcribe = arg('transcribe');
+  const noise = arg('noise');
+  if (transcribe || noise) session.audio.input = {};
+  if (transcribe) session.audio.input.transcription = { model: transcribe };
+  if (noise) session.audio.input.noise_reduction = { type: noise };
+  ws.send(JSON.stringify({ type: 'session.update', session }));
   for (let i = 0; i < samples.length; i += PIECE) {
     const piece = samples.subarray(i, i + PIECE);
     ws.send(JSON.stringify({
@@ -95,7 +105,7 @@ async function probe(target) {
 
   console.log(`\n=== ${path.basename(arg('wav'))} → ${target} (close code ${code})`);
   for (const [type, s] of shapes) console.log(type, JSON.stringify(s));
-  console.log(`audio: ${(audioBytes / 48000).toFixed(1)} s, first at ${firstAudioMs} ms after connect`);
+  console.log(`audio: ${(audioBytes / 48000).toFixed(1)} s (voiced ${(voicedFrames / 100).toFixed(1)} s), first at ${firstAudioMs} ms after connect`);
   console.log(`input transcript:  ${inText}`);
   console.log(`output transcript: ${outText}`);
 }
