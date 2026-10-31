@@ -8986,6 +8986,257 @@ git commit -m "test(interpreter): статистика и страница от�
 
 ---
 
+### Task 18b: Отчёт стенда — настоящая длительность кадров, баллы без непроверенных кусков, экранирование текста модели
+
+По ревью задачи 18 — отчёт врал бы в трёх местах, причём именно в тех, по которым на контрольной точке выбирают пороги:
+- **`voicedMs` считал каждый кадр за 10 мс.** Размер кадра выбирает LiveKit (см. `speaker-timeline.js`), а переводчик публикует кадры по 20 мс. Миллисекунды утечки и эха в разделе «Должно быть тихо» могли выйти вдвое меньше настоящих. Теперь кадр считается за свою длительность `ms`, которую записывает стенд (задача 19); кадр без неё — за 10 мс, как раньше.
+- **`suggestThresholds` полагался на то, что вызывающий отсеет непроверенные куски.** У такого куска `own` и `other` равны `null`, а в сортировке `null` становится нулём и тихо сдвигает процентили — то есть те самые τ и δ, которые потом переносятся в `interpreter.js`. Теперь куски без баллов отсеиваются здесь же.
+- **Субтитры и расшифровки шли в Markdown как есть.** `|` открывал лишнюю колонку таблицы, перевод строки начинал новую строку таблицы или пункт списка. А на контрольной точке субтитры читают глазами. Теперь `mdEscape`.
+
+**Files:**
+- Modify: `livekit-agent/bench/bench-report.js` (переписать целиком)
+- Modify: `livekit-agent/bench/bench-report.test.js` (семь тестов в конец)
+
+- [ ] **Step 1: Тесты (падают)**
+
+В конец `bench/bench-report.test.js` дописать через пустую строку:
+
+```js
+const emptyReport = (over) => ({
+  pair: 'ru-sk',
+  startedAt: '2026-11-01T10:00:00.000Z',
+  config: { model: 'm', fallbackModel: 'm2', threshold: 0.25, margin: 0.05, chunkMs: 500, hysteresis: 2 },
+  latencies: [],
+  silentChecks: [],
+  scoreGroups: [],
+  suggestion: null,
+  captions: [],
+  sameLanguage: [],
+  embedLatency: { n: 0 },
+  failOpen: 0,
+  ...over,
+});
+
+test('percentile of a single value is that value', () => {
+  for (const p of [0, 37, 100]) assert.strictEqual(r.percentile([7], p), 7);
+});
+
+test('no intruder chunks is not enough data to suggest thresholds', () => {
+  assert.strictEqual(r.suggestThresholds([{ own: 0.6, other: 0.1 }], []), null);
+});
+
+test('fail-open chunks (no score) do not move the suggested thresholds', () => {
+  const clean = Array.from({ length: 20 }, (_, i) => ({ own: 0.6 + i * 0.01, other: 0.1 }));
+  // Few intruder chunks: two unscored ones would move their percentiles past rounding.
+  const intruder = Array.from({ length: 5 }, (_, i) => ({ own: 0.1 + i * 0.05, other: 0.6 }));
+  const failOpen = { own: null, other: null };
+  assert.deepStrictEqual(
+    r.suggestThresholds([...clean, failOpen, failOpen], [...intruder, failOpen, failOpen]),
+    r.suggestThresholds(clean, intruder),
+  );
+});
+
+test('voiced time counts each frame for its own length', () => {
+  const frames = [{ t: 100, rms: 10, ms: 10 }, { t: 110, rms: 900, ms: 20 }, { t: 130, rms: 800, ms: 5 }, { t: 300, rms: 1000, ms: 10 }];
+  assert.strictEqual(r.voicedMs(frames, 100, 200), 25);
+  assert.strictEqual(r.voicedMs([{ t: 0, rms: 900 }, { t: 10, rms: 900 }], 0, 100), 20); // no ms: 10 each
+});
+
+test('model text cannot break a table row or a list item', () => {
+  const md = r.renderReport(emptyReport({
+    captions: [{ listener: 'bench-b', role: 'translation', text: 'raz | dva\ntri * štyri_ pať' }],
+    sameLanguage: [{ input: 'sk-1', target: 'sk', voicedSeconds: 1, transcript: 'a | b\nc' }],
+  }));
+  assert.ok(!md.includes('raz | dva') && !md.includes('dva\ntri'), md);
+  assert.ok(!md.includes('a | b\nc'), md);
+  assert.ok(md.includes('raz \\| dva') && md.includes('a \\| b'), md);
+});
+
+test('a missing transcript shows as —, not as "undefined"', () => {
+  const md = r.renderReport(emptyReport({ sameLanguage: [{ input: 'de-1', target: 'de', voicedSeconds: 0, transcript: undefined }] }));
+  const row = md.split('\n').find((l) => l.includes('de-1'));
+  assert.ok(row.endsWith('| — |') && !row.includes('undefined'), row);
+});
+
+test('without a suggestion the report says there is not enough data', () => {
+  const md = r.renderReport(emptyReport({}));
+  assert.ok(md.includes('Недостаточно данных.'));
+  assert.ok(!md.includes('разделяет'));
+});
+```
+
+Run: `node --test bench/bench-report.test.js`
+Expected: падают 3 теста: непроверенные куски, текст модели в таблице, длительность кадров. Четыре других новых проходят и сейчас: один процентиль, нет «чужих» кусков, «—» вместо пропавшей расшифровки, «недостаточно данных». Они закрепляют поведение, которое прежние тесты не ловили.
+
+- [ ] **Step 2: Модуль целиком**
+
+`bench/bench-report.js`:
+
+```js
+'use strict';
+/**
+ * Numbers and the markdown page for bench/interpreter-bench.js. Pure, so the
+ * arithmetic is tested; the bench itself needs LiveKit, OpenAI and the embed
+ * service.
+ */
+
+function percentile(values, p) {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1));
+  return sorted[idx];
+}
+
+function summarize(values) {
+  if (values.length === 0) return { n: 0 };
+  return {
+    n: values.length,
+    min: percentile(values, 0),
+    p10: percentile(values, 10),
+    median: percentile(values, 50),
+    p90: percentile(values, 90),
+    max: percentile(values, 100),
+  };
+}
+
+/** ms from `from` to the first 10 ms frame at or above `threshold` RMS, before `until`; null if none. */
+function firstVoicedAfter(frames, from, until, threshold = 300) {
+  for (const f of frames) if (f.t >= from && f.t < until && f.rms >= threshold) return f.t - from;
+  return null;
+}
+
+/**
+ * Milliseconds of frames at or above `threshold` RMS inside [from, to). Each
+ * frame counts for its own `ms`: LiveKit picks the frame size
+ * (speaker-timeline.js), and a flat 10 ms on 20 ms frames would halve the
+ * leak this measures. A frame without `ms` counts as `defaultMs`.
+ */
+function voicedMs(frames, from, to, threshold = 300, defaultMs = 10) {
+  let ms = 0;
+  for (const f of frames) if (f.t >= from && f.t < to && f.rms >= threshold) ms += f.ms ?? defaultMs;
+  return ms;
+}
+
+// A fail-open chunk has no score (own and other both null) and says nothing
+// about anyone's voice; left in, it would shift a percentile.
+const hasScore = (s) => Number.isFinite(s.own) && Number.isFinite(s.other);
+
+/**
+ * Thresholds that would separate the owner's own speech from sound intruding
+ * on the owner's phone (the partner's voice, the earpiece's translation):
+ * midpoints between the owner's 10th percentile and the intruders' 90th.
+ */
+function suggestThresholds(own, intruder) {
+  const round = (x) => Math.round(x * 100) / 100;
+  const o = own.filter(hasScore);
+  const i = intruder.filter(hasScore);
+  const ownSim = percentile(o.map((s) => s.own), 10);
+  const intSim = percentile(i.map((s) => s.own), 90);
+  const ownGap = percentile(o.map((s) => s.own - s.other), 10);
+  const intGap = percentile(i.map((s) => s.own - s.other), 90);
+  if (ownSim === null || intSim === null) return null;
+  return {
+    threshold: round((ownSim + intSim) / 2),
+    margin: round((ownGap + intGap) / 2),
+    thresholdSeparates: ownSim > intSim,
+    marginSeparates: ownGap > intGap,
+  };
+}
+
+const fmt = (x) => (x === null || x === undefined ? '—' : typeof x === 'number' && !Number.isInteger(x) ? x.toFixed(2) : String(x));
+const five = (s) => (s.n === 0 ? '—' : [s.min, s.p10, s.median, s.p90, s.max].map(fmt).join(' / '));
+
+/**
+ * Captions and transcripts are model output: a `|` would open a table column
+ * and a newline would start a row or a list item of its own. A missing value
+ * gives '', so `mdEscape(x) || '—'` still falls back.
+ */
+function mdEscape(text) {
+  if (text === null || text === undefined) return '';
+  return String(text)
+    .replace(/\\/g, '\\\\')
+    .replace(/[|*_`]/g, '\\$&')
+    .replace(/\s*[\r\n]+\s*/g, ' ')
+    .trim();
+}
+
+function renderReport(r) {
+  const c = r.config;
+  const lines = [
+    `# Стенд переводчика — ${r.pair} — ${r.startedAt}`,
+    '',
+    `Синхронная модель \`${c.model}\`, фразовая \`${c.fallbackModel}\`; τ=${c.threshold}, δ=${c.margin}, кусок ${c.chunkMs} мс, гистерезис ${c.hysteresis}.`,
+    '',
+    '## Задержка: от начала фразы до первого звука перевода',
+    '',
+    '| Фраза | Направление | Движок | мс |',
+    '|---|---|---|---|',
+    ...r.latencies.map((l) => `| ${mdEscape(l.phrase)} | ${mdEscape(l.direction)} | ${mdEscape(l.engine)} | ${fmt(l.ms)} |`),
+    '',
+    '## Должно быть тихо',
+    '',
+    '| Ситуация | Слышно у слушателя, мс |',
+    '|---|---|',
+    ...r.silentChecks.map((s) => `| ${mdEscape(s.situation)} | ${fmt(s.voicedMs)} |`),
+    '',
+    '## Сверка голоса',
+    '',
+    '| Группа | n | s_own: min / p10 / медиана / p90 / max | s_own − s_other: min / p10 / медиана / p90 / max | пропущено |',
+    '|---|---|---|---|---|',
+    ...r.scoreGroups.map((g) => {
+      const own = summarize(g.scores.map((s) => s.own));
+      const gap = summarize(g.scores.map((s) => s.own - s.other));
+      return `| ${mdEscape(g.group)} | ${g.scores.length} | ${five(own)} | ${five(gap)} | ${g.scores.filter((s) => s.pass).length} |`;
+    }),
+    '',
+    '## Предлагаемые пороги',
+    '',
+    r.suggestion
+      ? `τ = ${r.suggestion.threshold} (разделяет: ${r.suggestion.thresholdSeparates ? 'да' : 'нет'}), δ = ${r.suggestion.margin} (разделяет: ${r.suggestion.marginSeparates ? 'да' : 'нет'})`
+      : 'Недостаточно данных.',
+    '',
+    '## Субтитры',
+    '',
+    ...r.captions.map((cap) => `- ${mdEscape(cap.listener)} / ${mdEscape(cap.role)}: «${mdEscape(cap.text)}»`),
+    '',
+    '## Речь, уже на языке перевода',
+    '',
+    '| Вход | Цель | Озвучено, с | Текст на выходе |',
+    '|---|---|---|---|',
+    ...r.sameLanguage.map((s) => `| ${mdEscape(s.input)} | ${mdEscape(s.target)} | ${fmt(s.voicedSeconds)} | ${mdEscape(s.transcript) || '—'} |`),
+    '',
+    '## Сервис сверки',
+    '',
+    `Время ответа, мс (min / p10 / медиана / p90 / max): ${five(r.embedLatency)}`,
+    '',
+    '## Пропуски без проверки (fail-open)',
+    '',
+    String(r.failOpen),
+    '',
+  ];
+  return lines.join('\n');
+}
+
+module.exports = { percentile, summarize, firstVoicedAfter, voicedMs, suggestThresholds, renderReport };
+```
+
+- [ ] **Step 3: Проверить**
+
+```bash
+node --test bench/bench-report.test.js && npm test 2>&1 | tail -8
+```
+
+Ожидается: 12 тестов в файле; весь набор `ℹ pass 261`, `ℹ fail 0`.
+
+- [ ] **Step 4: Коммит**
+
+```bash
+git add bench/bench-report.js bench/bench-report.test.js
+git commit -m "fix(interpreter): отчёт стенда — длительность кадров, баллы без непроверенных кусков, экранирование текста модели" -m "По ревью задачи 18: voicedMs считал каждый кадр за 10 мс, null-баллы непроверенных кусков сдвигали предлагаемые пороги, | и перевод строки в субтитрах ломали таблицы отчёта." -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
 ### Task 19: `bench/interpreter-bench.js` — стенд
 
 **Files:**
@@ -9057,7 +9308,7 @@ async function tokenFor(identity, roomName) {
 /** A phone stand-in: plays scheduled clips as its mic and records its own interpretation track. */
 async function createBot({ identity, roomName, listenTo }) {
   const room = new rtc.Room();
-  const heard = []; // { t, rms } per 10 ms
+  const heard = []; // { t, rms, ms } per frame
   const heardPcm = []; // { t, samples }
   const captions = []; // { t, msg }
   room.on(rtc.RoomEvent.TrackSubscribed, (track, publication, participant) => {
@@ -9066,7 +9317,7 @@ async function createBot({ identity, roomName, listenTo }) {
       for await (const frame of new rtc.AudioStream(track, SR, 1)) {
         const samples = new Int16Array(frame.data);
         const t = Date.now();
-        heard.push({ t, rms: rms(samples) });
+        heard.push({ t, rms: rms(samples), ms: (samples.length / SR) * 1000 });
         heardPcm.push({ t, samples });
       }
     })().catch(() => {});
