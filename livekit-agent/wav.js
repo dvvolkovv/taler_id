@@ -43,10 +43,13 @@ function readWav(buffer) {
     const size = buffer.readUInt32LE(offset + 4);
     const body = offset + 8;
     if (id === 'fmt ') {
+      if (size < 16 || body + 16 > buffer.length) {
+        throw new Error('truncated fmt chunk');
+      }
       let format = buffer.readUInt16LE(body);
       // WAVE_FORMAT_EXTENSIBLE keeps the real format code at the start of
       // its SubFormat GUID; afconvert writes it for some layouts.
-      if (format === 0xfffe && size >= 26) format = buffer.readUInt16LE(body + 24);
+      if (format === 0xfffe && size >= 26 && body + 26 <= buffer.length) format = buffer.readUInt16LE(body + 24);
       fmt = {
         format,
         channels: buffer.readUInt16LE(body + 2),
@@ -62,6 +65,7 @@ function readWav(buffer) {
   if (fmt.format !== 1 || fmt.bitsPerSample !== 16) {
     throw new Error(`unsupported WAV (format ${fmt.format}, ${fmt.bitsPerSample} bit): need PCM16`);
   }
+  if (fmt.channels < 1) throw new Error('WAV with zero channels');
   const frames = Math.floor(data.length / (2 * fmt.channels));
   const samples = new Int16Array(frames);
   for (let i = 0; i < frames; i++) {
