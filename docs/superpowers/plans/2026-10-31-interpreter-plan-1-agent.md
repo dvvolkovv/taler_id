@@ -2502,9 +2502,12 @@ const MAX_QUEUED_PIECES = 40; // 4 s may wait for the socket; older audio is dro
 
 const audioOf = (event) => event.delta;
 const textOf = (event) => event.delta;
+// A handshake that stalls without an error would leave the direction silent
+// and never retried; the timeout turns it into an ordinary close.
+const HANDSHAKE_TIMEOUT_MS = 10000;
 
 function defaultWsFactory(url, options) {
-  return new WebSocket(url, options);
+  return new WebSocket(url, { ...options, handshakeTimeout: HANDSHAKE_TIMEOUT_MS });
 }
 
 function toBase64(int16) {
@@ -2813,7 +2816,14 @@ Run: `node --test phrase-session.test.js` → FAIL (`Cannot find module`).
  * whole as well (final = true). Spoken phrases are pruned from the
  * conversation: an interpreted talk can last an hour.
  */
+const WebSocket = require('ws');
 const { createRealtimeSession } = require('./realtime-phrase-session');
+
+// As in translate-session.js: a stalled handshake must end in a close the
+// reconnecting wrapper can retry. Set here rather than in
+// realtime-phrase-session.js, so the in-call translator keeps its behaviour.
+const HANDSHAKE_TIMEOUT_MS = 10000;
+const defaultWsFactory = (url, options) => new WebSocket(url, { ...options, handshakeTimeout: HANDSHAKE_TIMEOUT_MS });
 
 function toInt16(buf) {
   const even = buf.byteLength - (buf.byteLength % 2);
@@ -2841,7 +2851,7 @@ function createPhraseSession({
     {
       apiKey,
       model,
-      wsFactory,
+      wsFactory: wsFactory || defaultWsFactory,
       pruneHistory: true,
       onReady,
       onTranscript: ({ role, text }) => (role === 'source' ? onSourceText(text, true) : onTranslationText(text, true)),
