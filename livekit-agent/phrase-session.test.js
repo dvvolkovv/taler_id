@@ -224,7 +224,6 @@ test('what was said reaches the subtitles but not the log', (t) => {
   assert.ok(!lines.some((l) => l.includes('Добрый') || l.includes('Dobrý')), lines.join('\n'));
 });
 
-
 test('a callback that throws something other than an Error is logged as such, not as a parse error', () => {
   const errors = [];
   // eslint-disable-next-line no-throw-literal

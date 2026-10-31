@@ -183,7 +183,6 @@ test('a throwing onStatus is logged, not thrown into the caller', () => {
   assert.ok(errors.some((m) => m.includes('broadcast failed')));
 });
 
-
 test('an onStatus or a factory that throws something other than an Error is logged, not thrown', () => {
   const timers = fakeTimers();
   const errors = [];

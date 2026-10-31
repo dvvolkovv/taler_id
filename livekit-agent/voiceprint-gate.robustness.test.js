@@ -124,7 +124,6 @@ test('X2 after end() the next window does not reach back across the gap', async 
   assert.strictEqual(windows[2].length, 2 * CHUNK);
 });
 
-
 test('F5 a callback that throws something other than an Error is still only logged', async () => {
   // eslint-disable-next-line no-throw-literal
   const { g } = gate([OWN, OWN, OWN], { onOutput: () => { throw undefined; } });

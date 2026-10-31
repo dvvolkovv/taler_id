@@ -361,7 +361,6 @@ test('selftest fails on an error that follows session.updated within the append 
   assert.match(r.reason, /unknown event/);
 });
 
-
 test('a callback that throws something other than an Error is logged, not thrown into the socket', () => {
   const errors = [];
   // eslint-disable-next-line no-throw-literal
