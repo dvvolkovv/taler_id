@@ -96,3 +96,60 @@ test('selftest reports how long it took', async () => {
     server.close();
   }
 });
+
+test('every route is behind the guard, not just start', async () => {
+  const calls = { stop: false, status: false, selftest: false };
+  const { server, url } = await app({
+    stop: async () => { calls.stop = true; return { status: 'stopped' }; },
+    status: () => { calls.status = true; return { running: false }; },
+    selftest: async () => { calls.selftest = true; return { ok: true }; },
+  });
+  const body = JSON.stringify({ roomName: 'r' });
+  try {
+    const answers = await Promise.all([
+      fetch(`${url}/interpreter/stop`, { method: 'POST', headers: { 'content-type': 'application/json' }, body }),
+      fetch(`${url}/interpreter/status/r`),
+      fetch(`${url}/interpreter/selftest`),
+      fetch(`${url}/interpreter/stop`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-interpreter-secret': 'nope' }, body }),
+      fetch(`${url}/interpreter/status/r`, { headers: { 'x-interpreter-secret': 'nope' } }),
+      fetch(`${url}/interpreter/selftest`, { headers: { 'x-interpreter-secret': 'nope' } }),
+    ]);
+    assert.deepStrictEqual(answers.map((r) => r.status), [401, 401, 401, 401, 401, 401]);
+    assert.deepStrictEqual(calls, { stop: false, status: false, selftest: false });
+  } finally {
+    server.close();
+  }
+});
+
+test('a failing status is a JSON error, not an HTML page with the stack', async () => {
+  const { server, url } = await app({ status: () => { throw new Error('unexpected session state'); } });
+  try {
+    const res = await fetch(`${url}/interpreter/status/r`, { headers: { 'x-interpreter-secret': 's3cret' } });
+    assert.strictEqual(res.status, 500);
+    assert.match(res.headers.get('content-type') || '', /application\/json/);
+    assert.deepStrictEqual(await res.json(), { error: 'unexpected session state' });
+  } finally {
+    server.close();
+  }
+});
+
+test('a failing stop is a JSON error', async () => {
+  const { server, url } = await app({ stop: async () => { throw new Error('room disconnect failed'); } });
+  try {
+    const res = await fetch(`${url}/interpreter/stop`, json({ roomName: 'r' }));
+    assert.deepStrictEqual([res.status, await res.json()], [500, { error: 'room disconnect failed' }]);
+  } finally {
+    server.close();
+  }
+});
+
+test('a failing selftest still reports how long it took', async () => {
+  const { server, url } = await app({ selftest: async () => { throw new Error('OpenAI unreachable'); } });
+  try {
+    const res = await fetch(`${url}/interpreter/selftest`, { headers: { 'x-interpreter-secret': 's3cret' } });
+    const body = await res.json();
+    assert.deepStrictEqual([res.status, body.ok, body.reason, typeof body.latencyMs], [500, false, 'OpenAI unreachable', 'number']);
+  } finally {
+    server.close();
+  }
+});

@@ -39,7 +39,15 @@ function registerInterpreterRoutes(app, { secret, start, stop, status, selftest 
     }
   });
 
-  app.get('/interpreter/status/:roomName', guard, (req, res) => res.json(status(req.params.roomName)));
+  app.get('/interpreter/status/:roomName', guard, (req, res) => {
+    // Uncaught, a throw here would reach Express's default handler: an HTML
+    // page with the stack trace instead of JSON.
+    try {
+      res.json(status(req.params.roomName));
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
 
   app.get('/interpreter/selftest', guard, async (req, res) => {
     const t0 = Date.now();
