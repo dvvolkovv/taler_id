@@ -3631,6 +3631,243 @@ git commit -m "feat(interpreter): переподключение движка п
 
 ---
 
+### Task 9b: Переподключения — без падений процесса, без повторных сигналов, с общим пределом обрывов
+
+По ревью задачи 9:
+- **Исключение из фабрики при переподключении** (например, конструктор сокета отказывает) вылетало из таймера и роняло весь `livekit-ai-agent`.
+- **Повторный `onClose` того же движка** второй раз вызывал `retry()`. Он съедал запас попыток и затирал таймер; осиротевший таймер потом создавал движок, который никто не закроет, и сокет к OpenAI повисал.
+- **Запоздалый `onReady` после `close()`** слал ложный статус `ok`.
+- **`onStatus` не был защищён**, хотя за ним стоит рассылка и остановка сессии.
+- **Сессия, падающая сразу после подключения,** сбрасывала счётчик на каждом `onReady` и переподключалась вечно, каждый раз с оплатой в OpenAI. Теперь обрывы считаются и за весь разговор, предел — 20.
+
+**Files:**
+- Modify: `livekit-agent/reconnecting-engine.js` (переписать целиком)
+- Modify: `livekit-agent/reconnecting-engine.test.js` (одна проверка в существующем тесте, пять новых тестов)
+
+- [ ] **Step 1: Тесты (падают)**
+
+В тесте `'an unexpected close reconnects after a second and reports it'` после строки `engine.sendAudio('lost'); // no socket: dropped` добавить:
+
+```js
+  assert.deepStrictEqual(made[0].sent, []);
+```
+
+В конец `reconnecting-engine.test.js` дописать:
+
+```js
+const quietLog = { error() {} };
+
+test('a factory that throws on a reconnect counts as a failed attempt instead of escaping the timer', () => {
+  const timers = fakeTimers();
+  const statuses = [];
+  const made = [];
+  let calls = 0;
+  const factory = (handlers) => {
+    calls += 1;
+    if (calls === 2) throw new Error('bad url');
+    const e = { handlers, sent: [], closed: false, sendAudio(x) { this.sent.push(x); }, close() { this.closed = true; } };
+    made.push(e);
+    return e;
+  };
+  createReconnectingEngine({
+    factory, onStatus: (s) => statuses.push(s), setTimer: timers.setTimer, clearTimer: timers.clearTimer, log: quietLog,
+  });
+  made[0].handlers.onClose({ unexpected: true });
+  assert.doesNotThrow(() => timers.fireNext()); // the second factory call throws inside the timer
+  assert.strictEqual(timers.fireNext(), 2000, 'the throw is counted and the next attempt scheduled');
+  assert.strictEqual(made.length, 2);
+  assert.deepStrictEqual(statuses, ['reconnecting']);
+});
+
+test('a second onClose from the same engine schedules nothing more', () => {
+  const { timers, made, statuses } = setup();
+  made[0].handlers.onClose({ unexpected: true });
+  made[0].handlers.onClose({ unexpected: true });
+  assert.strictEqual(timers.active(), 1);
+  assert.deepStrictEqual(statuses, ['reconnecting']);
+});
+
+test('signals from an engine closed by us are ignored', () => {
+  const { timers, made, statuses, engine } = setup();
+  made[0].handlers.onClose({ unexpected: true });
+  timers.fireNext();
+  engine.close();
+  made[1].handlers.onReady();
+  made[1].handlers.onClose({ unexpected: true });
+  assert.deepStrictEqual(statuses, ['reconnecting']);
+  assert.strictEqual(timers.active(), 0);
+  assert.strictEqual(made.length, 2);
+});
+
+test('a session that keeps dropping right after it comes up is given up on', () => {
+  const { timers, made, statuses } = setup();
+  for (let i = 0; i < 25 && !statuses.includes('failed'); i++) {
+    made[i].handlers.onReady();
+    made[i].handlers.onClose({ unexpected: true });
+    timers.fireNext();
+  }
+  assert.strictEqual(statuses.filter((s) => s === 'failed').length, 1);
+  assert.ok(made.length <= 21, `made ${made.length} engines`);
+});
+
+test('a throwing onStatus is logged, not thrown into the caller', () => {
+  const timers = fakeTimers();
+  const { made, factory } = fakeFactory();
+  const errors = [];
+  createReconnectingEngine({
+    factory,
+    onStatus: () => { throw new Error('broadcast failed'); },
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+    log: { error: (m) => errors.push(m) },
+  });
+  assert.doesNotThrow(() => made[0].handlers.onClose({ unexpected: true }));
+  assert.strictEqual(timers.active(), 1);
+  assert.ok(errors.some((m) => m.includes('broadcast failed')));
+});
+```
+
+Run: `node --test reconnecting-engine.test.js`
+Expected: падают тест бросающей фабрики (исключение вылетает), тест повторного `onClose` (два таймера), тест сигналов после `close()` (лишний `ok`), тест вечных обрывов (`failed` не наступает) и тест бросающего `onStatus`.
+
+- [ ] **Step 2: Модуль целиком**
+
+`reconnecting-engine.js`:
+
+```js
+'use strict';
+/**
+ * Keeps one translation engine alive for a whole conversation. If OpenAI
+ * drops the socket, it reconnects after 1, 2 and 4 seconds and gives up after
+ * the third failure in a row; a successful reconnect starts that count over.
+ * A session that keeps dropping right after it comes up never fails three
+ * times in a row, so drops are also counted for the whole conversation and
+ * past maxDrops (20) the wrapper gives up: endless reconnects would bill
+ * OpenAI for a conversation that is effectively dead.
+ * Audio that arrives while there is no socket is dropped: a translation of the
+ * gap arriving later would be worse than none.
+ *
+ * factory({ onReady, onClose }) → { sendAudio, close }; onClose({ unexpected })
+ * tells a dropped socket from one we closed. Statuses: 'reconnecting', 'ok'
+ * (back after reconnecting), 'failed' (gave up — the caller ends the session).
+ * Signals from an engine that is no longer the current one are ignored: a
+ * second onClose, or an onReady after close(), must not schedule another
+ * connection or report a status.
+ */
+function createReconnectingEngine({
+  factory,
+  delaysMs = [1000, 2000, 4000],
+  maxDrops = 20,
+  onStatus = () => {},
+  setTimer = setTimeout,
+  clearTimer = clearTimeout,
+  log = console,
+}) {
+  let engine = null;
+  let closed = false;
+  let failures = 0;
+  let drops = 0;
+  let timer = null;
+  let reconnecting = false;
+  let failed = false;
+
+  // onStatus reaches into the interpreter (broadcast, ending the session); a
+  // throw there must not escape from a timer and take the agent down.
+  function status(state) {
+    try {
+      onStatus(state);
+    } catch (e) {
+      log.error(`[INTERPRETER] reconnecting engine: onStatus(${state}) failed: ${e.message}`);
+    }
+  }
+
+  function connect() {
+    let self = null;
+    self = factory({
+      onReady: () => {
+        if (engine !== self) return; // closed by us or superseded
+        failures = 0;
+        if (reconnecting) {
+          reconnecting = false;
+          status('ok');
+        }
+      },
+      onClose: ({ unexpected }) => {
+        if (engine !== self) return; // already handled, or closed by us
+        engine = null;
+        if (closed || !unexpected) return;
+        retry();
+      },
+    });
+    engine = self;
+  }
+
+  function retry() {
+    drops += 1;
+    if (failures >= delaysMs.length || drops > maxDrops) {
+      if (!failed) {
+        failed = true;
+        status('failed');
+      }
+      return;
+    }
+    const delay = delaysMs[failures];
+    failures += 1;
+    if (!reconnecting) {
+      reconnecting = true;
+      status('reconnecting');
+    }
+    timer = setTimer(() => {
+      timer = null;
+      if (closed) return;
+      try {
+        connect();
+      } catch (e) {
+        // E.g. the socket constructor refusing a bad URL. Uncaught, this would
+        // be an exception inside a timer; it is a failed attempt instead.
+        log.error(`[INTERPRETER] reconnecting engine: reconnect failed: ${e.message}`);
+        retry();
+      }
+    }, delay);
+  }
+
+  connect();
+
+  return {
+    sendAudio(int16) {
+      if (engine) engine.sendAudio(int16);
+    },
+    close() {
+      closed = true;
+      if (timer) clearTimer(timer);
+      timer = null;
+      const current = engine;
+      engine = null;
+      if (current) current.close();
+    },
+  };
+}
+
+module.exports = { createReconnectingEngine };
+```
+
+- [ ] **Step 3: Проверить**
+
+```bash
+node --test reconnecting-engine.test.js && npm test 2>&1 | tail -8
+```
+
+Ожидается: 11 тестов в файле; весь набор `ℹ pass 135`, `ℹ fail 0`.
+
+- [ ] **Step 4: Коммит**
+
+```bash
+git add reconnecting-engine.js reconnecting-engine.test.js
+git commit -m "fix(interpreter): переподключения — без падений процесса и повторных сигналов, общий предел обрывов" -m "По ревью задачи 9: исключение фабрики из таймера роняло агент, повторный onClose плодил движки с висящими сокетами к OpenAI, падающая сразу после подключения сессия переподключалась вечно." -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
 ### Task 10: `translate-session.js` — синхронный движок и самопроверка
 
 **Files:**
@@ -5277,7 +5514,7 @@ module.exports = { startInterpreter, stopInterpreter, getInterpreterStatus, self
 node --test interpreter.test.js && npm test 2>&1 | tail -8
 ```
 
-Ожидается: `ℹ pass 8` в файле, всего `ℹ pass 172`, `ℹ fail 0`.
+Ожидается: `ℹ pass 8` в файле, всего `ℹ pass 177`, `ℹ fail 0`.
 
 - [ ] **Step 4: Коммит**
 
@@ -5500,7 +5737,7 @@ registerInterpreterRoutes(app, {
 node --test interpreter-routes.test.js && node --check index.js && echo index-ok && npm test 2>&1 | tail -8
 ```
 
-Ожидается: `ℹ pass 6`, `index-ok`, весь набор `ℹ pass 178`, `ℹ fail 0`.
+Ожидается: `ℹ pass 6`, `index-ok`, весь набор `ℹ pass 183`, `ℹ fail 0`.
 
 - [ ] **Step 5: Коммит**
 
@@ -5708,7 +5945,7 @@ function renderReport(r) {
 module.exports = { percentile, summarize, firstVoicedAfter, voicedMs, suggestThresholds, renderReport };
 ```
 
-- [ ] **Step 3: Тест проходит** — `node --test bench/bench-report.test.js` → `ℹ pass 5`; весь `npm test` — `ℹ pass 183`, `ℹ fail 0`.
+- [ ] **Step 3: Тест проходит** — `node --test bench/bench-report.test.js` → `ℹ pass 5`; весь `npm test` — `ℹ pass 188`, `ℹ fail 0`.
 
 - [ ] **Step 4: Коммит**
 
