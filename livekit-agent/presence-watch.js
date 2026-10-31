@@ -7,10 +7,25 @@
  *
  * Also the address book for data messages: a person's current identities
  * (userId#device) are where their captions go.
+ *
+ * A set of identities per person, not a counter. @livekit/rtc-node reports one
+ * identity's arrivals and departures strictly in turn: a reconnect that
+ * replaces a participant (same identity, new sid) arrives as Disconnected and
+ * then Connected, and the Room throws rather than emit a second Connected for
+ * an identity it still holds. arrive() itself can be called twice for one
+ * participant (the event, then the snapshot of the room taken after connect),
+ * and a counter would never come back down to zero.
  */
 const { baseIdentity } = require('./translator-targets');
 
-function createPresenceWatch({ people, graceMs, onGone, setTimer = setTimeout, clearTimer = clearTimeout }) {
+function createPresenceWatch({
+  people,
+  graceMs,
+  onGone,
+  setTimer = setTimeout,
+  clearTimer = clearTimeout,
+  log = console,
+}) {
   const present = new Map(people.map((p) => [p, new Set()]));
   const timers = new Map();
   let closed = false;
@@ -19,7 +34,14 @@ function createPresenceWatch({ people, graceMs, onGone, setTimer = setTimeout, c
     if (closed || timers.has(person)) return;
     timers.set(person, setTimer(() => {
       timers.delete(person);
-      if (!closed) onGone(person);
+      if (closed) return;
+      // onGone ends the conversation. Called from a timer, a throw would be an
+      // uncaught exception and take the whole agent process down.
+      try {
+        onGone(person);
+      } catch (e) {
+        log.error(`[INTERPRETER] presence watch: onGone(${person}) failed: ${e && e.message}`);
+      }
     }, graceMs));
   }
 
