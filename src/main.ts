@@ -22,6 +22,11 @@ import { PcmWindow, wrapWavMono, pcmRms16 } from './voice-gate/pcm-window';
 // realtime-proxy-mode.ts. Only allow-listed models may be requested: anyone
 // holding a token could otherwise burn credits on the priciest model.
 import { realtimeProxyMode } from './voice/realtime-proxy-mode';
+import {
+  TranslatorTurnGate,
+  translatorClientEventAllowed,
+  withTranscriptionModel,
+} from './voice/translator-turn-gate';
 
 async function bootstrap() {
   // Refuse to start on credentials published in this repo, rather than coming
@@ -777,6 +782,34 @@ async function bootstrap() {
           },
         },
       );
+      // Translator sessions: no text injected by the app, no replies to turns
+      // without words — see translator-turn-gate.ts.
+      const translatorGate = proxyMode.translator
+        ? new TranslatorTurnGate({
+            toClient: (d) => {
+              if (clientWs.readyState === WebSocket.OPEN) clientWs.send(d);
+            },
+            toOpenAI: (e) => {
+              if (openaiWs.readyState === WebSocket.OPEN) {
+                openaiWs.send(JSON.stringify(e));
+              }
+            },
+            setTimer: (fn, ms) => {
+              setTimeout(fn, ms);
+            },
+            onVerdict: (verdict) => {
+              if (verdict === 'words') return;
+              Logger.log(
+                JSON.stringify({
+                  ns: 'translator.gate',
+                  verdict,
+                  userId: userIdFromToken,
+                }),
+                'translator.gate',
+              );
+            },
+          })
+        : null;
       // Beta→GA session.update shape transform. Shipped 1.0.78 clients still
       // send the flat beta layout (voice, input_audio_format, turn_detection
       // at session root); GA wants everything nested under `audio.input`/
@@ -845,7 +878,13 @@ async function bootstrap() {
         if (!isBinary) {
           try {
             parsedClient = JSON.parse(data.toString());
-            const transformed = transformSessionUpdate(parsedClient);
+            let transformed = transformSessionUpdate(parsedClient);
+            if (proxyMode.transcribeModel) {
+              transformed = withTranscriptionModel(
+                transformed,
+                proxyMode.transcribeModel,
+              );
+            }
             if (transformed !== parsedClient) {
               outData = JSON.stringify(transformed);
               outBin = false;
@@ -853,6 +892,21 @@ async function bootstrap() {
           } catch (_) {
             // not JSON, pass through
           }
+        }
+        if (
+          translatorGate &&
+          parsedClient &&
+          !translatorClientEventAllowed(parsedClient)
+        ) {
+          Logger.log(
+            JSON.stringify({
+              ns: 'translator.gate',
+              dropped: parsedClient.type,
+              userId: userIdFromToken,
+            }),
+            'translator.gate',
+          );
+          return;
         }
         const forwardToOpenAI = (d: any, bin: boolean) => {
           if (openaiWs.readyState === WebSocket.OPEN) {
@@ -988,8 +1042,9 @@ async function bootstrap() {
         openaiWs.on('message', (data: any, isBinary: boolean) => {
           let outData = data;
           let outBin = isBinary;
+          let ev: any = null;
           try {
-            const ev = JSON.parse(data.toString());
+            ev = JSON.parse(data.toString());
             if (ev.type === 'session.updated') {
               sessionConfigured = true;
               Logger.log('session.updated received from OpenAI', 'RealtimeProxy');
@@ -1039,6 +1094,10 @@ async function bootstrap() {
               outBin = false;
             }
           } catch (_) {}
+          if (translatorGate && ev && !outBin) {
+            translatorGate.fromOpenAI(ev, outData.toString());
+            return;
+          }
           if (clientWs.readyState === WebSocket.OPEN)
             clientWs.send(outBin ? outData : outData.toString(), {
               binary: outBin,

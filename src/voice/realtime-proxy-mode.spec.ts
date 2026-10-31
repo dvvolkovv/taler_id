@@ -1,6 +1,7 @@
 import {
   DEFAULT_REALTIME_MODEL,
   DEFAULT_TRANSLATOR_MODEL,
+  DEFAULT_TRANSLATOR_TRANSCRIBE_MODEL,
   realtimeProxyMode,
 } from './realtime-proxy-mode';
 
@@ -15,12 +16,21 @@ describe('realtimeProxyMode', () => {
     });
   });
 
-  it('translator session: full model, gate off', () => {
+  it('translator session: full model, gate off, fast transcription', () => {
     expect(realtimeProxyMode(q('token=x&mode=translator'), {})).toEqual({
       model: DEFAULT_TRANSLATOR_MODEL,
       translator: true,
       voiceGate: false,
+      transcribeModel: 'gpt-4o-mini-transcribe',
     });
+    expect(DEFAULT_TRANSLATOR_TRANSCRIBE_MODEL).toBe('gpt-4o-mini-transcribe');
+  });
+
+  it('translator transcription model can be overridden by env', () => {
+    const m = realtimeProxyMode(q('mode=translator'), {
+      REALTIME_TRANSLATOR_TRANSCRIBE_MODEL: 'whisper-1',
+    });
+    expect(m.transcribeModel).toBe('whisper-1');
   });
 
   it('translator model can be overridden by env', () => {
@@ -36,7 +46,9 @@ describe('realtimeProxyMode', () => {
   });
 
   it('allow-listed model override still works for assistant sessions', () => {
-    const m = realtimeProxyMode(q('model=b'), { REALTIME_ALLOWED_MODELS: 'a, b' });
+    const m = realtimeProxyMode(q('model=b'), {
+      REALTIME_ALLOWED_MODELS: 'a, b',
+    });
     expect(m).toEqual({ model: 'b', translator: false, voiceGate: true });
   });
 
