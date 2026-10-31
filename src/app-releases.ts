@@ -11,6 +11,28 @@ export interface AppRelease {
 // Keep notes user-facing (no internal jargon, no commit hashes).
 export const APP_RELEASES: AppRelease[] = [
   {
+    version: '1.1.38',
+    build: 239,
+    date: '2026-10-31',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.38 — экран звонка больше не переворачивается сам.\n\n' +
+      '🔒 В звонке появилась кнопка «Не поворачивать экран» — в шапке справа, а в альбомном виде — круглая в правом верхнем углу. ' +
+      'Нажали — экран сразу встаёт вертикально, даже если телефон лежит на боку, и больше не поворачивается. ' +
+      'Выбор запоминается для следующих звонков, снять фиксацию — той же кнопкой. Кнопка есть на телефонах, на планшетах её нет.\n' +
+      '🎙 То же голосом через ассистента в звонке: «не переворачивай экран» или «разреши поворот».\n' +
+      '🌐 Переводчик ассистента стал точнее: вопрос «как будет по-немецки слово…» он переводит, а не отвечает на него сам; ' +
+      'команда «переводи на английский» переключает на любой язык; уведомления о новых сообщениях больше не вклиниваются в перевод.',
+    notes_en:
+      'Release 1.1.38 — the call screen no longer turns on its own.\n\n' +
+      '🔒 Calls have a new "Lock rotation" button — in the top bar, or a round one in the top-right corner in landscape. ' +
+      'Tap it and the screen goes upright at once, even with the phone lying on its side, and stays that way. ' +
+      'The choice is remembered for the next calls; tap it again to let the screen rotate. The button is on phones, not on tablets.\n' +
+      '🎙 Or by voice with the in-call assistant: "stop the screen rotating" or "let the screen rotate".\n' +
+      '🌐 The assistant\'s translator is more precise: a question like "how do you say … in German" is translated rather than answered, ' +
+      '"translate into English" switches to any language, and new-message notifications no longer cut into the translation.',
+  },
+  {
     version: '1.1.37',
     build: 238,
     date: '2026-10-28',
