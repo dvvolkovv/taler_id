@@ -1200,10 +1200,13 @@ git commit -m "refactor(translator): фразовый движок, таблиц
 // test sends (parsed back from JSON) and lets the test play the server.
 //
 // Kept close to `ws` 8 where the code under test can tell the difference:
-// send() throws unless the socket is open; close() on an open socket reports
-// 1005 (no status received), and on a socket still connecting emits 'error'
-// and then 'close' with 1006; a socket closes once. Not copied: real `ws`
-// closes asynchronously through CLOSING (2), the fake closes on the spot.
+// close() on an open socket reports 1005 (no status received), and on a
+// socket still connecting emits 'error' (synchronously, inside close()) and
+// then 'close' with 1006; a socket closes once. Stricter than `ws` on
+// purpose: send() throws unless the socket is open, while `ws` throws only
+// while connecting and silently drops a send after close — real code must
+// check readyState, never rely on that throw. Not copied: real `ws` closes
+// asynchronously through CLOSING (2), the fake closes on the spot.
 const { EventEmitter } = require('events');
 
 class FakeWs extends EventEmitter {
