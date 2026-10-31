@@ -4294,6 +4294,719 @@ git commit -m "feat(interpreter): синхронный движок gpt-realtime
 
 ---
 
+### Task 10b: Синхронный движок — колбэки под защитой, готовность только после подтверждения, обрыв зависших сокетов
+
+По ревью задачи 10:
+- **Колбэки не были защищены.** Исключение в любом из них или JSON-кадр `null` выходили из обработчиков `ws` и роняли весь `livekit-ai-agent`. Воспроизведено на настоящем `ws` 8.20.
+- **Отвергнутый `session.update`.** Сессия становилась готовой по `session.created` и отдавала накопленный звук, не дождавшись подтверждения настройки. Если OpenAI отказывал (опечатка в `INTERPRETER_TRANSCRIBE_MODEL`, снятая модель расшифровки, переименованное поле), ошибка только писалась в лог. Сессия оставалась «живой» и переводила на язык по умолчанию — испанский (`bench/PROBE.md`), — и так в каждом разговоре. Теперь:
+  - готовность наступает по `session.updated`, причём эхо должно содержать нужный язык;
+  - `session.created` засчитывается только запасным путём: если за 1,5 с не пришло ошибки;
+  - ошибка до готовности рвёт сокет как неожиданный обрыв, и обёртка переподключается, а за пределами попыток разговор завершается с `translation_failed`.
+- **Зависание после рукопожатия.** Сессия без подтверждения или сокет, у которого копится неотправленное (застрявший собеседник, полуоткрытый TCP — 3,8 МБ в минуту, и молчание 15 минут и дольше), — то же немое направление, что и зависшее рукопожатие. Добавлены таймаут готовности (10 с) и предел буфера (1 МБ). Рвём `terminate()`, а не `close()`: закрывающий кадр встал бы за накопленным.
+- **После нашего `close()`** события больше не доставляются, а остановка во время рукопожатия не пишется как сбой.
+- **Самопроверка** сверяет эхо: поле, которое OpenAI молча проигнорировал, валит смоук, а не выключает субтитры во всех разговорах.
+- **Тесты** держат готовность, копию буфера и форму самопроверки. Мутационный прогон: было поймано 8 из 16 мутантов, стало 16 из 16.
+
+**Files:**
+- Modify: `livekit-agent/translate-session.js` (переписать целиком)
+- Modify: `livekit-agent/translate-session.test.js` (переписать целиком: прежние 14 тестов, два из них поправлены под новую готовность, плюс 16 новых)
+- Modify: `livekit-agent/testing/fake-ws.js` (добавить `terminate()`)
+- Create: `livekit-agent/translate-session.default-socket.test.js`
+
+- [ ] **Step 1: Фейковому сокету — `terminate()`**
+
+В `testing/fake-ws.js` после метода `close(code) { … }` добавить:
+
+```js
+  terminate() {
+    if (this.readyState === FakeWs.CLOSED) return;
+    this.readyState = FakeWs.CLOSED;
+    this.emit('close', 1006, Buffer.alloc(0));
+  }
+```
+
+- [ ] **Step 2: Тесты (падают)**
+
+`translate-session.test.js` целиком:
+
+```js
+// Run with: node --test  (from livekit-agent/)
+const test = require('node:test');
+const assert = require('node:assert');
+const { fakeWsFactory } = require('./testing/fake-ws');
+const { createTranslateSession, selftestTranslate } = require('./translate-session');
+
+const quietLog = { error() {}, warn() {} };
+
+function session(extra = {}) {
+  const { factory, last } = fakeWsFactory();
+  const seen = { audio: [], translation: [], source: [], ready: 0, closes: [] };
+  const s = createTranslateSession({
+    apiKey: 'k',
+    targetLang: 'de',
+    safetyId: 'abc',
+    wsFactory: factory,
+    onAudio: (a) => seen.audio.push(a),
+    onTranslationText: (t, f) => seen.translation.push([t, f]),
+    onSourceText: (t, f) => seen.source.push([t, f]),
+    onReady: () => { seen.ready += 1; },
+    onClose: (c) => seen.closes.push(c),
+    log: quietLog,
+    ...extra,
+  });
+  return { s, fake: last(), seen };
+}
+
+const appends = (fake) => fake.sentOfType('session.input_audio_buffer.append');
+
+test('connects to the translations endpoint with the key and a safety identifier', () => {
+  const { fake } = session();
+  assert.strictEqual(fake.url, 'wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate');
+  assert.deepStrictEqual(fake.options, { headers: { Authorization: 'Bearer k', 'OpenAI-Safety-Identifier': 'abc' } });
+});
+
+test('asks for the listener language, input transcription and near-field noise reduction on open', () => {
+  const { fake } = session();
+  fake.open();
+  assert.deepStrictEqual(fake.sent[0], {
+    type: 'session.update',
+    session: {
+      audio: {
+        input: { transcription: { model: 'gpt-4o-mini-transcribe' }, noise_reduction: { type: 'near_field' } },
+        output: { language: 'de' },
+      },
+    },
+  });
+});
+
+test('the transcription model can be changed and both extras switched off', () => {
+  const other = session({ transcribeModel: 'whisper-1' });
+  other.fake.open();
+  assert.deepStrictEqual(other.fake.sent[0].session.audio.input.transcription, { model: 'whisper-1' });
+
+  const bare = session({ transcribeModel: null, noiseReduction: null });
+  bare.fake.open();
+  assert.deepStrictEqual(bare.fake.sent[0], { type: 'session.update', session: { audio: { output: { language: 'de' } } } });
+});
+
+test('audio waits for the session and then goes out in 100 ms pieces', () => {
+  const { s, fake, seen } = session();
+  fake.open();
+  s.sendAudio(new Int16Array(6000).fill(7));
+  assert.strictEqual(appends(fake).length, 0);
+  fake.serverSends({ type: 'session.created' });
+  assert.strictEqual(appends(fake).length, 0, 'session.created alone does not prove the update applied');
+  fake.serverSends({ type: 'session.updated', session: { audio: { output: { language: 'de' } } } });
+  assert.deepStrictEqual(appends(fake).map((a) => Buffer.from(a.audio, 'base64').length), [4800, 4800, 2400]);
+  assert.strictEqual(seen.ready, 1);
+  s.sendAudio(new Int16Array(2400));
+  assert.strictEqual(appends(fake).length, 4);
+});
+
+test('at most 4 s waits for the session; older audio is dropped', () => {
+  const { s, fake } = session();
+  fake.open();
+  for (let i = 0; i < 50; i++) s.sendAudio(new Int16Array(2400).fill(i));
+  fake.serverSends({ type: 'session.updated' });
+  assert.strictEqual(appends(fake).length, 40);
+  assert.strictEqual(Buffer.from(appends(fake)[0].audio, 'base64').readInt16LE(0), 10);
+});
+
+test('translated audio and both transcripts reach their callbacks', () => {
+  const { fake, seen } = session();
+  fake.open();
+  fake.serverSends({ type: 'session.created' });
+  const pcm = Int16Array.from([5, -5, 300]);
+  fake.serverSends({ type: 'session.output_audio.delta', delta: Buffer.from(pcm.buffer).toString('base64') });
+  fake.serverSends({ type: 'session.output_transcript.delta', delta: 'Guten ' });
+  fake.serverSends({ type: 'session.input_transcript.delta', delta: 'Добрый ' });
+  assert.deepStrictEqual(Array.from(seen.audio[0]), [5, -5, 300]);
+  assert.deepStrictEqual(seen.translation, [['Guten ', false]]);
+  assert.deepStrictEqual(seen.source, [['Добрый ', false]]);
+});
+
+test('closing it ourselves says goodbye and is not unexpected', () => {
+  const { s, fake, seen } = session();
+  fake.open();
+  s.close();
+  assert.strictEqual(fake.sentOfType('session.close').length, 1);
+  assert.deepStrictEqual(seen.closes, [{ unexpected: false, code: 1005 }]);
+});
+
+test('the server dropping the socket is unexpected', () => {
+  const { fake, seen } = session();
+  fake.open();
+  fake.serverCloses(1011);
+  assert.deepStrictEqual(seen.closes, [{ unexpected: true, code: 1011 }]);
+});
+
+test('selftest passes on session.updated', async () => {
+  const { factory, last } = fakeWsFactory();
+  const result = selftestTranslate({ apiKey: 'k', wsFactory: factory, timeoutMs: 1000, quietMs: 1000 });
+  last().open();
+  last().serverSends({ type: 'session.updated' });
+  assert.deepStrictEqual(await result, { ok: true, reason: 'session.updated received' });
+});
+
+test('selftest passes when session.created is followed by quiet', async () => {
+  const { factory, last } = fakeWsFactory();
+  const result = selftestTranslate({ apiKey: 'k', wsFactory: factory, timeoutMs: 1000, quietMs: 20 });
+  last().open();
+  last().serverSends({ type: 'session.created' });
+  const r = await result;
+  assert.strictEqual(r.ok, true);
+  assert.match(r.reason, /no error within 20 ms/);
+});
+
+test('selftest sends a session.update and a little silence', async () => {
+  const { factory, last } = fakeWsFactory();
+  const result = selftestTranslate({ apiKey: 'k', wsFactory: factory, timeoutMs: 1000, quietMs: 1000 });
+  last().open();
+  assert.deepStrictEqual(last().sent.map((m) => m.type), ['session.update', 'session.input_audio_buffer.append']);
+  last().serverSends({ type: 'session.updated' });
+  await result;
+});
+
+test('selftest fails on an error event', async () => {
+  const { factory, last } = fakeWsFactory();
+  const result = selftestTranslate({ apiKey: 'k', wsFactory: factory, timeoutMs: 1000 });
+  last().open();
+  last().serverSends({ type: 'error', error: { message: 'model not found' } });
+  const r = await result;
+  assert.strictEqual(r.ok, false);
+  assert.match(r.reason, /model not found/);
+});
+
+test('selftest fails if the socket closes first', async () => {
+  const { factory, last } = fakeWsFactory();
+  const result = selftestTranslate({ apiKey: 'k', wsFactory: factory, timeoutMs: 1000 });
+  last().serverCloses(1006);
+  const r = await result;
+  assert.strictEqual(r.ok, false);
+  assert.match(r.reason, /closed code=1006/);
+});
+
+test('selftest without a key fails at once', async () => {
+  assert.deepStrictEqual(await selftestTranslate({ apiKey: '' }), { ok: false, reason: 'OPENAI_API_KEY not set' });
+});
+
+
+// ── after review (task 10b) ──
+
+test('session.created followed by quiet is accepted when session.updated never comes', async () => {
+  const { s, fake, seen } = session({ createdGraceMs: 20 });
+  fake.open();
+  s.sendAudio(new Int16Array(2400));
+  fake.serverSends({ type: 'session.created' });
+  assert.strictEqual(appends(fake).length, 0);
+  await new Promise((r) => setTimeout(r, 40));
+  assert.strictEqual(seen.ready, 1);
+  assert.strictEqual(appends(fake).length, 1);
+});
+
+test('ready fires once even though both session events arrive', () => {
+  const { fake, seen } = session();
+  fake.open();
+  fake.serverSends({ type: 'session.created' });
+  fake.serverSends({ type: 'session.updated' });
+  fake.serverSends({ type: 'session.updated' });
+  assert.strictEqual(seen.ready, 1);
+});
+
+test('a refused session.update lets no audio out and drops the socket as unexpected', () => {
+  const { s, fake, seen } = session();
+  fake.open();
+  s.sendAudio(new Int16Array(4800));
+  fake.serverSends({ type: 'session.created' });
+  fake.serverSends({ type: 'error', error: { message: 'unknown transcription model' } });
+  s.sendAudio(new Int16Array(2400));
+  assert.strictEqual(appends(fake).length, 0);
+  assert.strictEqual(seen.ready, 0);
+  assert.deepStrictEqual(seen.closes, [{ unexpected: true, code: 1006 }]);
+});
+
+test('an echo in another language is not ready', () => {
+  const { fake, seen } = session();
+  fake.open();
+  fake.serverSends({ type: 'session.updated', session: { audio: { output: { language: 'es' } } } });
+  assert.strictEqual(seen.ready, 0);
+  assert.deepStrictEqual(seen.closes, [{ unexpected: true, code: 1006 }]);
+});
+
+test('an error after the session is confirmed is only logged', () => {
+  const errors = [];
+  const { fake, seen } = session({ log: { error: (m) => errors.push(m), warn() {} } });
+  fake.open();
+  fake.serverSends({ type: 'session.updated' });
+  fake.serverSends({ type: 'error', error: { message: 'bad append' } });
+  assert.deepStrictEqual(seen.closes, []);
+  assert.strictEqual(errors.length, 1);
+});
+
+test('a session that never confirms is dropped as unexpected', async () => {
+  const { fake, seen } = session({ readyTimeoutMs: 20 });
+  fake.open();
+  await new Promise((r) => setTimeout(r, 40));
+  assert.deepStrictEqual(seen.closes, [{ unexpected: true, code: 1006 }]);
+});
+
+test('a socket whose writes pile up is dropped as unexpected', () => {
+  const { s, fake, seen } = session();
+  fake.open();
+  fake.serverSends({ type: 'session.updated' });
+  fake.bufferedAmount = 2 * 1024 * 1024;
+  s.sendAudio(new Int16Array(2400));
+  assert.deepStrictEqual(seen.closes, [{ unexpected: true, code: 1006 }]);
+});
+
+test('a throwing callback is logged, not thrown into the socket', () => {
+  const errors = [];
+  const boom = () => { throw new Error('boom'); };
+  const { fake } = session({
+    onAudio: boom, onTranslationText: boom, onSourceText: boom, onReady: boom, onClose: boom,
+    log: { error: (m) => errors.push(m), warn() {} },
+  });
+  fake.open();
+  assert.doesNotThrow(() => {
+    fake.serverSends({ type: 'session.updated' });
+    fake.serverSends({ type: 'session.output_audio.delta', delta: 'AAAA' });
+    fake.serverSends({ type: 'session.output_transcript.delta', delta: 'a' });
+    fake.serverSends({ type: 'session.input_transcript.delta', delta: 'b' });
+    fake.emit('message', Buffer.from('null'));
+    fake.serverCloses(1011);
+  });
+  assert.strictEqual(errors.length, 5);
+});
+
+test('nothing is delivered after we closed it', () => {
+  const { s, fake, seen } = session();
+  fake.open();
+  fake.serverSends({ type: 'session.updated' });
+  s.close();
+  fake.readyState = 1; // real ws keeps reading until the server answers the close frame
+  fake.serverSends({ type: 'session.output_audio.delta', delta: 'AAAA' });
+  assert.strictEqual(seen.audio.length, 0);
+});
+
+test('decoded audio owns its buffer: AudioFrame hands data.buffer to native from byte 0', () => {
+  const { fake, seen } = session();
+  fake.open();
+  fake.serverSends({ type: 'session.output_audio.delta', delta: Buffer.from(Int16Array.from([1, 2, 3]).buffer).toString('base64') });
+  assert.strictEqual(seen.audio[0].byteOffset, 0);
+  assert.strictEqual(seen.audio[0].buffer.byteLength, 6);
+});
+
+for (const [transcribeModel, noiseReduction] of [[undefined, undefined], [null, null], ['whisper-1', null]]) {
+  test(`the selftest asks for exactly what a live session asks for (${transcribeModel}, ${noiseReduction})`, async () => {
+    const live = session({ transcribeModel, noiseReduction });
+    live.fake.open();
+    const { factory, last } = fakeWsFactory();
+    const result = selftestTranslate({ apiKey: 'k', wsFactory: factory, timeoutMs: 1000, transcribeModel, noiseReduction });
+    last().open();
+    assert.deepStrictEqual(last().sentOfType('session.update')[0].session.audio.input, live.fake.sent[0].session.audio.input);
+    last().serverSends({ type: 'session.updated' });
+    await result;
+  });
+}
+
+test('selftest fails on an error that follows session.created, and closes its socket', async () => {
+  const { factory, last } = fakeWsFactory();
+  const result = selftestTranslate({ apiKey: 'k', wsFactory: factory, timeoutMs: 1000, quietMs: 200 });
+  last().open();
+  last().serverSends({ type: 'session.created' });
+  last().serverSends({ type: 'error', error: { message: 'bad field' } });
+  assert.strictEqual((await result).ok, false);
+  assert.strictEqual(last().readyState, 3);
+});
+
+test('selftest gives up after timeoutMs and closes its socket', async () => {
+  const { factory, last } = fakeWsFactory();
+  const r = await selftestTranslate({ apiKey: 'k', wsFactory: factory, timeoutMs: 20 });
+  assert.strictEqual(r.ok, false);
+  assert.match(r.reason, /timeout/);
+  assert.strictEqual(last().readyState, 3);
+});
+
+test('selftest fails when the echo dropped what we asked for', async () => {
+  const { factory, last } = fakeWsFactory();
+  const result = selftestTranslate({ apiKey: 'k', wsFactory: factory, timeoutMs: 1000 });
+  last().open();
+  last().serverSends({ type: 'session.updated', session: { audio: { input: { transcription: null, noise_reduction: { type: 'near_field' } }, output: { language: 'en' } } } });
+  const r = await result;
+  assert.strictEqual(r.ok, false);
+  assert.match(r.reason, /transcription/);
+});
+```
+
+`translate-session.default-socket.test.js`:
+
+```js
+// Run with: node --test  (from livekit-agent/)
+// The production socket: `ws` swapped in require.cache — no network.
+const test = require('node:test');
+const assert = require('node:assert');
+const { EventEmitter } = require('events');
+
+const wsPath = require.resolve('ws');
+const calls = [];
+class SpyWs extends EventEmitter {
+  constructor(url, options) { super(); calls.push({ url, options }); this.readyState = 0; }
+}
+Object.assign(SpyWs, { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 });
+require.cache[wsPath] = { id: wsPath, filename: wsPath, loaded: true, exports: SpyWs };
+const { createTranslateSession, selftestTranslate } = require('./translate-session');
+
+test('the default socket times out a stalled handshake, in a live session and in the selftest', () => {
+  createTranslateSession({ apiKey: 'k', targetLang: 'de' });
+  selftestTranslate({ apiKey: 'k', timeoutMs: 1 });
+  assert.deepStrictEqual(calls.map((c) => c.options.handshakeTimeout), [10000, 10000]);
+});
+```
+
+Run: `node --test translate-session.test.js translate-session.default-socket.test.js`
+Expected: падают новые тесты готовности, отказа, зависания, колбэков и самопроверки; сокет по умолчанию уже проходит.
+
+- [ ] **Step 3: Модуль целиком**
+
+`translate-session.js`:
+
+```js
+'use strict';
+/**
+ * One direction of simultaneous interpretation through OpenAI's
+ * gpt-realtime-translate: one person's (already gated) speech in, the other
+ * person's language out while the speaker is still talking.
+ *
+ * Unlike the phrase engine there are no turns: no commits, no response.create,
+ * no conversation to prune. The session takes a continuous 24 kHz PCM16 stream
+ * — silence included — and answers with translated audio and running
+ * transcripts of both sides. Its voice follows the speaker's tone and pitch,
+ * which is how the listener can still tell the two voices apart.
+ *
+ * The guide names the server events but not their fields. The accessors below
+ * match what bench/probe-translate.js printed on DEV (bench/PROBE.md).
+ */
+const WebSocket = require('ws');
+
+const ENDPOINT = 'wss://api.openai.com/v1/realtime/translations';
+const DEFAULT_MODEL = 'gpt-realtime-translate';
+// The speaker's own words (shown back to them as a subtitle) only arrive when
+// input transcription is on; without it the session sends no
+// session.input_transcript.delta at all (bench/PROBE.md, probe 2).
+const DEFAULT_TRANSCRIBE_MODEL = 'gpt-4o-mini-transcribe';
+// The phone is at its owner's ear: near-field noise reduction favours that one
+// close voice and dampens the partner across the table.
+const DEFAULT_NOISE_REDUCTION = 'near_field';
+const PIECE_SAMPLES = 2400; // 100 ms at 24 kHz, the size OpenAI's guide appends
+const MAX_QUEUED_PIECES = 40; // 4 s may wait for the socket; older audio is dropped
+
+const audioOf = (event) => event.delta;
+const textOf = (event) => event.delta;
+// A handshake that stalls without an error would leave the direction silent
+// and never retried; the timeout turns it into an ordinary close.
+const HANDSHAKE_TIMEOUT_MS = 10000;
+// After the handshake: a session that never confirms its configuration, or a
+// socket whose writes pile up (stalled peer, half-open TCP), is as silent as a
+// stalled handshake and must also end in a close the wrapper can retry.
+const READY_TIMEOUT_MS = 10000;
+const MAX_BUFFERED_BYTES = 1 << 20; // ~16 s of base64 audio at 64 KB/s
+// session.updated is what proves the update applied (bench/PROBE.md: it always
+// came). If it ever stops coming, session.created plus this long without an
+// error counts instead — the selftest's rule.
+const CREATED_GRACE_MS = 1500;
+
+function defaultWsFactory(url, options) {
+  return new WebSocket(url, { ...options, handshakeTimeout: HANDSHAKE_TIMEOUT_MS });
+}
+
+function toBase64(int16) {
+  return Buffer.from(int16.buffer, int16.byteOffset, int16.byteLength).toString('base64');
+}
+
+function fromBase64(b64) {
+  const buf = Buffer.from(b64, 'base64');
+  const even = buf.byteLength - (buf.byteLength % 2);
+  // Copy: a short decode is a view into Node's shared 8 KB pool, and LiveKit's
+  // AudioFrame hands data.buffer to the native side from byte 0, ignoring
+  // byteOffset. The copy also makes the caller's in-place gain safe.
+  return new Int16Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + even));
+}
+
+/** The session.update body. null switches transcription or noise reduction off. */
+function sessionConfig({ targetLang, transcribeModel = DEFAULT_TRANSCRIBE_MODEL, noiseReduction = DEFAULT_NOISE_REDUCTION }) {
+  const audio = { output: { language: targetLang } };
+  if (transcribeModel || noiseReduction) {
+    audio.input = {};
+    if (transcribeModel) audio.input.transcription = { model: transcribeModel };
+    if (noiseReduction) audio.input.noise_reduction = { type: noiseReduction };
+  }
+  return { audio };
+}
+
+function connect({ apiKey, model, safetyId, wsFactory }) {
+  const headers = { Authorization: `Bearer ${apiKey}` };
+  if (safetyId) headers['OpenAI-Safety-Identifier'] = safetyId;
+  return wsFactory(`${ENDPOINT}?model=${encodeURIComponent(model)}`, { headers });
+}
+
+function createTranslateSession(opts) {
+  const { targetLang, log = console } = opts;
+  if (!targetLang) throw new TypeError('createTranslateSession needs targetLang');
+  // Every callback reaches into the interpreter (gain, frame queue, data
+  // channel). Called from inside ws's handlers, a throw would escape into the
+  // socket's stream and take the whole agent process down.
+  const safe = (name, fn) => (...args) => {
+    if (!fn) return;
+    try {
+      fn(...args);
+    } catch (e) {
+      log.error(`[INTERPRETER] translate →${targetLang}: ${name} callback failed: ${e.message}`);
+    }
+  };
+  const onAudio = safe('onAudio', opts.onAudio);
+  const onTranslationText = safe('onTranslationText', opts.onTranslationText);
+  const onSourceText = safe('onSourceText', opts.onSourceText);
+  const onReady = safe('onReady', opts.onReady);
+  const onClose = safe('onClose', opts.onClose);
+  const readyTimeoutMs = opts.readyTimeoutMs ?? READY_TIMEOUT_MS;
+  const createdGraceMs = opts.createdGraceMs ?? CREATED_GRACE_MS;
+
+  const ws = connect({
+    apiKey: opts.apiKey,
+    model: opts.model || DEFAULT_MODEL,
+    safetyId: opts.safetyId,
+    wsFactory: opts.wsFactory || defaultWsFactory,
+  });
+  let ready = false;
+  let closedByUs = false;
+  let readyTimer = null;
+  let graceTimer = null;
+  const queue = [];
+
+  const append = (b64) => ws.send(JSON.stringify({ type: 'session.input_audio_buffer.append', audio: b64 }));
+  const clearTimers = () => {
+    clearTimeout(readyTimer);
+    clearTimeout(graceTimer);
+    readyTimer = graceTimer = null;
+  };
+  // Ends the socket at once (terminate, not close: a stalled socket would hold
+  // the close frame behind its backlog for closeTimeout) — reported as
+  // unexpected, so the reconnecting wrapper retries and, past its limits,
+  // the interpreter ends instead of running a broken direction.
+  function fail(reason) {
+    if (closedByUs) return;
+    log.error(`[INTERPRETER] translate →${targetLang}: ${reason}, dropping the socket`);
+    clearTimers();
+    try {
+      ws.terminate();
+    } catch (_) { /* already closed */ }
+  }
+  function becomeReady() {
+    if (ready) return;
+    ready = true;
+    clearTimers();
+    while (queue.length) append(queue.shift());
+    onReady();
+  }
+
+  ws.on('open', () => {
+    ws.send(JSON.stringify({
+      type: 'session.update',
+      session: sessionConfig({ targetLang, transcribeModel: opts.transcribeModel, noiseReduction: opts.noiseReduction }),
+    }));
+    readyTimer = setTimeout(() => fail(`no session confirmation within ${readyTimeoutMs} ms`), readyTimeoutMs);
+    if (readyTimer.unref) readyTimer.unref();
+  });
+
+  ws.on('message', (raw) => {
+    if (closedByUs) return; // what was still in flight after close()
+    let event;
+    try {
+      event = JSON.parse(raw.toString());
+    } catch (_) {
+      return;
+    }
+    if (!event || typeof event !== 'object') return;
+    switch (event.type) {
+      case 'session.created':
+        // A new session translates into Spanish until our session.update
+        // applies. That update went out on 'open', ahead of any audio, but
+        // only session.updated shows it was accepted.
+        if (!ready && !graceTimer) {
+          graceTimer = setTimeout(becomeReady, createdGraceMs);
+          if (graceTimer.unref) graceTimer.unref();
+        }
+        break;
+      case 'session.updated': {
+        const lang = event.session && event.session.audio && event.session.audio.output
+          && event.session.audio.output.language;
+        if (lang && lang !== targetLang) fail(`session answers in ${lang}, asked for ${targetLang}`);
+        else becomeReady();
+        break;
+      }
+      case 'session.output_audio.delta': {
+        const b64 = audioOf(event);
+        if (typeof b64 === 'string' && b64) onAudio(fromBase64(b64));
+        break;
+      }
+      case 'session.output_transcript.delta': {
+        const text = textOf(event);
+        if (typeof text === 'string' && text) onTranslationText(text, false);
+        break;
+      }
+      case 'session.input_transcript.delta': {
+        const text = textOf(event);
+        if (typeof text === 'string' && text) onSourceText(text, false);
+        break;
+      }
+      case 'error':
+        // Before the session is confirmed, an error is our configuration being
+        // refused: carrying on would translate into the default language.
+        if (!ready) fail(`session.update refused: ${JSON.stringify(event.error || event)}`);
+        else log.error(`[INTERPRETER] translate →${targetLang} error: ${JSON.stringify(event.error || event)}`);
+        break;
+      default:
+        break;
+    }
+  });
+
+  ws.on('error', (err) => {
+    if (!closedByUs) log.warn(`[INTERPRETER] translate →${targetLang} socket error: ${err.message}`);
+  });
+  ws.on('close', (code) => {
+    clearTimers();
+    onClose({ unexpected: !closedByUs, code });
+  });
+
+  return {
+    sendAudio(int16) {
+      if (ready && ws.readyState === WebSocket.OPEN && ws.bufferedAmount > MAX_BUFFERED_BYTES) {
+        fail(`${ws.bufferedAmount} bytes not taken by the server`);
+        return;
+      }
+      for (let i = 0; i < int16.length; i += PIECE_SAMPLES) {
+        const b64 = toBase64(int16.subarray(i, i + PIECE_SAMPLES));
+        if (ready && ws.readyState === WebSocket.OPEN) {
+          append(b64);
+        } else {
+          queue.push(b64);
+          if (queue.length > MAX_QUEUED_PIECES) queue.shift();
+        }
+      }
+    },
+    close() {
+      closedByUs = true;
+      clearTimers();
+      try {
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'session.close' }));
+      } catch (_) { /* closing anyway */ }
+      try {
+        ws.close();
+      } catch (_) { /* already closed */ }
+    },
+  };
+}
+
+/**
+ * What a session.updated echo lacks of what we asked for (bench/PROBE.md: the
+ * echo carries the language and turns the input fields from null into
+ * objects). A field OpenAI silently ignores fails here instead of quietly
+ * switching off subtitles in every conversation.
+ */
+function echoProblem(echo, asked) {
+  const audio = (echo && echo.audio) || {};
+  const out = audio.output || {};
+  const input = audio.input || {};
+  if (out.language !== undefined && out.language !== asked.audio.output.language) return `has language ${out.language}`;
+  const want = asked.audio.input || {};
+  if (want.transcription && audio.input && !input.transcription) return 'dropped input transcription';
+  if (want.noise_reduction && audio.input && !input.noise_reduction) return 'dropped noise reduction';
+  return null;
+}
+
+/**
+ * Post-deploy smoke: opens a session the way the interpreter does and waits
+ * for it to be accepted. Catches the model being renamed or withdrawn and the
+ * session shape being refused — what broke the in-call translator in 1.0.78.
+ * Passes on session.updated, or on session.created followed by quietMs with
+ * no error (the guide does not promise a session.updated).
+ */
+function selftestTranslate({
+  apiKey,
+  model = DEFAULT_MODEL,
+  transcribeModel,
+  noiseReduction,
+  wsFactory = defaultWsFactory,
+  timeoutMs = 10000,
+  quietMs = 1500,
+} = {}) {
+  if (!apiKey) return Promise.resolve({ ok: false, reason: 'OPENAI_API_KEY not set' });
+  return new Promise((resolve) => {
+    let done = false;
+    let quietTimer = null;
+    const ws = connect({ apiKey, model, safetyId: 'interpreter-selftest', wsFactory });
+    const timer = setTimeout(() => finish({ ok: false, reason: `timeout: no session event within ${timeoutMs} ms` }), timeoutMs);
+    function finish(result) {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      clearTimeout(quietTimer);
+      try {
+        ws.close();
+      } catch (_) { /* already closed */ }
+      resolve(result);
+    }
+    const asked = sessionConfig({ targetLang: 'en', transcribeModel, noiseReduction });
+    ws.on('open', () => {
+      // The same session shape the interpreter uses, so a refused field fails here too.
+      ws.send(JSON.stringify({ type: 'session.update', session: asked }));
+      ws.send(JSON.stringify({
+        type: 'session.input_audio_buffer.append',
+        audio: Buffer.alloc(PIECE_SAMPLES * 2 * 5).toString('base64'),
+      }));
+    });
+    ws.on('message', (raw) => {
+      let event;
+      try {
+        event = JSON.parse(raw.toString());
+      } catch (_) {
+        return;
+      }
+      if (!event || typeof event !== 'object') return;
+      if (event.type === 'error') {
+        finish({ ok: false, reason: `OpenAI error: ${JSON.stringify(event.error || event)}` });
+      } else if (event.type === 'session.updated') {
+        const problem = echoProblem(event.session, asked);
+        finish(problem ? { ok: false, reason: `session.updated ${problem}` } : { ok: true, reason: 'session.updated received' });
+      } else if (event.type === 'session.created' && !quietTimer) {
+        quietTimer = setTimeout(() => finish({ ok: true, reason: `session.created, no error within ${quietMs} ms` }), quietMs);
+      }
+    });
+    ws.on('error', (err) => finish({ ok: false, reason: `ws error: ${err.message}` }));
+    ws.on('close', (code) => finish({ ok: false, reason: `ws closed code=${code} before confirmation` }));
+  });
+}
+
+module.exports = { createTranslateSession, selftestTranslate, PIECE_SAMPLES };
+```
+
+- [ ] **Step 4: Проверить**
+
+```bash
+node --test translate-session.test.js translate-session.default-socket.test.js && npm test 2>&1 | tail -8
+```
+
+Ожидается: 30 + 1 тест; весь набор `ℹ pass 166`, `ℹ fail 0`.
+
+- [ ] **Step 5: Коммит**
+
+```bash
+git add translate-session.js translate-session.test.js translate-session.default-socket.test.js testing/fake-ws.js
+git commit -m "fix(interpreter): синхронный движок — колбэки под защитой, готовность после подтверждения, обрыв зависших сокетов" -m "По ревью задачи 10: исключение в колбэке роняло агент, отвергнутая настройка оставляла сессию переводить на испанский, зависший после рукопожатия сокет молчал без переподключения." -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
 ### Task 11: `phrase-session.js` — фразовый движок в общем интерфейсе
 
 **Files:**
@@ -4987,7 +5700,10 @@ function fakeRtc() {
     },
     TrackKind: { KIND_AUDIO: 1 },
     TrackSource: { SOURCE_MICROPHONE: 2 },
-    AudioSource: class { async captureFrame() {} },
+    AudioSource: class {
+      constructor() { this.frames = []; }
+      async captureFrame(frame) { this.frames.push(frame); }
+    },
     AudioFrame: class {
       constructor(data, sampleRate, channels, samplesPerChannel) {
         Object.assign(this, { data, sampleRate, channels, samplesPerChannel });
@@ -5008,7 +5724,7 @@ function fakeRtc() {
       this.published = [];
       this.data = [];
       this.localParticipant = {
-        publishTrack: async (track, options) => { this.published.push({ name: track.name, options }); },
+        publishTrack: async (track, options) => { this.published.push({ name: track.name, track, options }); },
         publishData: async (payload, options) => {
           this.data.push({ msg: JSON.parse(Buffer.from(payload).toString()), options });
         },
@@ -5149,6 +5865,22 @@ test('a track that arrives while the room is still connecting is not lost', asyn
   }
 });
 
+test('translated audio reaches the listener track in 20 ms frames that own their buffers', async () => {
+  const { rtc, made, deps } = setup();
+  await interpreter.startInterpreter({ sessionId: 's6', roomName: 'r-frames', participants: people() }, deps);
+  try {
+    const toB = made.find((e) => e.opts.targetLang === 'de');
+    toB.opts.onAudio(new Int16Array(9600).fill(5)); // one 400 ms delta
+    await settle();
+    const source = rtc.rooms[0].published.find((p) => p.name === 'interp-for-b').track.source;
+    assert.strictEqual(source.frames.length, 20);
+    assert.ok(source.frames.every((f) => f.samplesPerChannel === 480 && f.data.byteOffset === 0 && f.data.buffer.byteLength === 960));
+    assert.strictEqual(source.frames[0].data[0], 7); // gain 1.4 applied: 5 * 1.4 = 7
+  } finally {
+    await interpreter.stopInterpreter('r-frames');
+  }
+});
+
 test('captions go to their listener, recognised speech back to its speaker', async () => {
   const { rtc, made, deps } = setup();
   await interpreter.startInterpreter({ sessionId: 's5', roomName: 'r-captions', participants: people() }, deps);
@@ -5206,6 +5938,10 @@ const { notifyAgentEnded } = require('./backend-callback');
 
 const AGENT_IDENTITY = 'voice-interpreter';
 const SAMPLE_RATE = 24000;
+// createFrameQueue bounds itself by frame count (300, trimmed to 200), sized
+// for 20 ms frames. Fed whole 400 ms deltas it would allow two minutes of
+// backlog; cut into 20 ms frames the bound stays at a few seconds.
+const FRAME_SAMPLES = 480;
 // The embed service failing is survivable chunk by chunk (the gate fails
 // open); failing for this long means nobody's voice is being checked.
 const FATAL_FAIL_OPEN_MS = 60_000;
@@ -5367,7 +6103,13 @@ async function openLane(session, d) {
       onAudio: (int16) => {
         if (session.stopping) return;
         applyGain(int16, cfg.gain);
-        out.push(new rtc.AudioFrame(int16, SAMPLE_RATE, 1, int16.length));
+        for (let i = 0; i < int16.length; i += FRAME_SAMPLES) {
+          // slice, not subarray: AudioFrame hands data.buffer to the native
+          // side from byte 0, ignoring byteOffset — a view would play the
+          // wrong samples.
+          const frame = int16.slice(i, i + FRAME_SAMPLES);
+          out.push(new rtc.AudioFrame(frame, SAMPLE_RATE, 1, frame.length));
+        }
       },
       onTranslationText: (text, final) => sendTo(session, d.listener, messages.caption('translation', d.speaker, text, final)),
       onSourceText: (text, final) => sendTo(session, d.speaker, messages.caption('source', d.speaker, text, final)),
@@ -5514,7 +6256,7 @@ module.exports = { startInterpreter, stopInterpreter, getInterpreterStatus, self
 node --test interpreter.test.js && npm test 2>&1 | tail -8
 ```
 
-Ожидается: `ℹ pass 8` в файле, всего `ℹ pass 177`, `ℹ fail 0`.
+Ожидается: `ℹ pass 9` в файле, всего `ℹ pass 195`, `ℹ fail 0`.
 
 - [ ] **Step 4: Коммит**
 
@@ -5737,7 +6479,7 @@ registerInterpreterRoutes(app, {
 node --test interpreter-routes.test.js && node --check index.js && echo index-ok && npm test 2>&1 | tail -8
 ```
 
-Ожидается: `ℹ pass 6`, `index-ok`, весь набор `ℹ pass 183`, `ℹ fail 0`.
+Ожидается: `ℹ pass 6`, `index-ok`, весь набор `ℹ pass 201`, `ℹ fail 0`.
 
 - [ ] **Step 5: Коммит**
 
@@ -5945,7 +6687,7 @@ function renderReport(r) {
 module.exports = { percentile, summarize, firstVoicedAfter, voicedMs, suggestThresholds, renderReport };
 ```
 
-- [ ] **Step 3: Тест проходит** — `node --test bench/bench-report.test.js` → `ℹ pass 5`; весь `npm test` — `ℹ pass 188`, `ℹ fail 0`.
+- [ ] **Step 3: Тест проходит** — `node --test bench/bench-report.test.js` → `ℹ pass 5`; весь `npm test` — `ℹ pass 206`, `ℹ fail 0`.
 
 - [ ] **Step 4: Коммит**
 
