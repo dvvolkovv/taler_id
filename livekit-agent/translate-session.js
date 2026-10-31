@@ -260,8 +260,10 @@ function echoProblem(echo, asked) {
  * Post-deploy smoke: opens a session the way the interpreter does and waits
  * for it to be accepted. Catches the model being renamed or withdrawn and the
  * session shape being refused — what broke the in-call translator in 1.0.78.
- * Passes on session.updated, or on session.created followed by quietMs with
- * no error (the guide does not promise a session.updated).
+ * Passes on a session.updated whose echo carries what was asked, followed by
+ * appendCheckMs with no error — by then the appended silence has been read —
+ * or, should session.updated ever stop coming, on session.created followed by
+ * quietMs with no error.
  */
 function selftestTranslate({
   apiKey,
