@@ -2016,6 +2016,154 @@ git commit -m "fix(interpreter): фразовый движок — без отв
 
 ---
 
+### Task 5c: Регулярка галлюцинаций без экспоненциального перебора
+
+По повторному ревью задачи 5, критично. В регулярке из задачи 5b повторяемый кусок `(.{2,40}?)` может сам состоять из знаков препинания. Расшифровка, которая начинается с длинной серии `?!.…`, разбирается экспоненциальным числом способов: `'?'×40 + ' ок'` — 14,6 с. `isHallucination` вызывается синхронно на каждую расшифровку переводчика звонков, поэтому всё это время стоит весь `livekit-ai-agent`: переводы во всех звонках, запись встреч, ассистент.
+
+Исправление: кусок начинается и кончается буквой или цифрой, тогда разбиение однозначно и время линейное. Заодно «титры» Whisper ловятся только как вся расшифровка целиком, чтобы живое «Спасибо за просмотр квартиры» не теряло субтитр. И закрепляется ветка «commit ещё не подтверждён» из задачи 5b.
+
+**Files:**
+- Modify: `livekit-agent/realtime-phrase-session.js`
+- Modify: `livekit-agent/realtime-phrase-session.test.js`
+- Modify: `livekit-agent/realtime-phrase-session.prune.test.js`
+
+- [ ] **Step 1: Тесты (падают)**
+
+В `realtime-phrase-session.test.js` тест `'only real hallucinations are filtered, ordinary phrases are not'` заменить целиком на:
+
+```js
+test('only real hallucinations are filtered, ordinary phrases are not', () => {
+  for (const speech of [
+    'Добрый день',
+    'Guten Tag, wie geht es Ihnen?',
+    'да да да',
+    'Да, да, да.',
+    'нет, нет, нет',
+    'Спасибо за просмотр квартиры',
+    'Thanks for watching the kids',
+  ]) {
+    assert.strictEqual(isHallucination(speech), false, speech);
+  }
+  for (const loop of [
+    ' ',
+    'ok ok ok ok',
+    '… да … да … да … да',
+    'Субтитры сделал DimaTorzok',
+    'Продолжение следует...',
+    'Спасибо за просмотр!',
+    'Thanks for watching!',
+    'thank you for watching',
+    'Я не знаю, что делать. Я не знаю, что делать. Я не знаю, что делать. Я не знаю, что делать.',
+  ]) {
+    assert.strictEqual(isHallucination(loop), true, loop);
+  }
+});
+```
+
+и дописать в конец файла:
+
+```js
+test('punctuation runs cannot stall the agent', () => {
+  const start = process.hrtime.bigint();
+  for (const s of ['?'.repeat(34) + ' ок', '… '.repeat(22) + 'ну ладно', '!'.repeat(36) + 'x', '. '.repeat(24) + 'да']) {
+    isHallucination(s);
+  }
+  assert.ok(Number(process.hrtime.bigint() - start) / 1e6 < 100);
+});
+```
+
+В конец `realtime-phrase-session.prune.test.js` дописать:
+
+```js
+test('a commit acknowledged after response.done still gets its response', (t) => {
+  let now = 0;
+  t.mock.method(console, 'log', () => {});
+  t.mock.method(Date, 'now', () => now);
+  const { factory, last } = fakeWsFactory();
+  const ws = createRealtimeSession('ru', 'sk', () => {}, () => {}, { wsFactory: factory, apiKey: 'k', pruneHistory: true });
+  const fake = last();
+  fake.open();
+  fake.serverSends({ type: 'session.updated' });
+  const phrase = () => {
+    for (const end = now + 600; now < end; now += 20) ws.sendAudio(loud);
+    for (const end = now + 700; now < end; now += 20) ws.sendAudio(quiet);
+  };
+  phrase();
+  fake.serverSends({ type: 'input_audio_buffer.committed', item_id: 'in1' });
+  fake.serverSends({ type: 'response.created', response: { id: 'r1' } });
+  phrase(); // committed while r1 speaks; the server has not acknowledged it yet
+  fake.serverSends({ type: 'response.done', response: { id: 'r1', status: 'completed', output: [{ id: 'out1' }] } });
+  fake.serverSends({ type: 'input_audio_buffer.committed', item_id: 'in2' });
+  assert.strictEqual(fake.sentOfType('response.create').length, 2);
+});
+```
+
+Run: `node --test realtime-phrase-session.test.js realtime-phrase-session.prune.test.js`
+Expected: падают тест регулярки («Спасибо за просмотр квартиры» и «Thanks for watching the kids» помечаются) и тест на время работы (секунды вместо миллисекунд). Тест на запоздалое подтверждение уже проходит: он закрепляет поведение из 5b.
+
+- [ ] **Step 2: Две простые регулярки вместо одной**
+
+Блок
+
+```js
+// Common Whisper hallucination patterns: the same 2–40 characters said four or
+// more times over (three is still a person saying "да да да"), and the
+// subtitle-credit lines Whisper invents on silence. The repeat used to be
+// ((.{2,20})\s*){3,}, which any phrase of six characters satisfies — harmless
+// while the result was only logged, but it would swallow every subtitle.
+const HALLUCINATION_RE = /^(.{2,40}?)(?:[\s,.!?…]*\1){3,}[\s,.!?…]*$|продолжение следует|субтитры (?:сделал|создавал|подготовил)|редактор субтитров|спасибо за просмотр|thanks? (?:you )?for watching|구독과\s*좋아요|ご視聴|チャンネル登録|请订阅/i;
+
+function isHallucination(text) {
+  if (!text) return true;
+  const t = text.trim();
+  if (t.length < 2) return true;
+  if (HALLUCINATION_RE.test(t)) return true;
+  return false;
+}
+```
+
+заменить на:
+
+```js
+// Whisper hallucinations, two kinds. Both run on every transcript in the
+// agent's only thread, so both must stay linear in their input.
+//
+// The same 2–40 characters said four or more times over (three is still a
+// person saying "да да да"). The repeated piece starts and ends with a letter
+// or digit: a piece that may itself be punctuation lets a run of "?!.…" be
+// split exponentially many ways between it and the separators — such a
+// transcript froze the process for seconds in review. (The first version,
+// ((.{2,20})\s*){3,}, matched any phrase of six characters.)
+const REPEATED_RE = /^[\s,.!?…]*([^\s,.!?…].{0,38}?[^\s,.!?…])(?:[\s,.!?…]*\1){3,}[\s,.!?…]*$/i;
+// Credit lines Whisper invents on silence — only as the whole transcript, so a
+// real "спасибо за просмотр квартиры" keeps its subtitle.
+const CREDITS_RE = /^[\s,.!?…]*(?:продолжение следует|субтитры (?:сделал|создавал|подготовил).*|редактор субтитров.*|спасибо за просмотр|thanks? (?:you )?for watching|구독과\s*좋아요|ご視聴.*|チャンネル登録.*|请订阅.*)[\s,.!?…]*$/i;
+
+function isHallucination(text) {
+  if (!text) return true;
+  const t = text.trim();
+  if (t.length < 2) return true;
+  return REPEATED_RE.test(t) || CREDITS_RE.test(t);
+}
+```
+
+- [ ] **Step 3: Проверить**
+
+```bash
+npm test 2>&1 | tail -8
+```
+
+Ожидается `ℹ pass 86` (84 + 2), `ℹ fail 0`.
+
+- [ ] **Step 4: Коммит**
+
+```bash
+git add realtime-phrase-session.js realtime-phrase-session.test.js realtime-phrase-session.prune.test.js
+git commit -m "fix(translator): регулярка галлюцинаций без экспоненциального перебора; «титры» только целой расшифровкой" -m "По повторному ревью: на расшифровке, начинающейся с длинной серии знаков, проверка занимала секунды и стопорила весь агент, включая переводчик звонков. Кусок повтора теперь начинается и кончается буквой — разбор линейный." -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
 ### Task 6: `interpreter-langs.js` — какой движок для пары
 
 **Files:**
@@ -4545,7 +4693,7 @@ module.exports = { startInterpreter, stopInterpreter, getInterpreterStatus, self
 node --test interpreter.test.js && npm test 2>&1 | tail -8
 ```
 
-Ожидается: `ℹ pass 8` в файле, всего `ℹ pass 156`, `ℹ fail 0`.
+Ожидается: `ℹ pass 8` в файле, всего `ℹ pass 158`, `ℹ fail 0`.
 
 - [ ] **Step 4: Коммит**
 
@@ -4768,7 +4916,7 @@ registerInterpreterRoutes(app, {
 node --test interpreter-routes.test.js && node --check index.js && echo index-ok && npm test 2>&1 | tail -8
 ```
 
-Ожидается: `ℹ pass 6`, `index-ok`, весь набор `ℹ pass 162`, `ℹ fail 0`.
+Ожидается: `ℹ pass 6`, `index-ok`, весь набор `ℹ pass 164`, `ℹ fail 0`.
 
 - [ ] **Step 5: Коммит**
 
@@ -4976,7 +5124,7 @@ function renderReport(r) {
 module.exports = { percentile, summarize, firstVoicedAfter, voicedMs, suggestThresholds, renderReport };
 ```
 
-- [ ] **Step 3: Тест проходит** — `node --test bench/bench-report.test.js` → `ℹ pass 5`; весь `npm test` — `ℹ pass 167`, `ℹ fail 0`.
+- [ ] **Step 3: Тест проходит** — `node --test bench/bench-report.test.js` → `ℹ pass 5`; весь `npm test` — `ℹ pass 169`, `ℹ fail 0`.
 
 - [ ] **Step 4: Коммит**
 
