@@ -12,9 +12,12 @@
  *   onReady()     the session accepted its configuration
  *   onClose({ code })
  *   onTranscript({ role: 'source' | 'translation', text })
+ *   onServerError(error)  an `error` event from OpenAI, after it is logged
  *   pruneHistory  delete each phrase from the conversation once spoken
  *   logTag        log prefix (default TRANSLATOR: the in-call translator's
  *                 log lines stay exactly as they were)
+ *   logText       false logs how long each phrase was instead of its words
+ *                 (default true: the in-call translator logs them as before)
  * wsFactory must return a new socket that is still connecting: its 'open'
  * event is what sends the session.update.
  */
@@ -83,6 +86,9 @@ function createRealtimeSession(sourceLang, targetLang, onAudioDelta, onError, op
       console.error(`[${logTag}] [${tag}] ${name} callback failed:`, e.message);
     }
   };
+  // A phrase as the log shows it: its words, or with logText false only its
+  // length — a conversation is not the log's business.
+  const forLog = (text) => (opts.logText === false ? `${text.length} chars` : `"${text}"`);
   console.log(`[${logTag}] Opening WS for ${tag}`);
 
   // GA Realtime API (post 2026-05-20). Do NOT send OpenAI-Beta header — GA rejects it.
@@ -223,19 +229,20 @@ function createRealtimeSession(sourceLang, targetLang, onAudioDelta, onError, op
 
       if (event.type === 'conversation.item.input_audio_transcription.completed' && event.transcript) {
         const heard = event.transcript.trim();
-        console.log(`[${logTag}] [${tag}] heard: "${heard}"`);
+        console.log(`[${logTag}] [${tag}] heard: ${forLog(heard)}`);
         if (isHallucination(heard)) console.log(`[${logTag}] [${tag}] FILTERED: hallucination`);
         else callback('onTranscript', opts.onTranscript, { role: 'source', text: heard });
       }
 
       if (event.type === 'response.output_audio_transcript.done' && event.transcript) {
         const translated = event.transcript.trim();
-        console.log(`[${logTag}] [${tag}] translated: "${translated}"`);
+        console.log(`[${logTag}] [${tag}] translated: ${forLog(translated)}`);
         if (translated) callback('onTranscript', opts.onTranscript, { role: 'translation', text: translated });
       }
 
       if (event.type === 'error') {
         console.error(`[${logTag}] OpenAI error (${tag}):`, JSON.stringify(event.error));
+        callback('onServerError', opts.onServerError, event.error || event);
       }
     } catch (e) { console.error(`[${logTag}] [${tag}] message parse error:`, e.message); }
   });

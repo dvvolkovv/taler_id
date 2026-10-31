@@ -4,7 +4,9 @@ const assert = require('node:assert');
 const { fakeWsFactory } = require('./testing/fake-ws');
 const { createPhraseSession } = require('./phrase-session');
 
-function session() {
+const quietLog = { error() {}, warn() {} };
+
+function session(extra = {}, { open = true } = {}) {
   const { factory, last } = fakeWsFactory();
   const seen = { audio: [], translation: [], source: [], ready: 0, closes: [] };
   const s = createPhraseSession({
@@ -18,11 +20,20 @@ function session() {
     onSourceText: (t, f) => seen.source.push([t, f]),
     onReady: () => { seen.ready += 1; },
     onClose: (c) => seen.closes.push(c),
+    log: quietLog,
+    ...extra,
   });
   const fake = last();
-  fake.open();
+  if (open) fake.open();
   return { s, fake, seen };
 }
+
+const appends = (fake) => fake.sentOfType('input_audio_buffer.append');
+// 500 ms of PCM16 at 24 kHz, as the voice-print gate hands it over.
+const chunk = (value) => new Int16Array(12000).fill(value);
+const loud = () => chunk(3000);
+const quiet = () => chunk(0);
+const firstSample = (msg) => Buffer.from(msg.audio, 'base64').readInt16LE(0);
 
 test('it runs the given model with the known source language', () => {
   const { fake } = session();
@@ -66,4 +77,149 @@ test('closing it ourselves is not unexpected; the server closing is', () => {
   const b = session();
   b.fake.serverCloses(1006);
   assert.deepStrictEqual(b.seen.closes, [{ unexpected: true, code: 1006 }]);
+});
+
+// ── review of task 11 ──
+
+test('the safety identifier goes out as a header next to the key', () => {
+  const { fake } = session({ safetyId: 'abc' });
+  assert.deepStrictEqual(fake.options.headers, { Authorization: 'Bearer k', 'OpenAI-Safety-Identifier': 'abc' });
+});
+
+test('a refused session.update lets no audio out and drops the socket as unexpected', () => {
+  const { s, fake, seen } = session();
+  s.sendAudio(loud());
+  fake.serverSends({ type: 'session.created' });
+  fake.serverSends({ type: 'error', error: { type: 'invalid_request_error', param: 'session.audio.input.transcription.model' } });
+  s.sendAudio(loud());
+  assert.strictEqual(appends(fake).length, 0);
+  assert.strictEqual(seen.ready, 0);
+  assert.deepStrictEqual(seen.closes, [{ unexpected: true, code: 1006 }]);
+});
+
+test('an error after the session is confirmed is only logged', () => {
+  const { fake, seen } = session();
+  fake.serverSends({ type: 'session.updated' });
+  fake.serverSends({ type: 'error', error: { code: 'item_not_found' } });
+  assert.deepStrictEqual(seen.closes, []);
+  assert.strictEqual(fake.readyState, 1);
+});
+
+test('a session that never confirms is dropped as unexpected', async () => {
+  const { fake, seen } = session({ readyTimeoutMs: 20 });
+  await new Promise((r) => setTimeout(r, 40));
+  assert.deepStrictEqual(seen.closes, [{ unexpected: true, code: 1006 }]);
+  assert.strictEqual(fake.readyState, 3);
+});
+
+test('a confirmed session outlives the ready timeout', async () => {
+  const { fake, seen } = session({ readyTimeoutMs: 20 });
+  fake.serverSends({ type: 'session.updated' });
+  await new Promise((r) => setTimeout(r, 40));
+  assert.deepStrictEqual(seen.closes, []);
+  assert.strictEqual(fake.readyState, 1);
+});
+
+test('a socket whose writes pile up is dropped as unexpected', () => {
+  const { s, fake, seen } = session();
+  fake.serverSends({ type: 'session.updated' });
+  fake.bufferedAmount = 2 * 1024 * 1024;
+  s.sendAudio(loud());
+  assert.deepStrictEqual(seen.closes, [{ unexpected: true, code: 1006 }]);
+  assert.strictEqual(appends(fake).length, 0);
+});
+
+test('audio that waited for the session goes out whole, in order, and is cut into turns', (t) => {
+  let now = 0;
+  t.mock.method(Date, 'now', () => now);
+  const { s, fake } = session({}, { open: false });
+  const at = (ms, c) => { now = ms; s.sendAudio(c); };
+  at(0, quiet()); at(500, loud()); at(1000, loud()); // the handshake is still running
+  fake.open();
+  at(1500, quiet()); // open, not yet confirmed: used to be dropped, splicing a gap into the phrase
+  now = 1800;
+  fake.serverSends({ type: 'session.updated' });
+  assert.deepStrictEqual(appends(fake).map(firstSample), [0, 3000, 3000, 0]);
+  assert.strictEqual(fake.sentOfType('input_audio_buffer.commit').length, 0);
+  // The turn-taker heard the replay: live silence ends that phrase as usual
+  // (before the fix it never saw the speech and nothing was ever committed).
+  at(2000, quiet()); at(2500, quiet());
+  assert.strictEqual(fake.sentOfType('input_audio_buffer.commit').length, 1);
+  assert.strictEqual(fake.sentOfType('response.create').length, 1);
+});
+
+test('at most 4 s waits for the session; older audio is dropped', () => {
+  const { s, fake } = session({}, { open: false });
+  for (let i = 1; i <= 12; i++) s.sendAudio(chunk(i)); // 6 s of handshake
+  fake.open();
+  fake.serverSends({ type: 'session.updated' });
+  assert.deepStrictEqual(appends(fake).map(firstSample), [5, 6, 7, 8, 9, 10, 11, 12]);
+});
+
+test('a throwing callback is logged, not thrown into the socket or passed off as a parse error', () => {
+  const errors = [];
+  const boom = () => { throw new Error('boom'); };
+  const { fake } = session({
+    onAudio: boom, onTranslationText: boom, onSourceText: boom, onReady: boom, onClose: boom,
+    log: { error: (m) => errors.push(m), warn() {} },
+  });
+  const consoleErrors = [];
+  const saved = console.error;
+  console.error = (...a) => consoleErrors.push(a.join(' '));
+  try {
+    assert.doesNotThrow(() => {
+      fake.serverSends({ type: 'session.updated' });
+      fake.serverSends({ type: 'response.output_audio.delta', delta: 'AAAA' });
+      fake.serverSends({ type: 'response.output_audio_transcript.done', transcript: 'a' });
+      fake.serverSends({ type: 'conversation.item.input_audio_transcription.completed', transcript: 'бэ' });
+      fake.serverCloses(1011);
+    });
+  } finally {
+    console.error = saved;
+  }
+  assert.strictEqual(errors.length, 5);
+  assert.ok(errors.some((m) => /onAudio callback failed: boom/.test(m)));
+  assert.ok(!consoleErrors.some((m) => m.includes('parse error')), consoleErrors.join('\n'));
+});
+
+test('nothing is delivered after we closed it', () => {
+  const { s, fake, seen } = session();
+  fake.serverSends({ type: 'session.updated' });
+  s.close();
+  fake.readyState = 1; // real ws keeps reading until the server answers the close frame
+  fake.serverSends({ type: 'response.output_audio.delta', delta: 'AAAA' });
+  fake.serverSends({ type: 'response.output_audio_transcript.done', transcript: 'late' });
+  assert.strictEqual(seen.audio.length, 0);
+  assert.deepStrictEqual(seen.translation, []);
+});
+
+test('frames read after a refusal count for nothing', () => {
+  const { fake, seen } = session();
+  fake.serverSends({ type: 'error', error: { message: 'refused' } });
+  fake.readyState = 1; // real ws still parses what came in the same read
+  fake.serverSends({ type: 'session.updated' });
+  fake.serverSends({ type: 'response.output_audio.delta', delta: 'AAAA' });
+  assert.strictEqual(seen.ready, 0);
+  assert.strictEqual(seen.audio.length, 0);
+});
+
+test('stopping during the handshake is not a failure and sends nothing later', () => {
+  const { s, fake, seen } = session({}, { open: false });
+  s.sendAudio(loud());
+  s.close();
+  s.close();
+  assert.deepStrictEqual(seen.closes, [{ unexpected: false, code: 1006 }]);
+  assert.deepStrictEqual(fake.sent, []);
+});
+
+test('what was said reaches the subtitles but not the log', (t) => {
+  const lines = [];
+  t.mock.method(console, 'log', (...args) => lines.push(args.join(' ')));
+  const { fake, seen } = session();
+  fake.serverSends({ type: 'session.updated' });
+  fake.serverSends({ type: 'conversation.item.input_audio_transcription.completed', transcript: 'Добрый день' });
+  fake.serverSends({ type: 'response.output_audio_transcript.done', transcript: 'Dobrý deň' });
+  assert.deepStrictEqual(seen.source, [['Добрый день', true]]);
+  assert.deepStrictEqual(seen.translation, [['Dobrý deň', true]]);
+  assert.ok(!lines.some((l) => l.includes('Добрый') || l.includes('Dobrý')), lines.join('\n'));
 });

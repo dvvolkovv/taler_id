@@ -199,3 +199,30 @@ test('punctuation runs cannot stall the agent', () => {
   }
   assert.ok(Number(process.hrtime.bigint() - start) / 1e6 < 100);
 });
+
+test('a server error is logged and then handed to onServerError; without it nothing else happens', (t) => {
+  const errors = [];
+  t.mock.method(console, 'error', (...args) => errors.push(args.join(' ')));
+  const handed = [];
+  const a = open('ru', 'sk', { onServerError: (e) => handed.push(e) });
+  a.fake.serverSends({ type: 'error', error: { code: 'invalid_value' } });
+  assert.deepStrictEqual(handed, [{ code: 'invalid_value' }]);
+  const b = open('auto', 'en'); // the in-call translator passes no hook
+  assert.doesNotThrow(() => b.fake.serverSends({ type: 'error', error: { code: 'x' } }));
+  assert.strictEqual(errors.filter((l) => l.includes('OpenAI error')).length, 2);
+  assert.strictEqual(b.fake.readyState, 1);
+});
+
+test('with logText false the log shows how long a phrase was, not its words', (t) => {
+  const lines = [];
+  t.mock.method(console, 'log', (...args) => lines.push(args.join(' ')));
+  const quiet = open('ru', 'sk', { logText: false });
+  quiet.fake.serverSends({ type: 'conversation.item.input_audio_transcription.completed', transcript: 'Добрый день' });
+  quiet.fake.serverSends({ type: 'response.output_audio_transcript.done', transcript: 'Dobrý deň' });
+  assert.ok(!lines.some((l) => l.includes('Добрый') || l.includes('Dobrý')), lines.join('\n'));
+  assert.ok(lines.some((l) => l.endsWith('heard: 11 chars')));
+  assert.ok(lines.some((l) => l.endsWith('translated: 9 chars')));
+  const inCall = open('ru', 'sk'); // the in-call translator passes no logText
+  inCall.fake.serverSends({ type: 'conversation.item.input_audio_transcription.completed', transcript: 'Добрый день' });
+  assert.ok(lines.some((l) => l.endsWith('heard: "Добрый день"')));
+});
