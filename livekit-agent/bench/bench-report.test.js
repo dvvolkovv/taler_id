@@ -57,3 +57,65 @@ test('the report page carries every section', () => {
     assert.ok(md.includes(part), part);
   }
 });
+
+const emptyReport = (over) => ({
+  pair: 'ru-sk',
+  startedAt: '2026-11-01T10:00:00.000Z',
+  config: { model: 'm', fallbackModel: 'm2', threshold: 0.25, margin: 0.05, chunkMs: 500, hysteresis: 2 },
+  latencies: [],
+  silentChecks: [],
+  scoreGroups: [],
+  suggestion: null,
+  captions: [],
+  sameLanguage: [],
+  embedLatency: { n: 0 },
+  failOpen: 0,
+  ...over,
+});
+
+test('percentile of a single value is that value', () => {
+  for (const p of [0, 37, 100]) assert.strictEqual(r.percentile([7], p), 7);
+});
+
+test('no intruder chunks is not enough data to suggest thresholds', () => {
+  assert.strictEqual(r.suggestThresholds([{ own: 0.6, other: 0.1 }], []), null);
+});
+
+test('fail-open chunks (no score) do not move the suggested thresholds', () => {
+  const clean = Array.from({ length: 20 }, (_, i) => ({ own: 0.6 + i * 0.01, other: 0.1 }));
+  // Few intruder chunks: two unscored ones would move their percentiles past rounding.
+  const intruder = Array.from({ length: 5 }, (_, i) => ({ own: 0.1 + i * 0.05, other: 0.6 }));
+  const failOpen = { own: null, other: null };
+  assert.deepStrictEqual(
+    r.suggestThresholds([...clean, failOpen, failOpen], [...intruder, failOpen, failOpen]),
+    r.suggestThresholds(clean, intruder),
+  );
+});
+
+test('voiced time counts each frame for its own length', () => {
+  const frames = [{ t: 100, rms: 10, ms: 10 }, { t: 110, rms: 900, ms: 20 }, { t: 130, rms: 800, ms: 5 }, { t: 300, rms: 1000, ms: 10 }];
+  assert.strictEqual(r.voicedMs(frames, 100, 200), 25);
+  assert.strictEqual(r.voicedMs([{ t: 0, rms: 900 }, { t: 10, rms: 900 }], 0, 100), 20); // no ms: 10 each
+});
+
+test('model text cannot break a table row or a list item', () => {
+  const md = r.renderReport(emptyReport({
+    captions: [{ listener: 'bench-b', role: 'translation', text: 'raz | dva\ntri * štyri_ pať' }],
+    sameLanguage: [{ input: 'sk-1', target: 'sk', voicedSeconds: 1, transcript: 'a | b\nc' }],
+  }));
+  assert.ok(!md.includes('raz | dva') && !md.includes('dva\ntri'), md);
+  assert.ok(!md.includes('a | b\nc'), md);
+  assert.ok(md.includes('raz \\| dva') && md.includes('a \\| b'), md);
+});
+
+test('a missing transcript shows as —, not as "undefined"', () => {
+  const md = r.renderReport(emptyReport({ sameLanguage: [{ input: 'de-1', target: 'de', voicedSeconds: 0, transcript: undefined }] }));
+  const row = md.split('\n').find((l) => l.includes('de-1'));
+  assert.ok(row.endsWith('| — |') && !row.includes('undefined'), row);
+});
+
+test('without a suggestion the report says there is not enough data', () => {
+  const md = r.renderReport(emptyReport({}));
+  assert.ok(md.includes('Недостаточно данных.'));
+  assert.ok(!md.includes('разделяет'));
+});

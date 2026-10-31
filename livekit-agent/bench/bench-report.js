@@ -30,12 +30,21 @@ function firstVoicedAfter(frames, from, until, threshold = 300) {
   return null;
 }
 
-/** Milliseconds of 10 ms frames at or above `threshold` RMS inside [from, to). */
-function voicedMs(frames, from, to, threshold = 300) {
-  let n = 0;
-  for (const f of frames) if (f.t >= from && f.t < to && f.rms >= threshold) n += 1;
-  return n * 10;
+/**
+ * Milliseconds of frames at or above `threshold` RMS inside [from, to). Each
+ * frame counts for its own `ms`: LiveKit picks the frame size
+ * (speaker-timeline.js), and a flat 10 ms on 20 ms frames would halve the
+ * leak this measures. A frame without `ms` counts as `defaultMs`.
+ */
+function voicedMs(frames, from, to, threshold = 300, defaultMs = 10) {
+  let ms = 0;
+  for (const f of frames) if (f.t >= from && f.t < to && f.rms >= threshold) ms += f.ms ?? defaultMs;
+  return ms;
 }
+
+// A fail-open chunk has no score (own and other both null) and says nothing
+// about anyone's voice; left in, it would shift a percentile.
+const hasScore = (s) => Number.isFinite(s.own) && Number.isFinite(s.other);
 
 /**
  * Thresholds that would separate the owner's own speech from sound intruding
@@ -44,10 +53,12 @@ function voicedMs(frames, from, to, threshold = 300) {
  */
 function suggestThresholds(own, intruder) {
   const round = (x) => Math.round(x * 100) / 100;
-  const ownSim = percentile(own.map((s) => s.own), 10);
-  const intSim = percentile(intruder.map((s) => s.own), 90);
-  const ownGap = percentile(own.map((s) => s.own - s.other), 10);
-  const intGap = percentile(intruder.map((s) => s.own - s.other), 90);
+  const o = own.filter(hasScore);
+  const i = intruder.filter(hasScore);
+  const ownSim = percentile(o.map((s) => s.own), 10);
+  const intSim = percentile(i.map((s) => s.own), 90);
+  const ownGap = percentile(o.map((s) => s.own - s.other), 10);
+  const intGap = percentile(i.map((s) => s.own - s.other), 90);
   if (ownSim === null || intSim === null) return null;
   return {
     threshold: round((ownSim + intSim) / 2),
@@ -60,6 +71,20 @@ function suggestThresholds(own, intruder) {
 const fmt = (x) => (x === null || x === undefined ? '—' : typeof x === 'number' && !Number.isInteger(x) ? x.toFixed(2) : String(x));
 const five = (s) => (s.n === 0 ? '—' : [s.min, s.p10, s.median, s.p90, s.max].map(fmt).join(' / '));
 
+/**
+ * Captions and transcripts are model output: a `|` would open a table column
+ * and a newline would start a row or a list item of its own. A missing value
+ * gives '', so `mdEscape(x) || '—'` still falls back.
+ */
+function mdEscape(text) {
+  if (text === null || text === undefined) return '';
+  return String(text)
+    .replace(/\\/g, '\\\\')
+    .replace(/[|*_`]/g, '\\$&')
+    .replace(/\s*[\r\n]+\s*/g, ' ')
+    .trim();
+}
+
 function renderReport(r) {
   const c = r.config;
   const lines = [
@@ -71,13 +96,13 @@ function renderReport(r) {
     '',
     '| Фраза | Направление | Движок | мс |',
     '|---|---|---|---|',
-    ...r.latencies.map((l) => `| ${l.phrase} | ${l.direction} | ${l.engine} | ${fmt(l.ms)} |`),
+    ...r.latencies.map((l) => `| ${mdEscape(l.phrase)} | ${mdEscape(l.direction)} | ${mdEscape(l.engine)} | ${fmt(l.ms)} |`),
     '',
     '## Должно быть тихо',
     '',
     '| Ситуация | Слышно у слушателя, мс |',
     '|---|---|',
-    ...r.silentChecks.map((s) => `| ${s.situation} | ${s.voicedMs} |`),
+    ...r.silentChecks.map((s) => `| ${mdEscape(s.situation)} | ${fmt(s.voicedMs)} |`),
     '',
     '## Сверка голоса',
     '',
@@ -86,7 +111,7 @@ function renderReport(r) {
     ...r.scoreGroups.map((g) => {
       const own = summarize(g.scores.map((s) => s.own));
       const gap = summarize(g.scores.map((s) => s.own - s.other));
-      return `| ${g.group} | ${g.scores.length} | ${five(own)} | ${five(gap)} | ${g.scores.filter((s) => s.pass).length} |`;
+      return `| ${mdEscape(g.group)} | ${g.scores.length} | ${five(own)} | ${five(gap)} | ${g.scores.filter((s) => s.pass).length} |`;
     }),
     '',
     '## Предлагаемые пороги',
@@ -97,13 +122,13 @@ function renderReport(r) {
     '',
     '## Субтитры',
     '',
-    ...r.captions.map((cap) => `- ${cap.listener} / ${cap.role}: «${cap.text}»`),
+    ...r.captions.map((cap) => `- ${mdEscape(cap.listener)} / ${mdEscape(cap.role)}: «${mdEscape(cap.text)}»`),
     '',
     '## Речь, уже на языке перевода',
     '',
     '| Вход | Цель | Озвучено, с | Текст на выходе |',
     '|---|---|---|---|',
-    ...r.sameLanguage.map((s) => `| ${s.input} | ${s.target} | ${fmt(s.voicedSeconds)} | ${s.transcript || '—'} |`),
+    ...r.sameLanguage.map((s) => `| ${mdEscape(s.input)} | ${mdEscape(s.target)} | ${fmt(s.voicedSeconds)} | ${mdEscape(s.transcript) || '—'} |`),
     '',
     '## Сервис сверки',
     '',
