@@ -1783,6 +1783,239 @@ git commit -m "feat(interpreter): фразовый движок — onReady/onCl
 
 ---
 
+### Task 5b: Фразовый движок — без пустых ответов, колбэки не роняют процесс, регулярка галлюцинаций
+
+По ревью задачи 5. Все правки срабатывают только с `pruneHistory`, на колбэках или касаются строк лога, поэтому переводчик звонков не меняется.
+- **Пустой разговор.** За время одного ответа отрезаны две фразы: следующий ответ покрывает обе и удаляет обе, а второй запрос из очереди уходит на пустой разговор. Что модель скажет на пустоте, неизвестно; по опыту переводчика ассистента — что-то не по роли, и слушатель это услышит. Запрос из очереди пропускается, если всё отрезанное уже покрыто и ни один commit не ждёт подтверждения.
+- **Колбэки.** Исключение из `onClose` вылетело бы из обработчика `'close'` внутри `ws` и уронило бы весь `livekit-ai-agent`, а вместе с ним запись встреч. Исключения из `onReady` и `onTranscript` писались как `message parse error`.
+- **Регулярка.** Не ловила частые русские «титры» Whisper («Продолжение следует…», «Субтитры сделал…») и считала галлюцинацией живое «да да да». Теперь нужно четыре повтора и больше, плюс список «титров». На звук и перевод регулярка не влияет, только на субтитр своей речи; в переводчике звонков — только на строку лога.
+
+**Files:**
+- Modify: `livekit-agent/realtime-phrase-session.js`
+- Modify: `livekit-agent/realtime-phrase-session.test.js` (заменить один тест, добавить один)
+- Create: `livekit-agent/realtime-phrase-session.prune.test.js`
+
+- [ ] **Step 1: Тесты (падают)**
+
+`realtime-phrase-session.prune.test.js`:
+
+```js
+// Run with: node --test  (from livekit-agent/)
+//
+// pruneHistory against the real turn taker, with a server stand-in that
+// acknowledges commits and response.create in order.
+const test = require('node:test');
+const assert = require('node:assert');
+const { fakeWsFactory } = require('./testing/fake-ws');
+const { createRealtimeSession } = require('./realtime-phrase-session');
+
+const loud = Buffer.from(Int16Array.from({ length: 480 }, () => 1000).buffer).toString('base64');
+const quiet = Buffer.alloc(960).toString('base64');
+
+function pruning(t) {
+  let now = 0;
+  t.mock.method(console, 'log', () => {});
+  t.mock.method(console, 'warn', () => {});
+  t.mock.method(Date, 'now', () => now);
+  const { factory, last } = fakeWsFactory();
+  const ws = createRealtimeSession('ru', 'sk', () => {}, () => {}, { wsFactory: factory, apiKey: 'k', pruneHistory: true });
+  const fake = last();
+  fake.open();
+  fake.serverSends({ type: 'session.updated' });
+  let seen = 0;
+  let nIn = 0;
+  let nResp = 0;
+  const serve = () => {
+    for (; seen < fake.sent.length; seen++) {
+      const m = fake.sent[seen];
+      if (m.type === 'input_audio_buffer.commit') fake.serverSends({ type: 'input_audio_buffer.committed', item_id: `in${++nIn}` });
+      if (m.type === 'response.create') fake.serverSends({ type: 'response.created', response: { id: `r${++nResp}` } });
+    }
+  };
+  const phrase = () => {
+    for (const end = now + 600; now < end; now += 20) ws.sendAudio(loud);
+    for (const end = now + 700; now < end; now += 20) ws.sendAudio(quiet);
+    serve();
+  };
+  const done = (id) => {
+    fake.serverSends({ type: 'response.done', response: { id, status: 'completed', output: [{ id: `out_${id}` }] } });
+    serve();
+  };
+  const control = () => fake.sent
+    .filter((m) => m.type !== 'input_audio_buffer.append' && m.type !== 'session.update')
+    .map((m) => (m.item_id ? `delete ${m.item_id}` : m.type));
+  return { phrase, done, control };
+}
+
+test('the spoken phrase is deleted before the queued phrase is asked for', (t) => {
+  const { phrase, done, control } = pruning(t);
+  phrase();
+  phrase(); // cut while r1 speaks
+  done('r1');
+  assert.deepStrictEqual(control().slice(-3), ['delete in1', 'delete out_r1', 'response.create']);
+});
+
+test('two phrases cut during one response: no response is asked for on an empty conversation', (t) => {
+  const { phrase, done, control } = pruning(t);
+  phrase();
+  phrase();
+  phrase(); // phrases 2 and 3 both cut while r1 speaks
+  done('r1'); // r2 is created over in2 and in3
+  done('r2'); // both are deleted with it
+  assert.strictEqual(control().filter((c) => c === 'response.create').length, 2);
+});
+```
+
+В `realtime-phrase-session.test.js` тест `'only real hallucinations are filtered, ordinary phrases are not'` заменить целиком на:
+
+```js
+test('only real hallucinations are filtered, ordinary phrases are not', () => {
+  for (const speech of ['Добрый день', 'Guten Tag, wie geht es Ihnen?', 'да да да', 'Да, да, да.', 'нет, нет, нет']) {
+    assert.strictEqual(isHallucination(speech), false, speech);
+  }
+  for (const loop of [
+    ' ',
+    'ok ok ok ok',
+    'Субтитры сделал DimaTorzok',
+    'Продолжение следует...',
+    'Спасибо за просмотр!',
+    'Thanks for watching!',
+    'thank you for watching',
+    'Я не знаю, что делать. Я не знаю, что делать. Я не знаю, что делать. Я не знаю, что делать.',
+  ]) {
+    assert.strictEqual(isHallucination(loop), true, loop);
+  }
+});
+```
+
+и дописать в конец файла:
+
+```js
+test('a callback that throws is logged and does not escape the socket handlers', (t) => {
+  const errors = [];
+  t.mock.method(console, 'error', (...args) => errors.push(args.join(' ')));
+  const { fake } = open('ru', 'sk', {
+    onReady: () => { throw new Error('ready boom'); },
+    onClose: () => { throw new Error('close boom'); },
+  });
+  assert.doesNotThrow(() => fake.serverSends({ type: 'session.updated' }));
+  assert.doesNotThrow(() => fake.serverCloses(1006));
+  assert.ok(errors.some((l) => l.includes('onReady callback failed') && l.includes('ready boom')));
+  assert.ok(errors.some((l) => l.includes('onClose callback failed') && l.includes('close boom')));
+});
+```
+
+Run: `node --test realtime-phrase-session.prune.test.js realtime-phrase-session.test.js`
+Expected: падают «two phrases cut…» (3 запроса вместо 2), тест регулярки и тест колбэка.
+
+- [ ] **Step 2: Регулярка**
+
+Строки
+
+```js
+// Common Whisper hallucination patterns: the same 2–20 characters said three
+// or more times over, and YouTube-like sign-offs. The repeat used to be
+// ((.{2,20})\s*){3,}, which any phrase of six characters satisfies — harmless
+// while the result was only logged, but it would swallow every subtitle.
+const HALLUCINATION_RE = /^(.{2,20}?)(?:\s*\1){2,}$|구독과\s*좋아요|ご視聴|チャンネル登録|请订阅|thank you for watching/i;
+```
+
+заменить на:
+
+```js
+// Common Whisper hallucination patterns: the same 2–40 characters said four or
+// more times over (three is still a person saying "да да да"), and the
+// subtitle-credit lines Whisper invents on silence. The repeat used to be
+// ((.{2,20})\s*){3,}, which any phrase of six characters satisfies — harmless
+// while the result was only logged, but it would swallow every subtitle.
+const HALLUCINATION_RE = /^(.{2,40}?)(?:[\s,.!?…]*\1){3,}[\s,.!?…]*$|продолжение следует|субтитры (?:сделал|создавал|подготовил)|редактор субтитров|спасибо за просмотр|thanks? (?:you )?for watching|구독과\s*좋아요|ご視聴|チャンネル登録|请订阅/i;
+```
+
+- [ ] **Step 3: Колбэки под защитой**
+
+После строки `const logTag = opts.logTag || 'TRANSLATOR';` добавить:
+
+```js
+  // A callback that throws must not take the socket's handlers with it: an
+  // exception out of the 'close' handler would escape from inside `ws` and
+  // bring down the whole agent process.
+  const callback = (name, fn, arg) => {
+    if (!fn) return;
+    try {
+      fn(arg);
+    } catch (e) {
+      console.error(`[${logTag}] [${tag}] ${name} callback failed:`, e.message);
+    }
+  };
+```
+
+Затем четыре замены:
+
+| Было | Стало |
+|---|---|
+| `        if (opts.onReady) opts.onReady();` | `        callback('onReady', opts.onReady);` |
+| `        else if (opts.onTranscript) opts.onTranscript({ role: 'source', text: heard });` | `        else callback('onTranscript', opts.onTranscript, { role: 'source', text: heard });` |
+| `        if (opts.onTranscript && translated) opts.onTranscript({ role: 'translation', text: translated });` | `        if (translated) callback('onTranscript', opts.onTranscript, { role: 'translation', text: translated });` |
+| `    if (opts.onClose) opts.onClose({ code });` | `    callback('onClose', opts.onClose, { code });` |
+
+- [ ] **Step 4: Не просить ответ на пустом разговоре**
+
+После строки `const inputsByResponse = new Map();` добавить:
+
+```js
+  // Commits sent but not yet acknowledged by input_audio_buffer.committed.
+  let commitsAwaitingAck = 0;
+```
+
+В ветке `input_audio_buffer.committed` первой строкой внутри `if` добавить:
+
+```js
+        commitsAwaitingAck = Math.max(0, commitsAwaitingAck - 1);
+```
+
+В `onCommit` после `ws.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));` добавить:
+
+```js
+      if (opts.pruneHistory) commitsAwaitingAck += 1;
+```
+
+`onRespond` заменить на:
+
+```js
+    onRespond: (reason) => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      // The response before this one already covered every committed phrase:
+      // asking again would run on an empty conversation.
+      if (opts.pruneHistory && reason === 'queued' && uncoveredInputs.length === 0 && commitsAwaitingAck === 0) return;
+      ws.send(JSON.stringify({ type: 'response.create' }));
+    },
+```
+
+В комментарии над `function pruneSpoken` дописать строку:
+
+```js
+  // A failed response's phrase is deleted too and not retried: by the time the
+  // failure is known the speaker has moved on, and a late translation is worse
+  // than none.
+```
+
+- [ ] **Step 5: Проверить**
+
+```bash
+npm test 2>&1 | tail -8
+```
+
+Ожидается `ℹ pass 84` (81 + 3), `ℹ fail 0`. Характеризующие тесты переводчика звонков зелёные.
+
+- [ ] **Step 6: Коммит**
+
+```bash
+git add realtime-phrase-session.js realtime-phrase-session.test.js realtime-phrase-session.prune.test.js
+git commit -m "fix(interpreter): фразовый движок — без ответов на пустом разговоре, колбэки не роняют агент, регулярка «титров» Whisper" -m "По ревью задачи 5. Переводчик звонков не меняется: правки работают только с pruneHistory, на колбэках или в строке лога." -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
 ### Task 6: `interpreter-langs.js` — какой движок для пары
 
 **Files:**
@@ -4312,7 +4545,7 @@ module.exports = { startInterpreter, stopInterpreter, getInterpreterStatus, self
 node --test interpreter.test.js && npm test 2>&1 | tail -8
 ```
 
-Ожидается: `ℹ pass 8` в файле, всего `ℹ pass 153`, `ℹ fail 0`.
+Ожидается: `ℹ pass 8` в файле, всего `ℹ pass 156`, `ℹ fail 0`.
 
 - [ ] **Step 4: Коммит**
 
@@ -4535,7 +4768,7 @@ registerInterpreterRoutes(app, {
 node --test interpreter-routes.test.js && node --check index.js && echo index-ok && npm test 2>&1 | tail -8
 ```
 
-Ожидается: `ℹ pass 6`, `index-ok`, весь набор `ℹ pass 159`, `ℹ fail 0`.
+Ожидается: `ℹ pass 6`, `index-ok`, весь набор `ℹ pass 162`, `ℹ fail 0`.
 
 - [ ] **Step 5: Коммит**
 
@@ -4743,7 +4976,7 @@ function renderReport(r) {
 module.exports = { percentile, summarize, firstVoicedAfter, voicedMs, suggestThresholds, renderReport };
 ```
 
-- [ ] **Step 3: Тест проходит** — `node --test bench/bench-report.test.js` → `ℹ pass 5`; весь `npm test` — `ℹ pass 164`, `ℹ fail 0`.
+- [ ] **Step 3: Тест проходит** — `node --test bench/bench-report.test.js` → `ℹ pass 5`; весь `npm test` — `ℹ pass 167`, `ℹ fail 0`.
 
 - [ ] **Step 4: Коммит**
 
@@ -5170,6 +5403,7 @@ ssh dvolkov@77.73.131.137 'ssh dev-backend "rm -rf ~/interp-bench && echo cleane
 - разделение голосов и выбранные пороги, либо их отсутствие;
 - что модель делает с речью на языке перевода (`PROBE.md`, п. 5, и раздел отчёта);
 - качество перевода по субтитрам — 2–3 примера;
+- субтитры своей речи на фразовом направлении (ru→sk): пришли ли они для каждой фразы. Ревью задачи 5: удаление озвученной реплики может опередить её расшифровку, и тогда субтитр пропадёт; если так — откладывать удаление реплики до `completed`/`failed` расшифровки с таймаутом;
 - фразовое направление (ru→sk): нет ли в субтитрах выдуманных фраз. 31.10 соседняя работа над переводчиком ассистента видела, что ответы без истории (`conversation: "none"`) на шуме сочиняют перевод, а `pruneHistory` к этому близок. Если выдумки есть — предложить выключить `pruneHistory` или оставлять в разговоре последнюю озвученную реплику;
 - сколько стоил прогон.
 
