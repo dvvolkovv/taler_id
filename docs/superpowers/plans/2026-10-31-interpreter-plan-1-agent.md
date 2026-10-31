@@ -6970,6 +6970,270 @@ git commit -m "feat(interpreter): присутствие участников и
 
 ---
 
+### Task 13b: Присутствие — `onGone` не роняет агент, тесты на то, на что опирается задача 16
+
+По ревью задачи 13:
+- **`onGone` вызывался из таймера без защиты.** Исключение в нём — это uncaught exception: процесс агента падает вместе с записью встреч и переводчиком звонков. `index.js` обработчика `uncaughtException` не ставит. Теперь try/catch и запись в журнал, как в `reconnecting-engine.js`.
+- **Модель «множество identity на человека» подтверждена кодом SDK.** В rtc-node 0.13.24 замена участника с той же identity приходит строго как Disconnected, потом Connected, а второй Connected без Disconnected Room не шлёт. Счётчик был бы хуже: задача 16 вызывает `arrive` дважды (событие и снимок комнаты после connect), и он не вернулся бы к нулю. Это записано в шапке модуля.
+- **Тесты.** При мутациях выживали 9 мутантов из 21. Код верен, но не были закреплены четыре вещи, на которые опирается задача 16: срок из `graceMs`; приход одного не гасит часы другого; повторный уход не заводит второй таймер; уход постороннего ничего не ломает. Таймеры по умолчанию тоже не проверял ни один тест.
+
+**Files:**
+- Modify: `livekit-agent/presence-watch.js` (переписать целиком)
+- Modify: `livekit-agent/presence-watch.test.js` (переписать целиком)
+
+- [ ] **Step 1: Тесты (падают)**
+
+`presence-watch.test.js` целиком:
+
+```js
+// Run with: node --test  (from livekit-agent/)
+const test = require('node:test');
+const assert = require('node:assert');
+const { createPresenceWatch } = require('./presence-watch');
+
+function setup({ graceMs = 60000, onGone, log } = {}) {
+  const timers = [];
+  const gone = [];
+  const watch = createPresenceWatch({
+    people: ['a', 'b'],
+    graceMs,
+    onGone: onGone || ((p) => gone.push(p)),
+    setTimer: (fn, ms) => {
+      const t = { fn, ms, cleared: false };
+      timers.push(t);
+      return t;
+    },
+    clearTimer: (t) => { t.cleared = true; },
+    ...(log ? { log } : {}),
+  });
+  const live = () => timers.filter((t) => !t.cleared && !t.fired);
+  const fire = (t) => { t.fired = true; t.fn(); };
+  return { watch, timers, gone, live, fire };
+}
+
+test('both people get the grace period to show up at all', () => {
+  const { watch, live, fire, gone } = setup();
+  assert.strictEqual(live().length, 2);
+  watch.arrive('a#phone');
+  assert.strictEqual(live().length, 1);
+  fire(live()[0]);
+  assert.deepStrictEqual(gone, ['b']);
+});
+
+test('leaving starts the clock and coming back stops it', () => {
+  const { watch, live, gone } = setup();
+  watch.arrive('a#phone');
+  watch.arrive('b#phone');
+  watch.leave('b#phone');
+  assert.strictEqual(live().length, 1);
+  assert.strictEqual(live()[0].ms, 60000);
+  watch.arrive('b#phone');
+  assert.strictEqual(live().length, 0);
+  assert.deepStrictEqual(gone, []);
+});
+
+test('a person on two devices is present until the last one leaves', () => {
+  const { watch, live } = setup();
+  watch.arrive('a#phone');
+  watch.arrive('a#tablet');
+  watch.arrive('b#phone');
+  watch.leave('a#phone');
+  assert.strictEqual(live().length, 0);
+  assert.deepStrictEqual(watch.identitiesOf('a'), ['a#tablet']);
+  watch.leave('a#tablet');
+  assert.strictEqual(live().length, 1);
+  assert.deepStrictEqual(watch.presentPeople(), ['b']);
+});
+
+test('strangers are ignored', () => {
+  const { watch } = setup();
+  watch.arrive('voice-interpreter');
+  watch.arrive('c#phone');
+  assert.deepStrictEqual(watch.presentPeople(), []);
+  assert.deepStrictEqual(watch.identitiesOf('c'), []);
+});
+
+test('after close nobody is reported gone', () => {
+  const { watch, timers, gone } = setup();
+  watch.close();
+  assert.ok(timers.every((t) => t.cleared));
+  timers[0].fn();
+  assert.deepStrictEqual(gone, []);
+});
+
+// --- review 13 ---
+
+test('the clock runs for graceMs, not a built-in minute', () => {
+  const { watch, live } = setup({ graceMs: 45000 });
+  assert.deepStrictEqual(live().map((t) => t.ms), [45000, 45000]);
+  watch.arrive('a#phone');
+  watch.leave('a#phone');
+  assert.deepStrictEqual(live().map((t) => t.ms), [45000, 45000]);
+});
+
+test("one person showing up does not stop the other one's clock", () => {
+  const { watch, live, fire, gone } = setup();
+  watch.arrive('b#phone');
+  assert.strictEqual(live().length, 1);
+  fire(live()[0]);
+  assert.deepStrictEqual(gone, ['a']);
+});
+
+test('a departure while already away neither restarts nor doubles the clock', () => {
+  // The interpreter's case: someone present at connect leaves before the
+  // post-connect snapshot reached the watch, then comes back.
+  const { watch, live, fire, gone } = setup();
+  watch.leave('b#phone');
+  assert.strictEqual(live().length, 2);
+  watch.arrive('b#phone');
+  assert.strictEqual(live().length, 1);
+  fire(live()[0]);
+  assert.deepStrictEqual(gone, ['a']);
+});
+
+test('strangers leaving are ignored too', () => {
+  const { watch, live } = setup();
+  watch.leave('voice-interpreter');
+  watch.leave('c#phone');
+  watch.leave(undefined);
+  assert.strictEqual(live().length, 2);
+  assert.deepStrictEqual(watch.presentPeople(), []);
+});
+
+test('a throwing onGone is logged and does not escape the timer', () => {
+  const errors = [];
+  const log = { error: (m) => errors.push(m) };
+  const thrown = [new Error('boom'), undefined];
+  const { live, fire } = setup({ onGone: () => { throw thrown.shift(); }, log });
+  assert.doesNotThrow(() => fire(live()[0]));
+  assert.doesNotThrow(() => fire(live()[0]));
+  assert.strictEqual(errors.length, 2);
+  assert.match(errors[0], /onGone\(a\) failed: boom/);
+  assert.match(errors[1], /onGone\(b\) failed/);
+});
+
+test('default timers: the clock really runs, and close() really stops it', async () => {
+  const gone = [];
+  const watch = createPresenceWatch({ people: ['a', 'b'], graceMs: 20, onGone: (p) => gone.push(p) });
+  watch.arrive('a#phone');
+  const stopped = createPresenceWatch({ people: ['c'], graceMs: 20, onGone: (p) => gone.push(p) });
+  stopped.close();
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.deepStrictEqual(gone, ['b']);
+  watch.close();
+});
+```
+
+Run: `node --test presence-watch.test.js`
+Expected: падает один тест — `a throwing onGone is logged and does not escape the timer`. Остальные пять новых проходят и сейчас. Они закрепляют поведение, которое тесты задачи 13 не ловили.
+
+- [ ] **Step 2: Модуль целиком**
+
+`presence-watch.js`:
+
+```js
+'use strict';
+/**
+ * Who of the two is in the room, by person rather than device, and when one
+ * of them has been away too long. Each person gets the grace period from the
+ * start too — someone who scanned the code but never connected ends the
+ * conversation the same way as someone whose phone lost the network.
+ *
+ * Also the address book for data messages: a person's current identities
+ * (userId#device) are where their captions go.
+ *
+ * A set of identities per person, not a counter. @livekit/rtc-node reports one
+ * identity's arrivals and departures strictly in turn: a reconnect that
+ * replaces a participant (same identity, new sid) arrives as Disconnected and
+ * then Connected, and the Room throws rather than emit a second Connected for
+ * an identity it still holds. arrive() itself can be called twice for one
+ * participant (the event, then the snapshot of the room taken after connect),
+ * and a counter would never come back down to zero.
+ */
+const { baseIdentity } = require('./translator-targets');
+
+function createPresenceWatch({
+  people,
+  graceMs,
+  onGone,
+  setTimer = setTimeout,
+  clearTimer = clearTimeout,
+  log = console,
+}) {
+  const present = new Map(people.map((p) => [p, new Set()]));
+  const timers = new Map();
+  let closed = false;
+
+  function startClock(person) {
+    if (closed || timers.has(person)) return;
+    timers.set(person, setTimer(() => {
+      timers.delete(person);
+      if (closed) return;
+      // onGone ends the conversation. Called from a timer, a throw would be an
+      // uncaught exception and take the whole agent process down.
+      try {
+        onGone(person);
+      } catch (e) {
+        log.error(`[INTERPRETER] presence watch: onGone(${person}) failed: ${e && e.message}`);
+      }
+    }, graceMs));
+  }
+
+  for (const p of people) startClock(p);
+
+  return {
+    arrive(identity) {
+      const person = baseIdentity(identity);
+      const devices = present.get(person);
+      if (closed || !devices) return;
+      devices.add(identity);
+      const t = timers.get(person);
+      if (t) {
+        clearTimer(t);
+        timers.delete(person);
+      }
+    },
+    leave(identity) {
+      const person = baseIdentity(identity);
+      const devices = present.get(person);
+      if (closed || !devices) return;
+      devices.delete(identity);
+      if (devices.size === 0) startClock(person);
+    },
+    identitiesOf(person) {
+      return [...(present.get(person) || [])];
+    },
+    presentPeople() {
+      return people.filter((p) => present.get(p).size > 0);
+    },
+    close() {
+      closed = true;
+      for (const t of timers.values()) clearTimer(t);
+      timers.clear();
+    },
+  };
+}
+
+module.exports = { createPresenceWatch };
+```
+
+- [ ] **Step 3: Проверить**
+
+```bash
+node --test presence-watch.test.js && npm test 2>&1 | tail -8
+```
+
+Ожидается: 11 тестов в файле; весь набор `ℹ pass 213`, `ℹ fail 0`.
+
+- [ ] **Step 4: Коммит**
+
+```bash
+git add presence-watch.js presence-watch.test.js
+git commit -m "fix(interpreter): присутствие — onGone под защитой, тесты на то, на что опирается сессия" -m "По ревью задачи 13: исключение в onGone из таймера роняло весь агент; тесты не закрепляли срок из graceMs, независимость часов двух людей, отсутствие второго таймера и уход посторонних." -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
 ### Task 14: `interpreter-messages.js` — data-канал
 
 **Files:**
@@ -7764,7 +8028,7 @@ module.exports = { startInterpreter, stopInterpreter, getInterpreterStatus, self
 node --test interpreter.test.js && npm test 2>&1 | tail -8
 ```
 
-Ожидается: `ℹ pass 9` в файле, всего `ℹ pass 222`, `ℹ fail 0`.
+Ожидается: `ℹ pass 9` в файле, всего `ℹ pass 228`, `ℹ fail 0`.
 
 - [ ] **Step 4: Коммит**
 
@@ -7987,7 +8251,7 @@ registerInterpreterRoutes(app, {
 node --test interpreter-routes.test.js && node --check index.js && echo index-ok && npm test 2>&1 | tail -8
 ```
 
-Ожидается: `ℹ pass 6`, `index-ok`, весь набор `ℹ pass 228`, `ℹ fail 0`.
+Ожидается: `ℹ pass 6`, `index-ok`, весь набор `ℹ pass 234`, `ℹ fail 0`.
 
 - [ ] **Step 5: Коммит**
 
@@ -8195,7 +8459,7 @@ function renderReport(r) {
 module.exports = { percentile, summarize, firstVoicedAfter, voicedMs, suggestThresholds, renderReport };
 ```
 
-- [ ] **Step 3: Тест проходит** — `node --test bench/bench-report.test.js` → `ℹ pass 5`; весь `npm test` — `ℹ pass 233`, `ℹ fail 0`.
+- [ ] **Step 3: Тест проходит** — `node --test bench/bench-report.test.js` → `ℹ pass 5`; весь `npm test` — `ℹ pass 239`, `ℹ fail 0`.
 
 - [ ] **Step 4: Коммит**
 
