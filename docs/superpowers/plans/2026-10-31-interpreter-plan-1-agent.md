@@ -48,6 +48,7 @@
 5. **Фразовый движок.** `createRealtimeSession` переезжает в `realtime-phrase-session.js`; рядом появляются `lang-names.js` и `audio-out.js`.
 6. **`.env` агента.** На DEV это `~/taler-id/livekit-agent/.env`, а не `~/taler-id/.env`.
 7. **Таймер присутствия** настраивается: `INTERPRETER_PRESENCE_GRACE_MS` (60 000).
+8. **Сессия синхронного движка** включает расшифровку входа (`gpt-4o-mini-transcribe`) и шумоподавление `near_field`. Без расшифровки `session.input_transcript.delta` не приходит вовсе — это показала проба (задача 3, `bench/PROBE.md`). Обе настройки выключаются значением `off` в `INTERPRETER_TRANSCRIBE_MODEL` / `INTERPRETER_NOISE_REDUCTION`.
 
 ## Карта файлов
 
@@ -1167,7 +1168,7 @@ npm test 2>&1 | tail -8
 Ожидается:
 - `syntax-ok`;
 - `0` — ни одна из перенесённых функций больше не объявлена в `translator.js`;
-- `ℹ pass 64`: 48 прежних, 7 из `wav.test.js` и 6 + 3 новых; `ℹ fail 0`.
+- `ℹ pass 67`: 48 прежних, 10 из `wav.test.js` и 6 + 3 новых; `ℹ fail 0`.
 
 - [ ] **Step 8: Коммит**
 
@@ -1389,7 +1390,7 @@ const HALLUCINATION_RE = /^(.{2,20}?)(?:\s*\1){2,}$|구독과\s*좋아요|ご視
 node --test realtime-phrase-session.test.js && npm test 2>&1 | tail -8
 ```
 
-Ожидается: 12 тестов в файле зелёные, всего `ℹ pass 70`.
+Ожидается: 12 тестов в файле зелёные, всего `ℹ pass 73`.
 
 - [ ] **Step 7: Коммит**
 
@@ -2341,10 +2342,28 @@ test('connects to the translations endpoint with the key and a safety identifier
   assert.deepStrictEqual(fake.options, { headers: { Authorization: 'Bearer k', 'OpenAI-Safety-Identifier': 'abc' } });
 });
 
-test('asks for the listener language as soon as the socket opens', () => {
+test('asks for the listener language, input transcription and near-field noise reduction on open', () => {
   const { fake } = session();
   fake.open();
-  assert.deepStrictEqual(fake.sent[0], { type: 'session.update', session: { audio: { output: { language: 'de' } } } });
+  assert.deepStrictEqual(fake.sent[0], {
+    type: 'session.update',
+    session: {
+      audio: {
+        input: { transcription: { model: 'gpt-4o-mini-transcribe' }, noise_reduction: { type: 'near_field' } },
+        output: { language: 'de' },
+      },
+    },
+  });
+});
+
+test('the transcription model can be changed and both extras switched off', () => {
+  const other = session({ transcribeModel: 'whisper-1' });
+  other.fake.open();
+  assert.deepStrictEqual(other.fake.sent[0].session.audio.input.transcription, { model: 'whisper-1' });
+
+  const bare = session({ transcribeModel: null, noiseReduction: null });
+  bare.fake.open();
+  assert.deepStrictEqual(bare.fake.sent[0], { type: 'session.update', session: { audio: { output: { language: 'de' } } } });
 });
 
 test('audio waits for the session and then goes out in 100 ms pieces', () => {
@@ -2471,6 +2490,13 @@ const WebSocket = require('ws');
 
 const ENDPOINT = 'wss://api.openai.com/v1/realtime/translations';
 const DEFAULT_MODEL = 'gpt-realtime-translate';
+// The speaker's own words (shown back to them as a subtitle) only arrive when
+// input transcription is on; without it the session sends no
+// session.input_transcript.delta at all (bench/PROBE.md, probe 2).
+const DEFAULT_TRANSCRIBE_MODEL = 'gpt-4o-mini-transcribe';
+// The phone is at its owner's ear: near-field noise reduction favours that one
+// close voice and dampens the partner across the table.
+const DEFAULT_NOISE_REDUCTION = 'near_field';
 const PIECE_SAMPLES = 2400; // 100 ms at 24 kHz, the size OpenAI's guide appends
 const MAX_QUEUED_PIECES = 40; // 4 s may wait for the socket; older audio is dropped
 
@@ -2490,6 +2516,17 @@ function fromBase64(b64) {
   const even = buf.byteLength - (buf.byteLength % 2);
   // Copy: a base64-decoded Buffer may sit at an odd offset in the pool.
   return new Int16Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + even));
+}
+
+/** The session.update body. null switches transcription or noise reduction off. */
+function sessionConfig({ targetLang, transcribeModel = DEFAULT_TRANSCRIBE_MODEL, noiseReduction = DEFAULT_NOISE_REDUCTION }) {
+  const audio = { output: { language: targetLang } };
+  if (transcribeModel || noiseReduction) {
+    audio.input = {};
+    if (transcribeModel) audio.input.transcription = { model: transcribeModel };
+    if (noiseReduction) audio.input.noise_reduction = { type: noiseReduction };
+  }
+  return { audio };
 }
 
 function connect({ apiKey, model, safetyId, wsFactory }) {
@@ -2521,7 +2558,10 @@ function createTranslateSession(opts) {
   const append = (b64) => ws.send(JSON.stringify({ type: 'session.input_audio_buffer.append', audio: b64 }));
 
   ws.on('open', () => {
-    ws.send(JSON.stringify({ type: 'session.update', session: { audio: { output: { language: targetLang } } } }));
+    ws.send(JSON.stringify({
+      type: 'session.update',
+      session: sessionConfig({ targetLang, transcribeModel: opts.transcribeModel, noiseReduction: opts.noiseReduction }),
+    }));
   });
 
   ws.on('message', (raw) => {
@@ -2534,8 +2574,9 @@ function createTranslateSession(opts) {
     switch (event.type) {
       case 'session.created':
       case 'session.updated':
-        // session.update went out on 'open', before any audio, so the
-        // language is set by the time the queued audio is read.
+        // A new session starts out translating into Spanish. Our
+        // session.update went out on 'open', ahead of any audio on the same
+        // socket, so the queued audio is never read in the default language.
         if (!ready) {
           ready = true;
           while (queue.length) append(queue.shift());
@@ -2602,6 +2643,8 @@ function createTranslateSession(opts) {
 function selftestTranslate({
   apiKey,
   model = DEFAULT_MODEL,
+  transcribeModel,
+  noiseReduction,
   wsFactory = defaultWsFactory,
   timeoutMs = 10000,
   quietMs = 1500,
@@ -2623,7 +2666,11 @@ function selftestTranslate({
       resolve(result);
     }
     ws.on('open', () => {
-      ws.send(JSON.stringify({ type: 'session.update', session: { audio: { output: { language: 'en' } } } }));
+      // The same session shape the interpreter uses, so a refused field fails here too.
+      ws.send(JSON.stringify({
+        type: 'session.update',
+        session: sessionConfig({ targetLang: 'en', transcribeModel, noiseReduction }),
+      }));
       ws.send(JSON.stringify({
         type: 'session.input_audio_buffer.append',
         audio: Buffer.alloc(PIECE_SAMPLES * 2 * 5).toString('base64'),
@@ -2652,15 +2699,17 @@ function selftestTranslate({
 module.exports = { createTranslateSession, selftestTranslate, PIECE_SAMPLES };
 ```
 
-- [ ] **Step 3: Тест проходит** — `node --test translate-session.test.js` → `ℹ pass 13`.
+- [ ] **Step 3: Тест проходит** — `node --test translate-session.test.js` → `ℹ pass 14`.
 
-- [ ] **Step 4: Сверить с `bench/PROBE.md`**
+- [ ] **Step 4: Сверено с `bench/PROBE.md`, правок не нужно**
 
-Открыть выводы пробы и проверить два пункта.
-- **П. 1–2: поле не `delta`.** Если base64-звук или текст в событиях лежит в другом поле, поменять `audioOf` / `textOf` и в тестах «translated audio and both transcripts…» имя поля в `serverSends`. Например: `const audioOf = (event) => event.audio;` и `{ type: 'session.output_audio.delta', audio: … }`.
-- **П. 3: сервер шлёт `session.updated`.** Ничего не менять: готовность наступает по первому из `session.created` / `session.updated`.
+Проба на DEV показала:
+- поля с аудио и текстом во всех трёх событиях называются `delta`;
+- `session.updated` приходит, и сессия до него переводит на испанский;
+- с `transcription` во входе приходят `session.input_transcript.delta`;
+- `near_field` принимается.
 
-После правок — `node --test translate-session.test.js` → `ℹ pass 13`.
+Код выше уже это учитывает.
 
 - [ ] **Step 5: Коммит**
 
@@ -3417,16 +3466,20 @@ const settle = () => new Promise((r) => setTimeout(r, 30));
 test('configuration falls back to the documented defaults', () => {
   const c = interpreter.readConfig({});
   assert.deepStrictEqual(
-    [c.model, c.fallbackModel, c.embedUrl, c.threshold, c.margin, c.chunkMs, c.gateTimeoutMs, c.hysteresis, c.speechRms, c.gain, c.presenceGraceMs],
-    ['gpt-realtime-translate', 'gpt-realtime-2025-08-28', 'http://127.0.0.1:18082', 0.25, 0.05, 500, 300, 2, 400, 1.4, 60000],
+    [c.model, c.fallbackModel, c.transcribeModel, c.noiseReduction, c.embedUrl, c.threshold, c.margin, c.chunkMs, c.gateTimeoutMs, c.hysteresis, c.speechRms, c.gain, c.presenceGraceMs],
+    ['gpt-realtime-translate', 'gpt-realtime-2025-08-28', 'gpt-4o-mini-transcribe', 'near_field', 'http://127.0.0.1:18082', 0.25, 0.05, 500, 300, 2, 400, 1.4, 60000],
   );
 });
 
 test('configuration reads the environment and keeps values in range', () => {
-  const c = interpreter.readConfig({ INTERPRETER_VOICE_THRESHOLD: '0.4', INTERPRETER_GAIN: '9', INTERPRETER_GATE_HYSTERESIS: '0' });
+  const c = interpreter.readConfig({
+    INTERPRETER_VOICE_THRESHOLD: '0.4', INTERPRETER_GAIN: '9', INTERPRETER_GATE_HYSTERESIS: '0', INTERPRETER_NOISE_REDUCTION: 'off',
+  });
   assert.strictEqual(c.threshold, 0.4);
   assert.strictEqual(c.gain, 4);
   assert.strictEqual(c.hysteresis, 1);
+  assert.strictEqual(c.noiseReduction, null);
+  assert.strictEqual(c.transcribeModel, 'gpt-4o-mini-transcribe');
 });
 
 test('a bad request is a 400 and opens no room', async () => {
@@ -3451,6 +3504,8 @@ test('it publishes a track per listener and reports itself without voice prints'
     assert.deepStrictEqual(room.published.map((p) => p.name).sort(), ['interp-for-a', 'interp-for-b']);
     assert.deepStrictEqual(made.map((e) => [e.kind, e.opts.targetLang]).sort(), [['simultaneous', 'de'], ['simultaneous', 'ru']]);
     assert.match(made[0].opts.safetyId, /^[0-9a-f]{32}$/);
+    assert.strictEqual(made[0].opts.transcribeModel, 'gpt-4o-mini-transcribe');
+    assert.strictEqual(made[0].opts.noiseReduction, 'near_field');
     const status = interpreter.getInterpreterStatus('r-tracks');
     assert.strictEqual(status.running, true);
     assert.strictEqual(status.directions.length, 2);
@@ -3576,12 +3631,20 @@ function num(value, fallback) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+/** Unset → fallback; 'off' → null (feature switched off). */
+function optional(value, fallback) {
+  if (value === undefined || value === '') return fallback;
+  return value === 'off' ? null : value;
+}
+
 function readConfig(env = process.env) {
   return {
     lkUrl: env.LIVEKIT_WS_URL || 'ws://localhost:7880',
     openaiKey: env.OPENAI_API_KEY,
     model: env.INTERPRETER_MODEL || 'gpt-realtime-translate',
     fallbackModel: env.INTERPRETER_FALLBACK_MODEL || 'gpt-realtime-2025-08-28',
+    transcribeModel: optional(env.INTERPRETER_TRANSCRIBE_MODEL, 'gpt-4o-mini-transcribe'),
+    noiseReduction: optional(env.INTERPRETER_NOISE_REDUCTION, 'near_field'),
     embedUrl: env.VOICE_EMBED_URL || 'http://127.0.0.1:18082',
     threshold: num(env.INTERPRETER_VOICE_THRESHOLD, 0.25),
     margin: num(env.INTERPRETER_VOICE_MARGIN, 0.05),
@@ -3710,6 +3773,9 @@ async function openLane(session, d) {
       sourceLang: d.sourceLang,
       targetLang: d.targetLang,
       safetyId: safetyId(d.speaker),
+      // The phrase engine ignores these two.
+      transcribeModel: cfg.transcribeModel,
+      noiseReduction: cfg.noiseReduction,
       onAudio: (int16) => {
         if (session.stopping) return;
         applyGain(int16, cfg.gain);
@@ -3835,7 +3901,13 @@ function getInterpreterStatus(roomName) {
 
 function selftest(deps = {}) {
   const cfg = { ...readConfig(), ...(deps.config || {}) };
-  return selftestTranslate({ apiKey: cfg.openaiKey, model: cfg.model, wsFactory: deps.wsFactory });
+  return selftestTranslate({
+    apiKey: cfg.openaiKey,
+    model: cfg.model,
+    transcribeModel: cfg.transcribeModel,
+    noiseReduction: cfg.noiseReduction,
+    wsFactory: deps.wsFactory,
+  });
 }
 
 module.exports = { startInterpreter, stopInterpreter, getInterpreterStatus, selftest, readConfig, AGENT_IDENTITY };
@@ -3847,7 +3919,7 @@ module.exports = { startInterpreter, stopInterpreter, getInterpreterStatus, self
 node --test interpreter.test.js && npm test 2>&1 | tail -8
 ```
 
-Ожидается: `ℹ pass 8` в файле, всего `ℹ pass 141`, `ℹ fail 0`.
+Ожидается: `ℹ pass 8` в файле, всего `ℹ pass 145`, `ℹ fail 0`.
 
 - [ ] **Step 4: Коммит**
 
@@ -4070,7 +4142,7 @@ registerInterpreterRoutes(app, {
 node --test interpreter-routes.test.js && node --check index.js && echo index-ok && npm test 2>&1 | tail -8
 ```
 
-Ожидается: `ℹ pass 6`, `index-ok`, весь набор `ℹ pass 147`, `ℹ fail 0`.
+Ожидается: `ℹ pass 6`, `index-ok`, весь набор `ℹ pass 151`, `ℹ fail 0`.
 
 - [ ] **Step 5: Коммит**
 
@@ -4141,7 +4213,7 @@ test('the report page carries every section', () => {
     scoreGroups: [{ group: 'own A', scores: [{ own: 0.7, other: 0.1, pass: true }] }],
     suggestion: { threshold: 0.36, margin: 0.21, thresholdSeparates: true, marginSeparates: true },
     captions: [{ listener: 'bench-b', role: 'translation', text: 'Guten Tag' }],
-    sameLanguage: [{ input: 'de-1', target: 'de', outputSeconds: 0 }],
+    sameLanguage: [{ input: 'de-1', target: 'de', voicedSeconds: 0, transcript: '' }],
     embedLatency: { n: 3, min: 20, p10: 20, median: 31, p90: 55, max: 55 },
     failOpen: 0,
   });
@@ -4259,9 +4331,9 @@ function renderReport(r) {
     '',
     '## Речь, уже на языке перевода',
     '',
-    '| Вход | Цель | Секунд перевода на выходе |',
-    '|---|---|---|',
-    ...r.sameLanguage.map((s) => `| ${s.input} | ${s.target} | ${fmt(s.outputSeconds)} |`),
+    '| Вход | Цель | Озвучено, с | Текст на выходе |',
+    '|---|---|---|---|',
+    ...r.sameLanguage.map((s) => `| ${s.input} | ${s.target} | ${fmt(s.voicedSeconds)} | ${s.transcript || '—'} |`),
     '',
     '## Сервис сверки',
     '',
@@ -4278,7 +4350,7 @@ function renderReport(r) {
 module.exports = { percentile, summarize, firstVoicedAfter, voicedMs, suggestThresholds, renderReport };
 ```
 
-- [ ] **Step 3: Тест проходит** — `node --test bench/bench-report.test.js` → `ℹ pass 5`; весь `npm test` — `ℹ pass 152`, `ℹ fail 0`.
+- [ ] **Step 3: Тест проходит** — `node --test bench/bench-report.test.js` → `ℹ pass 5`; весь `npm test` — `ℹ pass 156`, `ℹ fail 0`.
 
 - [ ] **Step 4: Коммит**
 
@@ -4434,15 +4506,23 @@ async function createBot({ identity, roomName, listenTo }) {
   };
 }
 
-/** What gpt-realtime-translate says when the speech is already in the target language. */
+/**
+ * Whether gpt-realtime-translate says anything when the speech is already in
+ * the target language. Counted in voiced 10 ms frames, not bytes: the session
+ * streams audio continuously, silence included (bench/PROBE.md).
+ */
 async function sameLanguage(input, target) {
   const samples = clip(input);
-  let bytes = 0;
+  let voicedFrames = 0;
+  let transcript = '';
   const session = createTranslateSession({
     apiKey: process.env.OPENAI_API_KEY,
     targetLang: target,
     safetyId: 'interpreter-bench',
-    onAudio: (pcm) => { bytes += pcm.byteLength; },
+    onAudio: (pcm) => {
+      for (let i = 0; i + 240 <= pcm.length; i += 240) if (rms(pcm.subarray(i, i + 240)) >= 300) voicedFrames += 1;
+    },
+    onTranslationText: (text) => { transcript += text; },
   });
   await sleep(1500);
   for (let i = 0; i < samples.length; i += 2400) {
@@ -4454,7 +4534,7 @@ async function sameLanguage(input, target) {
     await sleep(100);
   }
   session.close();
-  return { input, target, outputSeconds: bytes / (SR * 2) };
+  return { input, target, voicedSeconds: voicedFrames / 100, transcript: transcript.trim() };
 }
 
 function captionTexts(name, bot) {
