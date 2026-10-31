@@ -17,11 +17,15 @@ const speaking = (speaker, on) => ({ type: 'speaking', speaker, on: Boolean(on) 
 const status = (state) => ({ type: 'status', state });
 
 async function send(localParticipant, identities, msg) {
-  if (!localParticipant || identities.length === 0) return false;
+  // An empty destination list is a broadcast in LiveKit. Anything but a
+  // non-empty array of identities — a Set (no .length), null, blanks — is
+  // nobody to send to.
+  const list = Array.isArray(identities) ? identities.filter(Boolean) : [];
+  if (!localParticipant || list.length === 0) return false;
   await localParticipant.publishData(Buffer.from(JSON.stringify(msg)), {
     reliable: true,
     topic: TOPIC,
-    destination_identities: identities,
+    destination_identities: list,
   });
   return true;
 }

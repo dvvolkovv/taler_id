@@ -24,3 +24,27 @@ test('nobody to send to means nothing is published', async () => {
   assert.strictEqual(await messages.send(participant, [], messages.status('ok')), false);
   assert.strictEqual(await messages.send(undefined, ['u1#phone'], messages.status('ok')), false);
 });
+
+test('a Set of identities is nobody to send to, not a broadcast', async () => {
+  // A Set has .size, not .length: the old guard let it through, and the SDK
+  // turns a non-array into an empty list, which LiveKit sends to everyone.
+  const calls = [];
+  const participant = { publishData: async (payload, opts) => calls.push(opts) };
+  assert.strictEqual(await messages.send(participant, new Set(['u1#phone']), messages.status('ok')), false);
+  assert.strictEqual(calls.length, 0);
+});
+
+test('blank identities are dropped', async () => {
+  const calls = [];
+  const participant = { publishData: async (payload, opts) => calls.push(opts) };
+  assert.strictEqual(await messages.send(participant, [''], messages.status('ok')), false);
+  assert.strictEqual(calls.length, 0);
+  assert.strictEqual(await messages.send(participant, ['u1#phone', ''], messages.status('ok')), true);
+  assert.deepStrictEqual(calls[0].destination_identities, ['u1#phone']);
+});
+
+test('undefined or null identities are nobody, not a crash', async () => {
+  const participant = { publishData: async () => { throw new Error('must not be called'); } };
+  assert.strictEqual(await messages.send(participant, undefined, messages.status('ok')), false);
+  assert.strictEqual(await messages.send(participant, null, messages.status('ok')), false);
+});
