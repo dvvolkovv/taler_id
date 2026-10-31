@@ -11,6 +11,24 @@ export interface AppRelease {
 // Keep notes user-facing (no internal jargon, no commit hashes).
 export const APP_RELEASES: AppRelease[] = [
   {
+    version: '1.1.39',
+    build: 240,
+    date: '2026-10-31',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.39 — «Поделиться» ведёт прямо в «Сообщения».\n\n' +
+      '📎 Документ, фото, видео или ссылку из любого приложения можно отправить через «Поделиться» → Taler ID: сразу открывается выбор получателя — с поиском и «Избранным».\n' +
+      '💬 В выбранном чате ничего не уходит само: файл ждёт над полем ввода, а ссылка или текст — в самом поле. ' +
+      'Допишите комментарий и нажмите «Отправить» — комментарий станет подписью к файлу и теперь виден и под документами.\n' +
+      '🛠 Android теперь принимает фото и документы из системного приложения «Файлы», а на iPhone больше не теряются видео из «Фото».',
+    notes_en:
+      'Release 1.1.39 — "Share" now goes straight to Messages.\n\n' +
+      '📎 Share a document, photo, video or link from any app to Taler ID and the recipient picker opens right away, with search and Favorites.\n' +
+      '💬 Nothing is sent on its own: in the chosen chat a file waits above the message field, and a link or text goes into the field itself. ' +
+      'Add a comment and tap Send — the comment becomes the file\'s caption and now shows under documents too.\n' +
+      '🛠 Android now accepts photos and documents from the system Files app, and on iPhone videos shared from Photos are no longer lost.',
+  },
+  {
     version: '1.1.38',
     build: 239,
     date: '2026-10-31',
