@@ -5914,6 +5914,563 @@ git commit -m "feat(interpreter): фразовый движок в общем и
 
 ---
 
+### Task 11b: Фразовый движок не глохнет молча, шлёт идентификатор пользователя, реплики не пишет в журнал
+
+По ревью задачи 11:
+- **Направление могло замолчать навсегда, и никто бы не узнал.** Если OpenAI отклоняет `session.update` (так было с 1.0.78; сейчас под угрозой `whisper-1`), `session.updated` не приходит. Звук отбрасывается, сокет остаётся открытым, `onReady` и `onClose` не срабатывают. Переподключения ничего не замечают, разговор идёт, минуты списываются. Так же кончаются сессия, которая не подтвердила настройки, и сокет, в котором копится запись. Теперь всё как в `translate-session.js`: 10 с на подтверждение; ошибка до подтверждения или больше 1 МБ в буфере обрывают сокет как неожиданно закрытый.
+- **`safetyId` терялся.** OpenAI просит передавать `OpenAI-Safety-Identifier` и в Realtime-соединениях; теперь заголовок уходит.
+- **Звук до подтверждения.** Пока сокет подключался, звук копился без предела. Между открытием и подтверждением он пропадал. Накопленное шло мимо нарезчика реплик и приклеивалось к следующей фразе. Теперь ждёт не больше 4 с и после подтверждения идёт обычным путём.
+- **Колбэки** защищены так же, как в синхронном движке. После `close()` и после обрыва ничего не доставляется.
+- **Реплики в журнал не пишутся** (`logText: false`): субтитры их получают, журнал pm2 — нет. Синхронный движок их тоже не пишет. Переводчик в звонках пишет, как раньше.
+
+Ошибки после подтверждения (например, кончилась квота) по-прежнему видны только в журнале, у обоих движков. Решение — на контрольной точке задачи 21.
+
+**Files:**
+- Modify: `livekit-agent/realtime-phrase-session.js` (крюк `onServerError`, параметр `logText`)
+- Modify: `livekit-agent/realtime-phrase-session.test.js` (два теста в конец)
+- Modify: `livekit-agent/phrase-session.js` (переписать целиком)
+- Modify: `livekit-agent/phrase-session.test.js` (переписать целиком)
+
+- [ ] **Step 1: Тесты (падают)**
+
+`phrase-session.test.js` целиком:
+
+```js
+// Run with: node --test  (from livekit-agent/)
+const test = require('node:test');
+const assert = require('node:assert');
+const { fakeWsFactory } = require('./testing/fake-ws');
+const { createPhraseSession } = require('./phrase-session');
+
+const quietLog = { error() {}, warn() {} };
+
+function session(extra = {}, { open = true } = {}) {
+  const { factory, last } = fakeWsFactory();
+  const seen = { audio: [], translation: [], source: [], ready: 0, closes: [] };
+  const s = createPhraseSession({
+    apiKey: 'k',
+    model: 'gpt-realtime-2025-08-28',
+    sourceLang: 'ru',
+    targetLang: 'sk',
+    wsFactory: factory,
+    onAudio: (a) => seen.audio.push(a),
+    onTranslationText: (t, f) => seen.translation.push([t, f]),
+    onSourceText: (t, f) => seen.source.push([t, f]),
+    onReady: () => { seen.ready += 1; },
+    onClose: (c) => seen.closes.push(c),
+    log: quietLog,
+    ...extra,
+  });
+  const fake = last();
+  if (open) fake.open();
+  return { s, fake, seen };
+}
+
+const appends = (fake) => fake.sentOfType('input_audio_buffer.append');
+// 500 ms of PCM16 at 24 kHz, as the voice-print gate hands it over.
+const chunk = (value) => new Int16Array(12000).fill(value);
+const loud = () => chunk(3000);
+const quiet = () => chunk(0);
+const firstSample = (msg) => Buffer.from(msg.audio, 'base64').readInt16LE(0);
+
+test('it runs the given model with the known source language', () => {
+  const { fake } = session();
+  assert.strictEqual(fake.url, 'wss://api.openai.com/v1/realtime?model=gpt-realtime-2025-08-28');
+  assert.ok(fake.sentOfType('session.update')[0].session.instructions.includes('spoken Russian audio into spoken Slovak'));
+});
+
+test('audio goes in as base64 PCM16 once the session is ready', () => {
+  const { s, fake, seen } = session();
+  fake.serverSends({ type: 'session.updated' });
+  assert.strictEqual(seen.ready, 1);
+  s.sendAudio(Int16Array.from([1, -1, 2]));
+  const back = Buffer.from(fake.sentOfType('input_audio_buffer.append')[0].audio, 'base64');
+  assert.deepStrictEqual([back.readInt16LE(0), back.readInt16LE(2), back.readInt16LE(4)], [1, -1, 2]);
+});
+
+test('translated audio comes back as samples and transcripts as whole phrases', () => {
+  const { fake, seen } = session();
+  fake.serverSends({ type: 'session.updated' });
+  fake.serverSends({ type: 'response.output_audio.delta', delta: Buffer.from(Int16Array.from([9, -9]).buffer).toString('base64') });
+  fake.serverSends({ type: 'conversation.item.input_audio_transcription.completed', transcript: 'Добрый день' });
+  fake.serverSends({ type: 'response.output_audio_transcript.done', transcript: 'Dobrý deň' });
+  assert.deepStrictEqual(Array.from(seen.audio[0]), [9, -9]);
+  assert.deepStrictEqual(seen.source, [['Добрый день', true]]);
+  assert.deepStrictEqual(seen.translation, [['Dobrý deň', true]]);
+});
+
+test('spoken phrases are pruned from the conversation', () => {
+  const { fake } = session();
+  fake.serverSends({ type: 'session.updated' });
+  fake.serverSends({ type: 'input_audio_buffer.committed', item_id: 'in1' });
+  fake.serverSends({ type: 'response.created', response: { id: 'r1' } });
+  fake.serverSends({ type: 'response.done', response: { id: 'r1', status: 'completed', output: [{ id: 'out1' }] } });
+  assert.deepStrictEqual(fake.sentOfType('conversation.item.delete').map((m) => m.item_id), ['in1', 'out1']);
+});
+
+test('closing it ourselves is not unexpected; the server closing is', () => {
+  const a = session();
+  a.s.close();
+  assert.deepStrictEqual(a.seen.closes, [{ unexpected: false, code: 1005 }]);
+  const b = session();
+  b.fake.serverCloses(1006);
+  assert.deepStrictEqual(b.seen.closes, [{ unexpected: true, code: 1006 }]);
+});
+
+// ── review of task 11 ──
+
+test('the safety identifier goes out as a header next to the key', () => {
+  const { fake } = session({ safetyId: 'abc' });
+  assert.deepStrictEqual(fake.options.headers, { Authorization: 'Bearer k', 'OpenAI-Safety-Identifier': 'abc' });
+});
+
+test('a refused session.update lets no audio out and drops the socket as unexpected', () => {
+  const { s, fake, seen } = session();
+  s.sendAudio(loud());
+  fake.serverSends({ type: 'session.created' });
+  fake.serverSends({ type: 'error', error: { type: 'invalid_request_error', param: 'session.audio.input.transcription.model' } });
+  s.sendAudio(loud());
+  assert.strictEqual(appends(fake).length, 0);
+  assert.strictEqual(seen.ready, 0);
+  assert.deepStrictEqual(seen.closes, [{ unexpected: true, code: 1006 }]);
+});
+
+test('an error after the session is confirmed is only logged', () => {
+  const { fake, seen } = session();
+  fake.serverSends({ type: 'session.updated' });
+  fake.serverSends({ type: 'error', error: { code: 'item_not_found' } });
+  assert.deepStrictEqual(seen.closes, []);
+  assert.strictEqual(fake.readyState, 1);
+});
+
+test('a session that never confirms is dropped as unexpected', async () => {
+  const { fake, seen } = session({ readyTimeoutMs: 20 });
+  await new Promise((r) => setTimeout(r, 40));
+  assert.deepStrictEqual(seen.closes, [{ unexpected: true, code: 1006 }]);
+  assert.strictEqual(fake.readyState, 3);
+});
+
+test('a confirmed session outlives the ready timeout', async () => {
+  const { fake, seen } = session({ readyTimeoutMs: 20 });
+  fake.serverSends({ type: 'session.updated' });
+  await new Promise((r) => setTimeout(r, 40));
+  assert.deepStrictEqual(seen.closes, []);
+  assert.strictEqual(fake.readyState, 1);
+});
+
+test('a socket whose writes pile up is dropped as unexpected', () => {
+  const { s, fake, seen } = session();
+  fake.serverSends({ type: 'session.updated' });
+  fake.bufferedAmount = 2 * 1024 * 1024;
+  s.sendAudio(loud());
+  assert.deepStrictEqual(seen.closes, [{ unexpected: true, code: 1006 }]);
+  assert.strictEqual(appends(fake).length, 0);
+});
+
+test('audio that waited for the session goes out whole, in order, and is cut into turns', (t) => {
+  let now = 0;
+  t.mock.method(Date, 'now', () => now);
+  const { s, fake } = session({}, { open: false });
+  const at = (ms, c) => { now = ms; s.sendAudio(c); };
+  at(0, quiet()); at(500, loud()); at(1000, loud()); // the handshake is still running
+  fake.open();
+  at(1500, quiet()); // open, not yet confirmed: used to be dropped, splicing a gap into the phrase
+  now = 1800;
+  fake.serverSends({ type: 'session.updated' });
+  assert.deepStrictEqual(appends(fake).map(firstSample), [0, 3000, 3000, 0]);
+  assert.strictEqual(fake.sentOfType('input_audio_buffer.commit').length, 0);
+  // The turn-taker heard the replay: live silence ends that phrase as usual
+  // (before the fix it never saw the speech and nothing was ever committed).
+  at(2000, quiet()); at(2500, quiet());
+  assert.strictEqual(fake.sentOfType('input_audio_buffer.commit').length, 1);
+  assert.strictEqual(fake.sentOfType('response.create').length, 1);
+});
+
+test('at most 4 s waits for the session; older audio is dropped', () => {
+  const { s, fake } = session({}, { open: false });
+  for (let i = 1; i <= 12; i++) s.sendAudio(chunk(i)); // 6 s of handshake
+  fake.open();
+  fake.serverSends({ type: 'session.updated' });
+  assert.deepStrictEqual(appends(fake).map(firstSample), [5, 6, 7, 8, 9, 10, 11, 12]);
+});
+
+test('a throwing callback is logged, not thrown into the socket or passed off as a parse error', () => {
+  const errors = [];
+  const boom = () => { throw new Error('boom'); };
+  const { fake } = session({
+    onAudio: boom, onTranslationText: boom, onSourceText: boom, onReady: boom, onClose: boom,
+    log: { error: (m) => errors.push(m), warn() {} },
+  });
+  const consoleErrors = [];
+  const saved = console.error;
+  console.error = (...a) => consoleErrors.push(a.join(' '));
+  try {
+    assert.doesNotThrow(() => {
+      fake.serverSends({ type: 'session.updated' });
+      fake.serverSends({ type: 'response.output_audio.delta', delta: 'AAAA' });
+      fake.serverSends({ type: 'response.output_audio_transcript.done', transcript: 'a' });
+      fake.serverSends({ type: 'conversation.item.input_audio_transcription.completed', transcript: 'бэ' });
+      fake.serverCloses(1011);
+    });
+  } finally {
+    console.error = saved;
+  }
+  assert.strictEqual(errors.length, 5);
+  assert.ok(errors.some((m) => /onAudio callback failed: boom/.test(m)));
+  assert.ok(!consoleErrors.some((m) => m.includes('parse error')), consoleErrors.join('\n'));
+});
+
+test('nothing is delivered after we closed it', () => {
+  const { s, fake, seen } = session();
+  fake.serverSends({ type: 'session.updated' });
+  s.close();
+  fake.readyState = 1; // real ws keeps reading until the server answers the close frame
+  fake.serverSends({ type: 'response.output_audio.delta', delta: 'AAAA' });
+  fake.serverSends({ type: 'response.output_audio_transcript.done', transcript: 'late' });
+  assert.strictEqual(seen.audio.length, 0);
+  assert.deepStrictEqual(seen.translation, []);
+});
+
+test('frames read after a refusal count for nothing', () => {
+  const { fake, seen } = session();
+  fake.serverSends({ type: 'error', error: { message: 'refused' } });
+  fake.readyState = 1; // real ws still parses what came in the same read
+  fake.serverSends({ type: 'session.updated' });
+  fake.serverSends({ type: 'response.output_audio.delta', delta: 'AAAA' });
+  assert.strictEqual(seen.ready, 0);
+  assert.strictEqual(seen.audio.length, 0);
+});
+
+test('stopping during the handshake is not a failure and sends nothing later', () => {
+  const { s, fake, seen } = session({}, { open: false });
+  s.sendAudio(loud());
+  s.close();
+  s.close();
+  assert.deepStrictEqual(seen.closes, [{ unexpected: false, code: 1006 }]);
+  assert.deepStrictEqual(fake.sent, []);
+});
+
+test('what was said reaches the subtitles but not the log', (t) => {
+  const lines = [];
+  t.mock.method(console, 'log', (...args) => lines.push(args.join(' ')));
+  const { fake, seen } = session();
+  fake.serverSends({ type: 'session.updated' });
+  fake.serverSends({ type: 'conversation.item.input_audio_transcription.completed', transcript: 'Добрый день' });
+  fake.serverSends({ type: 'response.output_audio_transcript.done', transcript: 'Dobrý deň' });
+  assert.deepStrictEqual(seen.source, [['Добрый день', true]]);
+  assert.deepStrictEqual(seen.translation, [['Dobrý deň', true]]);
+  assert.ok(!lines.some((l) => l.includes('Добрый') || l.includes('Dobrý')), lines.join('\n'));
+});
+```
+
+В конец `realtime-phrase-session.test.js` дописать через пустую строку:
+
+```js
+test('a server error is logged and then handed to onServerError; without it nothing else happens', (t) => {
+  const errors = [];
+  t.mock.method(console, 'error', (...args) => errors.push(args.join(' ')));
+  const handed = [];
+  const a = open('ru', 'sk', { onServerError: (e) => handed.push(e) });
+  a.fake.serverSends({ type: 'error', error: { code: 'invalid_value' } });
+  assert.deepStrictEqual(handed, [{ code: 'invalid_value' }]);
+  const b = open('auto', 'en'); // the in-call translator passes no hook
+  assert.doesNotThrow(() => b.fake.serverSends({ type: 'error', error: { code: 'x' } }));
+  assert.strictEqual(errors.filter((l) => l.includes('OpenAI error')).length, 2);
+  assert.strictEqual(b.fake.readyState, 1);
+});
+
+test('with logText false the log shows how long a phrase was, not its words', (t) => {
+  const lines = [];
+  t.mock.method(console, 'log', (...args) => lines.push(args.join(' ')));
+  const quiet = open('ru', 'sk', { logText: false });
+  quiet.fake.serverSends({ type: 'conversation.item.input_audio_transcription.completed', transcript: 'Добрый день' });
+  quiet.fake.serverSends({ type: 'response.output_audio_transcript.done', transcript: 'Dobrý deň' });
+  assert.ok(!lines.some((l) => l.includes('Добрый') || l.includes('Dobrý')), lines.join('\n'));
+  assert.ok(lines.some((l) => l.endsWith('heard: 11 chars')));
+  assert.ok(lines.some((l) => l.endsWith('translated: 9 chars')));
+  const inCall = open('ru', 'sk'); // the in-call translator passes no logText
+  inCall.fake.serverSends({ type: 'conversation.item.input_audio_transcription.completed', transcript: 'Добрый день' });
+  assert.ok(lines.some((l) => l.endsWith('heard: "Добрый день"')));
+});
+```
+
+Run: `node --test phrase-session.test.js realtime-phrase-session.test.js`
+Expected: падают 12 тестов: `onServerError`, `logText` (оба в движке), заголовок, отказ в настройке, сессия без подтверждения, копящийся буфер, звук до подтверждения (два), бросающий колбэк, доставка после `close()`, кадры после отказа, реплики в журнале. Три новых теста проходят и сейчас: ошибка после подтверждения не обрывает сокет, подтверждённая сессия переживает таймер, остановка во время подключения — не сбой. Они сторожат от перегиба.
+
+- [ ] **Step 2: Движок — пять правок в `realtime-phrase-session.js`**
+
+Переводчик в звонках не передаёт ни `onServerError`, ни `logText`, поэтому для него ничего не меняется.
+
+Правка 1 — описание параметров в шапке. Было:
+
+```js
+ *   onTranscript({ role: 'source' | 'translation', text })
+ *   pruneHistory  delete each phrase from the conversation once spoken
+ *   logTag        log prefix (default TRANSLATOR: the in-call translator's
+ *                 log lines stay exactly as they were)
+```
+
+Стало:
+
+```js
+ *   onTranscript({ role: 'source' | 'translation', text })
+ *   onServerError(error)  an `error` event from OpenAI, after it is logged
+ *   pruneHistory  delete each phrase from the conversation once spoken
+ *   logTag        log prefix (default TRANSLATOR: the in-call translator's
+ *                 log lines stay exactly as they were)
+ *   logText       false logs how long each phrase was instead of its words
+ *                 (default true: the in-call translator logs them as before)
+```
+
+Правка 2 — перед строкой `Opening WS` — как реплика попадает в журнал. Было:
+
+```js
+  console.log(`[${logTag}] Opening WS for ${tag}`);
+```
+
+Стало:
+
+```js
+  // A phrase as the log shows it: its words, or with logText false only its
+  // length — a conversation is not the log's business.
+  const forLog = (text) => (opts.logText === false ? `${text.length} chars` : `"${text}"`);
+  console.log(`[${logTag}] Opening WS for ${tag}`);
+```
+
+Правка 3 — расшифровка речи. Было:
+
+```js
+        console.log(`[${logTag}] [${tag}] heard: "${heard}"`);
+```
+
+Стало:
+
+```js
+        console.log(`[${logTag}] [${tag}] heard: ${forLog(heard)}`);
+```
+
+Правка 4 — расшифровка перевода. Было:
+
+```js
+        console.log(`[${logTag}] [${tag}] translated: "${translated}"`);
+```
+
+Стало:
+
+```js
+        console.log(`[${logTag}] [${tag}] translated: ${forLog(translated)}`);
+```
+
+Правка 5 — ошибка от OpenAI. Было:
+
+```js
+        console.error(`[${logTag}] OpenAI error (${tag}):`, JSON.stringify(event.error));
+```
+
+Стало:
+
+```js
+        console.error(`[${logTag}] OpenAI error (${tag}):`, JSON.stringify(event.error));
+        callback('onServerError', opts.onServerError, event.error || event);
+```
+
+- [ ] **Step 3: Обёртка — `phrase-session.js` целиком**
+
+```js
+'use strict';
+/**
+ * The phrase engine (realtime-phrase-session.js) behind the same interface as
+ * translate-session.js, for the pairs gpt-realtime-translate cannot speak.
+ * It waits for a pause and speaks whole phrases, so its transcripts arrive
+ * whole as well (final = true). Spoken phrases are pruned from the
+ * conversation: an interpreted talk can last an hour.
+ *
+ * The reconnecting wrapper learns that a direction has gone silent only from
+ * onClose({ unexpected: true }). So, as in translate-session.js, each way this
+ * session can go silent ends in such a close: a stalled handshake, a
+ * session.update OpenAI refuses, a session that never confirms, a socket whose
+ * writes pile up. These rules live here rather than in
+ * realtime-phrase-session.js, so the in-call translator keeps its behaviour.
+ */
+const WebSocket = require('ws');
+const { createRealtimeSession } = require('./realtime-phrase-session');
+
+const SAMPLE_RATE = 24000;
+const HANDSHAKE_TIMEOUT_MS = 10000;
+const READY_TIMEOUT_MS = 10000;
+const MAX_BUFFERED_BYTES = 1 << 20; // ~16 s of base64 audio at 64 KB/s
+// Audio that waits for the session, as in translate-session.js: at most 4 s,
+// older audio is dropped. It goes out through the engine's own path once the
+// session is ready, so the turn-taker hears it as well.
+const MAX_QUEUED_SAMPLES = 4 * SAMPLE_RATE;
+
+const defaultWsFactory = (url, options) => new WebSocket(url, { ...options, handshakeTimeout: HANDSHAKE_TIMEOUT_MS });
+
+function toBase64(int16) {
+  return Buffer.from(int16.buffer, int16.byteOffset, int16.byteLength).toString('base64');
+}
+
+function toInt16(buf) {
+  const even = buf.byteLength - (buf.byteLength % 2);
+  // Copy: a short decode is a view into Node's shared 8 KB pool, and the
+  // interpreter applies gain in place and hands data.buffer to LiveKit, which
+  // reads from byte 0.
+  return new Int16Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + even));
+}
+
+function createPhraseSession(opts) {
+  const { sourceLang, targetLang, safetyId, log = console } = opts;
+  const tag = `${sourceLang}→${targetLang}`;
+  // Every callback reaches into the interpreter (gain, frame queue, data
+  // channel). A throw must be logged as what it is and must not reach the
+  // socket's handlers.
+  const safe = (name, fn) => (...args) => {
+    if (!fn) return;
+    try {
+      fn(...args);
+    } catch (e) {
+      log.error(`[INTERPRETER] phrase ${tag}: ${name} callback failed: ${e.message}`);
+    }
+  };
+  const onAudio = safe('onAudio', opts.onAudio);
+  const onTranslationText = safe('onTranslationText', opts.onTranslationText);
+  const onSourceText = safe('onSourceText', opts.onSourceText);
+  const onReady = safe('onReady', opts.onReady);
+  const onClose = safe('onClose', opts.onClose);
+  const readyTimeoutMs = opts.readyTimeoutMs ?? READY_TIMEOUT_MS;
+
+  const baseFactory = opts.wsFactory || defaultWsFactory;
+  // OpenAI takes the per-end-user id on Realtime connections as a header too.
+  const wsFactory = safetyId
+    ? (url, options = {}) => baseFactory(url, {
+      ...options,
+      headers: { ...options.headers, 'OpenAI-Safety-Identifier': safetyId },
+    })
+    : baseFactory;
+
+  let ready = false;
+  let closedByUs = false;
+  let dropped = false; // fail() decided; frames already read must not count
+  let ended = false; // the socket has closed
+  let readyTimer = null;
+  let queue = [];
+  let queuedSamples = 0;
+  const live = () => !closedByUs && !dropped && !ended;
+
+  function forget() {
+    clearTimeout(readyTimer);
+    readyTimer = null;
+    queue = [];
+    queuedSamples = 0;
+  }
+
+  // Ends the socket at once (terminate, not close: a stalled socket would hold
+  // the close frame behind its backlog) and reports it as unexpected, so the
+  // wrapper reconnects and, past its limits, the interpreter ends.
+  function fail(reason) {
+    if (!live()) return;
+    dropped = true;
+    log.error(`[INTERPRETER] phrase ${tag}: ${reason}, dropping the socket`);
+    forget();
+    try {
+      ws.terminate();
+    } catch (_) { /* already closed */ }
+  }
+
+  const ws = createRealtimeSession(
+    sourceLang,
+    targetLang,
+    (pcm) => {
+      if (live()) onAudio(toInt16(pcm));
+    },
+    () => {}, // socket errors are followed by 'close', which is what the caller acts on
+    {
+      apiKey: opts.apiKey,
+      model: opts.model,
+      wsFactory,
+      pruneHistory: true,
+      logTag: 'INTERPRETER',
+      logText: false, // the subtitles carry the words; the log does not need them
+      onReady: () => {
+        if (ready || !live()) return;
+        ready = true;
+        const waiting = queue;
+        forget();
+        for (const { b64 } of waiting) ws.sendAudio(b64);
+        onReady();
+      },
+      // Before the session is confirmed nothing but our session.update has
+      // gone out, so an error is that update being refused: carrying on would
+      // leave this direction silent for the whole conversation. After it, an
+      // error concerns one request; the engine has logged it.
+      onServerError: (error) => {
+        if (!ready) fail(`session.update refused: ${JSON.stringify(error)}`);
+      },
+      onTranscript: ({ role, text }) => {
+        if (!live()) return;
+        if (role === 'source') onSourceText(text, true);
+        else onTranslationText(text, true);
+      },
+      onClose: ({ code }) => {
+        ended = true;
+        forget();
+        onClose({ unexpected: !closedByUs, code });
+      },
+    },
+  );
+
+  ws.on('open', () => {
+    if (ready || !live()) return;
+    readyTimer = setTimeout(() => fail(`no session confirmation within ${readyTimeoutMs} ms`), readyTimeoutMs);
+    if (readyTimer.unref) readyTimer.unref();
+  });
+
+  return {
+    sendAudio(int16) {
+      if (!live() || !int16.length) return;
+      if (ready) {
+        if (ws.readyState === WebSocket.OPEN && ws.bufferedAmount > MAX_BUFFERED_BYTES) {
+          fail(`${ws.bufferedAmount} bytes not taken by the server`);
+          return;
+        }
+        ws.sendAudio(toBase64(int16));
+        return;
+      }
+      queue.push({ b64: toBase64(int16), samples: int16.length });
+      queuedSamples += int16.length;
+      while (queuedSamples > MAX_QUEUED_SAMPLES && queue.length > 1) queuedSamples -= queue.shift().samples;
+    },
+    close() {
+      if (closedByUs) return;
+      closedByUs = true;
+      forget();
+      try {
+        ws.close();
+      } catch (_) { /* already closed */ }
+    },
+  };
+}
+
+module.exports = { createPhraseSession };
+```
+
+- [ ] **Step 4: Проверить**
+
+```bash
+node --test phrase-session.test.js realtime-phrase-session.test.js && npm test 2>&1 | tail -8
+```
+
+Ожидается: в файлах 18 и 17 тестов; весь набор `ℹ pass 191`, `ℹ fail 0` — в том числе характеризующие тесты переводчика в звонках.
+
+- [ ] **Step 5: Коммит**
+
+```bash
+git add phrase-session.js phrase-session.test.js realtime-phrase-session.js realtime-phrase-session.test.js
+git commit -m "fix(interpreter): фразовый движок не глохнет молча, шлёт идентификатор пользователя, реплики не пишет в журнал" -m "По ревью задачи 11: отказ OpenAI в настройке сессии оставлял направление немым без единого сигнала переподключениям, safetyId терялся, звук до подтверждения копился без предела и шёл мимо нарезчика реплик." -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
 ### Task 12: `interpreter-routing.js` — два направления
 
 **Files:**
@@ -7000,7 +7557,7 @@ module.exports = { startInterpreter, stopInterpreter, getInterpreterStatus, self
 node --test interpreter.test.js && npm test 2>&1 | tail -8
 ```
 
-Ожидается: `ℹ pass 9` в файле, всего `ℹ pass 200`, `ℹ fail 0`.
+Ожидается: `ℹ pass 9` в файле, всего `ℹ pass 215`, `ℹ fail 0`.
 
 - [ ] **Step 4: Коммит**
 
@@ -7223,7 +7780,7 @@ registerInterpreterRoutes(app, {
 node --test interpreter-routes.test.js && node --check index.js && echo index-ok && npm test 2>&1 | tail -8
 ```
 
-Ожидается: `ℹ pass 6`, `index-ok`, весь набор `ℹ pass 206`, `ℹ fail 0`.
+Ожидается: `ℹ pass 6`, `index-ok`, весь набор `ℹ pass 221`, `ℹ fail 0`.
 
 - [ ] **Step 5: Коммит**
 
@@ -7431,7 +7988,7 @@ function renderReport(r) {
 module.exports = { percentile, summarize, firstVoicedAfter, voicedMs, suggestThresholds, renderReport };
 ```
 
-- [ ] **Step 3: Тест проходит** — `node --test bench/bench-report.test.js` → `ℹ pass 5`; весь `npm test` — `ℹ pass 211`, `ℹ fail 0`.
+- [ ] **Step 3: Тест проходит** — `node --test bench/bench-report.test.js` → `ℹ pass 5`; весь `npm test` — `ℹ pass 226`, `ℹ fail 0`.
 
 - [ ] **Step 4: Коммит**
 
@@ -7861,6 +8418,8 @@ ssh dvolkov@77.73.131.137 'ssh dev-backend "rm -rf ~/interp-bench && echo cleane
 - субтитры своей речи на фразовом направлении (ru→sk): пришли ли они для каждой фразы. Ревью задачи 5: удаление озвученной реплики может опередить её расшифровку, и тогда субтитр пропадёт; если так — откладывать удаление реплики до `completed`/`failed` расшифровки с таймаутом;
 - фразовое направление (ru→sk): нет ли в субтитрах выдуманных фраз;
 - утечка на фразовом направлении: молчит ли фразовый движок на голосе соседа (его язык — язык слушателя). Для синхронного это доказала проба, для фразового — только стенд. 31.10 соседняя работа над переводчиком ассистента видела, что ответы без истории (`conversation: "none"`) на шуме сочиняют перевод, а `pruneHistory` к этому близок. Если выдумки есть — предложить выключить `pruneHistory` или оставлять в разговоре последнюю озвученную реплику;
+- задержка фразового направления: фильтр отдаёт звук кусками по 500 мс, а нарезчик реплик меряет тишину по часам, поэтому реплика закрывается примерно через 1,5 с тишины вместо 0,6 с (ревью задачи 11). Если задержка выходит заметно больше синхронной — предложить мерить тишину по звуку, а не по часам;
+- ошибки OpenAI после подтверждения сессии (например, кончилась квота) не видит ни один движок: направление молчит, минуты идут (ревью задачи 11). Предложить сторожа: фильтр пропустил N секунд речи, а перевода нет — строка `FATAL interpreter: …` в журнал, разговор не останавливать. N выбрать по стенду: сколько синхронный движок законно молчит на речи на языке слушателя;
 - сколько стоил прогон.
 
 Затем спросить: идём в план 2 (бэкенд, биллинг, сквозной набор) с этими настройками или что-то меняем. План 2 не начинать без ответа.
