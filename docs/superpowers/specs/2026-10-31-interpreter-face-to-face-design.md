@@ -371,6 +371,8 @@
    - зелёные наборы;
    - dev-сборки Android и iOS для ручной проверки.
 3. TEST, затем PROD — каждый шаг только по явной команде. На PROD агент копируется в `/opt/livekit-agent` на `do-media` (это не git-чекаут; перед заменой сверить `sha256sum`), env выставляется на `do-media` и на обеих app-нодах.
+   - Копируются **все** изменённые и новые файлы `livekit-agent/` сразу. `translator.js` теперь импортирует `lang-names.js`, `audio-out.js` и `realtime-phrase-session.js`; если скопировать его одного, агент не стартует целиком — вместе с записью встреч, переводчиком звонков и музыкой ожидания.
+   - Перед `pm2 restart livekit-ai-agent` проверить загрузку в `/opt/livekit-agent`: `node -e "require('dotenv').config(); require('./translator'); require('./interpreter')"`. Самопроверка `/translator/selftest` этого не ловит: у неё своя копия настроек сессии.
 4. Мобильный релиз по обычным правилам: `/app/version` и `APP_RELEASES`. Объявление — только когда на месте все платформы.
 5. Задача плана: проверить, видит ли taler-monitor логи pm2 агента со строкой `FATAL interpreter: …`; если не видит — подключить.
 

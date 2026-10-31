@@ -28,7 +28,7 @@
 - Работа идёт в worktree `/Users/dmitry/taler-id/.worktrees/interpreter`, ветка `feat/interpreter`. Все команды выполняются из `livekit-agent/` этого worktree, если не сказано иное.
 - Тесты запускаются `npm test` (= `node --test`) из `livekit-agent/`.
   - Итог локально (Node 26) печатается как `ℹ pass N`, на серверах (Node 20) — как `# pass N`.
-  - База до начала работы — 48 тестов, все зелёные.
+  - База до начала работы — 48 тестов, все зелёные. Ожидаемый итог после каждой задачи указан в ней самой.
 - Нельзя запускать `node --test` из корня репозитория и нельзя делать `require('./index')` или `require('./translator')` в тестах. Оба файла при загрузке читают ключи LiveKit и без них бросают исключение.
 - Код агента — CommonJS. Комментарии в коде на английском, как в соседних файлах, и объясняют «почему», а не «что».
 - Каждый коммит — с двумя `-m`: сообщение и `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>`.
@@ -1179,7 +1179,356 @@ git commit -m "refactor(translator): фразовый движок, таблиц
 
 ---
 
-### Task 5: Фразовый движок — `onReady`, `onClose`, `onTranscript`, `pruneHistory`
+### Task 4b: Характеризующие тесты цикла реплик, сокет по умолчанию, честный фейковый сокет
+
+По ревью задачи 4. Тесты задачи 4 держали только URL, заголовок и часть `session.update`. Ревьюер внёс в перенесённый движок 17 однострочных поломок, и все прошли незамеченными. Среди них удалённый `responseDone()`: после него переводчик в звонках замолкает после первой фразы. Задача 5 правит именно этот цикл, поэтому сначала тесты.
+
+**Files:**
+- Modify: `livekit-agent/testing/fake-ws.js` (переписать целиком)
+- Modify: `livekit-agent/audio-out.test.js` (переписать целиком: третий тест ждал фиксированные 20 мс и под нагрузкой падал в 12–19 запусках из 60–70)
+- Modify: `livekit-agent/realtime-phrase-session.test.js` (переименовать один тест)
+- Create: `livekit-agent/realtime-phrase-session.characterization.test.js`
+- Create: `livekit-agent/realtime-phrase-session.default-socket.test.js`
+
+- [ ] **Step 1: Фейковый сокет ближе к `ws` 8**
+
+`testing/fake-ws.js` целиком:
+
+```js
+'use strict';
+// Stand-in for a `ws` WebSocket in unit tests. It records what the code under
+// test sends (parsed back from JSON) and lets the test play the server.
+//
+// Kept close to `ws` 8 where the code under test can tell the difference:
+// send() throws unless the socket is open; close() on an open socket reports
+// 1005 (no status received), and on a socket still connecting emits 'error'
+// and then 'close' with 1006; a socket closes once. Not copied: real `ws`
+// closes asynchronously through CLOSING (2), the fake closes on the spot.
+const { EventEmitter } = require('events');
+
+class FakeWs extends EventEmitter {
+  constructor(url, options) {
+    super();
+    this.url = url;
+    this.options = options;
+    this.sent = [];
+    this.readyState = FakeWs.CONNECTING;
+  }
+
+  send(data) {
+    if (this.readyState !== FakeWs.OPEN) {
+      throw new Error(`WebSocket is not open: readyState ${this.readyState}`);
+    }
+    this.sent.push(JSON.parse(data));
+  }
+
+  close(code) {
+    if (this.readyState === FakeWs.CLOSED) return;
+    const wasConnecting = this.readyState === FakeWs.CONNECTING;
+    this.readyState = FakeWs.CLOSED;
+    if (wasConnecting) {
+      this.emit('error', new Error('WebSocket was closed before the connection was established'));
+      this.emit('close', 1006, Buffer.alloc(0));
+      return;
+    }
+    this.emit('close', code ?? 1005, Buffer.alloc(0));
+  }
+
+  // ── the test's side ──
+
+  open() {
+    this.readyState = FakeWs.OPEN;
+    this.emit('open');
+  }
+
+  serverSends(event) {
+    this.emit('message', Buffer.from(JSON.stringify(event)));
+  }
+
+  serverCloses(code = 1006) {
+    if (this.readyState === FakeWs.CLOSED) return;
+    this.readyState = FakeWs.CLOSED;
+    this.emit('close', code, Buffer.alloc(0));
+  }
+
+  sentOfType(type) {
+    return this.sent.filter((m) => m.type === type);
+  }
+}
+FakeWs.CONNECTING = 0;
+FakeWs.OPEN = 1;
+FakeWs.CLOSING = 2;
+FakeWs.CLOSED = 3;
+
+/** A wsFactory that keeps every socket it made, newest last. */
+function fakeWsFactory() {
+  const sockets = [];
+  const factory = (url, options) => {
+    const ws = new FakeWs(url, options);
+    sockets.push(ws);
+    return ws;
+  };
+  return { factory, sockets, last: () => sockets[sockets.length - 1] };
+}
+
+module.exports = { FakeWs, fakeWsFactory };
+```
+
+- [ ] **Step 2: Характеризующие тесты — весь `session.update` и цикл реплик**
+
+`realtime-phrase-session.characterization.test.js`:
+
+```js
+// Run with: node --test  (from livekit-agent/)
+//
+// What the in-call translator does with a Realtime session, pinned as a whole:
+// the exact session.update and the turn cycle (commit / response.create /
+// queue / reset). Task 5 edits exactly these branches; a slip there would
+// silence the translator on every environment while narrower tests stay green.
+const test = require('node:test');
+const assert = require('node:assert');
+const { fakeWsFactory } = require('./testing/fake-ws');
+const { createRealtimeSession } = require('./realtime-phrase-session');
+
+const INSTRUCTIONS_AUTO_SK = [
+  'TRANSLATE ONLY. OUTPUT NOTHING EXCEPT THE TRANSLATION.',
+  '',
+  'You are a machine that converts spoken audio into spoken Slovak. You are NOT an assistant. You do NOT think. You do NOT respond. You ONLY translate.',
+  '',
+  'YOUR ONLY OUTPUT IS THE VERBATIM TRANSLATION OF WHAT WAS SAID. Nothing before it. Nothing after it.',
+  '',
+  'FORBIDDEN — any of these is a critical failure:',
+  '- Saying ANYTHING that was not in the original speech',
+  '- Greetings, acknowledgements, "I understand", "Here is the translation", "The speaker said"',
+  '- Answers to questions (translate the question, do NOT answer it)',
+  '- "I didn\'t hear", "Could you repeat", apologies, clarifications',
+  '- Adding context, commentary, or explanations',
+  '',
+  'SILENCE RULES:',
+  '- Speech already in Slovak → output NOTHING',
+  '- Unclear audio, silence, noise → output NOTHING',
+  '',
+  'EXAMPLE OF CORRECT BEHAVIOR:',
+  'Input: "Добрый день, как вы себя чувствуете?"',
+  'Output (if target=English): "Good afternoon, how are you feeling?"',
+  'Input: "Can you help me?" (if target=English and speech is already English) → SILENCE',
+].join('\n');
+
+// Slovak has no voice of its own in LANG_VOICES, so this also pins the fallback.
+const GOLDEN_AUTO_SK = {
+  type: 'session.update',
+  session: {
+    type: 'realtime',
+    instructions: INSTRUCTIONS_AUTO_SK,
+    output_modalities: ['audio'],
+    audio: {
+      input: { format: { type: 'audio/pcm', rate: 24000 }, transcription: { model: 'whisper-1' }, turn_detection: null },
+      output: { format: { type: 'audio/pcm', rate: 24000 }, voice: 'alloy' },
+    },
+  },
+};
+
+const loud = Buffer.from(Int16Array.from({ length: 480 }, () => 1000).buffer).toString('base64');
+const quiet = Buffer.alloc(960).toString('base64');
+
+function session(t, { configure = true, onError = () => {} } = {}) {
+  let now = 0;
+  t.mock.method(Date, 'now', () => now);
+  const { factory, last } = fakeWsFactory();
+  const ws = createRealtimeSession('auto', 'sk', () => {}, onError, { wsFactory: factory, apiKey: 'k' });
+  const fake = last();
+  fake.open();
+  if (configure) fake.serverSends({ type: 'session.updated' });
+  const say = (ms) => { for (const end = now + ms; now < end; now += 20) ws.sendAudio(loud); };
+  const pause = (ms) => { for (const end = now + ms; now < end; now += 20) ws.sendAudio(quiet); };
+  const control = () => fake.sent.map((m) => m.type).filter((k) => k !== 'input_audio_buffer.append' && k !== 'session.update');
+  return { ws, fake, say, pause, control };
+}
+
+test('the whole session.update is unchanged (auto → a language without its own voice)', (t) => {
+  const { fake } = session(t, { configure: false });
+  assert.deepStrictEqual(fake.sentOfType('session.update'), [GOLDEN_AUTO_SK]);
+});
+
+test('a pause commits and asks for the translation; a turn cut mid-response waits for response.done', (t) => {
+  const { fake, say, pause, control } = session(t);
+  say(1000); pause(700);
+  assert.deepStrictEqual(control(), ['input_audio_buffer.commit', 'response.create']);
+  fake.serverSends({ type: 'response.created' });
+  say(1000); pause(700);
+  assert.deepStrictEqual(control().slice(2), ['input_audio_buffer.commit']);
+  fake.serverSends({ type: 'response.done', response: { status: 'completed' } });
+  assert.deepStrictEqual(control().slice(2), ['input_audio_buffer.commit', 'response.create']);
+});
+
+test('more than two turns behind: the third is committed but never spoken', (t) => {
+  const { fake, say, pause, control } = session(t);
+  say(500); pause(700);
+  fake.serverSends({ type: 'response.created' });
+  for (let i = 0; i < 3; i++) { say(500); pause(700); }
+  assert.deepStrictEqual(control(), ['input_audio_buffer.commit', 'response.create',
+    'input_audio_buffer.commit', 'input_audio_buffer.commit', 'input_audio_buffer.commit']);
+  // Each response.done hands over one queued turn; the dropped one never comes.
+  for (let i = 0; i < 4; i++) {
+    fake.serverSends({ type: 'response.done', response: { status: 'completed' } });
+    fake.serverSends({ type: 'response.created' });
+  }
+  assert.strictEqual(fake.sentOfType('response.create').length, 3);
+});
+
+test('a close resets the turn state', (t) => {
+  const { ws, fake, say } = session(t);
+  fake.serverSends({ type: 'response.created' });
+  say(100);
+  fake.serverCloses(1006);
+  assert.strictEqual(ws._turns.responding, false);
+  assert.strictEqual(ws._turns.speaking, false);
+});
+
+test('a socket error reaches onError (the in-call translator drops the session on it)', (t) => {
+  const errors = [];
+  const { fake } = session(t, { onError: (e) => errors.push(e.message) });
+  fake.emit('error', new Error('boom'));
+  assert.deepStrictEqual(errors, ['boom']);
+});
+
+test('audio after open but before session.updated is dropped, not queued (current behaviour)', (t) => {
+  const { ws, fake } = session(t, { configure: false });
+  ws.sendAudio(loud);
+  fake.serverSends({ type: 'session.updated' });
+  assert.strictEqual(fake.sentOfType('input_audio_buffer.append').length, 0);
+});
+```
+
+- [ ] **Step 3: Сокет по умолчанию — отдельным файлом**
+
+`node --test` запускает каждый файл в своём процессе, поэтому подмена `ws` в `require.cache` не задевает другие тесты.
+
+`realtime-phrase-session.default-socket.test.js`:
+
+```js
+// Run with: node --test  (from livekit-agent/)
+//
+// The production path: called with four arguments, the session builds a real
+// `ws` socket with exactly the URL and options the in-call translator always
+// used. `ws` is swapped in require.cache — no network.
+const test = require('node:test');
+const assert = require('node:assert');
+const { EventEmitter } = require('events');
+
+const wsPath = require.resolve('ws');
+const calls = [];
+class SpyWs extends EventEmitter {
+  constructor(url, options) {
+    super();
+    calls.push({ url, options, argc: arguments.length });
+    this.readyState = 0;
+  }
+}
+SpyWs.CONNECTING = 0;
+SpyWs.OPEN = 1;
+SpyWs.CLOSING = 2;
+SpyWs.CLOSED = 3;
+require.cache[wsPath] = { id: wsPath, filename: wsPath, loaded: true, exports: SpyWs };
+const { createRealtimeSession } = require('./realtime-phrase-session');
+
+test('the four-argument call builds the same socket the in-call translator always did', () => {
+  const saved = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = 'env-key';
+  try {
+    createRealtimeSession('auto', 'en', () => {}, () => {});
+  } finally {
+    if (saved === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = saved;
+  }
+  assert.deepStrictEqual(calls, [{
+    url: 'wss://api.openai.com/v1/realtime?model=gpt-realtime-mini',
+    options: { headers: { Authorization: 'Bearer env-key' } },
+    argc: 2,
+  }]);
+});
+```
+
+- [ ] **Step 4: Детерминированный тест очереди кадров**
+
+`audio-out.test.js` целиком:
+
+```js
+// Run with: node --test  (from livekit-agent/)
+const test = require('node:test');
+const assert = require('node:assert');
+const { applyGain, createFrameQueue } = require('./audio-out');
+
+test('gain 1 leaves the samples alone', () => {
+  const s = Int16Array.from([1, -2, 3]);
+  assert.strictEqual(applyGain(s, 1), s);
+  assert.deepStrictEqual(Array.from(s), [1, -2, 3]);
+});
+
+test('gain scales in place and clamps at full scale', () => {
+  const s = Int16Array.from([1000, -1000, 30000, -30000]);
+  applyGain(s, 2);
+  assert.deepStrictEqual(Array.from(s), [2000, -2000, 32767, -32768]);
+});
+
+test('frames reach captureFrame one at a time, in order', { timeout: 2000 }, async () => {
+  const started = [];
+  let active = 0;
+  let maxActive = 0;
+  let drained;
+  const done = new Promise((resolve) => { drained = resolve; });
+  const source = {
+    async captureFrame(frame) {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      started.push(frame);
+      await new Promise((r) => setImmediate(r));
+      active -= 1;
+      if (started.length === 3) drained();
+    },
+  };
+  const queue = createFrameQueue(source, 'en');
+  queue.push('a');
+  queue.push('b');
+  queue.push('c');
+  await done;
+  assert.deepStrictEqual(started, ['a', 'b', 'c']);
+  assert.strictEqual(maxActive, 1);
+});
+```
+
+- [ ] **Step 5: Честное имя теста**
+
+В `realtime-phrase-session.test.js` строку
+
+```js
+test('audio sent before the session is configured waits for session.updated', () => {
+```
+
+заменить на:
+
+```js
+test('audio sent while the socket is still connecting waits for session.updated', () => {
+```
+
+- [ ] **Step 6: Проверить**
+
+```bash
+npm test 2>&1 | tail -8
+```
+
+Ожидается `ℹ pass 74`: 67 + 6 характеризующих + 1 тест сокета по умолчанию; `ℹ fail 0`. Затем самопроверка: временно удалить в `realtime-phrase-session.js` строку `ws._turns.responseDone();` и запустить `node --test realtime-phrase-session.characterization.test.js`. Должен упасть хотя бы один тест. После этого вернуть файл: `git checkout realtime-phrase-session.js`.
+
+- [ ] **Step 7: Коммит**
+
+```bash
+git add testing/fake-ws.js audio-out.test.js realtime-phrase-session.test.js realtime-phrase-session.characterization.test.js realtime-phrase-session.default-socket.test.js
+git commit -m "test(translator): характеризующие тесты цикла реплик и сокета по умолчанию, фейковый сокет ближе к ws" -m "По ревью: прежние тесты не замечали поломок цикла реплик, который правит следующая задача; тест очереди кадров под нагрузкой падал." -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 5: Фразовый движок — `onReady`, `onClose`, `onTranscript`, `pruneHistory`, метка логов
 
 **Files:**
 - Modify: `livekit-agent/realtime-phrase-session.js`
@@ -1243,6 +1592,15 @@ test('with pruneHistory a spoken phrase is deleted and a queued one is kept', ()
   );
 });
 
+test('log lines carry the caller tag; the in-call translator keeps [TRANSLATOR]', (t) => {
+  const lines = [];
+  t.mock.method(console, 'log', (...args) => lines.push(args.join(' ')));
+  open('ru', 'sk', { logTag: 'INTERPRETER' });
+  open('ru', 'sk');
+  assert.ok(lines.some((l) => l.startsWith('[INTERPRETER] Opening WS for ru→sk')));
+  assert.ok(lines.some((l) => l.startsWith('[TRANSLATOR] Opening WS for ru→sk')));
+});
+
 test('without pruneHistory nothing is deleted', () => {
   const { fake } = open('ru', 'sk');
   fake.serverSends({ type: 'session.updated' });
@@ -1296,6 +1654,10 @@ const HALLUCINATION_RE = /^(.{2,20}?)(?:\s*\1){2,}$|구독과\s*좋아요|ご視
  *   onClose({ code })
  *   onTranscript({ role: 'source' | 'translation', text })
  *   pruneHistory  delete each phrase from the conversation once spoken
+ *   logTag        log prefix (default TRANSLATOR: the in-call translator's
+ *                 log lines stay exactly as they were)
+ * wsFactory must return a new socket that is still connecting: its 'open'
+ * event is what sends the session.update.
  */
 ```
 
@@ -1384,19 +1746,36 @@ const HALLUCINATION_RE = /^(.{2,20}?)(?:\s*\1){2,}$|구독과\s*좋아요|ご視
     if (opts.onClose) opts.onClose({ code });
 ```
 
+- [ ] **Step 5b: Метка логов — последней правкой, когда все якоря выше уже заменены**
+
+После строки `const wsFactory = opts.wsFactory || defaultWsFactory;` добавить:
+
+```js
+  const logTag = opts.logTag || 'TRANSLATOR';
+```
+
+Все строки логов в `createRealtimeSession` — шаблонные. Заменить в них метку:
+
+```bash
+sed -i '' 's/\[TRANSLATOR\]/[${logTag}]/g' realtime-phrase-session.js
+grep -c '\[TRANSLATOR\]' realtime-phrase-session.js; grep -c '\[\${logTag}\]' realtime-phrase-session.js
+```
+
+Ожидается `0` и `15`.
+
 - [ ] **Step 6: Тесты проходят**
 
 ```bash
 node --test realtime-phrase-session.test.js && npm test 2>&1 | tail -8
 ```
 
-Ожидается: 12 тестов в файле зелёные, всего `ℹ pass 73`.
+Ожидается: 13 тестов в файле зелёные, всего `ℹ pass 81`.
 
 - [ ] **Step 7: Коммит**
 
 ```bash
 git add realtime-phrase-session.js realtime-phrase-session.test.js
-git commit -m "feat(interpreter): фразовый движок — onReady/onClose/субтитры и удаление озвученных реплик" -m "Попутно: регулярка галлюцинаций Whisper без обратной ссылки помечала любую фразу от шести символов; в переводчике звонков она только писала в лог, но субтитры съела бы целиком." -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+git commit -m "feat(interpreter): фразовый движок — onReady/onClose/субтитры, удаление озвученных реплик, метка логов" -m "Попутно: регулярка галлюцинаций Whisper без обратной ссылки помечала любую фразу от шести символов; в переводчике звонков она только писала в лог, но субтитры съела бы целиком." -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -2405,7 +2784,7 @@ test('closing it ourselves says goodbye and is not unexpected', () => {
   fake.open();
   s.close();
   assert.strictEqual(fake.sentOfType('session.close').length, 1);
-  assert.deepStrictEqual(seen.closes, [{ unexpected: false, code: 1000 }]);
+  assert.deepStrictEqual(seen.closes, [{ unexpected: false, code: 1005 }]);
 });
 
 test('the server dropping the socket is unexpected', () => {
@@ -2796,7 +3175,7 @@ test('spoken phrases are pruned from the conversation', () => {
 test('closing it ourselves is not unexpected; the server closing is', () => {
   const a = session();
   a.s.close();
-  assert.deepStrictEqual(a.seen.closes, [{ unexpected: false, code: 1000 }]);
+  assert.deepStrictEqual(a.seen.closes, [{ unexpected: false, code: 1005 }]);
   const b = session();
   b.fake.serverCloses(1006);
   assert.deepStrictEqual(b.seen.closes, [{ unexpected: true, code: 1006 }]);
@@ -2853,6 +3232,7 @@ function createPhraseSession({
       model,
       wsFactory: wsFactory || defaultWsFactory,
       pruneHistory: true,
+      logTag: 'INTERPRETER',
       onReady,
       onTranscript: ({ role, text }) => (role === 'source' ? onSourceText(text, true) : onTranslationText(text, true)),
       onClose: ({ code }) => onClose({ unexpected: !closedByUs, code }),
@@ -3929,7 +4309,7 @@ module.exports = { startInterpreter, stopInterpreter, getInterpreterStatus, self
 node --test interpreter.test.js && npm test 2>&1 | tail -8
 ```
 
-Ожидается: `ℹ pass 8` в файле, всего `ℹ pass 145`, `ℹ fail 0`.
+Ожидается: `ℹ pass 8` в файле, всего `ℹ pass 153`, `ℹ fail 0`.
 
 - [ ] **Step 4: Коммит**
 
@@ -4152,7 +4532,7 @@ registerInterpreterRoutes(app, {
 node --test interpreter-routes.test.js && node --check index.js && echo index-ok && npm test 2>&1 | tail -8
 ```
 
-Ожидается: `ℹ pass 6`, `index-ok`, весь набор `ℹ pass 151`, `ℹ fail 0`.
+Ожидается: `ℹ pass 6`, `index-ok`, весь набор `ℹ pass 159`, `ℹ fail 0`.
 
 - [ ] **Step 5: Коммит**
 
@@ -4360,7 +4740,7 @@ function renderReport(r) {
 module.exports = { percentile, summarize, firstVoicedAfter, voicedMs, suggestThresholds, renderReport };
 ```
 
-- [ ] **Step 3: Тест проходит** — `node --test bench/bench-report.test.js` → `ℹ pass 5`; весь `npm test` — `ℹ pass 156`, `ℹ fail 0`.
+- [ ] **Step 3: Тест проходит** — `node --test bench/bench-report.test.js` → `ℹ pass 5`; весь `npm test` — `ℹ pass 164`, `ℹ fail 0`.
 
 - [ ] **Step 4: Коммит**
 
