@@ -3081,6 +3081,42 @@ test('F4 a chunk length that rounds to no samples is refused instead of spinning
     RangeError,
   );
 });
+
+// X1/X2 need the judged windows, so they use their own small helper.
+function gateWithWindows(scores) {
+  const out = [];
+  const windows = [];
+  let i = 0;
+  const g = createVoiceprintGate({
+    sampleRate: 1000,
+    chunkMs: 100,
+    score: async (w) => {
+      windows.push(w);
+      const s = scores[i++];
+      if (s instanceof Error) throw s;
+      return s;
+    },
+    onOutput: (c) => out.push(c),
+  });
+  return { g, out, windows };
+}
+
+test('X1 an embed failure on the first chunk of the partner\'s speech does not open the gate for the rest', async () => {
+  const { g, out } = gateWithWindows([new Error('timeout'), LEAK, LEAK]);
+  await feed(g, [silence(), speech(), speech(), speech(), silence()]);
+  assert.strictEqual(shape(out), '0S00');
+});
+
+test('X2 after end() the next window does not reach back across the gap', async () => {
+  const { g, windows } = gateWithWindows([OWN, OWN, OWN]);
+  await feed(g, [speech(1000), speech(1100)]);
+  g.end();
+  await tick();
+  await feed(g, [speech(1500), speech(1600)]);
+  const first = (w) => w[0];
+  assert.deepStrictEqual(windows.map(first), [1000, 1000, 1500], 'the window after the gap starts at the new audio');
+  assert.strictEqual(windows[2].length, 2 * CHUNK);
+});
 ```
 
 Run: `node --test voiceprint-gate.rules.test.js` → `ℹ pass 8` (правила уже соблюдаются). Тест устойчивости до исправления не запускать: F4 зациклит процесс.
@@ -3364,7 +3400,7 @@ module.exports = { createVoiceprintGate };
 node --test voiceprint-gate.test.js voiceprint-gate.rules.test.js voiceprint-gate.robustness.test.js && npm test 2>&1 | tail -8
 ```
 
-Ожидается: 13 + 8 + 4 = 25 в трёх файлах; весь набор `ℹ pass 122`, `ℹ fail 0`.
+Ожидается: 13 + 8 + 6 = 27 в трёх файлах; весь набор `ℹ pass 124`, `ℹ fail 0`.
 
 - [ ] **Step 4: Коммит**
 
@@ -4854,7 +4890,9 @@ test("the owner's speech reaches only the engine that translates them", async ()
     await settle();
     const toB = made.find((e) => e.opts.targetLang === 'de');
     const toA = made.find((e) => e.opts.targetLang === 'ru');
-    assert.ok(toB.sent.length >= 3, `a→b got ${toB.sent.length} chunks`);
+    // Three chunks are judged as the frames arrive; the fourth only because the
+    // stream ended and listen() called gate.end().
+    assert.strictEqual(toB.sent.length, 4, `a→b got ${toB.sent.length} chunks`);
     assert.ok(toB.sent.every((c) => c.some((x) => x !== 0)), 'speech, not silence');
     assert.strictEqual(toA.sent.length, 0);
   } finally {
@@ -4868,7 +4906,7 @@ test('a track that arrives while the room is still connecting is not lost', asyn
   await interpreter.startInterpreter({ sessionId: 's4', roomName: 'r-early', participants: people() }, deps);
   try {
     await settle();
-    assert.ok(made.find((e) => e.opts.targetLang === 'de').sent.length >= 3);
+    assert.strictEqual(made.find((e) => e.opts.targetLang === 'de').sent.length, 4);
   } finally {
     await interpreter.stopInterpreter('r-early');
   }
@@ -5239,7 +5277,7 @@ module.exports = { startInterpreter, stopInterpreter, getInterpreterStatus, self
 node --test interpreter.test.js && npm test 2>&1 | tail -8
 ```
 
-Ожидается: `ℹ pass 8` в файле, всего `ℹ pass 170`, `ℹ fail 0`.
+Ожидается: `ℹ pass 8` в файле, всего `ℹ pass 172`, `ℹ fail 0`.
 
 - [ ] **Step 4: Коммит**
 
@@ -5462,7 +5500,7 @@ registerInterpreterRoutes(app, {
 node --test interpreter-routes.test.js && node --check index.js && echo index-ok && npm test 2>&1 | tail -8
 ```
 
-Ожидается: `ℹ pass 6`, `index-ok`, весь набор `ℹ pass 176`, `ℹ fail 0`.
+Ожидается: `ℹ pass 6`, `index-ok`, весь набор `ℹ pass 178`, `ℹ fail 0`.
 
 - [ ] **Step 5: Коммит**
 
@@ -5670,7 +5708,7 @@ function renderReport(r) {
 module.exports = { percentile, summarize, firstVoicedAfter, voicedMs, suggestThresholds, renderReport };
 ```
 
-- [ ] **Step 3: Тест проходит** — `node --test bench/bench-report.test.js` → `ℹ pass 5`; весь `npm test` — `ℹ pass 181`, `ℹ fail 0`.
+- [ ] **Step 3: Тест проходит** — `node --test bench/bench-report.test.js` → `ℹ pass 5`; весь `npm test` — `ℹ pass 183`, `ℹ fail 0`.
 
 - [ ] **Step 4: Коммит**
 

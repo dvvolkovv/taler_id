@@ -87,3 +87,39 @@ test('F4 a chunk length that rounds to no samples is refused instead of spinning
     RangeError,
   );
 });
+
+// X1/X2 need the judged windows, so they use their own small helper.
+function gateWithWindows(scores) {
+  const out = [];
+  const windows = [];
+  let i = 0;
+  const g = createVoiceprintGate({
+    sampleRate: 1000,
+    chunkMs: 100,
+    score: async (w) => {
+      windows.push(w);
+      const s = scores[i++];
+      if (s instanceof Error) throw s;
+      return s;
+    },
+    onOutput: (c) => out.push(c),
+  });
+  return { g, out, windows };
+}
+
+test('X1 an embed failure on the first chunk of the partner\'s speech does not open the gate for the rest', async () => {
+  const { g, out } = gateWithWindows([new Error('timeout'), LEAK, LEAK]);
+  await feed(g, [silence(), speech(), speech(), speech(), silence()]);
+  assert.strictEqual(shape(out), '0S00');
+});
+
+test('X2 after end() the next window does not reach back across the gap', async () => {
+  const { g, windows } = gateWithWindows([OWN, OWN, OWN]);
+  await feed(g, [speech(1000), speech(1100)]);
+  g.end();
+  await tick();
+  await feed(g, [speech(1500), speech(1600)]);
+  const first = (w) => w[0];
+  assert.deepStrictEqual(windows.map(first), [1000, 1000, 1500], 'the window after the gap starts at the new audio');
+  assert.strictEqual(windows[2].length, 2 * CHUNK);
+});
