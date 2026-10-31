@@ -24,19 +24,25 @@ const { LANG_NAMES, LANG_VOICES } = require('./lang-names');
 
 const DEFAULT_MODEL = 'gpt-realtime-mini';
 
-// Common Whisper hallucination patterns: the same 2–40 characters said four or
-// more times over (three is still a person saying "да да да"), and the
-// subtitle-credit lines Whisper invents on silence. The repeat used to be
-// ((.{2,20})\s*){3,}, which any phrase of six characters satisfies — harmless
-// while the result was only logged, but it would swallow every subtitle.
-const HALLUCINATION_RE = /^(.{2,40}?)(?:[\s,.!?…]*\1){3,}[\s,.!?…]*$|продолжение следует|субтитры (?:сделал|создавал|подготовил)|редактор субтитров|спасибо за просмотр|thanks? (?:you )?for watching|구독과\s*좋아요|ご視聴|チャンネル登録|请订阅/i;
+// Whisper hallucinations, two kinds. Both run on every transcript in the
+// agent's only thread, so both must stay linear in their input.
+//
+// The same 2–40 characters said four or more times over (three is still a
+// person saying "да да да"). The repeated piece starts and ends with a letter
+// or digit: a piece that may itself be punctuation lets a run of "?!.…" be
+// split exponentially many ways between it and the separators — such a
+// transcript froze the process for seconds in review. (The first version,
+// ((.{2,20})\s*){3,}, matched any phrase of six characters.)
+const REPEATED_RE = /^[\s,.!?…]*([^\s,.!?…].{0,38}?[^\s,.!?…])(?:[\s,.!?…]*\1){3,}[\s,.!?…]*$/i;
+// Credit lines Whisper invents on silence — only as the whole transcript, so a
+// real "спасибо за просмотр квартиры" keeps its subtitle.
+const CREDITS_RE = /^[\s,.!?…]*(?:продолжение следует|субтитры (?:сделал|создавал|подготовил).*|редактор субтитров.*|спасибо за просмотр|thanks? (?:you )?for watching|구독과\s*좋아요|ご視聴.*|チャンネル登録.*|请订阅.*)[\s,.!?…]*$/i;
 
 function isHallucination(text) {
   if (!text) return true;
   const t = text.trim();
   if (t.length < 2) return true;
-  if (HALLUCINATION_RE.test(t)) return true;
-  return false;
+  return REPEATED_RE.test(t) || CREDITS_RE.test(t);
 }
 
 // Compute RMS amplitude of a PCM16 base64 audio frame

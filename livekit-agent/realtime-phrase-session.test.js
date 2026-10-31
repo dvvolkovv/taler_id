@@ -90,12 +90,21 @@ test('translated audio deltas reach the callback as bytes', () => {
 const { isHallucination } = require('./realtime-phrase-session');
 
 test('only real hallucinations are filtered, ordinary phrases are not', () => {
-  for (const speech of ['Добрый день', 'Guten Tag, wie geht es Ihnen?', 'да да да', 'Да, да, да.', 'нет, нет, нет']) {
+  for (const speech of [
+    'Добрый день',
+    'Guten Tag, wie geht es Ihnen?',
+    'да да да',
+    'Да, да, да.',
+    'нет, нет, нет',
+    'Спасибо за просмотр квартиры',
+    'Thanks for watching the kids',
+  ]) {
     assert.strictEqual(isHallucination(speech), false, speech);
   }
   for (const loop of [
     ' ',
     'ok ok ok ok',
+    '… да … да … да … да',
     'Субтитры сделал DimaTorzok',
     'Продолжение следует...',
     'Спасибо за просмотр!',
@@ -180,4 +189,12 @@ test('a callback that throws is logged and does not escape the socket handlers',
   assert.doesNotThrow(() => fake.serverCloses(1006));
   assert.ok(errors.some((l) => l.includes('onReady callback failed') && l.includes('ready boom')));
   assert.ok(errors.some((l) => l.includes('onClose callback failed') && l.includes('close boom')));
+});
+
+test('punctuation runs cannot stall the agent', () => {
+  const start = process.hrtime.bigint();
+  for (const s of ['?'.repeat(34) + ' ок', '… '.repeat(22) + 'ну ладно', '!'.repeat(36) + 'x', '. '.repeat(24) + 'да']) {
+    isHallucination(s);
+  }
+  assert.ok(Number(process.hrtime.bigint() - start) / 1e6 < 100);
 });

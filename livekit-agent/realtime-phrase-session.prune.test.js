@@ -62,3 +62,25 @@ test('two phrases cut during one response: no response is asked for on an empty 
   done('r2'); // both are deleted with it
   assert.strictEqual(control().filter((c) => c === 'response.create').length, 2);
 });
+
+test('a commit acknowledged after response.done still gets its response', (t) => {
+  let now = 0;
+  t.mock.method(console, 'log', () => {});
+  t.mock.method(Date, 'now', () => now);
+  const { factory, last } = fakeWsFactory();
+  const ws = createRealtimeSession('ru', 'sk', () => {}, () => {}, { wsFactory: factory, apiKey: 'k', pruneHistory: true });
+  const fake = last();
+  fake.open();
+  fake.serverSends({ type: 'session.updated' });
+  const phrase = () => {
+    for (const end = now + 600; now < end; now += 20) ws.sendAudio(loud);
+    for (const end = now + 700; now < end; now += 20) ws.sendAudio(quiet);
+  };
+  phrase();
+  fake.serverSends({ type: 'input_audio_buffer.committed', item_id: 'in1' });
+  fake.serverSends({ type: 'response.created', response: { id: 'r1' } });
+  phrase(); // committed while r1 speaks; the server has not acknowledged it yet
+  fake.serverSends({ type: 'response.done', response: { id: 'r1', status: 'completed', output: [{ id: 'out1' }] } });
+  fake.serverSends({ type: 'input_audio_buffer.committed', item_id: 'in2' });
+  assert.strictEqual(fake.sentOfType('response.create').length, 2);
+});
