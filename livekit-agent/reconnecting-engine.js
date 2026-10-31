@@ -40,7 +40,7 @@ function createReconnectingEngine({
     try {
       onStatus(state);
     } catch (e) {
-      log.error(`[INTERPRETER] reconnecting engine: onStatus(${state}) failed: ${e.message}`);
+      log.error(`[INTERPRETER] reconnecting engine: onStatus(${state}) failed: ${e && e.message}`);
     }
   }
 
@@ -88,7 +88,7 @@ function createReconnectingEngine({
       } catch (e) {
         // E.g. the socket constructor refusing a bad URL. Uncaught, this would
         // be an exception inside a timer; it is a failed attempt instead.
-        log.error(`[INTERPRETER] reconnecting engine: reconnect failed: ${e.message}`);
+        log.error(`[INTERPRETER] reconnecting engine: reconnect failed: ${e && e.message}`);
         retry();
       }
     }, delay);

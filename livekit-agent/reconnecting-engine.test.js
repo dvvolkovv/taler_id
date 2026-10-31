@@ -182,3 +182,31 @@ test('a throwing onStatus is logged, not thrown into the caller', () => {
   assert.strictEqual(timers.active(), 1);
   assert.ok(errors.some((m) => m.includes('broadcast failed')));
 });
+
+
+test('an onStatus or a factory that throws something other than an Error is logged, not thrown', () => {
+  const timers = fakeTimers();
+  const errors = [];
+  const made = [];
+  let calls = 0;
+  const factory = (handlers) => {
+    calls += 1;
+    // eslint-disable-next-line no-throw-literal
+    if (calls === 2) throw undefined;
+    const e = { handlers, sent: [], closed: false, sendAudio(x) { this.sent.push(x); }, close() { this.closed = true; } };
+    made.push(e);
+    return e;
+  };
+  createReconnectingEngine({
+    factory,
+    // eslint-disable-next-line no-throw-literal
+    onStatus: () => { throw undefined; },
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+    log: { error: (m) => errors.push(m) },
+  });
+  assert.doesNotThrow(() => made[0].handlers.onClose({ unexpected: true }));
+  assert.doesNotThrow(() => timers.fireNext());
+  assert.ok(errors.some((m) => m.includes('onStatus(reconnecting) failed: undefined')), errors.join('\n'));
+  assert.ok(errors.some((m) => m.includes('reconnect failed: undefined')), errors.join('\n'));
+});

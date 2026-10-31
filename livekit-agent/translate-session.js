@@ -90,7 +90,7 @@ function createTranslateSession(opts) {
     try {
       fn(...args);
     } catch (e) {
-      log.error(`[INTERPRETER] translate →${targetLang}: ${name} callback failed: ${e.message}`);
+      log.error(`[INTERPRETER] translate →${targetLang}: ${name} callback failed: ${e && e.message}`);
     }
   };
   const onAudio = safe('onAudio', opts.onAudio);

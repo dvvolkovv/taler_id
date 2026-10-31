@@ -360,3 +360,16 @@ test('selftest fails on an error that follows session.updated within the append 
   assert.strictEqual(r.ok, false);
   assert.match(r.reason, /unknown event/);
 });
+
+
+test('a callback that throws something other than an Error is logged, not thrown into the socket', () => {
+  const errors = [];
+  // eslint-disable-next-line no-throw-literal
+  const { fake } = session({ onAudio: () => { throw undefined; }, log: { error: (m) => errors.push(m), warn() {} } });
+  fake.open();
+  assert.doesNotThrow(() => {
+    fake.serverSends({ type: 'session.updated' });
+    fake.serverSends({ type: 'session.output_audio.delta', delta: 'AAAA' });
+  });
+  assert.ok(errors.some((m) => m.includes('onAudio callback failed: undefined')), errors.join('\n'));
+});

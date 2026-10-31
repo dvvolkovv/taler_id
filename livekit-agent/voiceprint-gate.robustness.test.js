@@ -123,3 +123,24 @@ test('X2 after end() the next window does not reach back across the gap', async 
   assert.deepStrictEqual(windows.map(first), [1000, 1000, 1500], 'the window after the gap starts at the new audio');
   assert.strictEqual(windows[2].length, 2 * CHUNK);
 });
+
+
+test('F5 a callback that throws something other than an Error is still only logged', async () => {
+  // eslint-disable-next-line no-throw-literal
+  const { g } = gate([OWN, OWN, OWN], { onOutput: () => { throw undefined; } });
+  const rejections = [];
+  const onRejection = (e) => rejections.push(e);
+  const errors = [];
+  const saved = console.error;
+  console.error = (...a) => errors.push(a.join(' '));
+  process.on('unhandledRejection', onRejection);
+  try {
+    await feed(g, [speech(), speech(), speech(), silence()]);
+    await new Promise((r) => setTimeout(r, 10));
+  } finally {
+    process.off('unhandledRejection', onRejection);
+    console.error = saved;
+  }
+  assert.strictEqual(rejections.length, 0, String(rejections[0]));
+  assert.ok(errors.some((m) => m.includes('onOutput callback failed: undefined')), errors.join('\n'));
+});

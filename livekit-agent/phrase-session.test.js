@@ -223,3 +223,66 @@ test('what was said reaches the subtitles but not the log', (t) => {
   assert.deepStrictEqual(seen.translation, [['Dobrý deň', true]]);
   assert.ok(!lines.some((l) => l.includes('Добрый') || l.includes('Dobrý')), lines.join('\n'));
 });
+
+
+test('a callback that throws something other than an Error is logged as such, not as a parse error', () => {
+  const errors = [];
+  // eslint-disable-next-line no-throw-literal
+  const { fake } = session({ onAudio: () => { throw undefined; }, log: { error: (m) => errors.push(m), warn() {} } });
+  const consoleErrors = [];
+  const saved = console.error;
+  console.error = (...a) => consoleErrors.push(a.join(' '));
+  try {
+    fake.serverSends({ type: 'session.updated' });
+    fake.serverSends({ type: 'response.output_audio.delta', delta: 'AAAA' });
+  } finally {
+    console.error = saved;
+  }
+  assert.ok(errors.some((m) => m.includes('onAudio callback failed: undefined')), errors.join('\n'));
+  assert.ok(!consoleErrors.some((m) => m.includes('parse error')), consoleErrors.join('\n'));
+});
+
+// ── selftestPhrase: the phrase engine's model, checked after a deploy ──
+
+const { selftestPhrase } = require('./phrase-session');
+
+test('selftest passes once the session accepts its configuration, and closes the socket', async () => {
+  const { factory, last } = fakeWsFactory();
+  const result = selftestPhrase({ apiKey: 'k', model: 'gpt-realtime-2025-08-28', wsFactory: factory, log: quietLog });
+  assert.match(last().url, /\/v1\/realtime\?model=gpt-realtime-2025-08-28$/);
+  last().open();
+  assert.deepStrictEqual(last().sent.map((m) => m.type), ['session.update']);
+  last().serverSends({ type: 'session.updated' });
+  assert.deepStrictEqual(await result, { ok: true, reason: 'session.updated received' });
+  assert.strictEqual(last().readyState, 3);
+});
+
+test('selftest fails with the refusal when OpenAI refuses the session', async () => {
+  const { factory, last } = fakeWsFactory();
+  const result = selftestPhrase({ apiKey: 'k', model: 'gpt-realtime-2025-08-28', wsFactory: factory, log: quietLog });
+  last().open();
+  last().serverSends({ type: 'error', error: { message: 'model not found' } });
+  const r = await result;
+  assert.strictEqual(r.ok, false);
+  assert.match(r.reason, /model not found/);
+});
+
+test('selftest fails when the socket closes first, and without a key at once', async () => {
+  const { factory, last } = fakeWsFactory();
+  const result = selftestPhrase({ apiKey: 'k', model: 'm', wsFactory: factory, log: quietLog });
+  last().serverCloses(1006);
+  const r = await result;
+  assert.strictEqual(r.ok, false);
+  assert.match(r.reason, /closed code=1006/);
+  assert.deepStrictEqual(await selftestPhrase({ apiKey: '' }), { ok: false, reason: 'OPENAI_API_KEY not set' });
+});
+
+test('selftest gives up after timeoutMs and closes its socket', async () => {
+  const { factory, last } = fakeWsFactory();
+  const result = selftestPhrase({ apiKey: 'k', model: 'm', wsFactory: factory, timeoutMs: 30, log: quietLog });
+  last().open();
+  const r = await result;
+  assert.strictEqual(r.ok, false);
+  assert.match(r.reason, /timeout|no session confirmation/);
+  assert.strictEqual(last().readyState, 3);
+});

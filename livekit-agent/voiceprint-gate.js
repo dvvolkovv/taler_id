@@ -80,7 +80,7 @@ function createVoiceprintGate(opts) {
     try {
       fn(arg);
     } catch (e) {
-      console.error(`[INTERPRETER] voiceprint gate: ${name} callback failed: ${e.message}`);
+      console.error(`[INTERPRETER] voiceprint gate: ${name} callback failed: ${e && e.message}`);
     }
   };
   const onOutput = safe('onOutput', opts.onOutput);

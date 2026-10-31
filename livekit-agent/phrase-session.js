@@ -50,7 +50,7 @@ function createPhraseSession(opts) {
     try {
       fn(...args);
     } catch (e) {
-      log.error(`[INTERPRETER] phrase ${tag}: ${name} callback failed: ${e.message}`);
+      log.error(`[INTERPRETER] phrase ${tag}: ${name} callback failed: ${e && e.message}`);
     }
   };
   const onAudio = safe('onAudio', opts.onAudio);
@@ -172,4 +172,48 @@ function createPhraseSession(opts) {
   };
 }
 
-module.exports = { createPhraseSession };
+/**
+ * Post-deploy smoke for the phrase engine, the counterpart of
+ * selftestTranslate: opens a session the way the interpreter does and waits
+ * for it to accept its configuration. The model is a dated snapshot
+ * (INTERPRETER_FALLBACK_MODEL); once OpenAI withdraws it, every pair outside
+ * gpt-realtime-translate's languages fails in every conversation, and the
+ * simultaneous engine's selftest has no way to notice.
+ */
+function selftestPhrase({ apiKey, model, wsFactory, timeoutMs = 10000, log = console } = {}) {
+  if (!apiKey) return Promise.resolve({ ok: false, reason: 'OPENAI_API_KEY not set' });
+  return new Promise((resolve) => {
+    let done = false;
+    let session = null;
+    let refusal = null;
+    let timer = null;
+    const finish = (result) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      if (session) session.close();
+      resolve(result);
+    };
+    timer = setTimeout(() => finish({ ok: false, reason: `timeout: no session.updated within ${timeoutMs} ms` }), timeoutMs);
+    try {
+      session = createPhraseSession({
+        apiKey,
+        model,
+        sourceLang: 'ru',
+        targetLang: 'sk',
+        safetyId: 'interpreter-selftest',
+        wsFactory,
+        readyTimeoutMs: timeoutMs,
+        // fail() names what OpenAI refused; the close that follows has only a code.
+        log: { error: (m) => { refusal = m; log.error(m); }, warn: (m) => log.warn(m) },
+        onReady: () => finish({ ok: true, reason: 'session.updated received' }),
+        onClose: ({ code }) => finish({ ok: false, reason: refusal || `ws closed code=${code} before confirmation` }),
+      });
+      if (done) session.close();
+    } catch (e) {
+      finish({ ok: false, reason: `phrase session did not open: ${e && e.message}` });
+    }
+  });
+}
+
+module.exports = { createPhraseSession, selftestPhrase };
