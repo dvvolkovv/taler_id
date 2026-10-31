@@ -6600,6 +6600,213 @@ git commit -m "feat(interpreter): направления перевода из �
 
 ---
 
+### Task 12b: Направления — отпечатки, на которых фильтр глохнет, и строгие идентификаторы
+
+По ревью задачи 12:
+- **Вырожденные отпечатки проходили проверку, и направление молча глохло.** Нулевой вектор (как и вектор из исчезающе малых или огромных чисел) даёт `cosine` 0 против любого голоса, и владельца не переводят вовсе. Одинаковые отпечатки у обоих (или один, умноженный на число) дают равное сходство, и не проходит никто — немая сессия, которую хост оплачивает поминутно. Сайдкар таких векторов не отдаёт: на DEV у образцов стенда длина 1,00, косинусы между разными голосами 0,23–0,43. Значит, это ошибка бэкенда, и агент — последнее место, где её ловят до списания. Теперь нужна конечная ненулевая длина вектора, а пара с косинусом от 0,99 отклоняется («same voice print»). Длину 1 не требуем: это свойство нынешнего сайдкара, а `cosine` от масштаба не зависит.
+- **`every()` пропускает дырки:** `new Array(192)` проходил. Теперь цикл по индексам.
+- **userId** — только `[A-Za-z0-9_-]{1,128}`: он входит в имя дорожки и в строки журнала, а бэкенд шлёт UUID.
+- **Язык в тексте ошибки** показывается, только если похож на код языка. Перепутанное поле с вектором раньше давало сообщение в 3,7 тыс. символов со всеми 192 числами, а строка с переводом строки подделывала запись в журнале. В задаче 17 текст ошибки уходит в журнал и в ответ 400.
+- **Тесты:** выживали 9 мутантов из 18. Например, можно было удалить `checkPerson(a)`: каждый плохой случай стоял вторым в паре.
+
+**Files:**
+- Modify: `livekit-agent/interpreter-routing.js` (переписать целиком)
+- Modify: `livekit-agent/interpreter-routing.test.js` (семь тестов в конец)
+
+- [ ] **Step 1: Тесты (падают)**
+
+В конец `interpreter-routing.test.js` дописать через пустую строку:
+
+```js
+test('the first participant is checked as strictly as the second', () => {
+  // Unchecked, an empty print reaches the gate, cosine() throws on the length
+  // mismatch and the gate fails open: that person's direction runs unfiltered.
+  assert.throws(() => planDirections([{ ...ivan, embedding: [] }, anna]), /192 finite numbers/);
+  assert.throws(() => planDirections([{ ...ivan, lang: 'xx' }, anna]), /unsupported language/);
+  assert.throws(() => planDirections([{ ...ivan, userId: '' }, anna]), /bare user id/);
+  assert.throws(() => planDirections([null, anna]), /bare user id/);
+});
+
+test('a third participant is refused, not ignored', () => {
+  assert.throws(() => planDirections([ivan, anna, { userId: 'u-olga', lang: 'en', embedding: print(3) }]), /exactly two/);
+});
+
+test('a user id that is not a plain id is refused', () => {
+  for (const userId of ['', ' ', 'u anna', 'u-anna\n', '\u0000', 'x'.repeat(129), 42, null, undefined]) {
+    assert.throws(() => planDirections([ivan, { ...anna, userId }]), /bare user id/, JSON.stringify(userId));
+  }
+  // What the backend actually sends.
+  const [toAnna] = planDirections([ivan, { ...anna, userId: 'aaaaaaaa-1111-2222-3333-444444444444' }]);
+  assert.strictEqual(toAnna.trackName, 'interp-for-aaaaaaaa-1111-2222-3333-444444444444');
+});
+
+test('every number of the print is checked, holes and nulls included', () => {
+  const bad = [
+    [], // Profile.ownerEmbedding default: "no print"
+    print(1).map((x, i) => (i === 7 ? null : x)), // JSON turns NaN into null
+    [...print(1).slice(1), Infinity],
+    print(1).map(String),
+    new Array(192), // every() skips holes
+    [...print(1), 0], // 193
+  ];
+  for (const embedding of bad) {
+    assert.throws(() => planDirections([ivan, { ...anna, embedding }]), /192 finite numbers/);
+  }
+});
+
+test('a print with no usable length is refused: its owner could never pass the gate', () => {
+  for (const value of [0, 1e-170, 1e200]) {
+    // 0 and an underflowing square both give |v| = 0, so cosine() scores 0 against
+    // any voice; an overflowing square gives 0 or NaN.
+    assert.throws(
+      () => planDirections([ivan, { ...anna, embedding: new Array(192).fill(value) }]),
+      /usable length/,
+      String(value),
+    );
+  }
+});
+
+test('two prints the gate cannot tell apart are refused', () => {
+  assert.throws(() => planDirections([ivan, { ...anna, embedding: ivan.embedding }]), /same voice print/);
+  assert.throws(() => planDirections([ivan, { ...anna, embedding: ivan.embedding.map((x) => x * 3) }]), /same voice print/);
+  // Alike is fine — telling alike voices apart is the gate's job. Cosine 0.8:
+  const alike = print(0).map((x, i) => (i === 1 ? 0.75 : x));
+  assert.doesNotThrow(() => planDirections([ivan, { ...anna, embedding: alike }]));
+});
+
+test('an error message never carries a voice print or a forged log line', () => {
+  const vector = Array.from({ length: 192 }, (_, i) => 0.123456789 + i);
+  const clean = (e) => {
+    assert.ok(!e.message.includes('0.123456789'), e.message);
+    assert.ok(!e.message.includes('\n'), e.message);
+    assert.ok(e.message.length < 120, e.message);
+    return true;
+  };
+  // A field mix-up: the print sent as the language.
+  for (const lang of [vector, 'x'.repeat(5000), 'ru\nFATAL forged', { toString: 1 }]) {
+    assert.throws(() => planDirections([ivan, { ...anna, lang }]), (e) => /unsupported language/.test(e.message) && clean(e));
+  }
+  assert.throws(() => planDirections([ivan, { ...anna, embedding: [...vector.slice(1), NaN] }]), clean);
+  assert.throws(() => planDirections([ivan, { ...anna, embedding: vector.map(() => 0) }]), clean);
+  assert.throws(() => planDirections([ivan, { ...anna, embedding: ivan.embedding }]), clean);
+});
+```
+
+Run: `node --test interpreter-routing.test.js`
+Expected: падают 5 новых тестов — идентификатор, числа отпечатка, нулевая длина, одинаковые отпечатки, текст ошибки. Два новых проходят и сейчас: строгая проверка первого участника и отказ третьему. Они закрепляют поведение, которое тесты задачи 12 не ловили.
+
+- [ ] **Step 2: Модуль целиком**
+
+`interpreter-routing.js`:
+
+```js
+'use strict';
+/**
+ * Turns the two participants the backend sends into the two directions the
+ * interpreter runs: who speaks, who listens, in which languages, by which
+ * engine, onto which track.
+ *
+ * Exactly two different people with different languages the agent knows and a
+ * 192-number voice print each — the gate cannot tell them apart without both
+ * prints, and a same-language pair needs no interpreter. User ids arrive bare
+ * (no "#device"): the track and the gate belong to the person, not the phone.
+ *
+ * A print the gate cannot score against is refused here rather than found out
+ * in the room, where it fails without a word: a zero-length print scores 0
+ * against every voice, so its owner never passes, and two prints alike enough
+ * score every voice the same, so nobody does.
+ */
+const { isSupported, chooseEngine } = require('./interpreter-langs');
+const { cosine } = require('./voice-embed-client');
+
+const EMBEDDING_DIM = 192;
+// The gate lets a chunk through only if it is closer to the owner than to the
+// partner by a margin. Prints this alike leave nothing to measure. Different
+// people's ECAPA prints sit far below it; a duplicate or a rescaled copy of one
+// print sits at 1.
+const SAME_PRINT_COSINE = 0.99;
+// Matched exactly against `<userId>#<device>` identities, and part of a track
+// name and of log lines. Backend ids are UUIDs.
+const USER_ID = /^[A-Za-z0-9_-]{1,128}$/;
+const LANG_SHAPE = /^[A-Za-z0-9_-]{1,16}$/;
+
+function trackNameFor(listenerUserId) {
+  return `interp-for-${listenerUserId}`;
+}
+
+/** The language as given, for an error message — never a long or odd value: a mixed-up field could hold a voice print. */
+function shownLang(lang) {
+  if (typeof lang === 'string' && LANG_SHAPE.test(lang)) return lang;
+  return `(${lang === null ? 'null' : typeof lang})`;
+}
+
+function checkPerson(p) {
+  if (!p || typeof p.userId !== 'string' || !USER_ID.test(p.userId)) {
+    throw new Error('participant userId must be a bare user id');
+  }
+  if (!isSupported(p.lang)) throw new Error(`participant ${p.userId}: unsupported language ${shownLang(p.lang)}`);
+  const e = p.embedding;
+  let ok = Array.isArray(e) && e.length === EMBEDDING_DIM;
+  let sumSq = 0;
+  // An index loop, not every(): every() skips holes, and new Array(192) would pass.
+  for (let i = 0; ok && i < EMBEDDING_DIM; i++) {
+    if (Number.isFinite(e[i])) sumSq += e[i] * e[i];
+    else ok = false;
+  }
+  if (!ok) throw new Error(`participant ${p.userId}: embedding must be ${EMBEDDING_DIM} finite numbers`);
+  // cosine() gives a zero-length vector 0 against anything; a print whose
+  // squares underflow scores the same, and one whose squares overflow scores 0 or NaN.
+  if (!(sumSq > 0) || !Number.isFinite(sumSq)) {
+    throw new Error(`participant ${p.userId}: embedding has no usable length`);
+  }
+}
+
+function planDirections(participants) {
+  if (!Array.isArray(participants) || participants.length !== 2) {
+    throw new Error('exactly two participants required');
+  }
+  const [a, b] = participants;
+  checkPerson(a);
+  checkPerson(b);
+  if (a.userId === b.userId) throw new Error('participants must be two different people');
+  if (a.lang === b.lang) throw new Error('participants speak the same language');
+  if (cosine(a.embedding, b.embedding) >= SAME_PRINT_COSINE) {
+    throw new Error('participants have the same voice print');
+  }
+
+  const direction = (speaker, listener) => ({
+    speaker: speaker.userId,
+    listener: listener.userId,
+    sourceLang: speaker.lang,
+    targetLang: listener.lang,
+    engine: chooseEngine(speaker.lang, listener.lang),
+    trackName: trackNameFor(listener.userId),
+    ownEmbedding: speaker.embedding,
+    otherEmbedding: listener.embedding,
+  });
+  return [direction(a, b), direction(b, a)];
+}
+
+module.exports = { planDirections, trackNameFor, EMBEDDING_DIM, SAME_PRINT_COSINE };
+```
+
+- [ ] **Step 3: Проверить**
+
+```bash
+node --test interpreter-routing.test.js && npm test 2>&1 | tail -8
+```
+
+Ожидается: 11 тестов в файле; весь набор `ℹ pass 202`, `ℹ fail 0`.
+
+- [ ] **Step 4: Коммит**
+
+```bash
+git add interpreter-routing.js interpreter-routing.test.js
+git commit -m "fix(interpreter): направления — отказ на отпечатках, с которыми фильтр немеет, строгие идентификаторы" -m "По ревью задачи 12: нулевой или одинаковый у обоих отпечаток проходил проверку и давал немую оплачиваемую сессию; дырявый массив проходил every(); язык в тексте ошибки мог нести вектор и подделывать журнал." -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
 ### Task 13: `presence-watch.js` — кто в комнате
 
 **Files:**
@@ -7557,7 +7764,7 @@ module.exports = { startInterpreter, stopInterpreter, getInterpreterStatus, self
 node --test interpreter.test.js && npm test 2>&1 | tail -8
 ```
 
-Ожидается: `ℹ pass 9` в файле, всего `ℹ pass 215`, `ℹ fail 0`.
+Ожидается: `ℹ pass 9` в файле, всего `ℹ pass 222`, `ℹ fail 0`.
 
 - [ ] **Step 4: Коммит**
 
@@ -7780,7 +7987,7 @@ registerInterpreterRoutes(app, {
 node --test interpreter-routes.test.js && node --check index.js && echo index-ok && npm test 2>&1 | tail -8
 ```
 
-Ожидается: `ℹ pass 6`, `index-ok`, весь набор `ℹ pass 221`, `ℹ fail 0`.
+Ожидается: `ℹ pass 6`, `index-ok`, весь набор `ℹ pass 228`, `ℹ fail 0`.
 
 - [ ] **Step 5: Коммит**
 
@@ -7988,7 +8195,7 @@ function renderReport(r) {
 module.exports = { percentile, summarize, firstVoicedAfter, voicedMs, suggestThresholds, renderReport };
 ```
 
-- [ ] **Step 3: Тест проходит** — `node --test bench/bench-report.test.js` → `ℹ pass 5`; весь `npm test` — `ℹ pass 226`, `ℹ fail 0`.
+- [ ] **Step 3: Тест проходит** — `node --test bench/bench-report.test.js` → `ℹ pass 5`; весь `npm test` — `ℹ pass 233`, `ℹ fail 0`.
 
 - [ ] **Step 4: Коммит**
 
