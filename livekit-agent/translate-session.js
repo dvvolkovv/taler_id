@@ -32,6 +32,15 @@ const textOf = (event) => event.delta;
 // A handshake that stalls without an error would leave the direction silent
 // and never retried; the timeout turns it into an ordinary close.
 const HANDSHAKE_TIMEOUT_MS = 10000;
+// After the handshake: a session that never confirms its configuration, or a
+// socket whose writes pile up (stalled peer, half-open TCP), is as silent as a
+// stalled handshake and must also end in a close the wrapper can retry.
+const READY_TIMEOUT_MS = 10000;
+const MAX_BUFFERED_BYTES = 1 << 20; // ~16 s of base64 audio at 64 KB/s
+// session.updated is what proves the update applied (bench/PROBE.md: it always
+// came). If it ever stops coming, session.created plus this long without an
+// error counts instead — the selftest's rule.
+const CREATED_GRACE_MS = 1500;
 
 function defaultWsFactory(url, options) {
   return new WebSocket(url, { ...options, handshakeTimeout: HANDSHAKE_TIMEOUT_MS });
@@ -44,7 +53,9 @@ function toBase64(int16) {
 function fromBase64(b64) {
   const buf = Buffer.from(b64, 'base64');
   const even = buf.byteLength - (buf.byteLength % 2);
-  // Copy: a base64-decoded Buffer may sit at an odd offset in the pool.
+  // Copy: a short decode is a view into Node's shared 8 KB pool, and LiveKit's
+  // AudioFrame hands data.buffer to the native side from byte 0, ignoring
+  // byteOffset. The copy also makes the caller's in-place gain safe.
   return new Int16Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + even));
 }
 
@@ -66,15 +77,27 @@ function connect({ apiKey, model, safetyId, wsFactory }) {
 }
 
 function createTranslateSession(opts) {
-  const {
-    targetLang,
-    onAudio = () => {},
-    onTranslationText = () => {},
-    onSourceText = () => {},
-    onReady = () => {},
-    onClose = () => {},
-    log = console,
-  } = opts;
+  const { targetLang, log = console } = opts;
+  if (!targetLang) throw new TypeError('createTranslateSession needs targetLang');
+  // Every callback reaches into the interpreter (gain, frame queue, data
+  // channel). Called from inside ws's handlers, a throw would escape into the
+  // socket's stream and take the whole agent process down.
+  const safe = (name, fn) => (...args) => {
+    if (!fn) return;
+    try {
+      fn(...args);
+    } catch (e) {
+      log.error(`[INTERPRETER] translate →${targetLang}: ${name} callback failed: ${e.message}`);
+    }
+  };
+  const onAudio = safe('onAudio', opts.onAudio);
+  const onTranslationText = safe('onTranslationText', opts.onTranslationText);
+  const onSourceText = safe('onSourceText', opts.onSourceText);
+  const onReady = safe('onReady', opts.onReady);
+  const onClose = safe('onClose', opts.onClose);
+  const readyTimeoutMs = opts.readyTimeoutMs ?? READY_TIMEOUT_MS;
+  const createdGraceMs = opts.createdGraceMs ?? CREATED_GRACE_MS;
+
   const ws = connect({
     apiKey: opts.apiKey,
     model: opts.model || DEFAULT_MODEL,
@@ -83,64 +106,111 @@ function createTranslateSession(opts) {
   });
   let ready = false;
   let closedByUs = false;
+  let readyTimer = null;
+  let graceTimer = null;
   const queue = [];
 
   const append = (b64) => ws.send(JSON.stringify({ type: 'session.input_audio_buffer.append', audio: b64 }));
+  const clearTimers = () => {
+    clearTimeout(readyTimer);
+    clearTimeout(graceTimer);
+    readyTimer = graceTimer = null;
+  };
+  // Ends the socket at once (terminate, not close: a stalled socket would hold
+  // the close frame behind its backlog for closeTimeout) — reported as
+  // unexpected, so the reconnecting wrapper retries and, past its limits,
+  // the interpreter ends instead of running a broken direction.
+  function fail(reason) {
+    if (closedByUs) return;
+    log.error(`[INTERPRETER] translate →${targetLang}: ${reason}, dropping the socket`);
+    clearTimers();
+    try {
+      ws.terminate();
+    } catch (_) { /* already closed */ }
+  }
+  function becomeReady() {
+    if (ready) return;
+    ready = true;
+    clearTimers();
+    while (queue.length) append(queue.shift());
+    onReady();
+  }
 
   ws.on('open', () => {
     ws.send(JSON.stringify({
       type: 'session.update',
       session: sessionConfig({ targetLang, transcribeModel: opts.transcribeModel, noiseReduction: opts.noiseReduction }),
     }));
+    readyTimer = setTimeout(() => fail(`no session confirmation within ${readyTimeoutMs} ms`), readyTimeoutMs);
+    if (readyTimer.unref) readyTimer.unref();
   });
 
   ws.on('message', (raw) => {
+    if (closedByUs) return; // what was still in flight after close()
     let event;
     try {
       event = JSON.parse(raw.toString());
     } catch (_) {
       return;
     }
+    if (!event || typeof event !== 'object') return;
     switch (event.type) {
       case 'session.created':
-      case 'session.updated':
-        // A new session starts out translating into Spanish. Our
-        // session.update went out on 'open', ahead of any audio on the same
-        // socket, so the queued audio is never read in the default language.
-        if (!ready) {
-          ready = true;
-          while (queue.length) append(queue.shift());
-          onReady();
+        // A new session translates into Spanish until our session.update
+        // applies. That update went out on 'open', ahead of any audio, but
+        // only session.updated shows it was accepted.
+        if (!ready && !graceTimer) {
+          graceTimer = setTimeout(becomeReady, createdGraceMs);
+          if (graceTimer.unref) graceTimer.unref();
         }
         break;
+      case 'session.updated': {
+        const lang = event.session && event.session.audio && event.session.audio.output
+          && event.session.audio.output.language;
+        if (lang && lang !== targetLang) fail(`session answers in ${lang}, asked for ${targetLang}`);
+        else becomeReady();
+        break;
+      }
       case 'session.output_audio.delta': {
         const b64 = audioOf(event);
-        if (b64) onAudio(fromBase64(b64));
+        if (typeof b64 === 'string' && b64) onAudio(fromBase64(b64));
         break;
       }
       case 'session.output_transcript.delta': {
         const text = textOf(event);
-        if (text) onTranslationText(text, false);
+        if (typeof text === 'string' && text) onTranslationText(text, false);
         break;
       }
       case 'session.input_transcript.delta': {
         const text = textOf(event);
-        if (text) onSourceText(text, false);
+        if (typeof text === 'string' && text) onSourceText(text, false);
         break;
       }
       case 'error':
-        log.error(`[INTERPRETER] translate →${targetLang} error: ${JSON.stringify(event.error || event)}`);
+        // Before the session is confirmed, an error is our configuration being
+        // refused: carrying on would translate into the default language.
+        if (!ready) fail(`session.update refused: ${JSON.stringify(event.error || event)}`);
+        else log.error(`[INTERPRETER] translate →${targetLang} error: ${JSON.stringify(event.error || event)}`);
         break;
       default:
         break;
     }
   });
 
-  ws.on('error', (err) => log.warn(`[INTERPRETER] translate →${targetLang} socket error: ${err.message}`));
-  ws.on('close', (code) => onClose({ unexpected: !closedByUs, code }));
+  ws.on('error', (err) => {
+    if (!closedByUs) log.warn(`[INTERPRETER] translate →${targetLang} socket error: ${err.message}`);
+  });
+  ws.on('close', (code) => {
+    clearTimers();
+    onClose({ unexpected: !closedByUs, code });
+  });
 
   return {
     sendAudio(int16) {
+      if (ready && ws.readyState === WebSocket.OPEN && ws.bufferedAmount > MAX_BUFFERED_BYTES) {
+        fail(`${ws.bufferedAmount} bytes not taken by the server`);
+        return;
+      }
       for (let i = 0; i < int16.length; i += PIECE_SAMPLES) {
         const b64 = toBase64(int16.subarray(i, i + PIECE_SAMPLES));
         if (ready && ws.readyState === WebSocket.OPEN) {
@@ -153,6 +223,7 @@ function createTranslateSession(opts) {
     },
     close() {
       closedByUs = true;
+      clearTimers();
       try {
         if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'session.close' }));
       } catch (_) { /* closing anyway */ }
@@ -161,6 +232,23 @@ function createTranslateSession(opts) {
       } catch (_) { /* already closed */ }
     },
   };
+}
+
+/**
+ * What a session.updated echo lacks of what we asked for (bench/PROBE.md: the
+ * echo carries the language and turns the input fields from null into
+ * objects). A field OpenAI silently ignores fails here instead of quietly
+ * switching off subtitles in every conversation.
+ */
+function echoProblem(echo, asked) {
+  const audio = (echo && echo.audio) || {};
+  const out = audio.output || {};
+  const input = audio.input || {};
+  if (out.language !== undefined && out.language !== asked.audio.output.language) return `has language ${out.language}`;
+  const want = asked.audio.input || {};
+  if (want.transcription && audio.input && !input.transcription) return 'dropped input transcription';
+  if (want.noise_reduction && audio.input && !input.noise_reduction) return 'dropped noise reduction';
+  return null;
 }
 
 /**
@@ -195,12 +283,10 @@ function selftestTranslate({
       } catch (_) { /* already closed */ }
       resolve(result);
     }
+    const asked = sessionConfig({ targetLang: 'en', transcribeModel, noiseReduction });
     ws.on('open', () => {
       // The same session shape the interpreter uses, so a refused field fails here too.
-      ws.send(JSON.stringify({
-        type: 'session.update',
-        session: sessionConfig({ targetLang: 'en', transcribeModel, noiseReduction }),
-      }));
+      ws.send(JSON.stringify({ type: 'session.update', session: asked }));
       ws.send(JSON.stringify({
         type: 'session.input_audio_buffer.append',
         audio: Buffer.alloc(PIECE_SAMPLES * 2 * 5).toString('base64'),
@@ -213,10 +299,12 @@ function selftestTranslate({
       } catch (_) {
         return;
       }
+      if (!event || typeof event !== 'object') return;
       if (event.type === 'error') {
         finish({ ok: false, reason: `OpenAI error: ${JSON.stringify(event.error || event)}` });
       } else if (event.type === 'session.updated') {
-        finish({ ok: true, reason: 'session.updated received' });
+        const problem = echoProblem(event.session, asked);
+        finish(problem ? { ok: false, reason: `session.updated ${problem}` } : { ok: true, reason: 'session.updated received' });
       } else if (event.type === 'session.created' && !quietTimer) {
         quietTimer = setTimeout(() => finish({ ok: true, reason: `session.created, no error within ${quietMs} ms` }), quietMs);
       }

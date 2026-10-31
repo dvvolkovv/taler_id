@@ -40,6 +40,12 @@ class FakeWs extends EventEmitter {
     this.emit('close', code ?? 1005, Buffer.alloc(0));
   }
 
+  terminate() {
+    if (this.readyState === FakeWs.CLOSED) return;
+    this.readyState = FakeWs.CLOSED;
+    this.emit('close', 1006, Buffer.alloc(0));
+  }
+
   // ── the test's side ──
 
   open() {

@@ -63,6 +63,8 @@ test('audio waits for the session and then goes out in 100 ms pieces', () => {
   s.sendAudio(new Int16Array(6000).fill(7));
   assert.strictEqual(appends(fake).length, 0);
   fake.serverSends({ type: 'session.created' });
+  assert.strictEqual(appends(fake).length, 0, 'session.created alone does not prove the update applied');
+  fake.serverSends({ type: 'session.updated', session: { audio: { output: { language: 'de' } } } });
   assert.deepStrictEqual(appends(fake).map((a) => Buffer.from(a.audio, 'base64').length), [4800, 4800, 2400]);
   assert.strictEqual(seen.ready, 1);
   s.sendAudio(new Int16Array(2400));
@@ -73,7 +75,7 @@ test('at most 4 s waits for the session; older audio is dropped', () => {
   const { s, fake } = session();
   fake.open();
   for (let i = 0; i < 50; i++) s.sendAudio(new Int16Array(2400).fill(i));
-  fake.serverSends({ type: 'session.created' });
+  fake.serverSends({ type: 'session.updated' });
   assert.strictEqual(appends(fake).length, 40);
   assert.strictEqual(Buffer.from(appends(fake)[0].audio, 'base64').readInt16LE(0), 10);
 });
@@ -154,4 +156,151 @@ test('selftest fails if the socket closes first', async () => {
 
 test('selftest without a key fails at once', async () => {
   assert.deepStrictEqual(await selftestTranslate({ apiKey: '' }), { ok: false, reason: 'OPENAI_API_KEY not set' });
+});
+
+
+// ── after review (task 10b) ──
+
+test('session.created followed by quiet is accepted when session.updated never comes', async () => {
+  const { s, fake, seen } = session({ createdGraceMs: 20 });
+  fake.open();
+  s.sendAudio(new Int16Array(2400));
+  fake.serverSends({ type: 'session.created' });
+  assert.strictEqual(appends(fake).length, 0);
+  await new Promise((r) => setTimeout(r, 40));
+  assert.strictEqual(seen.ready, 1);
+  assert.strictEqual(appends(fake).length, 1);
+});
+
+test('ready fires once even though both session events arrive', () => {
+  const { fake, seen } = session();
+  fake.open();
+  fake.serverSends({ type: 'session.created' });
+  fake.serverSends({ type: 'session.updated' });
+  fake.serverSends({ type: 'session.updated' });
+  assert.strictEqual(seen.ready, 1);
+});
+
+test('a refused session.update lets no audio out and drops the socket as unexpected', () => {
+  const { s, fake, seen } = session();
+  fake.open();
+  s.sendAudio(new Int16Array(4800));
+  fake.serverSends({ type: 'session.created' });
+  fake.serverSends({ type: 'error', error: { message: 'unknown transcription model' } });
+  s.sendAudio(new Int16Array(2400));
+  assert.strictEqual(appends(fake).length, 0);
+  assert.strictEqual(seen.ready, 0);
+  assert.deepStrictEqual(seen.closes, [{ unexpected: true, code: 1006 }]);
+});
+
+test('an echo in another language is not ready', () => {
+  const { fake, seen } = session();
+  fake.open();
+  fake.serverSends({ type: 'session.updated', session: { audio: { output: { language: 'es' } } } });
+  assert.strictEqual(seen.ready, 0);
+  assert.deepStrictEqual(seen.closes, [{ unexpected: true, code: 1006 }]);
+});
+
+test('an error after the session is confirmed is only logged', () => {
+  const errors = [];
+  const { fake, seen } = session({ log: { error: (m) => errors.push(m), warn() {} } });
+  fake.open();
+  fake.serverSends({ type: 'session.updated' });
+  fake.serverSends({ type: 'error', error: { message: 'bad append' } });
+  assert.deepStrictEqual(seen.closes, []);
+  assert.strictEqual(errors.length, 1);
+});
+
+test('a session that never confirms is dropped as unexpected', async () => {
+  const { fake, seen } = session({ readyTimeoutMs: 20 });
+  fake.open();
+  await new Promise((r) => setTimeout(r, 40));
+  assert.deepStrictEqual(seen.closes, [{ unexpected: true, code: 1006 }]);
+});
+
+test('a socket whose writes pile up is dropped as unexpected', () => {
+  const { s, fake, seen } = session();
+  fake.open();
+  fake.serverSends({ type: 'session.updated' });
+  fake.bufferedAmount = 2 * 1024 * 1024;
+  s.sendAudio(new Int16Array(2400));
+  assert.deepStrictEqual(seen.closes, [{ unexpected: true, code: 1006 }]);
+});
+
+test('a throwing callback is logged, not thrown into the socket', () => {
+  const errors = [];
+  const boom = () => { throw new Error('boom'); };
+  const { fake } = session({
+    onAudio: boom, onTranslationText: boom, onSourceText: boom, onReady: boom, onClose: boom,
+    log: { error: (m) => errors.push(m), warn() {} },
+  });
+  fake.open();
+  assert.doesNotThrow(() => {
+    fake.serverSends({ type: 'session.updated' });
+    fake.serverSends({ type: 'session.output_audio.delta', delta: 'AAAA' });
+    fake.serverSends({ type: 'session.output_transcript.delta', delta: 'a' });
+    fake.serverSends({ type: 'session.input_transcript.delta', delta: 'b' });
+    fake.emit('message', Buffer.from('null'));
+    fake.serverCloses(1011);
+  });
+  assert.strictEqual(errors.length, 5);
+});
+
+test('nothing is delivered after we closed it', () => {
+  const { s, fake, seen } = session();
+  fake.open();
+  fake.serverSends({ type: 'session.updated' });
+  s.close();
+  fake.readyState = 1; // real ws keeps reading until the server answers the close frame
+  fake.serverSends({ type: 'session.output_audio.delta', delta: 'AAAA' });
+  assert.strictEqual(seen.audio.length, 0);
+});
+
+test('decoded audio owns its buffer: AudioFrame hands data.buffer to native from byte 0', () => {
+  const { fake, seen } = session();
+  fake.open();
+  fake.serverSends({ type: 'session.output_audio.delta', delta: Buffer.from(Int16Array.from([1, 2, 3]).buffer).toString('base64') });
+  assert.strictEqual(seen.audio[0].byteOffset, 0);
+  assert.strictEqual(seen.audio[0].buffer.byteLength, 6);
+});
+
+for (const [transcribeModel, noiseReduction] of [[undefined, undefined], [null, null], ['whisper-1', null]]) {
+  test(`the selftest asks for exactly what a live session asks for (${transcribeModel}, ${noiseReduction})`, async () => {
+    const live = session({ transcribeModel, noiseReduction });
+    live.fake.open();
+    const { factory, last } = fakeWsFactory();
+    const result = selftestTranslate({ apiKey: 'k', wsFactory: factory, timeoutMs: 1000, transcribeModel, noiseReduction });
+    last().open();
+    assert.deepStrictEqual(last().sentOfType('session.update')[0].session.audio.input, live.fake.sent[0].session.audio.input);
+    last().serverSends({ type: 'session.updated' });
+    await result;
+  });
+}
+
+test('selftest fails on an error that follows session.created, and closes its socket', async () => {
+  const { factory, last } = fakeWsFactory();
+  const result = selftestTranslate({ apiKey: 'k', wsFactory: factory, timeoutMs: 1000, quietMs: 200 });
+  last().open();
+  last().serverSends({ type: 'session.created' });
+  last().serverSends({ type: 'error', error: { message: 'bad field' } });
+  assert.strictEqual((await result).ok, false);
+  assert.strictEqual(last().readyState, 3);
+});
+
+test('selftest gives up after timeoutMs and closes its socket', async () => {
+  const { factory, last } = fakeWsFactory();
+  const r = await selftestTranslate({ apiKey: 'k', wsFactory: factory, timeoutMs: 20 });
+  assert.strictEqual(r.ok, false);
+  assert.match(r.reason, /timeout/);
+  assert.strictEqual(last().readyState, 3);
+});
+
+test('selftest fails when the echo dropped what we asked for', async () => {
+  const { factory, last } = fakeWsFactory();
+  const result = selftestTranslate({ apiKey: 'k', wsFactory: factory, timeoutMs: 1000 });
+  last().open();
+  last().serverSends({ type: 'session.updated', session: { audio: { input: { transcription: null, noise_reduction: { type: 'near_field' } }, output: { language: 'en' } } } });
+  const r = await result;
+  assert.strictEqual(r.ok, false);
+  assert.match(r.reason, /transcription/);
 });
