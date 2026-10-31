@@ -8661,6 +8661,123 @@ git commit -m "feat(interpreter): ручки агента /interpreter/* под 
 
 ---
 
+### Task 17b: Ручки — сбой состояния отвечает JSON, тесты на защиту каждой ручки
+
+По ревью задачи 17:
+- **`/interpreter/status` без try/catch.** Исключение из `getInterpreterStatus` уходило в обработчик Express по умолчанию. Тот отвечал HTML-страницей со стеком вызовов и абсолютными путями (`NODE_ENV` на агенте не задан) вместо `{error}`, которым отвечают остальные ручки.
+- **Защита проверялась только на `start`.** Если убрать `guard` с `stop`, `status` или `selftest`, весь набор оставался зелёным. Ошибки `stop` и `selftest` тоже не проверялись.
+
+Попутно найдено и в задачу не входит (записано в спеке): прежние ручки агента на :3100 (`/join`, `/record`, `/translator/*`, `/hold-music/*`) работают без авторизации. Битый JSON отсекается глобальным `express.json()` ещё до проверки секрета, и в ответ уходит стек.
+
+**Files:**
+- Modify: `livekit-agent/interpreter-routes.js` (ручка `status`)
+- Modify: `livekit-agent/interpreter-routes.test.js` (четыре теста в конец)
+
+- [ ] **Step 1: Тесты (падают)**
+
+В конец `interpreter-routes.test.js` дописать через пустую строку:
+
+```js
+test('every route is behind the guard, not just start', async () => {
+  const calls = { stop: false, status: false, selftest: false };
+  const { server, url } = await app({
+    stop: async () => { calls.stop = true; return { status: 'stopped' }; },
+    status: () => { calls.status = true; return { running: false }; },
+    selftest: async () => { calls.selftest = true; return { ok: true }; },
+  });
+  const body = JSON.stringify({ roomName: 'r' });
+  try {
+    const answers = await Promise.all([
+      fetch(`${url}/interpreter/stop`, { method: 'POST', headers: { 'content-type': 'application/json' }, body }),
+      fetch(`${url}/interpreter/status/r`),
+      fetch(`${url}/interpreter/selftest`),
+      fetch(`${url}/interpreter/stop`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-interpreter-secret': 'nope' }, body }),
+      fetch(`${url}/interpreter/status/r`, { headers: { 'x-interpreter-secret': 'nope' } }),
+      fetch(`${url}/interpreter/selftest`, { headers: { 'x-interpreter-secret': 'nope' } }),
+    ]);
+    assert.deepStrictEqual(answers.map((r) => r.status), [401, 401, 401, 401, 401, 401]);
+    assert.deepStrictEqual(calls, { stop: false, status: false, selftest: false });
+  } finally {
+    server.close();
+  }
+});
+
+test('a failing status is a JSON error, not an HTML page with the stack', async () => {
+  const { server, url } = await app({ status: () => { throw new Error('unexpected session state'); } });
+  try {
+    const res = await fetch(`${url}/interpreter/status/r`, { headers: { 'x-interpreter-secret': 's3cret' } });
+    assert.strictEqual(res.status, 500);
+    assert.match(res.headers.get('content-type') || '', /application\/json/);
+    assert.deepStrictEqual(await res.json(), { error: 'unexpected session state' });
+  } finally {
+    server.close();
+  }
+});
+
+test('a failing stop is a JSON error', async () => {
+  const { server, url } = await app({ stop: async () => { throw new Error('room disconnect failed'); } });
+  try {
+    const res = await fetch(`${url}/interpreter/stop`, json({ roomName: 'r' }));
+    assert.deepStrictEqual([res.status, await res.json()], [500, { error: 'room disconnect failed' }]);
+  } finally {
+    server.close();
+  }
+});
+
+test('a failing selftest still reports how long it took', async () => {
+  const { server, url } = await app({ selftest: async () => { throw new Error('OpenAI unreachable'); } });
+  try {
+    const res = await fetch(`${url}/interpreter/selftest`, { headers: { 'x-interpreter-secret': 's3cret' } });
+    const body = await res.json();
+    assert.deepStrictEqual([res.status, body.ok, body.reason, typeof body.latencyMs], [500, false, 'OpenAI unreachable', 'number']);
+  } finally {
+    server.close();
+  }
+});
+```
+
+Run: `node --test interpreter-routes.test.js`
+Expected: падает один тест — `a failing status is a JSON error, not an HTML page with the stack`. Три других проходят и сейчас. Они закрепляют защиту `stop`, `status` и `selftest` и ответы этих ручек при сбое.
+
+- [ ] **Step 2: Ручка `status` в `interpreter-routes.js`**
+
+Было:
+
+```js
+  app.get('/interpreter/status/:roomName', guard, (req, res) => res.json(status(req.params.roomName)));
+```
+
+Стало:
+
+```js
+  app.get('/interpreter/status/:roomName', guard, (req, res) => {
+    // Uncaught, a throw here would reach Express's default handler: an HTML
+    // page with the stack trace instead of JSON.
+    try {
+      res.json(status(req.params.roomName));
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+```
+
+- [ ] **Step 3: Проверить**
+
+```bash
+node --test interpreter-routes.test.js && npm test 2>&1 | tail -8
+```
+
+Ожидается: 10 тестов в файле; весь набор `ℹ pass 249`, `ℹ fail 0`.
+
+- [ ] **Step 4: Коммит**
+
+```bash
+git add interpreter-routes.js interpreter-routes.test.js
+git commit -m "fix(interpreter): ручка status отвечает JSON при сбое, тесты на защиту каждой ручки" -m "По ревью задачи 17: исключение из status уходило в обработчик Express по умолчанию — HTML со стеком; защита проверялась только на start." -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
 ### Task 18: `bench/bench-report.js` — числа и страница отчёта
 
 **Files:**
@@ -8858,7 +8975,7 @@ function renderReport(r) {
 module.exports = { percentile, summarize, firstVoicedAfter, voicedMs, suggestThresholds, renderReport };
 ```
 
-- [ ] **Step 3: Тест проходит** — `node --test bench/bench-report.test.js` → `ℹ pass 5`; весь `npm test` — `ℹ pass 250`, `ℹ fail 0`.
+- [ ] **Step 3: Тест проходит** — `node --test bench/bench-report.test.js` → `ℹ pass 5`; весь `npm test` — `ℹ pass 254`, `ℹ fail 0`.
 
 - [ ] **Step 4: Коммит**
 
