@@ -7318,6 +7318,97 @@ git commit -m "feat(interpreter): сообщения data-канала interp" -
 
 ---
 
+### Task 14b: Сообщения — что угодно, кроме непустого массива, никому, а не всем
+
+По ревью задачи 14: единственная защита `send()` — проверка `identities.length === 0`.
+- **Set.** У множества нет `.length`, только `.size`. Проверка его пропускала, SDK превращал не-массив в пустой список, а пустой `destination_identities` LiveKit рассылает всем. Подпись одного человека ушла бы всей комнате. Ревьюер проверил это на настоящем классе `PublishDataRequest` из установленного SDK. Сегодня это недостижимо: `identitiesOf()` отдаёт массив. Но `send()` — граница «никогда не всем» для любого вызывающего, а множество identity лежит в соседнем модуле.
+- **`null` и `undefined`** бросали `TypeError` вместо «некому».
+- **Пустые строки** уходили адресатом, которого нет.
+
+**Files:**
+- Modify: `livekit-agent/interpreter-messages.js` (функция `send`)
+- Modify: `livekit-agent/interpreter-messages.test.js` (три теста в конец)
+
+- [ ] **Step 1: Тесты (падают)**
+
+В конец `interpreter-messages.test.js` дописать через пустую строку:
+
+```js
+test('a Set of identities is nobody to send to, not a broadcast', async () => {
+  // A Set has .size, not .length: the old guard let it through, and the SDK
+  // turns a non-array into an empty list, which LiveKit sends to everyone.
+  const calls = [];
+  const participant = { publishData: async (payload, opts) => calls.push(opts) };
+  assert.strictEqual(await messages.send(participant, new Set(['u1#phone']), messages.status('ok')), false);
+  assert.strictEqual(calls.length, 0);
+});
+
+test('blank identities are dropped', async () => {
+  const calls = [];
+  const participant = { publishData: async (payload, opts) => calls.push(opts) };
+  assert.strictEqual(await messages.send(participant, [''], messages.status('ok')), false);
+  assert.strictEqual(calls.length, 0);
+  assert.strictEqual(await messages.send(participant, ['u1#phone', ''], messages.status('ok')), true);
+  assert.deepStrictEqual(calls[0].destination_identities, ['u1#phone']);
+});
+
+test('undefined or null identities are nobody, not a crash', async () => {
+  const participant = { publishData: async () => { throw new Error('must not be called'); } };
+  assert.strictEqual(await messages.send(participant, undefined, messages.status('ok')), false);
+  assert.strictEqual(await messages.send(participant, null, messages.status('ok')), false);
+});
+```
+
+Run: `node --test interpreter-messages.test.js`
+Expected: падают все три новых теста.
+
+- [ ] **Step 2: `send` в `interpreter-messages.js`**
+
+Было:
+
+```js
+async function send(localParticipant, identities, msg) {
+  if (!localParticipant || identities.length === 0) return false;
+  await localParticipant.publishData(Buffer.from(JSON.stringify(msg)), {
+    reliable: true,
+    topic: TOPIC,
+    destination_identities: identities,
+  });
+```
+
+Стало:
+
+```js
+async function send(localParticipant, identities, msg) {
+  // An empty destination list is a broadcast in LiveKit. Anything but a
+  // non-empty array of identities — a Set (no .length), null, blanks — is
+  // nobody to send to.
+  const list = Array.isArray(identities) ? identities.filter(Boolean) : [];
+  if (!localParticipant || list.length === 0) return false;
+  await localParticipant.publishData(Buffer.from(JSON.stringify(msg)), {
+    reliable: true,
+    topic: TOPIC,
+    destination_identities: list,
+  });
+```
+
+- [ ] **Step 3: Проверить**
+
+```bash
+node --test interpreter-messages.test.js && npm test 2>&1 | tail -8
+```
+
+Ожидается: 6 тестов в файле; весь набор `ℹ pass 219`, `ℹ fail 0`.
+
+- [ ] **Step 4: Коммит**
+
+```bash
+git add interpreter-messages.js interpreter-messages.test.js
+git commit -m "fix(interpreter): сообщения — не-массив адресатов значит «никому», а не «всем»" -m "По ревью задачи 14: Set проходил проверку .length, и SDK превращал его в пустой список адресатов, то есть в рассылку всей комнате; null бросал TypeError; пустые строки уходили адресатом." -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
 ### Task 15: `backend-callback.js` — `agent-ended`
 
 **Files:**
@@ -8028,7 +8119,7 @@ module.exports = { startInterpreter, stopInterpreter, getInterpreterStatus, self
 node --test interpreter.test.js && npm test 2>&1 | tail -8
 ```
 
-Ожидается: `ℹ pass 9` в файле, всего `ℹ pass 228`, `ℹ fail 0`.
+Ожидается: `ℹ pass 9` в файле, всего `ℹ pass 231`, `ℹ fail 0`.
 
 - [ ] **Step 4: Коммит**
 
@@ -8251,7 +8342,7 @@ registerInterpreterRoutes(app, {
 node --test interpreter-routes.test.js && node --check index.js && echo index-ok && npm test 2>&1 | tail -8
 ```
 
-Ожидается: `ℹ pass 6`, `index-ok`, весь набор `ℹ pass 234`, `ℹ fail 0`.
+Ожидается: `ℹ pass 6`, `index-ok`, весь набор `ℹ pass 237`, `ℹ fail 0`.
 
 - [ ] **Step 5: Коммит**
 
@@ -8459,7 +8550,7 @@ function renderReport(r) {
 module.exports = { percentile, summarize, firstVoicedAfter, voicedMs, suggestThresholds, renderReport };
 ```
 
-- [ ] **Step 3: Тест проходит** — `node --test bench/bench-report.test.js` → `ℹ pass 5`; весь `npm test` — `ℹ pass 239`, `ℹ fail 0`.
+- [ ] **Step 3: Тест проходит** — `node --test bench/bench-report.test.js` → `ℹ pass 5`; весь `npm test` — `ℹ pass 242`, `ℹ fail 0`.
 
 - [ ] **Step 4: Коммит**
 
