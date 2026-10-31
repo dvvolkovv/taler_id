@@ -86,3 +86,76 @@ test('translated audio deltas reach the callback as bytes', () => {
   assert.strictEqual(audio.length, 1);
   assert.deepStrictEqual(Array.from(audio[0]), [1, 0, 2, 0]);
 });
+
+const { isHallucination } = require('./realtime-phrase-session');
+
+test('only real hallucinations are filtered, ordinary phrases are not', () => {
+  assert.strictEqual(isHallucination('Добрый день'), false);
+  assert.strictEqual(isHallucination('Guten Tag, wie geht es Ihnen?'), false);
+  assert.strictEqual(isHallucination('thank you for watching'), true);
+  assert.strictEqual(isHallucination('да да да'), true);
+  assert.strictEqual(isHallucination('ok ok ok ok'), true);
+  assert.strictEqual(isHallucination(' '), true);
+});
+
+test('onReady fires once the session is configured', () => {
+  let ready = 0;
+  const { fake } = open('ru', 'sk', { onReady: () => { ready += 1; } });
+  assert.strictEqual(ready, 0);
+  fake.serverSends({ type: 'session.updated' });
+  assert.strictEqual(ready, 1);
+});
+
+test('recognised speech and its translation are reported, hallucinations are not', () => {
+  const seen = [];
+  const { fake } = open('ru', 'sk', { onTranscript: (t) => seen.push(t) });
+  fake.serverSends({ type: 'conversation.item.input_audio_transcription.completed', transcript: ' Добрый день ' });
+  fake.serverSends({ type: 'conversation.item.input_audio_transcription.completed', transcript: 'thank you for watching' });
+  fake.serverSends({ type: 'response.output_audio_transcript.done', transcript: ' Dobrý deň ' });
+  assert.deepStrictEqual(seen, [
+    { role: 'source', text: 'Добрый день' },
+    { role: 'translation', text: 'Dobrý deň' },
+  ]);
+});
+
+test('onClose reports the close code', () => {
+  const closes = [];
+  const { fake } = open('ru', 'sk', { onClose: (c) => closes.push(c) });
+  fake.serverCloses(1011);
+  assert.deepStrictEqual(closes, [{ code: 1011 }]);
+});
+
+test('with pruneHistory a spoken phrase is deleted and a queued one is kept', () => {
+  const { fake } = open('ru', 'sk', { pruneHistory: true });
+  fake.serverSends({ type: 'session.updated' });
+  fake.serverSends({ type: 'input_audio_buffer.committed', item_id: 'in1' });
+  fake.serverSends({ type: 'response.created', response: { id: 'r1' } });
+  fake.serverSends({ type: 'input_audio_buffer.committed', item_id: 'in2' }); // cut while r1 speaks
+  fake.serverSends({ type: 'response.done', response: { id: 'r1', status: 'completed', output: [{ id: 'out1' }] } });
+  assert.deepStrictEqual(fake.sentOfType('conversation.item.delete').map((m) => m.item_id), ['in1', 'out1']);
+
+  fake.serverSends({ type: 'response.created', response: { id: 'r2' } });
+  fake.serverSends({ type: 'response.done', response: { id: 'r2', status: 'completed', output: [{ id: 'out2' }] } });
+  assert.deepStrictEqual(
+    fake.sentOfType('conversation.item.delete').map((m) => m.item_id),
+    ['in1', 'out1', 'in2', 'out2'],
+  );
+});
+
+test('log lines carry the caller tag; the in-call translator keeps [TRANSLATOR]', (t) => {
+  const lines = [];
+  t.mock.method(console, 'log', (...args) => lines.push(args.join(' ')));
+  open('ru', 'sk', { logTag: 'INTERPRETER' });
+  open('ru', 'sk');
+  assert.ok(lines.some((l) => l.startsWith('[INTERPRETER] Opening WS for ru→sk')));
+  assert.ok(lines.some((l) => l.startsWith('[TRANSLATOR] Opening WS for ru→sk')));
+});
+
+test('without pruneHistory nothing is deleted', () => {
+  const { fake } = open('ru', 'sk');
+  fake.serverSends({ type: 'session.updated' });
+  fake.serverSends({ type: 'input_audio_buffer.committed', item_id: 'in1' });
+  fake.serverSends({ type: 'response.created', response: { id: 'r1' } });
+  fake.serverSends({ type: 'response.done', response: { id: 'r1', status: 'completed', output: [{ id: 'out1' }] } });
+  assert.strictEqual(fake.sentOfType('conversation.item.delete').length, 0);
+});

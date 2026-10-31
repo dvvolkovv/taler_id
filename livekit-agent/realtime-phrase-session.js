@@ -6,9 +6,17 @@
  * engine for the pairs gpt-realtime-translate cannot speak. Called the old way
  * — createRealtimeSession(source, target, onAudio, onError) — it does exactly
  * what it did inside the in-call translator. `opts` adds:
- *   model      Realtime model (default gpt-realtime-mini, as before)
- *   apiKey     default process.env.OPENAI_API_KEY
- *   wsFactory  (url, options) => socket; tests pass a fake
+ *   model         Realtime model (default gpt-realtime-mini, as before)
+ *   apiKey        default process.env.OPENAI_API_KEY
+ *   wsFactory     (url, options) => socket; tests pass a fake
+ *   onReady()     the session accepted its configuration
+ *   onClose({ code })
+ *   onTranscript({ role: 'source' | 'translation', text })
+ *   pruneHistory  delete each phrase from the conversation once spoken
+ *   logTag        log prefix (default TRANSLATOR: the in-call translator's
+ *                 log lines stay exactly as they were)
+ * wsFactory must return a new socket that is still connecting: its 'open'
+ * event is what sends the session.update.
  */
 const WebSocket = require('ws');
 const { createTurnTaker } = require('./translator-turns');
@@ -16,8 +24,11 @@ const { LANG_NAMES, LANG_VOICES } = require('./lang-names');
 
 const DEFAULT_MODEL = 'gpt-realtime-mini';
 
-// Common Whisper hallucination patterns (repeated phrases, YouTube-like text)
-const HALLUCINATION_RE = /^((.{2,20})\s*){3,}$|구독과\s*좋아요|ご視聴|チャンネル登録|请订阅|thank you for watching/i;
+// Common Whisper hallucination patterns: the same 2–20 characters said three
+// or more times over, and YouTube-like sign-offs. The repeat used to be
+// ((.{2,20})\s*){3,}, which any phrase of six characters satisfies — harmless
+// while the result was only logged, but it would swallow every subtitle.
+const HALLUCINATION_RE = /^(.{2,20}?)(?:\s*\1){2,}$|구독과\s*좋아요|ご視聴|チャンネル登録|请订阅|thank you for watching/i;
 
 function isHallucination(text) {
   if (!text) return true;
@@ -53,7 +64,8 @@ function createRealtimeSession(sourceLang, targetLang, onAudioDelta, onError, op
   const model = opts.model || DEFAULT_MODEL;
   const apiKey = opts.apiKey !== undefined ? opts.apiKey : process.env.OPENAI_API_KEY;
   const wsFactory = opts.wsFactory || defaultWsFactory;
-  console.log(`[TRANSLATOR] Opening WS for ${tag}`);
+  const logTag = opts.logTag || 'TRANSLATOR';
+  console.log(`[${logTag}] Opening WS for ${tag}`);
 
   // GA Realtime API (post 2026-05-20). Do NOT send OpenAI-Beta header — GA rejects it.
   const ws = wsFactory(
@@ -68,8 +80,25 @@ function createRealtimeSession(sourceLang, targetLang, onAudioDelta, onError, op
   let ready = false;
   const pendingMessages = [];
 
+  // pruneHistory: inputs committed but not yet covered by a response, and the
+  // inputs each in-flight response covers.
+  const uncoveredInputs = [];
+  const inputsByResponse = new Map();
+
+  // Every response re-reads the whole conversation, so without this each
+  // phrase costs more than the one before it for as long as the call lasts.
+  function pruneSpoken(response) {
+    if (!response || !response.id || ws.readyState !== WebSocket.OPEN) return;
+    const ids = [
+      ...(inputsByResponse.get(response.id) || []),
+      ...(response.output || []).map((item) => item && item.id).filter(Boolean),
+    ];
+    inputsByResponse.delete(response.id);
+    for (const id of ids) ws.send(JSON.stringify({ type: 'conversation.item.delete', item_id: id }));
+  }
+
   ws.on('open', () => {
-    console.log(`[TRANSLATOR] WS opened for ${tag}`);
+    console.log(`[${logTag}] WS opened for ${tag}`);
     // GA session.update shape: audio.input/output nested, output_modalities top-level.
     ws.send(JSON.stringify({
       type: 'session.update',
@@ -125,24 +154,32 @@ function createRealtimeSession(sourceLang, targetLang, onAudioDelta, onError, op
 
       // GA renamed audio events: response.audio.* → response.output_audio.*
       if (event.type !== 'response.output_audio.delta') {
-        console.log(`[TRANSLATOR] [${tag}] event: ${event.type}`);
+        console.log(`[${logTag}] [${tag}] event: ${event.type}`);
       }
 
       if (event.type === 'session.updated') {
         ready = true;
-        console.log(`[TRANSLATOR] Session configured for ${tag}`);
+        console.log(`[${logTag}] Session configured for ${tag}`);
         for (const msg of pendingMessages) ws.send(msg);
         pendingMessages.length = 0;
+        if (opts.onReady) opts.onReady();
+      }
+
+      if (opts.pruneHistory && event.type === 'input_audio_buffer.committed' && event.item_id) {
+        uncoveredInputs.push(event.item_id);
       }
 
       if (event.type === 'response.created') {
+        if (opts.pruneHistory && event.response && event.response.id) {
+          inputsByResponse.set(event.response.id, uncoveredInputs.splice(0));
+        }
         ws._turns.responseCreated();
       }
 
       if (event.type === 'response.output_audio.delta' && event.delta) {
         if (!ws._audioStartLogged) {
           ws._audioStartLogged = true;
-          console.log(`[TRANSLATOR] [${tag}] >>> AUDIO OUTPUT STARTED`);
+          console.log(`[${logTag}] [${tag}] >>> AUDIO OUTPUT STARTED`);
         }
         onAudioDelta(Buffer.from(event.delta, 'base64'));
       }
@@ -153,36 +190,41 @@ function createRealtimeSession(sourceLang, targetLang, onAudioDelta, onError, op
 
       if (event.type === 'response.done') {
         const status = event.response?.status;
-        console.log(`[TRANSLATOR] [${tag}] response.done status=${status}`);
+        console.log(`[${logTag}] [${tag}] response.done status=${status}`);
         // Turns cut while this one was speaking are already committed; this
         // hands the next of them over.
+        if (opts.pruneHistory) pruneSpoken(event.response);
         ws._turns.responseDone();
       }
 
       if (event.type === 'conversation.item.input_audio_transcription.completed' && event.transcript) {
         const heard = event.transcript.trim();
-        console.log(`[TRANSLATOR] [${tag}] heard: "${heard}"`);
-        if (isHallucination(heard)) console.log(`[TRANSLATOR] [${tag}] FILTERED: hallucination`);
+        console.log(`[${logTag}] [${tag}] heard: "${heard}"`);
+        if (isHallucination(heard)) console.log(`[${logTag}] [${tag}] FILTERED: hallucination`);
+        else if (opts.onTranscript) opts.onTranscript({ role: 'source', text: heard });
       }
 
       if (event.type === 'response.output_audio_transcript.done' && event.transcript) {
-        console.log(`[TRANSLATOR] [${tag}] translated: "${event.transcript.trim()}"`);
+        const translated = event.transcript.trim();
+        console.log(`[${logTag}] [${tag}] translated: "${translated}"`);
+        if (opts.onTranscript && translated) opts.onTranscript({ role: 'translation', text: translated });
       }
 
       if (event.type === 'error') {
-        console.error(`[TRANSLATOR] OpenAI error (${tag}):`, JSON.stringify(event.error));
+        console.error(`[${logTag}] OpenAI error (${tag}):`, JSON.stringify(event.error));
       }
-    } catch (e) { console.error(`[TRANSLATOR] [${tag}] message parse error:`, e.message); }
+    } catch (e) { console.error(`[${logTag}] [${tag}] message parse error:`, e.message); }
   });
 
   ws.on('error', (err) => {
-    console.error(`[TRANSLATOR] WS error (${tag}):`, err.message);
+    console.error(`[${logTag}] WS error (${tag}):`, err.message);
     if (onError) onError(err);
   });
 
   ws.on('close', (code) => {
-    console.log(`[TRANSLATOR] WS closed (${tag}), code=${code}`);
+    console.log(`[${logTag}] WS closed (${tag}), code=${code}`);
     ws._turns.reset();
+    if (opts.onClose) opts.onClose({ code });
   });
 
   // Where speech is cut into turns, and when each turn is asked to be spoken.
@@ -194,7 +236,7 @@ function createRealtimeSession(sourceLang, targetLang, onAudioDelta, onError, op
     maxQueued: DEFAULT_MAX_QUEUED_TURNS,
     onCommit: (reason) => {
       if (ws.readyState !== WebSocket.OPEN) return;
-      console.log(`[TRANSLATOR] [${tag}] Committing (${reason})`);
+      console.log(`[${logTag}] [${tag}] Committing (${reason})`);
       ws.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
     },
     onRespond: () => {
@@ -203,7 +245,7 @@ function createRealtimeSession(sourceLang, targetLang, onAudioDelta, onError, op
     },
     onDrop: (reason) => {
       console.warn(
-        `[TRANSLATOR] [${tag}] Dropped a turn (${reason}) — translation is more than ` +
+        `[${logTag}] [${tag}] Dropped a turn (${reason}) — translation is more than ` +
         `${DEFAULT_MAX_QUEUED_TURNS} turns behind the speaker`,
       );
     },
