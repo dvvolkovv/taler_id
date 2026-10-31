@@ -158,7 +158,7 @@
   Успешный ответ Б: `{sessionId, roomName, token, livekitWsUrl, partner: {firstName, avatarUrl, lang}, directions: {toMe: 'simultaneous'|'phrase', fromMe: 'simultaneous'|'phrase'}}`.
 - `GET /interpreter/sessions/:id` → `{status, endReason, partner, directions, startedAt}`. А узнаёт о входе Б из события LiveKit (подключился участник); эта ручка — запасной путь и источник причины завершения.
 - `POST /interpreter/sessions/:id/end` (идемпотентна). Останавливает агента (`POST /interpreter/stop`), закрывает биллинг, удаляет комнату (`deleteRoom`), ставит `status=ended`.
-- `POST /interpreter/internal/sessions/:id/agent-ended` с телом `{reason}` — агент сообщает, что остановился сам. Защищена заголовком `x-interpreter-secret`, по образцу `x-recorder-secret`. Закрывает биллинг, удаляет комнату, ставит `ended` с причиной от агента.
+- `POST /interpreter/internal/sessions/:id/agent-ended` с телом `{reason}` — агент сообщает, что остановился сам. Защищена заголовком `x-interpreter-secret`, по образцу `x-recorder-secret`. Закрывает биллинг, удаляет комнату, ставит `ended` с причиной от агента. Идемпотентна: после сетевой ошибки или 5xx агент повторяет вызов один раз, поэтому вызов для уже закрытой сессии ничего не меняет и отвечает 200.
 
 **Периодическая сверка** раз в 10 с, по образцу `MeteringService`:
 - Активная сессия, чья биллинг-сессия уже не `active` (`terminated_no_funds` или `terminated_stale`), закрывается с причиной `no_funds` или `max_duration`.

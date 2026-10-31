@@ -7526,6 +7526,314 @@ git commit -m "feat(interpreter): колбэк agent-ended на бэкенд" -m
 
 ---
 
+### Task 15b: Колбэк — один повтор, тело ответа не держит соединение, `throw undefined` не ломает «никогда не бросает»
+
+По ревью задачи 15:
+- **Повторов не было.** Колбэк, потерянный во время рестарта бэкенда (обычный `pm2 restart` на DEV и TEST — секунда-две), замечала только сверка бэкенда: до минуты спустя и с причиной `agent_lost` вместо настоящей. Всю эту минуту платит хост. Теперь один повтор через 1,5 с после сетевой ошибки или 5xx. 4xx не повторяется: ответ не изменится. «Никогда не бросает» остаётся в силе. Ручка бэкенда должна быть идемпотентной — это записано в спеке.
+- **Тело ответа не читалось.** `fetch` отдаёт ответ по заголовкам, а таймер гасится сразу после этого. Ответ, застрявший после заголовков, держал сокет открытым бессрочно: ревьюер видел его открытым через 6,5 с при таймауте 1 с. Теперь тело отменяется.
+- **`${e.message}`** на `throw undefined` бросал сам и ломал главное обещание модуля. Теперь `e && e.message`.
+- **Таймаут.** Путь по таймауту не проверялся: тест недоступного бэкенда падает сразу на ECONNREFUSED.
+
+**Files:**
+- Modify: `livekit-agent/backend-callback.js` (переписать целиком)
+- Modify: `livekit-agent/backend-callback.test.js` (переписать целиком: двум прежним тестам отказа — `retries: 0`, восемь новых)
+
+- [ ] **Step 1: Тесты (падают)**
+
+`backend-callback.test.js` целиком:
+
+```js
+// Run with: node --test  (from livekit-agent/)
+const test = require('node:test');
+const assert = require('node:assert');
+const http = require('node:http');
+const { notifyAgentEnded } = require('./backend-callback');
+
+const quietLog = { warn() {} };
+
+function serve(handler) {
+  return new Promise((resolve) => {
+    const server = http.createServer(handler);
+    server.listen(0, '127.0.0.1', () => resolve({ server, url: `http://127.0.0.1:${server.address().port}` }));
+  });
+}
+
+test('posts the reason to the session endpoint with the shared secret', async () => {
+  let got;
+  const { server, url } = await serve((req, res) => {
+    let raw = '';
+    req.on('data', (c) => { raw += c; });
+    req.on('end', () => {
+      got = { method: req.method, path: req.url, secret: req.headers['x-interpreter-secret'], body: JSON.parse(raw) };
+      res.end('{}');
+    });
+  });
+  try {
+    const r = await notifyAgentEnded({ backendUrl: `${url}/`, secret: 's3', sessionId: 'abc 1', reason: 'partner_left', log: quietLog });
+    assert.deepStrictEqual(r, { ok: true, status: 200 });
+    assert.deepStrictEqual(got, {
+      method: 'POST',
+      path: '/interpreter/internal/sessions/abc%201/agent-ended',
+      secret: 's3',
+      body: { reason: 'partner_left' },
+    });
+  } finally {
+    server.close();
+  }
+});
+
+test('an HTTP error is reported, not thrown', async () => {
+  const { server, url } = await serve((req, res) => { res.statusCode = 500; res.end(); });
+  try {
+    assert.deepStrictEqual(
+      await notifyAgentEnded({ backendUrl: url, secret: 's', sessionId: 'x', reason: 'r', retries: 0, log: quietLog }),
+      { ok: false, status: 500 },
+    );
+  } finally {
+    server.close();
+  }
+});
+
+test('an unreachable backend is reported, not thrown', async () => {
+  const { server, url } = await serve(() => {});
+  await new Promise((r) => server.close(r));
+  assert.deepStrictEqual(
+    await notifyAgentEnded({ backendUrl: url, secret: 's', sessionId: 'x', reason: 'r', retries: 0, log: quietLog }),
+    { ok: false, status: 0 },
+  );
+});
+
+function listen(server) {
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(`http://127.0.0.1:${server.address().port}`)));
+}
+
+test('a backend that takes the connection and never answers is cut off at timeoutMs', async () => {
+  const server = http.createServer(() => {});
+  // Without our timeout the call would wait out fetch's own 300 s; this
+  // closes the socket after 2 s so such a regression fails fast.
+  server.timeout = 2000;
+  const url = await listen(server);
+  try {
+    const started = Date.now();
+    assert.deepStrictEqual(
+      await notifyAgentEnded({ backendUrl: url, secret: 's', sessionId: 'x', reason: 'r', timeoutMs: 150, retries: 0, log: quietLog }),
+      { ok: false, status: 0 },
+    );
+    assert.ok(Date.now() - started < 1500);
+  } finally {
+    server.closeAllConnections();
+    server.close();
+  }
+});
+
+test('a response that stalls after its headers does not keep the connection open', async () => {
+  let open = 0;
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.write('{"ok":true'); // and nothing more
+  });
+  server.on('connection', (socket) => {
+    open += 1;
+    socket.on('close', () => { open -= 1; });
+  });
+  const url = await listen(server);
+  try {
+    assert.deepStrictEqual(
+      await notifyAgentEnded({ backendUrl: url, secret: 's', sessionId: 'x', reason: 'r', timeoutMs: 1000, retries: 0, log: quietLog }),
+      { ok: true, status: 200 },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.strictEqual(open, 0);
+  } finally {
+    server.closeAllConnections();
+    server.close();
+  }
+});
+
+test('a body the fetchFn has already read does not change the outcome', async () => {
+  const { server, url } = await serve((req, res) => res.end('{}'));
+  const fetchFn = async (...args) => {
+    const res = await fetch(...args);
+    await res.text(); // cancel() on a read body rejects
+    return res;
+  };
+  try {
+    assert.deepStrictEqual(
+      await notifyAgentEnded({ backendUrl: url, secret: 's', sessionId: 'x', reason: 'r', fetchFn, retries: 0, log: quietLog }),
+      { ok: true, status: 200 },
+    );
+  } finally {
+    server.close();
+  }
+});
+
+test('a fetchFn rejecting with a bare value is reported, not thrown', async () => {
+  assert.deepStrictEqual(
+    await notifyAgentEnded({
+      backendUrl: 'http://127.0.0.1:1', secret: 's', sessionId: 'x', reason: 'r',
+      fetchFn: async () => { throw undefined; }, retries: 0, log: quietLog,
+    }),
+    { ok: false, status: 0 },
+  );
+});
+
+function counting() {
+  const delays = [];
+  return { delays, setTimer: (fn, ms) => { delays.push(ms); fn(); } };
+}
+
+test('a 5xx is retried once, after retryDelayMs', async () => {
+  let hits = 0;
+  const { server, url } = await serve((req, res) => {
+    hits += 1;
+    res.statusCode = hits === 1 ? 503 : 200;
+    res.end('{}');
+  });
+  const { delays, setTimer } = counting();
+  try {
+    assert.deepStrictEqual(
+      await notifyAgentEnded({ backendUrl: url, secret: 's', sessionId: 'x', reason: 'partner_left', setTimer, log: quietLog }),
+      { ok: true, status: 200 },
+    );
+    assert.strictEqual(hits, 2);
+    assert.deepStrictEqual(delays, [1500]);
+  } finally {
+    server.close();
+  }
+});
+
+test('a network error is retried once', async () => {
+  const { server, url } = await serve((req, res) => res.end('{}'));
+  let calls = 0;
+  const fetchFn = (...args) => (++calls === 1 ? Promise.reject(new Error('blip')) : fetch(...args));
+  try {
+    assert.deepStrictEqual(
+      await notifyAgentEnded({ backendUrl: url, secret: 's', sessionId: 'x', reason: 'agent_lost', fetchFn, setTimer: counting().setTimer, log: quietLog }),
+      { ok: true, status: 200 },
+    );
+    assert.strictEqual(calls, 2);
+  } finally {
+    server.close();
+  }
+});
+
+test('after one retry it gives up and reports the last answer', async () => {
+  let hits = 0;
+  const { server, url } = await serve((req, res) => { hits += 1; res.statusCode = 500; res.end(); });
+  try {
+    assert.deepStrictEqual(
+      await notifyAgentEnded({ backendUrl: url, secret: 's', sessionId: 'x', reason: 'r', setTimer: counting().setTimer, log: quietLog }),
+      { ok: false, status: 500 },
+    );
+    assert.strictEqual(hits, 2);
+  } finally {
+    server.close();
+  }
+});
+
+test('a 4xx is not retried', async () => {
+  let hits = 0;
+  const { server, url } = await serve((req, res) => { hits += 1; res.statusCode = 401; res.end(); });
+  const { delays, setTimer } = counting();
+  try {
+    assert.deepStrictEqual(
+      await notifyAgentEnded({ backendUrl: url, secret: 's', sessionId: 'x', reason: 'r', setTimer, log: quietLog }),
+      { ok: false, status: 401 },
+    );
+    assert.strictEqual(hits, 1);
+    assert.deepStrictEqual(delays, []);
+  } finally {
+    server.close();
+  }
+});
+```
+
+Run: `node --test backend-callback.test.js`
+Expected: падают 5 новых тестов: застрявшее тело, голое значение из `fetchFn`, повтор после 5xx, повтор после сетевой ошибки, отказ после одного повтора. Три новых проходят и сейчас: таймаут, уже прочитанное тело, 4xx без повтора. Они закрепляют поведение, которое прежние тесты не ловили.
+
+- [ ] **Step 2: Модуль целиком**
+
+`backend-callback.js`:
+
+```js
+'use strict';
+/**
+ * Tells the backend that an interpreter session ended on the agent's side
+ * (someone stayed away, the translation could not be restored, the agent lost
+ * LiveKit), so it can close billing and the room. Never throws: the backend
+ * also reconciles on its own, and the agent must finish stopping either way.
+ *
+ * One retry after a network error or a 5xx. Without it a callback lost to a
+ * backend restart (a plain `pm2 restart` on DEV and TEST) is noticed only by
+ * the backend's reconciliation, up to a minute later and as `agent_lost`, and
+ * the host pays for that minute. A 4xx is not retried: it will not change.
+ * The backend's handler is idempotent, so a retry after a lost answer is safe.
+ */
+async function attempt({ url, secret, reason, sessionId, fetchFn, timeoutMs, log }) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetchFn(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-interpreter-secret': secret },
+      body: JSON.stringify({ reason }),
+      signal: controller.signal,
+    });
+    // fetch resolves on the headers. Unread, a body that stalls after them
+    // would hold the socket open long after the timer below is cleared.
+    if (res.body && typeof res.body.cancel === 'function') res.body.cancel().catch(() => {});
+    if (!res.ok) log.warn(`[INTERPRETER] agent-ended for ${sessionId}: HTTP ${res.status}`);
+    return { ok: res.ok, status: res.status };
+  } catch (e) {
+    log.warn(`[INTERPRETER] agent-ended for ${sessionId} failed: ${e && e.message}`);
+    return { ok: false, status: 0 };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function notifyAgentEnded({
+  backendUrl,
+  secret,
+  sessionId,
+  reason,
+  fetchFn = fetch,
+  timeoutMs = 5000,
+  retries = 1,
+  retryDelayMs = 1500,
+  setTimer = setTimeout,
+  log = console,
+}) {
+  const url = `${String(backendUrl).replace(/\/+$/, '')}/interpreter/internal/sessions/${encodeURIComponent(sessionId)}/agent-ended`;
+  for (let tries = 0; ; tries++) {
+    const outcome = await attempt({ url, secret, reason, sessionId, fetchFn, timeoutMs, log });
+    const transient = !outcome.ok && (outcome.status === 0 || outcome.status >= 500);
+    if (!transient || tries >= retries) return outcome;
+    log.warn(`[INTERPRETER] agent-ended for ${sessionId}: retrying in ${retryDelayMs} ms`);
+    await new Promise((resolve) => setTimer(resolve, retryDelayMs));
+  }
+}
+
+module.exports = { notifyAgentEnded };
+```
+
+- [ ] **Step 3: Проверить**
+
+```bash
+node --test backend-callback.test.js && npm test 2>&1 | tail -8
+```
+
+Ожидается: 11 тестов в файле; весь набор `ℹ pass 230`, `ℹ fail 0`.
+
+- [ ] **Step 4: Коммит**
+
+```bash
+git add backend-callback.js backend-callback.test.js
+git commit -m "fix(interpreter): колбэк agent-ended — один повтор, отмена тела ответа, throw undefined не ломает" -m "По ревью задачи 15: колбэк, потерянный при рестарте бэкенда, давал причину agent_lost и до минуты лишней оплаты; ответ, застрявший после заголовков, держал сокет бессрочно." -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
 ### Task 16: `interpreter.js` — сессия разговора в комнате
 
 **Files:**
@@ -8119,7 +8427,7 @@ module.exports = { startInterpreter, stopInterpreter, getInterpreterStatus, self
 node --test interpreter.test.js && npm test 2>&1 | tail -8
 ```
 
-Ожидается: `ℹ pass 9` в файле, всего `ℹ pass 231`, `ℹ fail 0`.
+Ожидается: `ℹ pass 9` в файле, всего `ℹ pass 239`, `ℹ fail 0`.
 
 - [ ] **Step 4: Коммит**
 
@@ -8342,7 +8650,7 @@ registerInterpreterRoutes(app, {
 node --test interpreter-routes.test.js && node --check index.js && echo index-ok && npm test 2>&1 | tail -8
 ```
 
-Ожидается: `ℹ pass 6`, `index-ok`, весь набор `ℹ pass 237`, `ℹ fail 0`.
+Ожидается: `ℹ pass 6`, `index-ok`, весь набор `ℹ pass 245`, `ℹ fail 0`.
 
 - [ ] **Step 5: Коммит**
 
@@ -8550,7 +8858,7 @@ function renderReport(r) {
 module.exports = { percentile, summarize, firstVoicedAfter, voicedMs, suggestThresholds, renderReport };
 ```
 
-- [ ] **Step 3: Тест проходит** — `node --test bench/bench-report.test.js` → `ℹ pass 5`; весь `npm test` — `ℹ pass 242`, `ℹ fail 0`.
+- [ ] **Step 3: Тест проходит** — `node --test bench/bench-report.test.js` → `ℹ pass 5`; весь `npm test` — `ℹ pass 250`, `ℹ fail 0`.
 
 - [ ] **Step 4: Коммит**
 
