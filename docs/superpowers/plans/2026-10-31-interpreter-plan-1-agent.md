@@ -2841,6 +2841,540 @@ git commit -m "feat(interpreter): фильтр голоса по двум обр
 
 ---
 
+### Task 8b: Фильтр голоса — непроверенное не считается пройденным, `end()`, защита колбэков и настроек
+
+По ревью задачи 8. Ревьюер прогнал 120 случайных сценариев против эталонной модели и 25 точечных поломок. На штатном потоке фильтр верен. Найдено:
+- **Ошибка сверки засчитывалась как пройденная проверка.** Она обнуляла серию провалов, поэтому один сбой сервиса удваивал утечку голоса соседа (`00PP0PP00` вместо одного куска), а у владельца загорался индикатор «говорит». Теперь непроверенный кусок проходит, не трогая состояние.
+- **Конец потока.** При обрыве удержанный кусок выходил через 20 с, приклеенный к новому потоку. Недобранный хвост склеивался со свежим голосом соседа и проходил, потому что сглаживание переживало обрыв. Новый метод `end()` судит удержанное без следующего куска, отдаёт хвост, сбрасывает состояние и гасит индикатор. Задача 16 вызывает его, когда поток дорожки кончается.
+- **Колбэки.** Исключение из `onDecision` или `onOutput` в асинхронной ветке давало необработанный отказ промиса и роняло весь агент; `score`, вернувший не числа, давал то же самое.
+- **Настройки.** Кусок в 0 сэмплов (`INTERPRETER_GATE_CHUNK_MS=0`) вешал процесс в `push()` навсегда; `hysteresis: NaN` выключал отсечку.
+- **Тесты.** Набор не держал половину правил: «подряд», новую речь после паузы, `own ≥ τ` отдельно от зазора, состав окна, настройку гистерезиса.
+
+**Files:**
+- Modify: `livekit-agent/voiceprint-gate.js` (переписать целиком)
+- Create: `livekit-agent/voiceprint-gate.rules.test.js`, `livekit-agent/voiceprint-gate.robustness.test.js`
+
+- [ ] **Step 1: Тесты**
+
+`voiceprint-gate.rules.test.js` (на текущем коде проходят — закрепляют правила):
+
+```js
+// Run with: node --test  (from livekit-agent/)
+//
+// The gate's rules one by one — the knobs the bench will turn (threshold,
+// margin, hysteresis, window) must each be pinned, or a slip in one of them
+// goes unnoticed until it leaks a voice.
+const test = require('node:test');
+const assert = require('node:assert');
+const { createVoiceprintGate } = require('./voiceprint-gate');
+
+const CHUNK = 100;
+const speech = (v = 2000) => new Int16Array(CHUNK).fill(v);
+const silence = () => new Int16Array(CHUNK);
+const tick = () => new Promise((r) => setImmediate(r));
+const isSpeech = (c) => c.length === CHUNK && c.some((x) => x !== 0);
+const isZero = (c) => c.every((x) => x === 0);
+const shape = (out) => out.map((c) => (isZero(c) ? '0' : 'S')).join('');
+
+const OWN = { own: 0.8, other: 0.1 };
+const LEAK = { own: 0.1, other: 0.7 };
+
+function gate(scores, extra = {}) {
+  const out = [];
+  const speaking = [];
+  const decisions = [];
+  const windows = [];
+  let i = 0;
+  const g = createVoiceprintGate({
+    sampleRate: 1000,
+    chunkMs: 100,
+    speechRms: 400,
+    threshold: 0.25,
+    margin: 0.05,
+    hysteresis: 2,
+    score: async (w) => {
+      windows.push(w);
+      const s = scores[i++];
+      if (s instanceof Error) throw s;
+      return s;
+    },
+    onOutput: (c) => out.push(c),
+    onSpeaking: (on) => speaking.push(on),
+    onDecision: (d) => decisions.push(d),
+    ...extra,
+  });
+  return { g, out, speaking, decisions, windows };
+}
+
+async function feed(g, chunks) {
+  for (const c of chunks) g.push(c);
+  await tick();
+  await tick();
+}
+
+test('A1 speech after a pause is new speech again: its first chunk gets no benefit of the doubt', async () => {
+  const { g, out } = gate([OWN, OWN, LEAK, OWN]);
+  await feed(g, [speech(), speech(), silence(), speech(), speech(), silence()]);
+  assert.strictEqual(shape(out), 'SS00S');
+});
+
+test('A2 only failures in a row count: a pass in between resets the streak', async () => {
+  const { g, out } = gate([OWN, LEAK, OWN, LEAK]);
+  await feed(g, [speech(), speech(), speech(), speech(), silence()]);
+  assert.strictEqual(shape(out), 'SSSS');
+});
+
+test('A3 a margin over the partner is not enough without sounding like the owner', async () => {
+  const { g, out } = gate([{ own: 0.2, other: 0.0 }]);
+  await feed(g, [speech(), silence()]);
+  assert.strictEqual(shape(out), '0');
+});
+
+test('A4 the window is the previous chunk, the chunk and the next one, in that order', async () => {
+  const { g, windows } = gate([OWN, OWN, OWN]);
+  await feed(g, [speech(1000), speech(1100), speech(1200), speech(1300)]);
+  const parts = (w) => Array.from({ length: w.length / CHUNK }, (_, k) => w[k * CHUNK]);
+  assert.deepStrictEqual(windows.map(parts), [[1000, 1100], [1000, 1100, 1200], [1100, 1200, 1300]]);
+});
+
+test('A5 hysteresis is a setting: 1 cuts at the first failure, 3 at the third', async () => {
+  const one = gate([OWN, LEAK, OWN], { hysteresis: 1 });
+  await feed(one.g, [speech(), speech(), speech(), silence()]);
+  assert.strictEqual(shape(one.out), 'S0S');
+  const three = gate([OWN, LEAK, LEAK, LEAK, OWN], { hysteresis: 3 });
+  await feed(three.g, [speech(), speech(), speech(), speech(), speech(), silence()]);
+  assert.strictEqual(shape(three.out), 'SSS0S');
+});
+
+test('A6 one quiet chunk between phrases does not switch speaking off', async () => {
+  const { g, speaking } = gate([OWN, OWN, OWN, OWN]);
+  await feed(g, [speech(), speech(), silence(), speech(), speech(), silence(), silence(), silence()]);
+  assert.deepStrictEqual(speaking, [true, false]);
+});
+
+test('A7 answers coming back in reverse order give the same output as in order', async () => {
+  const pending = [];
+  const out = [];
+  const g = createVoiceprintGate({
+    sampleRate: 1000,
+    chunkMs: 100,
+    score: () => new Promise((resolve) => pending.push(resolve)),
+    onOutput: (c) => out.push(c),
+  });
+  await feed(g, [speech(), speech(), speech(), silence()]);
+  pending[2](LEAK);
+  pending[1](LEAK);
+  await tick();
+  assert.strictEqual(out.length, 0);
+  pending[0](OWN);
+  await tick();
+  assert.strictEqual(shape(out), 'SS0');
+});
+
+test('A8 after close no decision is reported either', async () => {
+  const pending = [];
+  const decisions = [];
+  const g = createVoiceprintGate({
+    sampleRate: 1000,
+    chunkMs: 100,
+    score: () => new Promise((resolve) => pending.push(resolve)),
+    onOutput: () => {},
+    onDecision: (d) => decisions.push(d),
+  });
+  await feed(g, [speech(), speech()]);
+  g.close();
+  pending[0](OWN);
+  await tick();
+  assert.strictEqual(decisions.length, 0);
+});
+```
+
+`voiceprint-gate.robustness.test.js` (на текущем коде F1–F3 падают; F4 не запускать на старом коде — он повесит прогон):
+
+```js
+// Run with: node --test  (from livekit-agent/)
+//
+// The gate under bad weather: the embed service failing, a callback throwing,
+// the audio stopping mid-phrase, a configuration that would spin forever.
+const test = require('node:test');
+const assert = require('node:assert');
+const { createVoiceprintGate } = require('./voiceprint-gate');
+
+const CHUNK = 100;
+const speech = (v = 2000) => new Int16Array(CHUNK).fill(v);
+const silence = () => new Int16Array(CHUNK);
+const tick = () => new Promise((r) => setImmediate(r));
+const isZero = (c) => c.every((x) => x === 0);
+const shape = (out) => out.map((c) => (isZero(c) ? '0' : 'S')).join('');
+const OWN = { own: 0.8, other: 0.1 };
+const LEAK = { own: 0.1, other: 0.7 };
+
+function gate(scores, extra = {}) {
+  const out = [];
+  const speaking = [];
+  let i = 0;
+  const g = createVoiceprintGate({
+    sampleRate: 1000,
+    chunkMs: 100,
+    score: async () => {
+      const s = scores[i++];
+      if (s instanceof Error) throw s;
+      return s;
+    },
+    onOutput: (c) => out.push(c),
+    onSpeaking: (on) => speaking.push(on),
+    ...extra,
+  });
+  return { g, out, speaking };
+}
+
+async function feed(g, chunks) {
+  for (const c of chunks) g.push(c);
+  await tick();
+  await tick();
+}
+
+test('F1 an embed failure inside the partner\'s speech lets through that chunk only', async () => {
+  const { g, out } = gate([LEAK, LEAK, new Error('timeout'), LEAK, LEAK]);
+  await feed(g, [speech(), speech(), speech(), speech(), speech(), silence()]);
+  assert.strictEqual(shape(out), '00S00');
+});
+
+test('F2 a throwing callback neither stops the stream nor escapes as an unhandled rejection', async () => {
+  let calls = 0;
+  const { g } = gate([OWN, OWN, OWN], {
+    onOutput: () => {
+      calls += 1;
+      if (calls === 1) throw new Error('engine hiccup');
+    },
+    onDecision: () => { throw new Error('log sink closed'); },
+  });
+  const rejections = [];
+  const onRejection = (e) => rejections.push(e);
+  process.on('unhandledRejection', onRejection);
+  try {
+    await feed(g, [speech(), speech(), speech(), silence()]);
+    await new Promise((r) => setTimeout(r, 10));
+  } finally {
+    process.off('unhandledRejection', onRejection);
+  }
+  assert.strictEqual(rejections.length, 0, rejections.map((e) => e.message).join('; '));
+  assert.strictEqual(calls, 3);
+});
+
+test('F3 end() lets out what was held, switches speaking off, and what follows is new speech', async () => {
+  const { g, out, speaking } = gate([OWN, OWN, OWN, LEAK, OWN]);
+  await feed(g, [speech(), speech()]);
+  g.push(new Int16Array(40).fill(2000));
+  g.end();
+  await tick();
+  await tick();
+  assert.deepStrictEqual(out.map((c) => c.length), [100, 100, 40]);
+  assert.deepStrictEqual(speaking, [true, false]);
+  await feed(g, [speech(), speech(), silence()]);
+  assert.strictEqual(shape(out.slice(3)), '0S', 'the first chunk after end() must pass on its own');
+});
+
+test('F4 a chunk length that rounds to no samples is refused instead of spinning forever', () => {
+  assert.throws(
+    () => createVoiceprintGate({ sampleRate: 24000, chunkMs: 0, score: async () => OWN, onOutput: () => {} }),
+    RangeError,
+  );
+});
+```
+
+Run: `node --test voiceprint-gate.rules.test.js` → `ℹ pass 8` (правила уже соблюдаются). Тест устойчивости до исправления не запускать: F4 зациклит процесс.
+
+- [ ] **Step 2: Фильтр целиком**
+
+`voiceprint-gate.js`:
+
+```js
+'use strict';
+/**
+ * Lets through only the phone owner's own speech, judged a chunk at a time
+ * against two voice prints: the owner's and the partner's.
+ *
+ * Two people sit at one table, each with their own phone, so each microphone
+ * hears both of them. Only the owner's speech may reach the interpreter: the
+ * partner's voice on this phone would be "translated" back at them, and so
+ * would the translation playing in this phone's own earpiece. The assistant's
+ * gate asks one question, "does this sound like the owner?". With both prints
+ * at hand this gate also asks "more like the owner than the partner?", which
+ * is the question that actually separates two people at one table.
+ *
+ * A chunk is judged on a window that includes its neighbours — the embedding
+ * model needs about a second of audio to say anything — so a chunk goes out
+ * only after the next one has arrived. That, plus the embed call, is the
+ * gate's whole delay (~1 s with 500 ms chunks).
+ *
+ * Out comes either the original chunk or the same length of zeros, in order,
+ * so the engine downstream gets a steady stream. Chunks too quiet to count as
+ * speech go out as zeros too: a neighbour below the speech threshold is still
+ * intelligible to a translation model.
+ *
+ * If the embed service fails, the chunk is let through (fail-open) without
+ * counting as a pass: unjudged audio is no evidence, so the hysteresis stays
+ * where it was. A dead conversation is worse than an occasional leak, and a
+ * leak is mostly in the listener's own language, on which gpt-realtime-
+ * translate stays silent (bench/PROBE.md).
+ *
+ * When the audio stops — the track ends, the participant reconnects — end()
+ * lets out what is held instead of splicing it onto whatever comes next, and
+ * the next audio starts as new speech.
+ */
+const { rms } = require('./wav');
+
+// Quiet chunks before the speaking indicator goes off: one quiet chunk is a
+// pause inside a phrase and must not make the indicator blink.
+const SPEAKING_OFF_AFTER = 2;
+
+function concat(parts) {
+  let length = 0;
+  for (const p of parts) length += p.length;
+  const out = new Int16Array(length);
+  let offset = 0;
+  for (const p of parts) {
+    out.set(p, offset);
+    offset += p.length;
+  }
+  return out;
+}
+
+/**
+ * @param opts.score      async (windowInt16) => ({ own, other }) cosine similarities; may throw,
+ *                        must settle — a score that never settles stalls this direction
+ *                        (the embed client's timeout guarantees it does)
+ * @param opts.onOutput   (chunkInt16) => void — the original chunk or silence, in order; the
+ *                        chunk is also the next window's "before", so do not modify it
+ * @param opts.onSpeaking (on) => void — the owner started / stopped being let through
+ * @param opts.onDecision (record) => void — one per judged chunk, for logs and the bench
+ */
+function createVoiceprintGate(opts) {
+  const sampleRate = opts.sampleRate ?? 24000;
+  const chunkSamples = Math.round((sampleRate * (opts.chunkMs ?? 500)) / 1000);
+  // A zero-sample chunk would spin push() forever and freeze the whole agent.
+  if (!(chunkSamples >= 1)) throw new RangeError(`voiceprint gate: ${opts.chunkMs} ms at ${sampleRate} Hz is no chunk at all`);
+  const speechRms = opts.speechRms ?? 400;
+  const threshold = opts.threshold ?? 0.25;
+  const margin = opts.margin ?? 0.05;
+  const h = Number(opts.hysteresis ?? 2);
+  const hysteresis = Number.isFinite(h) ? Math.max(1, Math.round(h)) : 2;
+  const { score } = opts;
+  const now = opts.now ?? Date.now;
+  if (typeof score !== 'function' || typeof opts.onOutput !== 'function') {
+    throw new TypeError('createVoiceprintGate needs score and onOutput');
+  }
+  // A throwing callback must not stall the stream or, from inside a promise
+  // handler, take the whole agent process down with an unhandled rejection.
+  const safe = (name, fn) => (arg) => {
+    if (!fn) return;
+    try {
+      fn(arg);
+    } catch (e) {
+      console.error(`[INTERPRETER] voiceprint gate: ${name} callback failed: ${e.message}`);
+    }
+  };
+  const onOutput = safe('onOutput', opts.onOutput);
+  const onSpeaking = safe('onSpeaking', opts.onSpeaking);
+  const onDecision = safe('onDecision', opts.onDecision);
+
+  let filling = new Int16Array(chunkSamples);
+  let filled = 0;
+  let fillStartedAt = 0;
+  let nextIndex = 0;
+  let previous = null;
+  let awaiting = null; // the newest chunk, still waiting for its look-ahead
+  const queue = [];
+  let closed = false;
+
+  // Release-side state; advanced strictly in stream order.
+  let inSpeech = false;
+  let open = false;
+  let failStreak = 0;
+  let speaking = false;
+  let quietRun = 0;
+
+  function push(samples) {
+    if (closed) return;
+    let offset = 0;
+    // closed is checked per chunk: a callback may close the gate mid-push.
+    while (offset < samples.length && !closed) {
+      if (filled === 0) fillStartedAt = now();
+      const take = Math.min(chunkSamples - filled, samples.length - offset);
+      filling.set(samples.subarray(offset, offset + take), filled);
+      filled += take;
+      offset += take;
+      if (filled === chunkSamples) {
+        complete(filling, fillStartedAt);
+        filling = new Int16Array(chunkSamples);
+        filled = 0;
+      }
+    }
+  }
+
+  function complete(samples, startedAt) {
+    const chunk = {
+      index: nextIndex++,
+      samples,
+      startedAt,
+      before: previous,
+      speech: rms(samples) >= speechRms,
+      decided: false,
+      pass: false,
+    };
+    previous = samples;
+    queue.push(chunk);
+    // The chunk before this one now has its look-ahead and can be judged.
+    if (awaiting) judge(awaiting, samples);
+    awaiting = chunk;
+  }
+
+  /**
+   * The audio stopped (track ended, participant reconnecting): judge what is
+   * held without its look-ahead, let it out now rather than spliced in front
+   * of whatever comes next, and start the next audio as new speech.
+   */
+  function end() {
+    if (closed) return;
+    if (filled > 0) {
+      complete(filling.slice(0, filled), fillStartedAt);
+      filling = new Int16Array(chunkSamples);
+      filled = 0;
+    }
+    if (awaiting) judge(awaiting, null);
+    awaiting = null;
+    previous = null;
+    queue.push({ boundary: true, decided: true });
+    release();
+  }
+
+  function judge(chunk, after) {
+    if (!chunk.speech) {
+      chunk.decided = true;
+      release();
+      return;
+    }
+    const window = concat([chunk.before, chunk.samples, after].filter(Boolean));
+    const askedAt = now();
+    Promise.resolve()
+      .then(() => score(window))
+      .then(
+        (s) => {
+          const own = Number(s && s.own);
+          const other = Number(s && s.other);
+          if (!Number.isFinite(own) || !Number.isFinite(other)) {
+            settle(chunk, true, null, new Error('score gave no similarities'), askedAt);
+          } else {
+            settle(chunk, own >= threshold && own - other >= margin, { own, other }, null, askedAt);
+          }
+        },
+        (err) => settle(chunk, true, null, err, askedAt),
+      );
+  }
+
+  function settle(chunk, pass, s, err, askedAt) {
+    if (closed) return;
+    chunk.pass = pass;
+    chunk.failOpen = Boolean(err);
+    chunk.decided = true;
+    onDecision({
+      index: chunk.index,
+      startedAt: chunk.startedAt,
+      own: s ? s.own : null,
+      other: s ? s.other : null,
+      pass,
+      failOpen: Boolean(err),
+      error: err ? String(err.message || err) : null,
+      latencyMs: now() - askedAt,
+    });
+    release();
+  }
+
+  function release() {
+    while (!closed && queue.length > 0 && queue[0].decided) {
+      const chunk = queue.shift();
+      if (chunk.boundary) {
+        inSpeech = false;
+        open = false;
+        failStreak = 0;
+        quietRun = 0;
+        if (speaking) {
+          speaking = false;
+          onSpeaking(false);
+        }
+        continue;
+      }
+      let letThrough = false;
+      if (!chunk.speech) {
+        inSpeech = false;
+        failStreak = 0;
+      } else if (chunk.failOpen) {
+        // Unjudged is no evidence either way: this chunk goes through, the
+        // hysteresis stays where it was.
+        letThrough = true;
+      } else {
+        if (!inSpeech) {
+          // New speech gets no benefit of the doubt.
+          inSpeech = true;
+          open = chunk.pass;
+          failStreak = chunk.pass ? 0 : 1;
+        } else if (chunk.pass) {
+          open = true;
+          failStreak = 0;
+        } else {
+          failStreak += 1;
+          if (failStreak >= hysteresis) open = false;
+        }
+        letThrough = open;
+      }
+      if (letThrough) {
+        quietRun = 0;
+        if (!speaking) {
+          speaking = true;
+          onSpeaking(true);
+        }
+      } else {
+        quietRun += 1;
+        if (speaking && quietRun >= SPEAKING_OFF_AFTER) {
+          speaking = false;
+          onSpeaking(false);
+        }
+      }
+      onOutput(letThrough ? chunk.samples : new Int16Array(chunk.samples.length));
+    }
+  }
+
+  return {
+    push,
+    end,
+    close() {
+      closed = true;
+      queue.length = 0;
+    },
+  };
+}
+
+module.exports = { createVoiceprintGate };
+```
+
+- [ ] **Step 3: Проверить**
+
+```bash
+node --test voiceprint-gate.test.js voiceprint-gate.rules.test.js voiceprint-gate.robustness.test.js && npm test 2>&1 | tail -8
+```
+
+Ожидается: 13 + 8 + 4 = 25 в трёх файлах; весь набор `ℹ pass 122`, `ℹ fail 0`.
+
+- [ ] **Step 4: Коммит**
+
+```bash
+git add voiceprint-gate.js voiceprint-gate.rules.test.js voiceprint-gate.robustness.test.js
+git commit -m "fix(interpreter): фильтр голоса — непроверенное не считается пройденным, end() на обрыве, колбэки и настройки не роняют агент" -m "По ревью задачи 8: сбой сервиса сверки удваивал утечку голоса соседа, обрыв потока склеивал хвост с новым голосом, исключение в колбэке или нулевой кусок роняли или вешали весь процесс." -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
 ### Task 9: `reconnecting-engine.js` — переподключения
 
 **Files:**
@@ -4249,7 +4783,9 @@ test('configuration falls back to the documented defaults', () => {
 test('configuration reads the environment and keeps values in range', () => {
   const c = interpreter.readConfig({
     INTERPRETER_VOICE_THRESHOLD: '0.4', INTERPRETER_GAIN: '9', INTERPRETER_GATE_HYSTERESIS: '0', INTERPRETER_NOISE_REDUCTION: 'off',
+    INTERPRETER_GATE_CHUNK_MS: '0',
   });
+  assert.strictEqual(c.chunkMs, 100);
   assert.strictEqual(c.threshold, 0.4);
   assert.strictEqual(c.gain, 4);
   assert.strictEqual(c.hysteresis, 1);
@@ -4423,7 +4959,9 @@ function readConfig(env = process.env) {
     embedUrl: env.VOICE_EMBED_URL || 'http://127.0.0.1:18082',
     threshold: num(env.INTERPRETER_VOICE_THRESHOLD, 0.25),
     margin: num(env.INTERPRETER_VOICE_MARGIN, 0.05),
-    chunkMs: num(env.INTERPRETER_GATE_CHUNK_MS, 500),
+    // A chunk under ~100 ms floods the embed service (shared with the assistant's
+    // voice gate); a zero one would hang the gate.
+    chunkMs: Math.max(100, Math.min(2000, num(env.INTERPRETER_GATE_CHUNK_MS, 500))),
     gateTimeoutMs: num(env.INTERPRETER_GATE_TIMEOUT_MS, 300),
     hysteresis: Math.max(1, Math.round(num(env.INTERPRETER_GATE_HYSTERESIS, 2))),
     speechRms: num(env.INTERPRETER_SPEECH_RMS, 400),
@@ -4601,9 +5139,16 @@ function listen(session, lane, track, identity) {
   lane.listening = token;
   console.log(`[INTERPRETER] ${session.roomName}: listening to ${identity}`);
   (async () => {
-    for await (const frame of new session.rtc.AudioStream(track, SAMPLE_RATE, 1)) {
-      if (session.stopping || lane.listening !== token) break;
-      lane.gate.push(new Int16Array(frame.data));
+    try {
+      for await (const frame of new session.rtc.AudioStream(track, SAMPLE_RATE, 1)) {
+        if (session.stopping || lane.listening !== token) break;
+        lane.gate.push(new Int16Array(frame.data));
+      }
+    } finally {
+      // The track ended (left, reconnecting, unpublished): let the held audio
+      // out now instead of splicing it onto whatever comes next. Not when a
+      // newer device took the lane over — that would reset it mid-stream.
+      if (lane.listening === token && !session.stopping) lane.gate.end();
     }
   })().catch((e) => console.warn(`[INTERPRETER] ${session.roomName}: audio from ${identity} ended: ${e.message}`));
 }
@@ -4694,7 +5239,7 @@ module.exports = { startInterpreter, stopInterpreter, getInterpreterStatus, self
 node --test interpreter.test.js && npm test 2>&1 | tail -8
 ```
 
-Ожидается: `ℹ pass 8` в файле, всего `ℹ pass 158`, `ℹ fail 0`.
+Ожидается: `ℹ pass 8` в файле, всего `ℹ pass 170`, `ℹ fail 0`.
 
 - [ ] **Step 4: Коммит**
 
@@ -4917,7 +5462,7 @@ registerInterpreterRoutes(app, {
 node --test interpreter-routes.test.js && node --check index.js && echo index-ok && npm test 2>&1 | tail -8
 ```
 
-Ожидается: `ℹ pass 6`, `index-ok`, весь набор `ℹ pass 164`, `ℹ fail 0`.
+Ожидается: `ℹ pass 6`, `index-ok`, весь набор `ℹ pass 176`, `ℹ fail 0`.
 
 - [ ] **Step 5: Коммит**
 
@@ -5125,7 +5670,7 @@ function renderReport(r) {
 module.exports = { percentile, summarize, firstVoicedAfter, voicedMs, suggestThresholds, renderReport };
 ```
 
-- [ ] **Step 3: Тест проходит** — `node --test bench/bench-report.test.js` → `ℹ pass 5`; весь `npm test` — `ℹ pass 169`, `ℹ fail 0`.
+- [ ] **Step 3: Тест проходит** — `node --test bench/bench-report.test.js` → `ℹ pass 5`; весь `npm test` — `ℹ pass 181`, `ℹ fail 0`.
 
 - [ ] **Step 4: Коммит**
 
@@ -5553,7 +6098,8 @@ ssh dvolkov@77.73.131.137 'ssh dev-backend "rm -rf ~/interp-bench && echo cleane
 - что модель делает с речью на языке перевода (`PROBE.md`, п. 5, и раздел отчёта);
 - качество перевода по субтитрам — 2–3 примера;
 - субтитры своей речи на фразовом направлении (ru→sk): пришли ли они для каждой фразы. Ревью задачи 5: удаление озвученной реплики может опередить её расшифровку, и тогда субтитр пропадёт; если так — откладывать удаление реплики до `completed`/`failed` расшифровки с таймаутом;
-- фразовое направление (ru→sk): нет ли в субтитрах выдуманных фраз. 31.10 соседняя работа над переводчиком ассистента видела, что ответы без истории (`conversation: "none"`) на шуме сочиняют перевод, а `pruneHistory` к этому близок. Если выдумки есть — предложить выключить `pruneHistory` или оставлять в разговоре последнюю озвученную реплику;
+- фразовое направление (ru→sk): нет ли в субтитрах выдуманных фраз;
+- утечка на фразовом направлении: молчит ли фразовый движок на голосе соседа (его язык — язык слушателя). Для синхронного это доказала проба, для фразового — только стенд. 31.10 соседняя работа над переводчиком ассистента видела, что ответы без истории (`conversation: "none"`) на шуме сочиняют перевод, а `pruneHistory` к этому близок. Если выдумки есть — предложить выключить `pruneHistory` или оставлять в разговоре последнюю озвученную реплику;
 - сколько стоил прогон.
 
 Затем спросить: идём в план 2 (бэкенд, биллинг, сквозной набор) с этими настройками или что-то меняем. План 2 не начинать без ответа.
