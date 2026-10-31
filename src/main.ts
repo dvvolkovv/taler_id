@@ -27,6 +27,7 @@ import {
   translatorClientEventAllowed,
   withTranscriptionModel,
 } from './voice/translator-turn-gate';
+import { withUpgradedTranslatorPrompt } from './voice/translator-legacy-prompt';
 
 async function bootstrap() {
   // Refuse to start on credentials published in this repo, rather than coming
@@ -884,6 +885,10 @@ async function bootstrap() {
                 transformed,
                 proxyMode.transcribeModel,
               );
+            }
+            // Apps up to 1.1.37 send the translator prompt without rule 5.
+            if (proxyMode.translator) {
+              transformed = withUpgradedTranslatorPrompt(transformed);
             }
             if (transformed !== parsedClient) {
               outData = JSON.stringify(transformed);
