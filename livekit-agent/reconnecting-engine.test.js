@@ -62,6 +62,7 @@ test('an unexpected close reconnects after a second and reports it', () => {
   const { timers, made, statuses, engine } = setup();
   made[0].handlers.onClose({ unexpected: true });
   engine.sendAudio('lost'); // no socket: dropped
+  assert.deepStrictEqual(made[0].sent, []);
   assert.deepStrictEqual(statuses, ['reconnecting']);
   assert.strictEqual(timers.fireNext(), 1000);
   made[1].handlers.onReady();
@@ -109,4 +110,75 @@ test('closing cancels a pending reconnect and closes the engine', () => {
   const second = setup();
   second.engine.close();
   assert.strictEqual(second.made[0].closed, true);
+});
+
+const quietLog = { error() {} };
+
+test('a factory that throws on a reconnect counts as a failed attempt instead of escaping the timer', () => {
+  const timers = fakeTimers();
+  const statuses = [];
+  const made = [];
+  let calls = 0;
+  const factory = (handlers) => {
+    calls += 1;
+    if (calls === 2) throw new Error('bad url');
+    const e = { handlers, sent: [], closed: false, sendAudio(x) { this.sent.push(x); }, close() { this.closed = true; } };
+    made.push(e);
+    return e;
+  };
+  createReconnectingEngine({
+    factory, onStatus: (s) => statuses.push(s), setTimer: timers.setTimer, clearTimer: timers.clearTimer, log: quietLog,
+  });
+  made[0].handlers.onClose({ unexpected: true });
+  assert.doesNotThrow(() => timers.fireNext()); // the second factory call throws inside the timer
+  assert.strictEqual(timers.fireNext(), 2000, 'the throw is counted and the next attempt scheduled');
+  assert.strictEqual(made.length, 2);
+  assert.deepStrictEqual(statuses, ['reconnecting']);
+});
+
+test('a second onClose from the same engine schedules nothing more', () => {
+  const { timers, made, statuses } = setup();
+  made[0].handlers.onClose({ unexpected: true });
+  made[0].handlers.onClose({ unexpected: true });
+  assert.strictEqual(timers.active(), 1);
+  assert.deepStrictEqual(statuses, ['reconnecting']);
+});
+
+test('signals from an engine closed by us are ignored', () => {
+  const { timers, made, statuses, engine } = setup();
+  made[0].handlers.onClose({ unexpected: true });
+  timers.fireNext();
+  engine.close();
+  made[1].handlers.onReady();
+  made[1].handlers.onClose({ unexpected: true });
+  assert.deepStrictEqual(statuses, ['reconnecting']);
+  assert.strictEqual(timers.active(), 0);
+  assert.strictEqual(made.length, 2);
+});
+
+test('a session that keeps dropping right after it comes up is given up on', () => {
+  const { timers, made, statuses } = setup();
+  for (let i = 0; i < 25 && !statuses.includes('failed'); i++) {
+    made[i].handlers.onReady();
+    made[i].handlers.onClose({ unexpected: true });
+    timers.fireNext();
+  }
+  assert.strictEqual(statuses.filter((s) => s === 'failed').length, 1);
+  assert.ok(made.length <= 21, `made ${made.length} engines`);
+});
+
+test('a throwing onStatus is logged, not thrown into the caller', () => {
+  const timers = fakeTimers();
+  const { made, factory } = fakeFactory();
+  const errors = [];
+  createReconnectingEngine({
+    factory,
+    onStatus: () => { throw new Error('broadcast failed'); },
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+    log: { error: (m) => errors.push(m) },
+  });
+  assert.doesNotThrow(() => made[0].handlers.onClose({ unexpected: true }));
+  assert.strictEqual(timers.active(), 1);
+  assert.ok(errors.some((m) => m.includes('broadcast failed')));
 });
