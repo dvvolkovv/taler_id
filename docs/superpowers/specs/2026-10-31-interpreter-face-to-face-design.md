@@ -185,8 +185,11 @@
 Работает в том же процессе `livekit-ai-agent`, ручки на `:3100`. Все ручки требуют заголовок `x-interpreter-secret`.
 
 - `POST /interpreter/start` с телом `{sessionId, roomName, participants: [{userId, lang, embedding}, {userId, lang, embedding}]}` → `{status: 'started' | 'already_running'}`.
+  - Комната занимается до первого ожидания. Повторный старт той же комнаты (бэкенд повторил запрос, который не дождался ответа) ждёт первый и отвечает `already_running` или `503`.
+  - `503` ещё в двух случаях: сессию остановили, пока она стартовала; у агента нет `OPENAI_API_KEY`.
+  - Подключение к LiveKit ограничено 15 с, поэтому таймаут бэкенда на этот вызов — не меньше 30 с.
 - `POST /interpreter/stop` с телом `{roomName}` → `{status: 'stopped' | 'not_running'}`.
-- `GET /interpreter/selftest` открывает сессию `INTERPRETER_MODEL`, шлёт `session.update` и ждёт подтверждения не дольше 10 с → `{ok, reason, latencyMs}`. Бэкенд пробрасывает её как `GET /interpreter/selftest` своего модуля, под `JwtAuthGuard`: в отличие от открытого `translator/selftest`, анонимный вызов не должен открывать сессии OpenAI.
+- `GET /interpreter/selftest` параллельно открывает сессию `INTERPRETER_MODEL` и сессию фразового движка на `INTERPRETER_FALLBACK_MODEL`, шлёт обеим `session.update` и ждёт подтверждения не дольше 10 с → `{ok, reason, simultaneous, phrase, latencyMs}`. Фразовая модель — датированный снимок: если OpenAI её уберёт, без этой проверки сломанное фразовое направление заметят только пользователи. Бэкенд пробрасывает её как `GET /interpreter/selftest` своего модуля, под `JwtAuthGuard`: в отличие от открытого `translator/selftest`, анонимный вызов не должен открывать сессии OpenAI.
 
 **Сессия разговора:**
 1. Агент подключается к комнате как `voice-interpreter`.
@@ -301,10 +304,10 @@
 | `INTERPRETER_VOICE_THRESHOLD` | `0.25` | порог похожести на владельца (τ) |
 | `INTERPRETER_VOICE_MARGIN` | `0.05` | зазор «владелец − собеседник» (δ) |
 | `INTERPRETER_GATE_CHUNK_MS` | `500` | длина куска фильтра; задержка ≈ два куска |
-| `INTERPRETER_PRESENCE_GRACE_MS` | `60000` | сколько ждать вернувшегося участника |
-| `INTERPRETER_GATE_TIMEOUT_MS` | `300` | ожидание сервиса сверки |
+| `INTERPRETER_PRESENCE_GRACE_MS` | `60000` | сколько ждать вернувшегося участника; 10 000–600 000 |
+| `INTERPRETER_GATE_TIMEOUT_MS` | `300` | ожидание сервиса сверки; 100–3000 (0 выключил бы фильтр) |
 | `INTERPRETER_GATE_HYSTERESIS` | `2` | сколько провалов подряд отсекают речь |
-| `INTERPRETER_SPEECH_RMS` | `400` | порог речи в куске |
+| `INTERPRETER_SPEECH_RMS` | `400` | порог речи в куске; 50–5000 |
 | `INTERPRETER_GAIN` | `1.4` | громкость перевода |
 | `INTERPRETER_SHARED_SECRET` | — | секрет между бэкендом и агентом в обе стороны |
 | `BACKEND_URL` | уже есть | куда слать `agent-ended` |
@@ -397,4 +400,5 @@
   - переводчик в звонках не тарифицируется;
   - при ответе через CallKit слышны все `translation-*` дорожки;
   - у агента на :3100 без авторизации все прежние ручки (`/join`, `/leave`, `/record`, `/stop-record`, `/translator/*`, `/hold-music/*`), а на некоторых хостах порт виден не только с localhost;
-  - битый JSON отсекает глобальный `express.json()` ещё до проверки секрета, и при незаданном `NODE_ENV` в ответ уходит HTML со стеком: нужен обработчик ошибок JSON в `index.js` или `NODE_ENV=production` на агенте.
+  - битый JSON отсекает глобальный `express.json()` ещё до проверки секрета, и при незаданном `NODE_ENV` в ответ уходит HTML со стеком: нужен обработчик ошибок JSON в `index.js` или `NODE_ENV=production` на агенте;
+  - `translator.js` и `recorder.js` читают аудио `for await` из `AudioStream`, а в rtc-node 0.13 такой поток сам не кончается, когда участник уходит: цикл и сессия висят до перезапуска агента. Ревью задачи 16 вывело это из исходников rust-sdks, вживую не проверено. Быстрая проверка на DEV — в журнале переводчика почти нет строк `Audio loop ended` против `Participant disconnected`.

@@ -9237,6 +9237,1670 @@ git commit -m "fix(interpreter): отчёт стенда — длительно�
 
 ---
 
+### Task 16b: Сессия — жизненный цикл без гонок, освобождение нативных ресурсов, самопроверка обоих движков
+
+Выполняется после задачи 18b: один из новых тестов гоняет модуль через ручки задачи 17.
+
+По ревью задачи 16 (и отложенным пунктам ревью задач 13 и 14):
+- **Сессия, остановленная во время старта, продолжала жить (критично).** `disconnect()` в rtc-node ничего не делает, пока идёт `connect()`. Остановка во время медленного старта давала такую картину: подключение доходило до конца, оба движка OpenAI открывались, HTTP отвечал `started`. Остановить такую сессию потом было нечем: её уже нет в `sessions`. Агент оставался в комнате, движки переподключались к OpenAI. Теперь старт проверяет остановку после каждого `await`, освобождает открытое после неё, выходит из комнаты, если подключение дошло позже, и отвечает `503`.
+- **Два старта одной комнаты шли оба (критично).** Оба проходили проверку `already_running` до того, как один из них занимал комнату. LiveKit выкидывал первого агента с `DUPLICATE_IDENTITY`, и его `Disconnected` по имени комнаты останавливал живую вторую сессию. Теперь комната занимается до первого `await`. Повторный старт ждёт первый и отвечает `already_running` или `503`. События останавливают только свою сессию.
+- **Аудиопотоки не кончались никогда.** В rtc-node поток удалённой дорожки закрывается, только когда освобождён его хэндл или хэндл дорожки. Цикл чтения держал сессию и слушателя на общем FFI-эмиттере, через которого идёт каждый кадр звука в агенте, включая запись встреч и переводчик звонков. Теперь поток читается через reader, который отменяется при отписке, уходе, перехвате другим устройством и остановке. Опубликованные дорожки (с источниками) закрываются после выхода из комнаты.
+- **`connect()` без таймаута.** `recorder.js` помнит подключение, которое не завершилось никогда (инцидент 2026-05-18). Теперь 15 с; `disconnect()` — 5 с.
+- **Причина конца.** Если LiveKit потерял самого агента — `agent_lost`, а не `partner_left`.
+- **Настройки, которые молча ломали каждую сессию:** `presenceGraceMs` (0 или отрицательное значение в Node — таймер на 1 мс) теперь 10–600 с; `gateTimeoutMs` (0 выключал фильтр голоса) — 100–3000 мс; `speechRms` — 50–5000. Без `OPENAI_API_KEY` старт сразу отвечает `503`.
+- **Самопроверка** не проверяла модель фразового движка — датированный снимок, который OpenAI может убрать. Теперь `selftestPhrase`, обе проверки идут параллельно → `{ok, reason, simultaneous, phrase}`.
+- **Журнал:**
+  - сбои остановки и сбой на любом шаге разбора теперь пишутся в журнал, разбор при этом идёт дальше;
+  - приход и уход участников пишутся с `sid` и причиной;
+  - пока LiveKit переподключает агента, данные не шлются; серия неудачных отправок — одна строка;
+  - отказ сверки голоса — одна строка на перебой, FATAL снова взводится после восстановления.
+- **`${e && e.message}`** во всех обработчиках ветки: `throw undefined` в колбэке иначе ронял сокет или таймер.
+
+Не входит, записано в спеке: тот же вечный аудиопоток в `translator.js` и `recorder.js`.
+
+**Files:**
+- Modify: `livekit-agent/interpreter.js` (переписать целиком)
+- Modify: `livekit-agent/interpreter.test.js` (переписать целиком: фейковый rtc ведёт себя как настоящий — `disconnect()` во время `connect()` ничего не делает, потоки сами не кончаются)
+- Modify: `livekit-agent/phrase-session.js` (`selftestPhrase`, `e && e.message`), `livekit-agent/phrase-session.test.js` (пять тестов в конец)
+- Modify: `livekit-agent/translate-session.js`, `livekit-agent/reconnecting-engine.js`, `livekit-agent/voiceprint-gate.js` (`e && e.message`) и их тесты (по одному тесту в конец; для фильтра — `voiceprint-gate.robustness.test.js`)
+
+- [ ] **Step 1: Тесты (падают)**
+
+`interpreter.test.js` целиком:
+
+```js
+// Run with: node --test  (from livekit-agent/)
+//
+// LiveKit, OpenAI and the embed service are all faked: these check the wiring
+// — which track goes to which gate and engine, what gets published, who gets
+// which message. The real thing runs in bench/interpreter-bench.js.
+const test = require('node:test');
+const assert = require('node:assert');
+const { EventEmitter } = require('node:events');
+const { fakeWsFactory } = require('./testing/fake-ws');
+const interpreter = require('./interpreter');
+
+const print = (k) => Array.from({ length: 192 }, (_, i) => (i === k ? 1 : 0));
+const people = (langB = 'de') => [
+  { userId: 'a', lang: 'ru', embedding: print(0) },
+  { userId: 'b', lang: langB, embedding: print(1) },
+];
+
+/**
+ * @livekit/rtc-node as far as the interpreter can tell the difference:
+ * - disconnect() does nothing until connect() has finished, and drops every
+ *   listener once it has;
+ * - an AudioStream is a ReadableStream; a `live` track, like a real remote
+ *   one, never ends its stream by itself — only cancel() does;
+ * - localParticipant exists only after connect().
+ * Hooks let a test stall or fail connect, publishTrack and disconnect.
+ */
+function fakeRtc() {
+  const CONN = { CONN_DISCONNECTED: 0, CONN_CONNECTED: 1, CONN_RECONNECTING: 2 };
+  const rtc = {
+    rooms: [],
+    duringConnect: null,
+    connectError: null,
+    publishHook: null,
+    disconnectHook: null,
+    RoomEvent: {
+      ParticipantConnected: 'participantConnected',
+      ParticipantDisconnected: 'participantDisconnected',
+      TrackSubscribed: 'trackSubscribed',
+      TrackUnsubscribed: 'trackUnsubscribed',
+      Disconnected: 'disconnected',
+      Reconnecting: 'reconnecting',
+      Reconnected: 'reconnected',
+    },
+    ConnectionState: CONN,
+    DisconnectReason: { 0: 'UNKNOWN_REASON', 1: 'CLIENT_INITIATED', 2: 'DUPLICATE_IDENTITY', 5: 'ROOM_DELETED' },
+    TrackKind: { KIND_AUDIO: 1 },
+    TrackSource: { SOURCE_MICROPHONE: 2 },
+    AudioSource: class {
+      constructor() { this.frames = []; this.closed = false; }
+      async captureFrame(frame) {
+        if (this.closed) throw new Error('AudioSource is closed');
+        this.frames.push(frame);
+      }
+      async close() { this.closed = true; }
+    },
+    AudioFrame: class {
+      constructor(data, sampleRate, channels, samplesPerChannel) {
+        Object.assign(this, { data, sampleRate, channels, samplesPerChannel });
+      }
+    },
+    LocalAudioTrack: {
+      createAudioTrack: (name, source) => ({
+        name,
+        source,
+        closed: false,
+        async close() {
+          this.closed = true;
+          await source.close();
+        },
+      }),
+    },
+    TrackPublishOptions: class { constructor(init) { Object.assign(this, init); } },
+    AudioStream: class extends ReadableStream {
+      constructor(track) {
+        super({
+          start(controller) {
+            track.controller = controller;
+            for (const data of track.frames || []) controller.enqueue({ data });
+            if (!track.live) controller.close();
+          },
+          cancel() { track.cancelled = (track.cancelled || 0) + 1; },
+        });
+      }
+    },
+  };
+  rtc.Room = class extends EventEmitter {
+    constructor() {
+      super();
+      rtc.rooms.push(this);
+      this.remoteParticipants = new Map();
+      this.published = [];
+      this.data = [];
+      this.connectionState = CONN.CONN_DISCONNECTED;
+      this.disconnected = false;
+    }
+    get isConnected() { return this.connectionState !== CONN.CONN_DISCONNECTED; }
+    async connect(url, token, opts) {
+      this.connectArgs = { url, token, opts };
+      if (rtc.duringConnect) await rtc.duringConnect(this);
+      if (rtc.connectError) throw rtc.connectError;
+      this.connectionState = CONN.CONN_CONNECTED;
+      this.localParticipant = {
+        publishTrack: async (track, options) => {
+          if (rtc.publishHook) await rtc.publishHook(track, this);
+          this.published.push({ name: track.name, track, options });
+        },
+        publishData: async (payload, options) => {
+          this.data.push({ msg: JSON.parse(Buffer.from(payload).toString()), options });
+          if (rtc.publishDataError) throw rtc.publishDataError;
+        },
+      };
+    }
+    async disconnect() {
+      if (!this.isConnected) return; // what rtc-node does while connect() is still running
+      this.disconnectCalls = (this.disconnectCalls || 0) + 1;
+      if (rtc.disconnectHook) await rtc.disconnectHook(this);
+      this.disconnected = true;
+      this.connectionState = CONN.CONN_DISCONNECTED;
+      this.removeAllListeners();
+    }
+  };
+  return rtc;
+}
+
+function setup(config = {}) {
+  const rtc = fakeRtc();
+  const made = [];
+  const engine = (kind) => (opts) => {
+    const e = { kind, opts, sent: [], closed: false, sendAudio(x) { this.sent.push(x); }, close() { this.closed = true; } };
+    made.push(e);
+    return e;
+  };
+  const deps = {
+    rtc,
+    engines: { simultaneous: engine('simultaneous'), phrase: engine('phrase') },
+    credentials: { apiKey: 'devkey', apiSecret: 'x'.repeat(32) },
+    embed: { embedPcm: async () => print(0) }, // every window sounds like a
+    config: { chunkMs: 100, backendUrl: null, openaiKey: 'sk-test', ...config },
+  };
+  return { rtc, made, deps };
+}
+
+// 400 ms of loud speech in 10 ms frames at 24 kHz: four 100 ms chunks.
+const speechFrames = (n = 40) => Array.from({ length: n }, () => new Int16Array(240).fill(3000));
+const settle = (ms = 30) => new Promise((r) => setTimeout(r, ms));
+const deferred = () => {
+  let resolve;
+  const promise = new Promise((r) => { resolve = r; });
+  return { promise, resolve };
+};
+
+/** Collects console output for the duration of fn. */
+async function capture(fn) {
+  const lines = [];
+  const saved = { log: console.log, warn: console.warn, error: console.error };
+  for (const k of Object.keys(saved)) console[k] = (...a) => lines.push(a.join(' '));
+  try {
+    await fn(lines);
+  } finally {
+    Object.assign(console, saved);
+  }
+  return lines;
+}
+
+/** Replaces fetch for agent-ended callbacks; returns the reasons sent. */
+function captureCallbacks(t) {
+  const reasons = [];
+  const saved = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    reasons.push(JSON.parse(init.body).reason);
+    return { ok: true, status: 200, body: null };
+  };
+  t.after(() => { globalThis.fetch = saved; });
+  return reasons;
+}
+
+test('configuration falls back to the documented defaults', () => {
+  const c = interpreter.readConfig({});
+  assert.deepStrictEqual(
+    [c.model, c.fallbackModel, c.transcribeModel, c.noiseReduction, c.embedUrl, c.threshold, c.margin, c.chunkMs, c.gateTimeoutMs, c.hysteresis, c.speechRms, c.gain, c.presenceGraceMs],
+    ['gpt-realtime-translate', 'gpt-realtime-2025-08-28', 'gpt-4o-mini-transcribe', 'near_field', 'http://127.0.0.1:18082', 0.25, 0.05, 500, 300, 2, 400, 1.4, 60000],
+  );
+});
+
+test('configuration reads the environment and keeps values in range', () => {
+  const c = interpreter.readConfig({
+    INTERPRETER_VOICE_THRESHOLD: '0.4', INTERPRETER_GAIN: '9', INTERPRETER_GATE_HYSTERESIS: '0', INTERPRETER_NOISE_REDUCTION: 'off',
+    INTERPRETER_GATE_CHUNK_MS: '0',
+  });
+  assert.strictEqual(c.chunkMs, 100);
+  assert.strictEqual(c.threshold, 0.4);
+  assert.strictEqual(c.gain, 4);
+  assert.strictEqual(c.hysteresis, 1);
+  assert.strictEqual(c.noiseReduction, null);
+  assert.strictEqual(c.transcribeModel, 'gpt-4o-mini-transcribe');
+});
+
+test('a bad request is a 400 and opens no room', async () => {
+  const { rtc, deps } = setup();
+  await assert.rejects(interpreter.startInterpreter({ roomName: 'r0' }, deps), (e) => e.statusCode === 400);
+  await assert.rejects(
+    interpreter.startInterpreter({ sessionId: 's', roomName: 'r0', participants: [people()[0]] }, deps),
+    (e) => e.statusCode === 400 && /exactly two/.test(e.message),
+  );
+  assert.strictEqual(rtc.rooms.length, 0);
+});
+
+test('it publishes a track per listener and reports itself without voice prints', async () => {
+  const { rtc, made, deps } = setup();
+  assert.deepStrictEqual(
+    await interpreter.startInterpreter({ sessionId: 's1', roomName: 'r-tracks', participants: people() }, deps),
+    { status: 'started' },
+  );
+  try {
+    const room = rtc.rooms[0];
+    assert.strictEqual(room.connectArgs.opts.autoSubscribe, true);
+    assert.deepStrictEqual(room.published.map((p) => p.name).sort(), ['interp-for-a', 'interp-for-b']);
+    assert.deepStrictEqual(made.map((e) => [e.kind, e.opts.targetLang]).sort(), [['simultaneous', 'de'], ['simultaneous', 'ru']]);
+    assert.match(made[0].opts.safetyId, /^[0-9a-f]{32}$/);
+    assert.strictEqual(made[0].opts.transcribeModel, 'gpt-4o-mini-transcribe');
+    assert.strictEqual(made[0].opts.noiseReduction, 'near_field');
+    const status = interpreter.getInterpreterStatus('r-tracks');
+    assert.strictEqual(status.running, true);
+    assert.strictEqual(status.directions.length, 2);
+    assert.ok(!JSON.stringify(status).includes('mbedding'));
+    assert.deepStrictEqual(
+      await interpreter.startInterpreter({ sessionId: 's1', roomName: 'r-tracks', participants: people() }, deps),
+      { status: 'already_running' },
+    );
+  } finally {
+    assert.deepStrictEqual(await interpreter.stopInterpreter('r-tracks'), { status: 'stopped' });
+  }
+  assert.strictEqual(rtc.rooms[0].disconnected, true);
+  assert.ok(made.every((e) => e.closed));
+  assert.deepStrictEqual(await interpreter.stopInterpreter('r-tracks'), { status: 'not_running' });
+});
+
+test('a pair the model cannot speak runs that direction on the phrase engine', async () => {
+  const { made, deps } = setup();
+  await interpreter.startInterpreter({ sessionId: 's2', roomName: 'r-sk', participants: people('sk') }, deps);
+  try {
+    const toSk = made.find((e) => e.opts.targetLang === 'sk');
+    assert.strictEqual(toSk.kind, 'phrase');
+    assert.strictEqual(toSk.opts.model, 'gpt-realtime-2025-08-28');
+    assert.strictEqual(toSk.opts.sourceLang, 'ru');
+  } finally {
+    await interpreter.stopInterpreter('r-sk');
+  }
+});
+
+test("the owner's speech reaches only the engine that translates them", async () => {
+  const { rtc, made, deps } = setup();
+  await interpreter.startInterpreter({ sessionId: 's3', roomName: 'r-flow', participants: people() }, deps);
+  try {
+    rtc.rooms[0].emit('trackSubscribed', { kind: 1, frames: speechFrames() }, { name: 'mic' }, { identity: 'a#dev1' });
+    await settle();
+    const toB = made.find((e) => e.opts.targetLang === 'de');
+    const toA = made.find((e) => e.opts.targetLang === 'ru');
+    // Three chunks are judged as the frames arrive; the fourth only because the
+    // stream ended and listen() called gate.end().
+    assert.strictEqual(toB.sent.length, 4, `a→b got ${toB.sent.length} chunks`);
+    assert.ok(toB.sent.every((c) => c.some((x) => x !== 0)), 'speech, not silence');
+    assert.strictEqual(toA.sent.length, 0);
+  } finally {
+    await interpreter.stopInterpreter('r-flow');
+  }
+});
+
+test('a track that arrives while the room is still connecting is not lost', async () => {
+  const { rtc, made, deps } = setup();
+  rtc.duringConnect = (room) => room.emit('trackSubscribed', { kind: 1, frames: speechFrames() }, { name: 'mic' }, { identity: 'a#dev1' });
+  await interpreter.startInterpreter({ sessionId: 's4', roomName: 'r-early', participants: people() }, deps);
+  try {
+    await settle();
+    assert.strictEqual(made.find((e) => e.opts.targetLang === 'de').sent.length, 4);
+  } finally {
+    await interpreter.stopInterpreter('r-early');
+  }
+});
+
+test('translated audio reaches the listener track in 20 ms frames that own their buffers', async () => {
+  const { rtc, made, deps } = setup();
+  await interpreter.startInterpreter({ sessionId: 's6', roomName: 'r-frames', participants: people() }, deps);
+  try {
+    const toB = made.find((e) => e.opts.targetLang === 'de');
+    toB.opts.onAudio(new Int16Array(9600).fill(5)); // one 400 ms delta
+    await settle();
+    const source = rtc.rooms[0].published.find((p) => p.name === 'interp-for-b').track.source;
+    assert.strictEqual(source.frames.length, 20);
+    assert.ok(source.frames.every((f) => f.samplesPerChannel === 480 && f.data.byteOffset === 0 && f.data.buffer.byteLength === 960));
+    assert.strictEqual(source.frames[0].data[0], 7); // gain 1.4 applied: 5 * 1.4 = 7
+  } finally {
+    await interpreter.stopInterpreter('r-frames');
+  }
+});
+
+test('captions go to their listener, recognised speech back to its speaker', async () => {
+  const { rtc, made, deps } = setup();
+  await interpreter.startInterpreter({ sessionId: 's5', roomName: 'r-captions', participants: people() }, deps);
+  try {
+    const room = rtc.rooms[0];
+    room.emit('participantConnected', { identity: 'a#dev1' });
+    room.emit('participantConnected', { identity: 'b#dev1' });
+    const toB = made.find((e) => e.opts.targetLang === 'de');
+    toB.opts.onTranslationText('Guten Tag', false);
+    toB.opts.onSourceText('Добрый день', false);
+    await settle();
+    assert.deepStrictEqual(room.data.map((d) => [d.msg.role, d.msg.speaker, d.msg.text, d.options.destination_identities]), [
+      ['translation', 'a', 'Guten Tag', ['b#dev1']],
+      ['source', 'a', 'Добрый день', ['a#dev1']],
+    ]);
+    assert.ok(room.data.every((d) => d.options.topic === 'interp' && d.options.reliable === true));
+  } finally {
+    await interpreter.stopInterpreter('r-captions');
+  }
+});
+
+// ── review 16: lifecycle, native handles, LiveKit weather ──────────────────
+
+test('a second start for a room that is still starting joins nothing and answers with the first one', async () => {
+  const { rtc, made, deps } = setup();
+  const body = { sessionId: 's-dup', roomName: 'r-dup', participants: people() };
+  const results = await Promise.all([interpreter.startInterpreter(body, deps), interpreter.startInterpreter(body, deps)]);
+  try {
+    assert.deepStrictEqual(results, [{ status: 'started' }, { status: 'already_running' }]);
+    assert.strictEqual(rtc.rooms.length, 1, 'one agent in the room, not two');
+    assert.strictEqual(made.length, 2);
+  } finally {
+    await interpreter.stopInterpreter('r-dup');
+  }
+  assert.ok(made.every((e) => e.closed), 'no engine outlives the stop');
+});
+
+test('a start waiting on one that fails fails too, and the room is free again', async () => {
+  const { rtc, deps } = setup();
+  rtc.connectError = new Error('signal refused');
+  const body = { sessionId: 's-dup2', roomName: 'r-dup2', participants: people() };
+  const results = await Promise.allSettled([interpreter.startInterpreter(body, deps), interpreter.startInterpreter(body, deps)]);
+  assert.deepStrictEqual(results.map((r) => r.status), ['rejected', 'rejected']);
+  assert.match(results[0].reason.message, /signal refused/);
+  assert.strictEqual(results[1].reason.statusCode, 503);
+  assert.strictEqual(rtc.rooms.length, 1);
+  assert.deepStrictEqual(interpreter.getInterpreterStatus('r-dup2'), { running: false });
+});
+
+test('a stop that arrives while LiveKit is connecting: nothing is opened, the room is left, no "started"', async () => {
+  const { rtc, made, deps } = setup();
+  rtc.duringConnect = async () => {
+    assert.deepStrictEqual(await interpreter.stopInterpreter('r-stop-connect'), { status: 'stopped' });
+  };
+  try {
+    await assert.rejects(
+      interpreter.startInterpreter({ sessionId: 's7', roomName: 'r-stop-connect', participants: people() }, deps),
+      (e) => e.statusCode === 503 && /ended while starting \(stopped\)/.test(e.message),
+    );
+    await settle();
+    assert.strictEqual(made.length, 0, 'no OpenAI session for a session that is gone');
+    assert.deepStrictEqual(rtc.rooms[0].published, []);
+    assert.strictEqual(rtc.rooms[0].disconnected, true, 'the connect that landed after the stop left the room again');
+  } finally {
+    await interpreter.stopInterpreter('r-stop-connect');
+  }
+});
+
+test('a grace period that runs out during the connect ends the start as agent_lost', async (t) => {
+  const reasons = captureCallbacks(t);
+  const { rtc, made, deps } = setup({ presenceGraceMs: 20, backendUrl: 'http://backend.invalid', secret: 'sec' });
+  rtc.duringConnect = () => settle(80);
+  try {
+    await assert.rejects(
+      interpreter.startInterpreter({ sessionId: 's8', roomName: 'r-gone-connect', participants: people() }, deps),
+      (e) => e.statusCode === 503 && /agent_lost/.test(e.message),
+    );
+    await settle();
+    assert.deepStrictEqual(reasons, ['agent_lost'], 'the agent was never in the room: nobody "left"');
+    assert.strictEqual(made.length, 0);
+    assert.strictEqual(rtc.rooms[0].disconnected, true);
+  } finally {
+    await interpreter.stopInterpreter('r-gone-connect');
+  }
+});
+
+test('someone away past the grace period is partner_left, unless the agent itself is off LiveKit', async (t) => {
+  const reasons = captureCallbacks(t);
+  for (const [roomName, state, expected] of [['r-away-ok', 1, 'partner_left'], ['r-away-lost', 2, 'agent_lost']]) {
+    const { rtc, deps } = setup({ presenceGraceMs: 40, backendUrl: 'http://backend.invalid', secret: 'sec' });
+    await interpreter.startInterpreter({ sessionId: `s-${roomName}`, roomName, participants: people() }, deps);
+    rtc.rooms[0].connectionState = state; // 2: CONN_RECONNECTING
+    await settle(120);
+    assert.deepStrictEqual(interpreter.getInterpreterStatus(roomName), { running: false });
+    assert.strictEqual(reasons.at(-1), expected, `${roomName}: ${reasons.join(',')}`);
+  }
+});
+
+test('a stop while the second track is publishing opens no engine for it and releases both tracks', async () => {
+  const { rtc, made, deps } = setup();
+  rtc.publishHook = async (track) => {
+    if (track.name === 'interp-for-a') await interpreter.stopInterpreter('r-stop-publish');
+  };
+  try {
+    await assert.rejects(
+      interpreter.startInterpreter({ sessionId: 's9', roomName: 'r-stop-publish', participants: people() }, deps),
+      (e) => e.statusCode === 503,
+    );
+    await settle();
+    assert.strictEqual(made.length, 1, 'the second direction never reached OpenAI');
+    assert.ok(made.every((e) => e.closed));
+    const tracks = rtc.rooms[0].published.map((p) => p.track);
+    assert.strictEqual(tracks.length, 2);
+    assert.ok(tracks.every((tr) => tr.closed && tr.source.closed), 'native track and source handles released');
+  } finally {
+    await interpreter.stopInterpreter('r-stop-publish');
+  }
+});
+
+test('a lane that fails to publish releases its own track and everything opened before it', async () => {
+  const { rtc, made, deps } = setup();
+  const tracks = [];
+  rtc.publishHook = async (track) => {
+    tracks.push(track);
+    if (track.name === 'interp-for-a') throw new Error('publish timed out');
+  };
+  await assert.rejects(
+    interpreter.startInterpreter({ sessionId: 's10', roomName: 'r-publish-fails', participants: people() }, deps),
+    /publish timed out/,
+  );
+  await settle();
+  assert.strictEqual(tracks.length, 2);
+  assert.ok(tracks.every((tr) => tr.closed && tr.source.closed));
+  assert.ok(made.every((e) => e.closed));
+  assert.deepStrictEqual(interpreter.getInterpreterStatus('r-publish-fails'), { running: false });
+});
+
+test('stop cancels the audio streams, which never end by themselves, and closes the published tracks', async () => {
+  const { rtc, deps } = setup();
+  await interpreter.startInterpreter({ sessionId: 's11', roomName: 'r-release', participants: people() }, deps);
+  const room = rtc.rooms[0];
+  const micA = { kind: 1, live: true, frames: speechFrames(5) };
+  const micB = { kind: 1, live: true, frames: speechFrames(5) };
+  room.emit('trackSubscribed', micA, { name: 'mic' }, { identity: 'a#dev1' });
+  room.emit('trackSubscribed', micB, { name: 'mic' }, { identity: 'b#dev1' });
+  await settle();
+  const published = room.published.map((p) => p.track);
+  await interpreter.stopInterpreter('r-release');
+  await settle();
+  assert.ok(micA.cancelled >= 1 && micB.cancelled >= 1, 'both remote streams released');
+  assert.ok(published.every((tr) => tr.closed && tr.source.closed), 'both local tracks and sources released');
+});
+
+test('a track that goes away lets the held audio out and releases its stream', async () => {
+  const { rtc, made, deps } = setup();
+  await interpreter.startInterpreter({ sessionId: 's12', roomName: 'r-unsub', participants: people() }, deps);
+  try {
+    const room = rtc.rooms[0];
+    const mic = { kind: 1, live: true, frames: speechFrames(25) }; // 2.5 chunks
+    room.emit('trackSubscribed', mic, { name: 'mic' }, { identity: 'a#dev1' });
+    await settle();
+    const toB = made.find((e) => e.opts.targetLang === 'de');
+    assert.strictEqual(toB.sent.length, 1, 'one chunk out, one and a half held');
+    room.emit('trackUnsubscribed', mic, { name: 'mic' }, { identity: 'a#dev1' });
+    await settle();
+    assert.strictEqual(toB.sent.length, 3, 'the held audio went out when the track went away');
+    assert.strictEqual(mic.cancelled, 1);
+  } finally {
+    await interpreter.stopInterpreter('r-unsub');
+  }
+});
+
+test('a participant leaving releases their stream even without an unsubscription', async () => {
+  const { rtc, deps } = setup();
+  await interpreter.startInterpreter({ sessionId: 's13', roomName: 'r-left', participants: people() }, deps);
+  try {
+    const room = rtc.rooms[0];
+    const mic = { kind: 1, live: true, frames: [] };
+    room.emit('participantConnected', { identity: 'a#dev1', sid: 'PA_1' });
+    room.emit('trackSubscribed', mic, { name: 'mic' }, { identity: 'a#dev1' });
+    await settle();
+    room.emit('participantDisconnected', { identity: 'a#dev1', sid: 'PA_1', disconnectReason: 1 });
+    await settle();
+    assert.strictEqual(mic.cancelled, 1);
+  } finally {
+    await interpreter.stopInterpreter('r-left');
+  }
+});
+
+test("a second device takes over: the first device's held audio goes out first and its stream is released", async () => {
+  const { rtc, made, deps } = setup();
+  await interpreter.startInterpreter({ sessionId: 's14', roomName: 'r-takeover', participants: people() }, deps);
+  try {
+    const room = rtc.rooms[0];
+    const phone = { kind: 1, live: true, frames: speechFrames(15) }; // 1.5 chunks, all held
+    const tablet = { kind: 1, live: true, frames: [] };
+    room.emit('trackSubscribed', phone, { name: 'mic' }, { identity: 'a#phone' });
+    await settle();
+    const toB = made.find((e) => e.opts.targetLang === 'de');
+    assert.strictEqual(toB.sent.length, 0);
+    room.emit('trackSubscribed', tablet, { name: 'mic' }, { identity: 'a#tablet' });
+    await settle();
+    assert.strictEqual(toB.sent.length, 2, "the phone's held audio went out before the tablet's");
+    assert.strictEqual(phone.cancelled, 1);
+    for (const f of speechFrames(20)) tablet.controller.enqueue({ data: f });
+    await settle();
+    assert.strictEqual(toB.sent.length, 3, 'the tablet is listened to');
+  } finally {
+    await interpreter.stopInterpreter('r-takeover');
+  }
+});
+
+test('nothing is sent while LiveKit reconnects, and a run of failed messages is logged once', async () => {
+  const { rtc, made, deps } = setup();
+  await interpreter.startInterpreter({ sessionId: 's15', roomName: 'r-reconnect', participants: people() }, deps);
+  try {
+    const room = rtc.rooms[0];
+    room.emit('participantConnected', { identity: 'a#dev1', sid: 'PA_a' });
+    room.emit('participantConnected', { identity: 'b#dev1', sid: 'PA_b' });
+    const toB = made.find((e) => e.opts.targetLang === 'de');
+    rtc.publishDataError = new Error('engine is closed');
+    const lines = await capture(async () => {
+      room.emit('reconnecting');
+      for (let i = 0; i < 30; i++) toB.opts.onTranslationText(`d${i}`, false);
+      await settle();
+      assert.strictEqual(room.data.length, 0, 'not attempted while reconnecting');
+      room.emit('reconnected');
+      for (let i = 0; i < 30; i++) toB.opts.onTranslationText(`e${i}`, false);
+      await settle();
+    });
+    assert.strictEqual(room.data.length, 30, 'attempted again once reconnected');
+    assert.strictEqual(lines.filter((l) => l.includes('failed: engine is closed')).length, 1, lines.join('\n'));
+  } finally {
+    rtc.publishDataError = null;
+    await interpreter.stopInterpreter('r-reconnect');
+  }
+});
+
+test('arrivals, departures and losing LiveKit are logged with sid and reason', async (t) => {
+  captureCallbacks(t);
+  const { rtc, deps } = setup({ backendUrl: 'http://backend.invalid', secret: 'sec' });
+  await interpreter.startInterpreter({ sessionId: 's16', roomName: 'r-logs', participants: people() }, deps);
+  const room = rtc.rooms[0];
+  const lines = await capture(async () => {
+    room.emit('participantConnected', { identity: 'a#dev1', sid: 'PA_a1' });
+    room.emit('participantDisconnected', { identity: 'a#dev1', sid: 'PA_a1', disconnectReason: 2 });
+    room.emit('disconnected', 5);
+    await settle();
+  });
+  assert.ok(lines.some((l) => l.includes('a#dev1') && l.includes('PA_a1') && /joined/.test(l)), lines.join('\n'));
+  assert.ok(lines.some((l) => l.includes('PA_a1') && l.includes('DUPLICATE_IDENTITY')), lines.join('\n'));
+  assert.ok(lines.some((l) => l.includes('ROOM_DELETED')), lines.join('\n'));
+});
+
+test('an end that fails part-way still closes the rest, leaves the room and says what failed', async () => {
+  const { rtc, made, deps } = setup();
+  await interpreter.startInterpreter({ sessionId: 's17', roomName: 'r-end-fails', participants: people() }, deps);
+  const toB = made.find((e) => e.opts.targetLang === 'de');
+  toB.close = () => { throw new Error('socket gone'); };
+  const lines = await capture(async () => {
+    rtc.rooms[0].emit('disconnected', 9);
+    await settle();
+  });
+  assert.strictEqual(made.find((e) => e.opts.targetLang === 'ru').closed, true);
+  assert.strictEqual(rtc.rooms[0].disconnected, true);
+  assert.ok(lines.some((l) => l.includes('socket gone')), lines.join('\n'));
+  assert.deepStrictEqual(interpreter.getInterpreterStatus('r-end-fails'), { running: false });
+});
+
+test('without an OpenAI key the start fails at once and joins no room', async () => {
+  const { rtc, deps } = setup({ openaiKey: '' });
+  await assert.rejects(
+    interpreter.startInterpreter({ sessionId: 's18', roomName: 'r-nokey', participants: people() }, deps),
+    (e) => e.statusCode === 503 && /OPENAI_API_KEY/.test(e.message),
+  );
+  assert.strictEqual(rtc.rooms.length, 0);
+});
+
+test('configuration keeps out values that would end every conversation or switch the gate off', () => {
+  const grace = (v) => interpreter.readConfig({ INTERPRETER_PRESENCE_GRACE_MS: v }).presenceGraceMs;
+  assert.deepStrictEqual([grace('0'), grace('-5'), grace('9999999999'), grace('30000')], [10_000, 10_000, 600_000, 30_000]);
+  const timeout = (v) => interpreter.readConfig({ INTERPRETER_GATE_TIMEOUT_MS: v }).gateTimeoutMs;
+  assert.deepStrictEqual([timeout('0'), timeout('-1'), timeout('60000'), timeout('250')], [100, 100, 3000, 250]);
+  const rmsFloor = (v) => interpreter.readConfig({ INTERPRETER_SPEECH_RMS: v }).speechRms;
+  assert.deepStrictEqual([rmsFloor('0'), rmsFloor('40000'), rmsFloor('600')], [50, 5000, 600]);
+});
+
+test('a connect that never settles fails the start in time, and if it lands later the room is left', async () => {
+  const { rtc, made, deps } = setup({ connectTimeoutMs: 40 });
+  const landed = deferred();
+  rtc.duringConnect = () => landed.promise;
+  try {
+    const outcome = await Promise.race([
+      interpreter.startInterpreter({ sessionId: 's19', roomName: 'r-hung', participants: people() }, deps).then(() => 'started', (e) => e),
+      settle(400).then(() => 'still hanging'),
+    ]);
+    assert.ok(outcome instanceof Error && /did not settle/.test(outcome.message), String(outcome));
+    assert.deepStrictEqual(interpreter.getInterpreterStatus('r-hung'), { running: false });
+    landed.resolve();
+    await settle();
+    assert.strictEqual(rtc.rooms[0].disconnected, true);
+    assert.strictEqual(made.length, 0);
+  } finally {
+    landed.resolve();
+    await interpreter.stopInterpreter('r-hung');
+  }
+});
+
+test('stop does not hang on a disconnect that never settles', async () => {
+  const { rtc, deps } = setup({ disconnectTimeoutMs: 40 });
+  await interpreter.startInterpreter({ sessionId: 's20', roomName: 'r-hung-stop', participants: people() }, deps);
+  rtc.disconnectHook = () => new Promise(() => {});
+  const outcome = await Promise.race([
+    interpreter.stopInterpreter('r-hung-stop'),
+    settle(400).then(() => 'still hanging'),
+  ]);
+  assert.deepStrictEqual(outcome, { status: 'stopped' });
+});
+
+test('selftest opens both engines, and a refused phrase model fails it', async () => {
+  const { factory, sockets } = fakeWsFactory();
+  const result = interpreter.selftest({ config: { openaiKey: 'k' }, wsFactory: factory });
+  const translate = sockets.find((s) => s.url.includes('/realtime/translations'));
+  const phrase = sockets.find((s) => s.url.includes('/v1/realtime?model=gpt-realtime-2025-08-28'));
+  assert.ok(translate && phrase, sockets.map((s) => s.url).join(', '));
+  translate.open();
+  translate.serverSends({ type: 'session.updated' });
+  phrase.open();
+  phrase.serverSends({ type: 'error', error: { message: 'The model gpt-realtime-2025-08-28 does not exist' } });
+  const r = await result;
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.simultaneous.ok, true);
+  assert.strictEqual(r.phrase.ok, false);
+  assert.match(r.reason, /gpt-realtime-2025-08-28.*does not exist/);
+});
+
+test('selftest passes when both engines accept their sessions, and closes both sockets', async () => {
+  const { factory, sockets } = fakeWsFactory();
+  const result = interpreter.selftest({ config: { openaiKey: 'k' }, wsFactory: factory });
+  for (const s of sockets) {
+    s.open();
+    s.serverSends({ type: 'session.updated' });
+  }
+  const r = await result;
+  assert.strictEqual(r.ok, true, r.reason);
+  assert.strictEqual(typeof r.reason, 'string');
+  assert.strictEqual(sockets.length, 2);
+  assert.ok(sockets.every((s) => s.readyState === 3), 'both sockets closed');
+});
+
+test('gate fail-open is logged once per outage, FATAL after a minute, and again for a later outage', async () => {
+  const { rtc, deps } = setup();
+  let embedUp = false;
+  deps.embed = { embedPcm: async () => { if (!embedUp) throw new Error('voice-embed HTTP 502'); return print(0); } };
+  await interpreter.startInterpreter({ sessionId: 's21', roomName: 'r-failopen', participants: people() }, deps);
+  const room = rtc.rooms[0];
+  const realNow = Date.now;
+  let clock = realNow();
+  Date.now = () => clock;
+  try {
+    const speak = async (identity, frames) => {
+      room.emit('trackSubscribed', { kind: 1, frames }, { name: 'mic' }, { identity });
+      await settle();
+    };
+    const lines = await capture(async () => {
+      await speak('a#dev1', speechFrames(40)); // four unchecked chunks
+      clock += 61_000;
+      await speak('a#dev1', speechFrames(20)); // still down, a minute on
+      embedUp = true;
+      await speak('a#dev1', speechFrames(20)); // back
+      embedUp = false;
+      await speak('a#dev1', speechFrames(20));
+      clock += 61_000;
+      await speak('a#dev1', speechFrames(20));
+    });
+    assert.strictEqual(lines.filter((l) => l.includes('gate fail-open')).length, 2, lines.join('\n'));
+    assert.strictEqual(lines.filter((l) => l.startsWith('FATAL interpreter: voice-embed unavailable')).length, 2, lines.join('\n'));
+  } finally {
+    Date.now = realNow;
+    await interpreter.stopInterpreter('r-failopen');
+  }
+});
+
+test('the agent routes of Task 17 drive this module the way index.js wires them', async () => {
+  const express = require('express');
+  const { registerInterpreterRoutes } = require('./interpreter-routes');
+  const { deps } = setup();
+  const { factory, sockets } = fakeWsFactory();
+  const app = express();
+  app.use(express.json());
+  registerInterpreterRoutes(app, {
+    secret: 's3cret',
+    start: (body) => interpreter.startInterpreter(body, deps),
+    stop: (roomName) => interpreter.stopInterpreter(roomName),
+    status: (roomName) => interpreter.getInterpreterStatus(roomName),
+    selftest: () => interpreter.selftest({ config: { openaiKey: 'k' }, wsFactory: factory }),
+  });
+  const server = await new Promise((resolve) => {
+    const s = app.listen(0, '127.0.0.1', () => resolve(s));
+  });
+  const url = `http://127.0.0.1:${server.address().port}`;
+  const call = async (method, path, body) => {
+    const res = await fetch(`${url}${path}`, {
+      method,
+      headers: { 'content-type': 'application/json', 'x-interpreter-secret': 's3cret' },
+      body: body && JSON.stringify(body),
+    });
+    return [res.status, await res.json()];
+  };
+  try {
+    const body = { sessionId: 's-http', roomName: 'r-http', participants: people() };
+    assert.deepStrictEqual(await call('POST', '/interpreter/start', { roomName: 'r-http' }), [400, { error: 'sessionId and roomName required' }]);
+    assert.deepStrictEqual(await call('POST', '/interpreter/start', body), [200, { status: 'started' }]);
+    assert.deepStrictEqual(await call('POST', '/interpreter/start', body), [200, { status: 'already_running' }]);
+    const [, status] = await call('GET', '/interpreter/status/r-http');
+    assert.strictEqual(status.running, true);
+    assert.deepStrictEqual(await call('POST', '/interpreter/stop', { roomName: 'r-http' }), [200, { status: 'stopped' }]);
+    assert.deepStrictEqual(await call('POST', '/interpreter/stop', { roomName: 'r-http' }), [200, { status: 'not_running' }]);
+    const selftest = call('GET', '/interpreter/selftest');
+    for (let i = 0; i < 40 && sockets.length < 2; i++) await settle(5);
+    assert.strictEqual(sockets.length, 2, 'the selftest opened both engines');
+    for (const s of sockets) {
+      s.open();
+      s.serverSends({ type: 'session.updated' });
+    }
+    const [code, result] = await selftest;
+    assert.strictEqual(code, 200);
+    assert.strictEqual(result.ok, true, result.reason);
+    assert.strictEqual(typeof result.latencyMs, 'number');
+    assert.deepStrictEqual([result.simultaneous.ok, result.phrase.ok], [true, true]);
+  } finally {
+    server.close();
+    await interpreter.stopInterpreter('r-http');
+  }
+});
+
+test('a room LiveKit dropped by itself no longer holds the session through our handlers', async (t) => {
+  captureCallbacks(t);
+  const { rtc, deps } = setup({ backendUrl: 'http://backend.invalid', secret: 'sec' });
+  await interpreter.startInterpreter({ sessionId: 's22', roomName: 'r-kicked', participants: people() }, deps);
+  const room = rtc.rooms[0];
+  // rtc-node has already marked it disconnected, so its disconnect() returns
+  // early and never takes the room off the process-wide FFI emitter.
+  room.connectionState = rtc.ConnectionState.CONN_DISCONNECTED;
+  room.emit('disconnected', 5);
+  await settle();
+  assert.deepStrictEqual(interpreter.getInterpreterStatus('r-kicked'), { running: false });
+  assert.deepStrictEqual(room.eventNames(), [], 'no handler of ours left on a room the SDK keeps alive');
+});
+```
+
+В конец `phrase-session.test.js` дописать через пустую строку:
+
+```js
+test('a callback that throws something other than an Error is logged as such, not as a parse error', () => {
+  const errors = [];
+  // eslint-disable-next-line no-throw-literal
+  const { fake } = session({ onAudio: () => { throw undefined; }, log: { error: (m) => errors.push(m), warn() {} } });
+  const consoleErrors = [];
+  const saved = console.error;
+  console.error = (...a) => consoleErrors.push(a.join(' '));
+  try {
+    fake.serverSends({ type: 'session.updated' });
+    fake.serverSends({ type: 'response.output_audio.delta', delta: 'AAAA' });
+  } finally {
+    console.error = saved;
+  }
+  assert.ok(errors.some((m) => m.includes('onAudio callback failed: undefined')), errors.join('\n'));
+  assert.ok(!consoleErrors.some((m) => m.includes('parse error')), consoleErrors.join('\n'));
+});
+
+// ── selftestPhrase: the phrase engine's model, checked after a deploy ──
+
+const { selftestPhrase } = require('./phrase-session');
+
+test('selftest passes once the session accepts its configuration, and closes the socket', async () => {
+  const { factory, last } = fakeWsFactory();
+  const result = selftestPhrase({ apiKey: 'k', model: 'gpt-realtime-2025-08-28', wsFactory: factory, log: quietLog });
+  assert.match(last().url, /\/v1\/realtime\?model=gpt-realtime-2025-08-28$/);
+  last().open();
+  assert.deepStrictEqual(last().sent.map((m) => m.type), ['session.update']);
+  last().serverSends({ type: 'session.updated' });
+  assert.deepStrictEqual(await result, { ok: true, reason: 'session.updated received' });
+  assert.strictEqual(last().readyState, 3);
+});
+
+test('selftest fails with the refusal when OpenAI refuses the session', async () => {
+  const { factory, last } = fakeWsFactory();
+  const result = selftestPhrase({ apiKey: 'k', model: 'gpt-realtime-2025-08-28', wsFactory: factory, log: quietLog });
+  last().open();
+  last().serverSends({ type: 'error', error: { message: 'model not found' } });
+  const r = await result;
+  assert.strictEqual(r.ok, false);
+  assert.match(r.reason, /model not found/);
+});
+
+test('selftest fails when the socket closes first, and without a key at once', async () => {
+  const { factory, last } = fakeWsFactory();
+  const result = selftestPhrase({ apiKey: 'k', model: 'm', wsFactory: factory, log: quietLog });
+  last().serverCloses(1006);
+  const r = await result;
+  assert.strictEqual(r.ok, false);
+  assert.match(r.reason, /closed code=1006/);
+  assert.deepStrictEqual(await selftestPhrase({ apiKey: '' }), { ok: false, reason: 'OPENAI_API_KEY not set' });
+});
+
+test('selftest gives up after timeoutMs and closes its socket', async () => {
+  const { factory, last } = fakeWsFactory();
+  const result = selftestPhrase({ apiKey: 'k', model: 'm', wsFactory: factory, timeoutMs: 30, log: quietLog });
+  last().open();
+  const r = await result;
+  assert.strictEqual(r.ok, false);
+  assert.match(r.reason, /timeout|no session confirmation/);
+  assert.strictEqual(last().readyState, 3);
+});
+```
+
+В конец `translate-session.test.js` дописать через пустую строку:
+
+```js
+test('a callback that throws something other than an Error is logged, not thrown into the socket', () => {
+  const errors = [];
+  // eslint-disable-next-line no-throw-literal
+  const { fake } = session({ onAudio: () => { throw undefined; }, log: { error: (m) => errors.push(m), warn() {} } });
+  fake.open();
+  assert.doesNotThrow(() => {
+    fake.serverSends({ type: 'session.updated' });
+    fake.serverSends({ type: 'session.output_audio.delta', delta: 'AAAA' });
+  });
+  assert.ok(errors.some((m) => m.includes('onAudio callback failed: undefined')), errors.join('\n'));
+});
+```
+
+В конец `reconnecting-engine.test.js` дописать через пустую строку:
+
+```js
+test('an onStatus or a factory that throws something other than an Error is logged, not thrown', () => {
+  const timers = fakeTimers();
+  const errors = [];
+  const made = [];
+  let calls = 0;
+  const factory = (handlers) => {
+    calls += 1;
+    // eslint-disable-next-line no-throw-literal
+    if (calls === 2) throw undefined;
+    const e = { handlers, sent: [], closed: false, sendAudio(x) { this.sent.push(x); }, close() { this.closed = true; } };
+    made.push(e);
+    return e;
+  };
+  createReconnectingEngine({
+    factory,
+    // eslint-disable-next-line no-throw-literal
+    onStatus: () => { throw undefined; },
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+    log: { error: (m) => errors.push(m) },
+  });
+  assert.doesNotThrow(() => made[0].handlers.onClose({ unexpected: true }));
+  assert.doesNotThrow(() => timers.fireNext());
+  assert.ok(errors.some((m) => m.includes('onStatus(reconnecting) failed: undefined')), errors.join('\n'));
+  assert.ok(errors.some((m) => m.includes('reconnect failed: undefined')), errors.join('\n'));
+});
+```
+
+В конец `voiceprint-gate.robustness.test.js` дописать через пустую строку:
+
+```js
+test('F5 a callback that throws something other than an Error is still only logged', async () => {
+  // eslint-disable-next-line no-throw-literal
+  const { g } = gate([OWN, OWN, OWN], { onOutput: () => { throw undefined; } });
+  const rejections = [];
+  const onRejection = (e) => rejections.push(e);
+  const errors = [];
+  const saved = console.error;
+  console.error = (...a) => errors.push(a.join(' '));
+  process.on('unhandledRejection', onRejection);
+  try {
+    await feed(g, [speech(), speech(), speech(), silence()]);
+    await new Promise((r) => setTimeout(r, 10));
+  } finally {
+    process.off('unhandledRejection', onRejection);
+    console.error = saved;
+  }
+  assert.strictEqual(rejections.length, 0, String(rejections[0]));
+  assert.ok(errors.some((m) => m.includes('onOutput callback failed: undefined')), errors.join('\n'));
+});
+```
+
+Run: `npm test 2>&1 | tail -8`
+Expected: падения в `interpreter.test.js` (новые тесты жизненного цикла) и во всех добавленных тестах вспомогательных модулей. Девять прежних тестов сессии проходят и на старом коде.
+
+- [ ] **Step 2: Вспомогательные модули**
+
+`phrase-session.js`:
+
+Было:
+
+```js
+      log.error(`[INTERPRETER] phrase ${tag}: ${name} callback failed: ${e.message}`);
+```
+
+Стало:
+
+```js
+      log.error(`[INTERPRETER] phrase ${tag}: ${name} callback failed: ${e && e.message}`);
+```
+
+Было:
+
+```js
+module.exports = { createPhraseSession };
+```
+
+Стало:
+
+```js
+/**
+ * Post-deploy smoke for the phrase engine, the counterpart of
+ * selftestTranslate: opens a session the way the interpreter does and waits
+ * for it to accept its configuration. The model is a dated snapshot
+ * (INTERPRETER_FALLBACK_MODEL); once OpenAI withdraws it, every pair outside
+ * gpt-realtime-translate's languages fails in every conversation, and the
+ * simultaneous engine's selftest has no way to notice.
+ */
+function selftestPhrase({ apiKey, model, wsFactory, timeoutMs = 10000, log = console } = {}) {
+  if (!apiKey) return Promise.resolve({ ok: false, reason: 'OPENAI_API_KEY not set' });
+  return new Promise((resolve) => {
+    let done = false;
+    let session = null;
+    let refusal = null;
+    let timer = null;
+    const finish = (result) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      if (session) session.close();
+      resolve(result);
+    };
+    timer = setTimeout(() => finish({ ok: false, reason: `timeout: no session.updated within ${timeoutMs} ms` }), timeoutMs);
+    try {
+      session = createPhraseSession({
+        apiKey,
+        model,
+        sourceLang: 'ru',
+        targetLang: 'sk',
+        safetyId: 'interpreter-selftest',
+        wsFactory,
+        readyTimeoutMs: timeoutMs,
+        // fail() names what OpenAI refused; the close that follows has only a code.
+        log: { error: (m) => { refusal = m; log.error(m); }, warn: (m) => log.warn(m) },
+        onReady: () => finish({ ok: true, reason: 'session.updated received' }),
+        onClose: ({ code }) => finish({ ok: false, reason: refusal || `ws closed code=${code} before confirmation` }),
+      });
+      if (done) session.close();
+    } catch (e) {
+      finish({ ok: false, reason: `phrase session did not open: ${e && e.message}` });
+    }
+  });
+}
+
+module.exports = { createPhraseSession, selftestPhrase };
+```
+
+`translate-session.js`:
+
+Было:
+
+```js
+      log.error(`[INTERPRETER] translate →${targetLang}: ${name} callback failed: ${e.message}`);
+```
+
+Стало:
+
+```js
+      log.error(`[INTERPRETER] translate →${targetLang}: ${name} callback failed: ${e && e.message}`);
+```
+
+`reconnecting-engine.js`:
+
+Было:
+
+```js
+      log.error(`[INTERPRETER] reconnecting engine: onStatus(${state}) failed: ${e.message}`);
+```
+
+Стало:
+
+```js
+      log.error(`[INTERPRETER] reconnecting engine: onStatus(${state}) failed: ${e && e.message}`);
+```
+
+Было:
+
+```js
+        log.error(`[INTERPRETER] reconnecting engine: reconnect failed: ${e.message}`);
+```
+
+Стало:
+
+```js
+        log.error(`[INTERPRETER] reconnecting engine: reconnect failed: ${e && e.message}`);
+```
+
+`voiceprint-gate.js`:
+
+Было:
+
+```js
+      console.error(`[INTERPRETER] voiceprint gate: ${name} callback failed: ${e.message}`);
+```
+
+Стало:
+
+```js
+      console.error(`[INTERPRETER] voiceprint gate: ${name} callback failed: ${e && e.message}`);
+```
+
+- [ ] **Step 3: `interpreter.js` целиком**
+
+```js
+'use strict';
+/**
+ * Face-to-face interpreter: two people at one table, each on their own phone,
+ * in one LiveKit room. See
+ * docs/superpowers/specs/2026-10-31-interpreter-face-to-face-design.md.
+ *
+ * For each of the two: their microphone → voice-print gate (only the phone
+ * owner's speech goes on) → an engine that renders it into the other person's
+ * language → a track named after the listener, interp-for-<userId>. Neither
+ * microphone is forwarded anywhere else, and each phone plays only the track
+ * named after its owner: that is how "only the translation in the earpiece"
+ * is kept on the agent's side.
+ *
+ * A session can end at any moment, including while it is still starting: the
+ * stop route, a person's grace period running out, LiveKit dropping the
+ * agent, an engine giving up. So a session claims its room before its first
+ * await — a second start for the room (a backend retrying one that timed out)
+ * waits for this one instead of putting a second agent in — the start checks
+ * after every await and releases whatever it opened after the end, and a
+ * connect that lands after the end leaves the room again (rtc-node's
+ * disconnect() does nothing while connect() is running). Room and engine
+ * events end the session they belong to, never "whatever runs in this room
+ * now".
+ *
+ * Native handles are released explicitly. An AudioStream from
+ * @livekit/rtc-node 0.13 does not end when its participant leaves or when the
+ * agent leaves the room: the native stream ends only when its own handle or
+ * its track's handle is released. Left to itself it waits forever, holding
+ * its session and a listener on the process-wide FFI emitter that every audio
+ * frame in the agent then passes through. So streams are cancelled on
+ * unsubscription, departure, takeover and stop, and the published tracks
+ * (with their sources) are closed once the room is left.
+ */
+const crypto = require('crypto');
+const { AccessToken } = require('livekit-server-sdk');
+const { readLivekitCredentials } = require('./livekit-credentials');
+const { baseIdentity } = require('./translator-targets');
+const { planDirections } = require('./interpreter-routing');
+const { createVoiceprintGate } = require('./voiceprint-gate');
+const { createVoiceEmbedClient, cosine } = require('./voice-embed-client');
+const { createTranslateSession, selftestTranslate } = require('./translate-session');
+const { createPhraseSession, selftestPhrase } = require('./phrase-session');
+const { createReconnectingEngine } = require('./reconnecting-engine');
+const { createPresenceWatch } = require('./presence-watch');
+const messages = require('./interpreter-messages');
+const { applyGain, createFrameQueue } = require('./audio-out');
+const { notifyAgentEnded } = require('./backend-callback');
+
+const AGENT_IDENTITY = 'voice-interpreter';
+const SAMPLE_RATE = 24000;
+// createFrameQueue bounds itself by frame count (300, trimmed to 200), sized
+// for 20 ms frames. Fed whole 400 ms deltas it would allow two minutes of
+// backlog; cut into 20 ms frames the bound stays at a few seconds.
+const FRAME_SAMPLES = 480;
+// The embed service failing is survivable chunk by chunk (the gate fails
+// open); failing for this long means nobody's voice is being checked.
+const FATAL_FAIL_OPEN_MS = 60_000;
+// rtc-node's connect can stall without ever settling (recorder.js, the
+// incident of 2026-05-18): unbounded, the start request and the room's claim
+// would hang with it. A stalled disconnect would hang the stop route and,
+// when the agent ends a session itself, the agent-ended callback that closes
+// the host's billing.
+const CONNECT_TIMEOUT_MS = 15_000;
+const DISCONNECT_TIMEOUT_MS = 5_000;
+
+const sessions = new Map(); // roomName → session, from the start's first step until its end
+
+function num(value, fallback) {
+  const n = parseFloat(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+/** Unset → fallback; 'off' → null (feature switched off). */
+function optional(value, fallback) {
+  if (value === undefined || value === '') return fallback;
+  return value === 'off' ? null : value;
+}
+
+function readConfig(env = process.env) {
+  return {
+    lkUrl: env.LIVEKIT_WS_URL || 'ws://localhost:7880',
+    openaiKey: env.OPENAI_API_KEY,
+    model: env.INTERPRETER_MODEL || 'gpt-realtime-translate',
+    fallbackModel: env.INTERPRETER_FALLBACK_MODEL || 'gpt-realtime-2025-08-28',
+    transcribeModel: optional(env.INTERPRETER_TRANSCRIBE_MODEL, 'gpt-4o-mini-transcribe'),
+    noiseReduction: optional(env.INTERPRETER_NOISE_REDUCTION, 'near_field'),
+    embedUrl: env.VOICE_EMBED_URL || 'http://127.0.0.1:18082',
+    threshold: num(env.INTERPRETER_VOICE_THRESHOLD, 0.25),
+    margin: num(env.INTERPRETER_VOICE_MARGIN, 0.05),
+    // A chunk under ~100 ms floods the embed service (shared with the assistant's
+    // voice gate); a zero one would hang the gate.
+    chunkMs: clamp(num(env.INTERPRETER_GATE_CHUNK_MS, 500), 100, 2000),
+    // Below ~100 ms the embed service never answers in time: every chunk fails
+    // open, which switches the gate off without a word. Above a few seconds a
+    // slow answer holds the whole direction back.
+    gateTimeoutMs: clamp(num(env.INTERPRETER_GATE_TIMEOUT_MS, 300), 100, 3000),
+    hysteresis: Math.max(1, Math.round(num(env.INTERPRETER_GATE_HYSTERESIS, 2))),
+    // 0 sends silence to the embed service as speech; near full scale nothing
+    // counts as speech and both directions go mute.
+    speechRms: clamp(num(env.INTERPRETER_SPEECH_RMS, 400), 50, 5000),
+    gain: clamp(num(env.INTERPRETER_GAIN, 1.4), 0.1, 4),
+    // Node runs a timer of 0, a negative value or more than 2^31-1 ms after
+    // 1 ms: every conversation would end right after it started.
+    presenceGraceMs: clamp(num(env.INTERPRETER_PRESENCE_GRACE_MS, 60_000), 10_000, 600_000),
+    connectTimeoutMs: CONNECT_TIMEOUT_MS,
+    disconnectTimeoutMs: DISCONNECT_TIMEOUT_MS,
+    backendUrl: env.BACKEND_URL || null,
+    secret: env.INTERPRETER_SHARED_SECRET || null,
+  };
+}
+
+function httpError(statusCode, message) {
+  const err = new Error(message);
+  err.statusCode = statusCode;
+  return err;
+}
+
+/** OpenAI asks for a stable per-end-user id; a hash keeps ours out of their logs. */
+function safetyId(userId) {
+  return crypto.createHash('sha256').update(String(userId)).digest('hex').slice(0, 32);
+}
+
+function withTimeout(promise, ms, what) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} did not settle within ${ms} ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+/** Runs one step of a teardown; a failure is logged and the teardown goes on. */
+function quietly(session, what, fn) {
+  const fail = (e) => console.warn(`[INTERPRETER] ${session.roomName}: ${what} failed: ${e && e.message}`);
+  try {
+    const result = fn();
+    if (result && typeof result.then === 'function') result.then(undefined, fail);
+  } catch (e) {
+    fail(e);
+  }
+}
+
+/** Whether the agent itself is in the room right now (not connecting, not reconnecting). */
+function agentConnected(session) {
+  const { room, rtc } = session;
+  const connected = rtc.ConnectionState && rtc.ConnectionState.CONN_CONNECTED;
+  return connected === undefined ? room.isConnected === true : room.connectionState === connected;
+}
+
+function reasonName(rtc, reason) {
+  if (reason === undefined || reason === null) return 'reason unknown';
+  return (rtc.DisconnectReason && rtc.DisconnectReason[reason]) || String(reason);
+}
+
+function sameTrack(a, b) {
+  return a === b || Boolean(a && b && a.sid && a.sid === b.sid);
+}
+
+function ensureRunning(session) {
+  if (session.stopping) {
+    throw httpError(503, `interpreter for ${session.roomName} ended while starting (${session.stopReason})`);
+  }
+}
+
+async function startInterpreter(body, deps = {}) {
+  const { sessionId, roomName, participants } = body || {};
+  if (!sessionId || !roomName) throw httpError(400, 'sessionId and roomName required');
+  const existing = sessions.get(roomName);
+  if (existing) return alreadyRunning(existing);
+  let directions;
+  try {
+    directions = planDirections(participants);
+  } catch (e) {
+    throw httpError(400, e.message);
+  }
+
+  const cfg = { ...readConfig(), ...(deps.config || {}) };
+  // Without a key every engine is refused, retried and given up on: the
+  // conversation would end as translation_failed seconds after it started.
+  if (!cfg.openaiKey) throw httpError(503, 'OPENAI_API_KEY is not set on the agent');
+  const rtc = deps.rtc || require('@livekit/rtc-node');
+  const { apiKey, apiSecret } = deps.credentials || readLivekitCredentials();
+  const embed = deps.embed || createVoiceEmbedClient({ baseUrl: cfg.embedUrl, timeoutMs: cfg.gateTimeoutMs });
+  const at = new AccessToken(apiKey, apiSecret, { identity: AGENT_IDENTITY, name: 'Interpreter' });
+  at.addGrant({ roomJoin: true, room: roomName, canPublish: true, canSubscribe: true, canPublishData: true });
+
+  const session = {
+    sessionId,
+    roomName,
+    room: new rtc.Room(),
+    rtc,
+    cfg,
+    deps,
+    embed,
+    directions,
+    lanes: new Map(), // speaker userId → lane
+    ready: false,
+    pendingTracks: [],
+    stopping: false,
+    stopReason: null,
+    left: false,
+    linkDown: false, // LiveKit is reconnecting the agent
+    dataFailures: 0,
+    failOpenSince: null,
+    failOpenCount: 0,
+    fatalLogged: false,
+  };
+  let settleStartup;
+  session.startup = new Promise((resolve) => { settleStartup = resolve; });
+  // Claimed before the first await: a second start for this room now waits
+  // for this one (alreadyRunning) instead of joining a second agent.
+  sessions.set(roomName, session);
+
+  session.presence = createPresenceWatch({
+    people: directions.map((d) => d.speaker),
+    graceMs: cfg.presenceGraceMs,
+    onGone: (userId) => {
+      // While the agent itself is off LiveKit, nobody looks present to it.
+      const reason = agentConnected(session) ? 'partner_left' : 'agent_lost';
+      console.log(`[INTERPRETER] ${roomName}: ${userId} away for ${cfg.presenceGraceMs} ms — ending (${reason})`);
+      endInBackground(session, reason);
+    },
+  });
+  watchRoom(session);
+
+  try {
+    const token = await at.toJwt();
+    ensureRunning(session);
+    const connecting = session.room.connect(cfg.lkUrl, token, { autoSubscribe: true, dynacast: false });
+    // However this start goes, a connect that lands after the end leaves again.
+    connecting.then(() => { if (session.stopping) leaveRoom(session); }, () => {});
+    await withTimeout(connecting, cfg.connectTimeoutMs, 'LiveKit connect');
+    ensureRunning(session);
+    // Who was in the room before us; events report everyone after.
+    for (const p of session.room.remoteParticipants.values()) session.presence.arrive(p.identity);
+    for (const d of directions) session.lanes.set(d.speaker, await openLane(session, d));
+  } catch (e) {
+    settleStartup(false);
+    await endSession(session, { reason: 'translation_failed', notify: false });
+    throw e;
+  }
+  session.ready = true;
+  settleStartup(true);
+  for (const { track, identity } of session.pendingTracks.splice(0)) route(session, track, identity);
+
+  console.log(
+    `[INTERPRETER] ${roomName}: started — ${directions.map((d) => `${d.sourceLang}→${d.targetLang} (${d.engine})`).join(', ')}`,
+  );
+  return { status: 'started' };
+}
+
+/** A start for a room that already has one, likely the backend retrying: the answer is how that one ends. */
+async function alreadyRunning(session) {
+  if ((await session.startup) && !session.stopping) return { status: 'already_running' };
+  throw httpError(503, `interpreter for ${session.roomName} did not start`);
+}
+
+function watchRoom(session) {
+  const { room, rtc, roomName } = session;
+  room.on(rtc.RoomEvent.ParticipantConnected, (p) => {
+    console.log(`[INTERPRETER] ${roomName}: ${p.identity} (${p.sid}) joined`);
+    session.presence.arrive(p.identity);
+  });
+  room.on(rtc.RoomEvent.ParticipantDisconnected, (p) => {
+    // The reason tells someone leaving (CLIENT_INITIATED) from LiveKit
+    // removing them (DUPLICATE_IDENTITY, STATE_MISMATCH, ...).
+    console.log(`[INTERPRETER] ${roomName}: ${p.identity} (${p.sid}) left: ${reasonName(rtc, p.disconnectReason)}`);
+    session.presence.leave(p.identity);
+    stopListening(session, (l) => l.identity === p.identity);
+  });
+  room.on(rtc.RoomEvent.TrackSubscribed, (track, publication, participant) => {
+    if (session.stopping || track.kind !== rtc.TrackKind.KIND_AUDIO) return;
+    // Tracks already in the room are subscribed during connect, before the
+    // lanes exist. Hold them until the lanes are open.
+    if (!session.ready) {
+      session.pendingTracks.push({ track, identity: participant.identity });
+      return;
+    }
+    route(session, track, participant.identity);
+  });
+  room.on(rtc.RoomEvent.TrackUnsubscribed, (track) => {
+    session.pendingTracks = session.pendingTracks.filter((p) => !sameTrack(p.track, track));
+    stopListening(session, (l) => sameTrack(l.track, track));
+  });
+  room.on(rtc.RoomEvent.Reconnecting, () => {
+    session.linkDown = true;
+    console.warn(`[INTERPRETER] ${roomName}: LiveKit is reconnecting the agent`);
+  });
+  room.on(rtc.RoomEvent.Reconnected, () => {
+    session.linkDown = false;
+    console.log(`[INTERPRETER] ${roomName}: LiveKit reconnected the agent`);
+  });
+  room.on(rtc.RoomEvent.Disconnected, (reason) => {
+    if (session.stopping) return;
+    console.warn(`[INTERPRETER] ${roomName}: lost the LiveKit connection: ${reasonName(rtc, reason)}`);
+    endInBackground(session, 'agent_lost');
+  });
+}
+
+async function openLane(session, d) {
+  const { cfg, rtc, room, deps } = session;
+  const source = new rtc.AudioSource(SAMPLE_RATE, 1);
+  const lane = {
+    direction: d,
+    track: rtc.LocalAudioTrack.createAudioTrack(d.trackName, source),
+    listening: null,
+    engine: null,
+    gate: null,
+  };
+  try {
+    await room.localParticipant.publishTrack(
+      lane.track,
+      new rtc.TrackPublishOptions({ source: rtc.TrackSource.SOURCE_MICROPHONE, stream: d.trackName }),
+    );
+    // Ended while publishing: no OpenAI session for a conversation that is gone.
+    ensureRunning(session);
+    const out = createFrameQueue(source, d.trackName);
+    const makeEngine = (deps.engines && deps.engines[d.engine])
+      || (d.engine === 'simultaneous' ? createTranslateSession : createPhraseSession);
+    lane.engine = createReconnectingEngine({
+      factory: (handlers) => makeEngine({
+        apiKey: cfg.openaiKey,
+        model: d.engine === 'simultaneous' ? cfg.model : cfg.fallbackModel,
+        sourceLang: d.sourceLang,
+        targetLang: d.targetLang,
+        safetyId: safetyId(d.speaker),
+        // The phrase engine ignores these two.
+        transcribeModel: cfg.transcribeModel,
+        noiseReduction: cfg.noiseReduction,
+        onAudio: (int16) => {
+          if (session.stopping) return;
+          applyGain(int16, cfg.gain);
+          for (let i = 0; i < int16.length; i += FRAME_SAMPLES) {
+            // slice, not subarray: AudioFrame hands data.buffer to the native
+            // side from byte 0, ignoring byteOffset — a view would play the
+            // wrong samples.
+            const frame = int16.slice(i, i + FRAME_SAMPLES);
+            out.push(new rtc.AudioFrame(frame, SAMPLE_RATE, 1, frame.length));
+          }
+        },
+        onTranslationText: (text, final) => sendTo(session, d.listener, messages.caption('translation', d.speaker, text, final)),
+        onSourceText: (text, final) => sendTo(session, d.speaker, messages.caption('source', d.speaker, text, final)),
+        ...handlers,
+      }),
+      onStatus: (state) => {
+        broadcast(session, messages.status(state));
+        if (state === 'failed') endInBackground(session, 'translation_failed');
+      },
+    });
+
+    lane.gate = createVoiceprintGate({
+      sampleRate: SAMPLE_RATE,
+      chunkMs: cfg.chunkMs,
+      speechRms: cfg.speechRms,
+      threshold: cfg.threshold,
+      margin: cfg.margin,
+      hysteresis: cfg.hysteresis,
+      score: async (window) => {
+        const vector = await session.embed.embedPcm(window, SAMPLE_RATE);
+        return { own: cosine(vector, d.ownEmbedding), other: cosine(vector, d.otherEmbedding) };
+      },
+      onOutput: (chunk) => lane.engine.sendAudio(chunk),
+      onSpeaking: (on) => broadcast(session, messages.speaking(d.speaker, on)),
+      onDecision: (record) => {
+        noteFailOpen(session, record);
+        if (deps.onDecision) deps.onDecision(d.speaker, record);
+      },
+    });
+    return lane;
+  } catch (e) {
+    // Not in session.lanes yet, so the end would not find what this opened.
+    quietly(session, `closing the ${d.trackName} engine`, () => lane.engine && lane.engine.close());
+    releaseTrack(session, lane);
+    throw e;
+  }
+}
+
+function route(session, track, identity) {
+  const lane = session.lanes.get(baseIdentity(identity));
+  if (lane) listen(session, lane, track, identity);
+}
+
+function listen(session, lane, track, identity) {
+  const previous = lane.listening;
+  if (previous) {
+    // Another device of the same person (or the same mic again): the old
+    // stream stops now, and what the gate holds from it goes out ahead of the
+    // new audio instead of being spliced onto it.
+    lane.listening = null;
+    cancelReader(previous);
+    lane.gate.end();
+  }
+  let reader;
+  try {
+    reader = new session.rtc.AudioStream(track, SAMPLE_RATE, 1).getReader();
+  } catch (e) {
+    console.warn(`[INTERPRETER] ${session.roomName}: cannot listen to ${identity}: ${e && e.message}`);
+    return;
+  }
+  const listening = { reader, track, identity };
+  lane.listening = listening;
+  console.log(`[INTERPRETER] ${session.roomName}: listening to ${identity}`);
+  (async () => {
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done || session.stopping || lane.listening !== listening) break;
+        lane.gate.push(new Int16Array(value.data));
+      }
+    } finally {
+      cancelReader(listening);
+      if (lane.listening === listening) {
+        // The track went away (left, unsubscribed, reconnecting): let the held
+        // audio out now instead of splicing it onto whatever comes next.
+        lane.listening = null;
+        if (!session.stopping) lane.gate.end();
+      }
+    }
+  })().catch((e) => console.warn(`[INTERPRETER] ${session.roomName}: audio from ${identity} ended: ${e && e.message}`));
+}
+
+/** Releases the native stream and its FFI listener; a pending read() returns done. */
+function cancelReader(listening) {
+  try {
+    listening.reader.cancel().catch(() => {});
+  } catch (_) { /* already released */ }
+}
+
+/** Ends the matching streams; each loop then lets its gate's held audio out. */
+function stopListening(session, match) {
+  for (const lane of session.lanes.values()) {
+    if (lane.listening && match(lane.listening)) cancelReader(lane.listening);
+  }
+}
+
+function sendTo(session, userId, msg) {
+  // While LiveKit reconnects the agent nothing can be sent, and every caption
+  // delta would fail and log on its own.
+  if (session.stopping || session.linkDown) return;
+  messages
+    .send(session.room.localParticipant, session.presence.identitiesOf(userId), msg)
+    .then(
+      () => {
+        if (session.dataFailures === 0) return;
+        console.log(`[INTERPRETER] ${session.roomName}: data channel works again after ${session.dataFailures} failed messages`);
+        session.dataFailures = 0;
+      },
+      (e) => {
+        session.dataFailures += 1;
+        if (session.dataFailures > 1) return; // one line per run of failures, not per delta
+        console.warn(`[INTERPRETER] ${session.roomName}: data to ${userId} failed: ${e && e.message} (further failures counted until one gets through)`);
+      },
+    );
+}
+
+function broadcast(session, msg) {
+  for (const d of session.directions) sendTo(session, d.speaker, msg);
+}
+
+/**
+ * One line when the gate starts failing open, FATAL once that has lasted a
+ * minute, one line when checks are back. Shared by the two lanes on purpose:
+ * the embed service is shared, so a check that works on either lane means it
+ * is up. A later outage in the same conversation is reported again.
+ */
+function noteFailOpen(session, record) {
+  if (!record.failOpen) {
+    if (session.failOpenSince !== null) {
+      console.log(`[INTERPRETER] ${session.roomName}: voice checks back after ${session.failOpenCount} chunks let through unchecked`);
+    }
+    session.failOpenSince = null;
+    session.failOpenCount = 0;
+    session.fatalLogged = false;
+    return;
+  }
+  const now = Date.now();
+  session.failOpenCount += 1;
+  if (session.failOpenSince === null) {
+    session.failOpenSince = now;
+    console.warn(`[INTERPRETER] gate fail-open in ${session.roomName}: ${record.error}`);
+  }
+  if (!session.fatalLogged && now - session.failOpenSince > FATAL_FAIL_OPEN_MS) {
+    session.fatalLogged = true;
+    console.error(
+      `FATAL interpreter: voice-embed unavailable for ${Math.round((now - session.failOpenSince) / 1000)} s in ${session.roomName}`
+      + ` (${session.failOpenCount} chunks let through unchecked)`,
+    );
+  }
+}
+
+function endInBackground(session, reason) {
+  endSession(session, { reason, notify: true }).catch((e) => {
+    console.error(`[INTERPRETER] ${session.roomName}: ending (${reason}) failed: ${e && e.message}`);
+  });
+}
+
+/** Leaves the room once it is joined; a connect still running leaves when it lands (startInterpreter). */
+async function leaveRoom(session) {
+  if (session.left || session.room.isConnected === false) return;
+  session.left = true;
+  try {
+    await withTimeout(session.room.disconnect(), session.cfg.disconnectTimeoutMs, 'LiveKit disconnect');
+  } catch (e) {
+    console.warn(`[INTERPRETER] ${session.roomName}: leaving the room failed: ${e && e.message}`);
+  }
+}
+
+function closeLane(session, lane) {
+  const { listening } = lane;
+  lane.listening = null; // the loop is no longer the owner: no end() on a closed gate
+  if (listening) cancelReader(listening);
+  const name = lane.direction.trackName;
+  quietly(session, `closing the ${name} gate`, () => lane.gate && lane.gate.close());
+  quietly(session, `closing the ${name} engine`, () => lane.engine && lane.engine.close());
+}
+
+/** close() closes the track's AudioSource too. */
+function releaseTrack(session, lane) {
+  const { track } = lane;
+  lane.track = null;
+  if (track && typeof track.close === 'function') quietly(session, `closing ${lane.direction.trackName}`, () => track.close());
+}
+
+async function endSession(session, { reason = 'stopped', notify = false } = {}) {
+  if (session.stopping) return { status: 'not_running' };
+  session.stopping = true;
+  session.stopReason = reason;
+  if (sessions.get(session.roomName) === session) sessions.delete(session.roomName);
+  quietly(session, 'closing the presence watch', () => session.presence && session.presence.close());
+  session.pendingTracks = [];
+  for (const lane of session.lanes.values()) closeLane(session, lane);
+  await leaveRoom(session);
+  // rtc-node detaches a room from its process-wide FFI emitter only in a
+  // disconnect() that finds it connected. A room LiveKit dropped by itself is
+  // never detached, so our handlers must not keep this session reachable.
+  quietly(session, 'detaching from the room', () => session.room.removeAllListeners());
+  // After leaving: a track's handle is not pulled from under a live publication.
+  for (const lane of session.lanes.values()) releaseTrack(session, lane);
+  console.log(`[INTERPRETER] ${session.roomName}: stopped (${reason})`);
+  const { backendUrl, secret } = session.cfg;
+  if (notify && backendUrl && secret) {
+    await notifyAgentEnded({ backendUrl, secret, sessionId: session.sessionId, reason });
+  }
+  return { status: 'stopped' };
+}
+
+async function stopInterpreter(roomName, { reason = 'stopped', notify = false } = {}) {
+  const session = sessions.get(roomName);
+  if (!session) return { status: 'not_running' };
+  return endSession(session, { reason, notify });
+}
+
+function getInterpreterStatus(roomName) {
+  const session = sessions.get(roomName);
+  if (!session) return { running: false };
+  return {
+    running: true,
+    ready: session.ready,
+    sessionId: session.sessionId,
+    directions: session.directions.map(({ speaker, listener, sourceLang, targetLang, engine }) => ({
+      speaker, listener, sourceLang, targetLang, engine,
+    })),
+    present: session.presence.presentPeople(),
+  };
+}
+
+/**
+ * Post-deploy smoke for both engines: gpt-realtime-translate for the pairs it
+ * speaks, the phrase engine's model for the rest. { ok, reason } as before,
+ * plus each engine's own result.
+ */
+async function selftest(deps = {}) {
+  const cfg = { ...readConfig(), ...(deps.config || {}) };
+  const [simultaneous, phrase] = await Promise.all([
+    selftestTranslate({
+      apiKey: cfg.openaiKey,
+      model: cfg.model,
+      transcribeModel: cfg.transcribeModel,
+      noiseReduction: cfg.noiseReduction,
+      wsFactory: deps.wsFactory,
+    }),
+    selftestPhrase({ apiKey: cfg.openaiKey, model: cfg.fallbackModel, wsFactory: deps.wsFactory }),
+  ]);
+  const ok = simultaneous.ok && phrase.ok;
+  const reason = ok
+    ? `${cfg.model}: ${simultaneous.reason}; ${cfg.fallbackModel}: ${phrase.reason}`
+    : [!simultaneous.ok && `${cfg.model}: ${simultaneous.reason}`, !phrase.ok && `${cfg.fallbackModel}: ${phrase.reason}`]
+      .filter(Boolean)
+      .join('; ');
+  return { ok, reason, simultaneous, phrase };
+}
+
+module.exports = { startInterpreter, stopInterpreter, getInterpreterStatus, selftest, readConfig, AGENT_IDENTITY };
+```
+
+- [ ] **Step 4: Проверить**
+
+```bash
+npm test 2>&1 | tail -8
+node -e "process.env.LIVEKIT_API_KEY='x'; process.env.LIVEKIT_API_SECRET='y'; const s=require('fs').readFileSync('index.js','utf8'); for (const [,m] of s.matchAll(/require\(['\"](\.\/[^'\"]+)['\"]\)/g)) require(m); console.log('modules-ok')"
+```
+
+Ожидается: весь набор `ℹ pass 292`, `ℹ fail 0`; `modules-ok`.
+
+- [ ] **Step 5: Коммит**
+
+```bash
+git add interpreter.js interpreter.test.js phrase-session.js phrase-session.test.js translate-session.js translate-session.test.js reconnecting-engine.js reconnecting-engine.test.js voiceprint-gate.js voiceprint-gate.robustness.test.js
+git commit -m "fix(interpreter): сессия — жизненный цикл без гонок, освобождение потоков и дорожек, самопроверка обоих движков" -m "По ревью задачи 16: остановка во время старта оставляла живую сессию с движками OpenAI, два старта одной комнаты убивали друг друга, аудиопотоки не кончались и держали сессию; таймауты connect/disconnect, причина agent_lost, рамки настроек, selftestPhrase, e && e.message во всех обработчиках." -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
 ### Task 19: `bench/interpreter-bench.js` — стенд
 
 **Files:**
