@@ -20,6 +20,14 @@
  *                 (default true: the in-call translator logs them as before)
  * wsFactory must return a new socket that is still connecting: its 'open'
  * event is what sends the session.update.
+ *
+ * The socket comes back with sendAudio(base64Audio, atMs): one frame of 24 kHz
+ * PCM16, appended and judged speech or silence for the turn-taker. atMs is the
+ * frame's time in ms on the caller's own clock. A caller whose audio arrives
+ * in bursts passes its audio clock, so that a 600 ms pause is 600 ms of audio
+ * and not however long the bursts took to arrive. Without it the frame is
+ * timed by Date.now(), as the in-call translator, which streams live, has
+ * always had it.
  */
 const WebSocket = require('ws');
 const { createTurnTaker } = require('./translator-turns');
@@ -286,7 +294,7 @@ function createRealtimeSession(sourceLang, targetLang, onAudioDelta, onError, op
     },
   });
 
-  ws.sendAudio = (base64Audio) => {
+  ws.sendAudio = (base64Audio, atMs) => {
     const msg = JSON.stringify({ type: 'input_audio_buffer.append', audio: base64Audio });
     if (ready && ws.readyState === WebSocket.OPEN) {
       ws.send(msg);
@@ -299,7 +307,7 @@ function createRealtimeSession(sourceLang, targetLang, onAudioDelta, onError, op
 
     // Amplitude-based speech/silence detection (replaces server_vad)
     const rms = getFrameRMS(base64Audio);
-    ws._turns.feed(rms >= SPEECH_RMS_THRESHOLD, Date.now());
+    ws._turns.feed(rms >= SPEECH_RMS_THRESHOLD, atMs ?? Date.now());
   };
 
   return ws;

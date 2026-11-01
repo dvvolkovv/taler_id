@@ -68,7 +68,11 @@ function createTurnTaker(opts = {}) {
       return hasSpeech;
     },
 
-    /** One audio frame's worth of "was this speech", on the wall clock. */
+    /**
+     * One audio frame's worth of "was this speech", at nowMs on the caller's
+     * clock: the wall clock for a live stream, the audio's own clock for
+     * audio that arrives in bursts.
+     */
     feed(isSpeech, nowMs) {
       if (isSpeech) {
         if (!hasSpeech) {

@@ -34,6 +34,16 @@ const chunk = (value) => new Int16Array(12000).fill(value);
 const loud = () => chunk(3000);
 const quiet = () => chunk(0);
 const firstSample = (msg) => Buffer.from(msg.audio, 'base64').readInt16LE(0);
+// A 500 ms chunk goes in as 25 frames of 20 ms: one value per frame.
+const framed = (...values) => values.flatMap((v) => new Array(25).fill(v));
+
+/** How many 20 ms frames went in before the first commit, the frame that made the cut included. */
+function framesBeforeCommit(fake) {
+  const kinds = fake.sent.map((m) => m.type);
+  const cut = kinds.indexOf('input_audio_buffer.commit');
+  assert.ok(cut >= 0, 'nothing was committed');
+  return kinds.slice(0, cut).filter((k) => k === 'input_audio_buffer.append').length;
+}
 
 test('it runs the given model with the known source language', () => {
   const { fake } = session();
@@ -139,7 +149,7 @@ test('audio that waited for the session goes out whole, in order, and is cut int
   at(1500, quiet()); // open, not yet confirmed: used to be dropped, splicing a gap into the phrase
   now = 1800;
   fake.serverSends({ type: 'session.updated' });
-  assert.deepStrictEqual(appends(fake).map(firstSample), [0, 3000, 3000, 0]);
+  assert.deepStrictEqual(appends(fake).map(firstSample), framed(0, 3000, 3000, 0));
   assert.strictEqual(fake.sentOfType('input_audio_buffer.commit').length, 0);
   // The turn-taker heard the replay: live silence ends that phrase as usual
   // (before the fix it never saw the speech and nothing was ever committed).
@@ -153,7 +163,57 @@ test('at most 4 s waits for the session; older audio is dropped', () => {
   for (let i = 1; i <= 12; i++) s.sendAudio(chunk(i)); // 6 s of handshake
   fake.open();
   fake.serverSends({ type: 'session.updated' });
-  assert.deepStrictEqual(appends(fake).map(firstSample), [5, 6, 7, 8, 9, 10, 11, 12]);
+  assert.deepStrictEqual(appends(fake).map(firstSample), framed(5, 6, 7, 8, 9, 10, 11, 12));
+});
+
+// ── pauses measured in audio, not in the gate's 500 ms deliveries ──
+
+test('a pause is cut after 600 ms of audio: inside the second quiet chunk, not on the third', (t) => {
+  // The wall clock stands still: only the audio can tell how long the pause is.
+  // Before, every chunk was one reading of Date.now(), so here the pause never
+  // grew at all; on the bench the cut came only with a third quiet chunk.
+  t.mock.method(Date, 'now', () => 0);
+  const { s, fake } = session();
+  fake.serverSends({ type: 'session.updated' });
+  const commits = () => fake.sentOfType('input_audio_buffer.commit').length;
+  s.sendAudio(loud());
+  s.sendAudio(loud());
+  s.sendAudio(quiet());
+  assert.strictEqual(commits(), 0, '500 ms of silence is still inside the phrase');
+  s.sendAudio(quiet());
+  assert.strictEqual(commits(), 1);
+  // 50 frames of speech, 30 of silence (600 ms) and the frame that ends the wait.
+  assert.strictEqual(framesBeforeCommit(fake), 50 + 30 + 1);
+  assert.ok(appends(fake).every((m) => Buffer.from(m.audio, 'base64').length === 960), 'in 20 ms frames');
+});
+
+test('someone who does not pause is cut after 7 s of their audio', (t) => {
+  t.mock.method(Date, 'now', () => 0);
+  const lines = [];
+  t.mock.method(console, 'log', (...args) => lines.push(args.join(' ')));
+  const { s, fake } = session();
+  fake.serverSends({ type: 'session.updated' });
+  for (let i = 0; i < 14; i++) s.sendAudio(loud()); // 7 s
+  assert.strictEqual(fake.sentOfType('input_audio_buffer.commit').length, 0);
+  s.sendAudio(loud());
+  assert.strictEqual(fake.sentOfType('input_audio_buffer.commit').length, 1);
+  assert.strictEqual(framesBeforeCommit(fake), 350 + 1, 'cut on the frame that starts 7 s into the speech');
+  assert.ok(lines.some((l) => l.endsWith('Committing (force)')), lines.join('\n'));
+});
+
+test('audio that waited for the session counts on the audio clock too', (t) => {
+  t.mock.method(Date, 'now', () => 0);
+  const { s, fake } = session({}, { open: false });
+  s.sendAudio(loud());
+  s.sendAudio(quiet()); // the handshake is still running: the pause begins in the queue
+  fake.open();
+  fake.serverSends({ type: 'session.updated' });
+  assert.strictEqual(fake.sentOfType('input_audio_buffer.commit').length, 0);
+  s.sendAudio(quiet());
+  assert.strictEqual(fake.sentOfType('input_audio_buffer.commit').length, 1);
+  // 25 frames of speech; 30 of silence, 500 ms of it from the queue and 100 ms
+  // live; and the frame that ends the wait.
+  assert.strictEqual(framesBeforeCommit(fake), 25 + 30 + 1);
 });
 
 test('a throwing callback is logged, not thrown into the socket or passed off as a parse error', () => {

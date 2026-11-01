@@ -226,3 +226,30 @@ test('with logText false the log shows how long a phrase was, not its words', (t
   inCall.fake.serverSends({ type: 'conversation.item.input_audio_transcription.completed', transcript: 'Добрый день' });
   assert.ok(lines.some((l) => l.endsWith('heard: "Добрый день"')));
 });
+
+// 20 ms of PCM16 at one level, the frame the interpreter's phrase adapter sends.
+const frame20 = (level) => Buffer.from(new Int16Array(480).fill(level).buffer).toString('base64');
+
+test('a frame sent with its time is judged on that time, not on the wall clock', (t) => {
+  t.mock.method(Date, 'now', () => 0); // the wall clock stands still
+  const { ws, fake } = open('ru', 'sk');
+  fake.serverSends({ type: 'session.updated' });
+  let at = 0;
+  for (; at < 1000; at += 20) ws.sendAudio(frame20(1000), at);
+  for (; at < 1600; at += 20) ws.sendAudio(frame20(0), at);
+  assert.strictEqual(fake.sentOfType('input_audio_buffer.commit').length, 0);
+  ws.sendAudio(frame20(0), at); // 600 ms after the pause began
+  assert.strictEqual(fake.sentOfType('input_audio_buffer.commit').length, 1);
+});
+
+test('a frame sent without a time is judged on Date.now(), as the in-call translator sends it', (t) => {
+  let now = 0;
+  t.mock.method(Date, 'now', () => now);
+  const { ws, fake } = open('ru', 'sk');
+  fake.serverSends({ type: 'session.updated' });
+  for (; now < 1000; now += 20) ws.sendAudio(frame20(1000));
+  for (let i = 0; i < 50; i++) ws.sendAudio(frame20(0)); // a second of frames while the wall clock stands still
+  assert.strictEqual(fake.sentOfType('input_audio_buffer.commit').length, 0);
+  for (const end = now + 600; now <= end; now += 20) ws.sendAudio(frame20(0));
+  assert.strictEqual(fake.sentOfType('input_audio_buffer.commit').length, 1);
+});

@@ -17,12 +17,15 @@ const WebSocket = require('ws');
 const { createRealtimeSession } = require('./realtime-phrase-session');
 
 const SAMPLE_RATE = 24000;
+const SAMPLES_PER_MS = SAMPLE_RATE / 1000;
+const FRAME_SAMPLES = 480; // 20 ms: what the engine is handed, and judges, at a time
 const HANDSHAKE_TIMEOUT_MS = 10000;
 const READY_TIMEOUT_MS = 10000;
 const MAX_BUFFERED_BYTES = 1 << 20; // ~16 s of base64 audio at 64 KB/s
 // Audio that waits for the session, as in translate-session.js: at most 4 s,
-// older audio is dropped. It goes out through the engine's own path once the
-// session is ready, so the turn-taker hears it as well.
+// older audio is dropped. It is kept as samples and goes out through the same
+// framed path once the session is ready, so the turn-taker hears it and the
+// audio clock counts it.
 const MAX_QUEUED_SAMPLES = 4 * SAMPLE_RATE;
 
 const defaultWsFactory = (url, options) => new WebSocket(url, { ...options, handshakeTimeout: HANDSHAKE_TIMEOUT_MS });
@@ -74,8 +77,9 @@ function createPhraseSession(opts) {
   let dropped = false; // fail() decided; frames already read must not count
   let ended = false; // the socket has closed
   let readyTimer = null;
-  let queue = [];
+  let queue = []; // Int16Array chunks waiting for the session
   let queuedSamples = 0;
+  let audioMs = 0; // this session's audio clock: how much audio the engine has been handed
   const live = () => !closedByUs && !dropped && !ended;
 
   function forget() {
@@ -98,6 +102,20 @@ function createPhraseSession(opts) {
     } catch (_) { /* already closed */ }
   }
 
+  // The gate hands audio over 500 ms at a time. Sent whole, each chunk was a
+  // single wall-clock reading for the turn-taker, so a pause ended only with
+  // the third quiet chunk: ~1.5 s of silence where it waits for 0.6 s (on the
+  // bench the phrase direction answered 7–7.5 s after the phrase began). Cut
+  // into 20 ms frames, each stamped with the audio that came before it, the
+  // pause is measured in audio, however the chunks arrive.
+  function append(int16) {
+    for (let i = 0; i < int16.length; i += FRAME_SAMPLES) {
+      const frame = int16.subarray(i, i + FRAME_SAMPLES);
+      ws.sendAudio(toBase64(frame), audioMs);
+      audioMs += frame.length / SAMPLES_PER_MS;
+    }
+  }
+
   const ws = createRealtimeSession(
     sourceLang,
     targetLang,
@@ -117,7 +135,7 @@ function createPhraseSession(opts) {
         ready = true;
         const waiting = queue;
         forget();
-        for (const { b64 } of waiting) ws.sendAudio(b64);
+        for (const int16 of waiting) append(int16);
         onReady();
       },
       // Before the session is confirmed nothing but our session.update has
@@ -154,12 +172,14 @@ function createPhraseSession(opts) {
           fail(`${ws.bufferedAmount} bytes not taken by the server`);
           return;
         }
-        ws.sendAudio(toBase64(int16));
+        append(int16);
         return;
       }
-      queue.push({ b64: toBase64(int16), samples: int16.length });
+      // A copy: the samples are read only once the session is ready, and the
+      // buffer is the caller's.
+      queue.push(int16.slice());
       queuedSamples += int16.length;
-      while (queuedSamples > MAX_QUEUED_SAMPLES && queue.length > 1) queuedSamples -= queue.shift().samples;
+      while (queuedSamples > MAX_QUEUED_SAMPLES && queue.length > 1) queuedSamples -= queue.shift().length;
     },
     close() {
       if (closedByUs) return;
