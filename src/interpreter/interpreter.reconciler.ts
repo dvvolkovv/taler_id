@@ -13,6 +13,9 @@ const AGENT_LOST_AFTER_MS = 60_000;
 const WAITING_GRACE_MS = 5 * 60_000;
 // A join links the billing it opened to the session a moment later.
 const UNLINKED_BILLING_GRACE_MS = 60_000;
+// close() marks a session ENDED first and closes its billing after stopping
+// the agent (up to 10 s): until then that billing is still its to close.
+const CLOSING_GRACE_MS = 60_000;
 
 const SESSION_FIELDS = {
   id: true,
@@ -88,9 +91,11 @@ export class InterpreterReconciler {
 
   /**
    * The passes above start from a session row, so they never see billing that
-   * no ACTIVE session holds: a join that died between opening billing and
-   * claiming the code, a cleanup step that failed after a lost claim or in
-   * close(). Metering would charge the host for it up to its 2-hour cap.
+   * no session holds: a join that died between opening billing and claiming
+   * the code, a cleanup step that failed after a lost claim or in close().
+   * Metering would charge the host for it up to its 2-hour cap. A session
+   * that ended under a minute ago still holds its billing: closing it here
+   * would race close() and record a hang-up as 'failed'.
    */
   private async reconcileBilling(now: Date): Promise<void> {
     let unheld: string[];
@@ -108,8 +113,14 @@ export class InterpreterReconciler {
       if (open.length === 0) return;
       const held = await this.prisma.interpreterSession.findMany({
         where: {
-          status: 'ACTIVE',
           billingSessionId: { in: open.map((b) => b.id) },
+          OR: [
+            { status: 'ACTIVE' },
+            {
+              status: 'ENDED',
+              endedAt: { gt: new Date(now.getTime() - CLOSING_GRACE_MS) },
+            },
+          ],
         },
         select: { billingSessionId: true },
       });

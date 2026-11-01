@@ -13,10 +13,20 @@ const active = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+/** Whether a row satisfies the reconciler's status filter: one alternative or an OR. */
+function matches(row: any, where: any): boolean {
+  return (where.OR ?? [where]).some(
+    (alt: any) =>
+      alt.status === row.status &&
+      (!alt.endedAt || row.endedAt.getTime() > alt.endedAt.gt.getTime()),
+  );
+}
+
 function setup(
   rows: {
     active?: unknown[];
     waiting?: unknown[];
+    ended?: unknown[];
     openBilling?: { id: string }[];
   } = {},
 ) {
@@ -24,8 +34,17 @@ function setup(
     interpreterSession: {
       findMany: jest.fn(async ({ where }: any) => {
         if (where.billingSessionId) {
-          return ((rows.active ?? []) as any[]).filter((s) =>
-            where.billingSessionId.in.includes(s.billingSessionId),
+          const rowsWithStatus = [
+            ...((rows.active ?? []) as any[]).map((s) => ({
+              status: 'ACTIVE',
+              ...s,
+            })),
+            ...((rows.ended ?? []) as any[]),
+          ];
+          return rowsWithStatus.filter(
+            (s) =>
+              where.billingSessionId.in.includes(s.billingSessionId) &&
+              matches(s, where),
           );
         }
         return where.status === 'ACTIVE'
@@ -167,7 +186,7 @@ describe('InterpreterReconciler: waiting sessions', () => {
 });
 
 describe('InterpreterReconciler: billing no session holds', () => {
-  it('closes open interpreter billing that no ACTIVE session holds', async () => {
+  it('closes open interpreter billing that no session holds', async () => {
     // bill-1 belongs to a live conversation; bill-2 was opened by a join that
     // died before claiming the code, or left open by a failed cleanup.
     const { reconciler, prisma, interpreter } = setup({
@@ -188,12 +207,51 @@ describe('InterpreterReconciler: billing no session holds', () => {
     });
     expect(prisma.interpreterSession.findMany).toHaveBeenCalledWith({
       where: {
-        status: 'ACTIVE',
         billingSessionId: { in: ['bill-1', 'bill-2'] },
+        OR: [
+          { status: 'ACTIVE' },
+          {
+            status: 'ENDED',
+            endedAt: { gt: new Date(NOW.getTime() - 60_000) },
+          },
+        ],
       },
       select: { billingSessionId: true },
     });
     expect(interpreter.closeUnheldBilling).toHaveBeenCalledTimes(1);
+    expect(interpreter.closeUnheldBilling).toHaveBeenCalledWith('bill-2');
+  });
+
+  it('leaves billing of a session that ended moments ago to close()', async () => {
+    // close() marks the row ENDED first and closes billing after stopping the
+    // agent; closing it here would record a hang-up as 'failed'.
+    const { reconciler, interpreter } = setup({
+      ended: [
+        { billingSessionId: 'bill-2', status: 'ENDED', endedAt: secondsAgo(5) },
+      ],
+      openBilling: [{ id: 'bill-2' }],
+    });
+
+    await reconciler.runOnce(NOW);
+
+    expect(interpreter.closeUnheldBilling).not.toHaveBeenCalled();
+  });
+
+  it('closes billing a session left open after ending over a minute ago', async () => {
+    // close() died, or its billing step failed, before the billing was closed.
+    const { reconciler, interpreter } = setup({
+      ended: [
+        {
+          billingSessionId: 'bill-2',
+          status: 'ENDED',
+          endedAt: secondsAgo(61),
+        },
+      ],
+      openBilling: [{ id: 'bill-2' }],
+    });
+
+    await reconciler.runOnce(NOW);
+
     expect(interpreter.closeUnheldBilling).toHaveBeenCalledWith('bill-2');
   });
 

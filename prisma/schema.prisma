@@ -897,6 +897,8 @@ model AiSession {
 
   @@index([userId, status])
   @@index([contextRef])
+  // The interpreter's reconciler looks for open billing of one feature.
+  @@index([featureKey, status, startedAt])
 }
 
 model UserFeatureToggle {
