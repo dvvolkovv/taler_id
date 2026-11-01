@@ -51,6 +51,9 @@ model User {
   /// Партнёр, который завёл этот аккаунт (партнёрский API). Пока человек не задал пароль TalerID, аккаунт для этого партнёра «управляемый».
   createdByPartnerId   String?
   createdByPartner     Partner?              @relation(fields: [createdByPartnerId], references: [id], onDelete: Restrict)
+  /// Разговоры с переводом: где человек показал QR и где вошёл по чужому.
+  interpreterHosted    InterpreterSession[]  @relation("InterpreterHost")
+  interpreterJoined    InterpreterSession[]  @relation("InterpreterGuest")
 }
 
 model DeviceKey {
@@ -1201,4 +1204,50 @@ model PartnerContact {
 
   @@unique([partnerId, userAId, userBId])
   @@index([userAId, userBId])
+}
+
+enum InterpreterStatus {
+  WAITING
+  ACTIVE
+  ENDED
+}
+
+enum InterpreterEndReason {
+  HANGUP
+  PARTNER_LEFT
+  NO_FUNDS
+  MAX_DURATION
+  TRANSLATION_FAILED
+  AGENT_LOST
+  EXPIRED
+}
+
+/// Разговор с переводом: двое рядом, у каждого свой телефон.
+/// Спека: docs/superpowers/specs/2026-10-31-interpreter-face-to-face-design.md
+model InterpreterSession {
+  id               String                @id @default(uuid())
+  roomName         String                @unique
+  hostId           String
+  guestId          String?
+  hostLang         String
+  guestLang        String?
+  /// sha256 кода из QR. Есть только у ожидающей сессии: вход гостя и завершение его стирают.
+  codeHash         String?               @unique
+  codeExpiresAt    DateTime?
+  status           InterpreterStatus     @default(WAITING)
+  /// AiSession хоста (interpreter): открывается при входе гостя, ожидание не тарифицируется.
+  billingSessionId String?               @db.Uuid
+  /// Когда сверка последний раз видела агента в комнате; отсюда отсчёт до agent_lost.
+  agentSeenAt      DateTime?
+  startedAt        DateTime?
+  endedAt          DateTime?
+  endReason        InterpreterEndReason?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  host             User                  @relation("InterpreterHost", fields: [hostId], references: [id], onDelete: Cascade)
+  guest            User?                 @relation("InterpreterGuest", fields: [guestId], references: [id], onDelete: Cascade)
+
+  @@index([hostId, status])
+  @@index([guestId, status])
+  @@index([status, codeExpiresAt])
 }
