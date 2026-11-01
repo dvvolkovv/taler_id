@@ -9800,7 +9800,7 @@ flutter build apk --debug --flavor dev -t lib/main_dev.dart --dart-define=FLAVOR
 
 ## Исправления по финальному ревью (задачи с буквой)
 
-Финальное ревью ветки (задача 24, шаг 2) нашло то, что ниже. Выполняются после задачи 24, в этом порядке, до задачи 25. Числа в «Ожидается» — от состояния после задачи 24 и предыдущих задач этого раздела.
+Финальное ревью ветки (задача 24, шаг 2) и повторное ревью исправлений нашли то, что ниже. Выполняются после задачи 24, в этом порядке, до задачи 25. Числа в «Ожидается» — от состояния после задачи 24 и предыдущих задач этого раздела.
 
 ### Task 24b: Код из ссылки ведёт ко входу
 
@@ -10729,6 +10729,337 @@ flutter analyze lib/features/interpreter/presentation/bloc/interpreter_bloc.dart
 ```bash
 git add test/features/interpreter/presentation/bloc/interpreter_bloc_test.dart lib/features/interpreter/presentation/bloc/interpreter_bloc.dart
 git commit -m "fix(interpreter): закрытый BLoC завершает живой разговор на сервере" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 24f: Мёртвый код из ссылки не застревает
+
+- Код из ссылки возвращался на старт после каждой ошибки, и после «код истёк», «код уже использован», «это ваш код» и «код не найден» старт снова предлагал «Подключиться» с тем же мёртвым кодом, а «Начать» не появлялось, пока не выйти из раздела. Код живёт 5 минут, так что это реально. Теперь после этих четырёх ошибок старт возвращается без кода; после остальных (сеть, образец голоса, недоступность, средства хоста) код остаётся, чтобы можно было повторить.
+
+**Files:**
+- Modify: `test/features/interpreter/presentation/bloc/interpreter_bloc_test.dart`, `lib/features/interpreter/presentation/bloc/interpreter_bloc.dart`, `lib/features/interpreter/presentation/bloc/interpreter_state.dart`
+
+- [ ] **Step 1: Тесты (падают)**
+
+Патч к `test/features/interpreter/presentation/bloc/interpreter_bloc_test.dart`:
+
+```diff
+--- a/test/features/interpreter/presentation/bloc/interpreter_bloc_test.dart
++++ b/test/features/interpreter/presentation/bloc/interpreter_bloc_test.dart
+@@ -634,6 +634,82 @@
+     }
+   });
+ 
++  group('a dead join code does not stick around', () {
++    const deadCodeKinds = [
++      InterpreterErrorKind.codeExpired,
++      InterpreterErrorKind.codeUsed,
++      InterpreterErrorKind.ownCode,
++      InterpreterErrorKind.codeNotFound,
++    ];
++
++    for (final kind in deadCodeKinds) {
++      blocTest<InterpreterBloc, InterpreterState>(
++        '${kind.name} drops the pending code from Failure.back, and '
++        'BackToStart lands on Choosing without it',
++        build: () {
++          when(() => repo.catalog()).thenAnswer((_) async => _catalog());
++          when(() => langStore.initial(any(), any()))
++              .thenAnswer((_) async => 'ru');
++          when(() => voice.getStatus())
++              .thenAnswer((_) async => const OwnerVoiceStatus(enrolled: true));
++          when(() => repo.join('JOIN99', 'ru'))
++              .thenThrow(InterpreterException(kind));
++          return bloc;
++        },
++        act: (b) async {
++          b.add(const Started(joinCode: 'JOIN99'));
++          await Future.delayed(_tinyDelay);
++          b.add(const JoinPressed('JOIN99'));
++          await Future.delayed(_tinyDelay);
++          b.add(const BackToStart());
++        },
++        expect: () => [
++          const InterpreterLoading(),
++          isA<InterpreterChoosing>()
++              .having((s) => s.joinCode, 'joinCode', 'JOIN99'),
++          const InterpreterWorking(InterpreterWorkKind.joining),
++          isA<InterpreterFailure>()
++              .having((s) => s.kind, 'kind', kind)
++              .having((s) => s.back?.joinCode, 'back.joinCode', isNull),
++          isA<InterpreterChoosing>()
++              .having((s) => s.joinCode, 'joinCode', isNull),
++        ],
++      );
++    }
++
++    blocTest<InterpreterBloc, InterpreterState>(
++      'a non-definitive failure (network) keeps the code so the guest can retry',
++      build: () {
++        when(() => repo.catalog()).thenAnswer((_) async => _catalog());
++        when(() => langStore.initial(any(), any()))
++            .thenAnswer((_) async => 'ru');
++        when(() => voice.getStatus())
++            .thenAnswer((_) async => const OwnerVoiceStatus(enrolled: true));
++        when(() => repo.join('JOIN99', 'ru')).thenThrow(
++            const InterpreterException(InterpreterErrorKind.network));
++        return bloc;
++      },
++      act: (b) async {
++        b.add(const Started(joinCode: 'JOIN99'));
++        await Future.delayed(_tinyDelay);
++        b.add(const JoinPressed('JOIN99'));
++        await Future.delayed(_tinyDelay);
++        b.add(const BackToStart());
++      },
++      expect: () => [
++        const InterpreterLoading(),
++        isA<InterpreterChoosing>()
++            .having((s) => s.joinCode, 'joinCode', 'JOIN99'),
++        const InterpreterWorking(InterpreterWorkKind.joining),
++        isA<InterpreterFailure>()
++            .having((s) => s.kind, 'kind', InterpreterErrorKind.network)
++            .having((s) => s.back?.joinCode, 'back.joinCode', 'JOIN99'),
++        isA<InterpreterChoosing>()
++            .having((s) => s.joinCode, 'joinCode', 'JOIN99'),
++      ],
++    );
++  });
++
+   group('RetryPressed / BackToStart', () {
+     blocTest<InterpreterBloc, InterpreterState>(
+       'RetryPressed from a Failure returns to the Choosing it carries',
+```
+
+Run: `flutter test test/features/interpreter/presentation/bloc/interpreter_bloc_test.dart`
+Expected: `test/features/interpreter/presentation/bloc/interpreter_bloc_test.dart` — падают 4 из 48. Всего тестов 48, падающих 4.
+
+- [ ] **Step 2: Код**
+
+Патч к `lib/features/interpreter/presentation/bloc/interpreter_bloc.dart`:
+
+```diff
+--- a/lib/features/interpreter/presentation/bloc/interpreter_bloc.dart
++++ b/lib/features/interpreter/presentation/bloc/interpreter_bloc.dart
+@@ -642,6 +642,19 @@
+     emit(choosing);
+   }
+ 
++  /// Backend codes that mean the join code itself is now dead, not just this
++  /// one attempt — offering it again on the start view (the deep-linked
++  /// code's whole reason for being there) would only repeat the same
++  /// definitive error, so [_emitRepoFailure] drops it from the Choosing it
++  /// falls back to. Every other code (network, voice print, unavailable,
++  /// host funds…) leaves the code in place so the guest can just retry.
++  static const _deadJoinCodeKinds = {
++    InterpreterErrorKind.codeExpired,
++    InterpreterErrorKind.codeUsed,
++    InterpreterErrorKind.ownCode,
++    InterpreterErrorKind.codeNotFound,
++  };
++
+   /// Centralises what happens to a thrown repo/voice error: a bare
+   /// `voice_print_required` reopens the gate when there is a pending
+   /// action to resume; everything else — including `network`/`unknown` and
+@@ -661,7 +674,15 @@
+       emit(InterpreterNeedVoicePrint(then: pendingThen, code: pendingCode));
+       return;
+     }
+-    emit(InterpreterFailure(kind: kind, back: back ?? _lastChoosing));
++    var effectiveBack = back ?? _lastChoosing;
++    if (_deadJoinCodeKinds.contains(kind) && effectiveBack?.joinCode != null) {
++      effectiveBack = effectiveBack!.withoutJoinCode();
++      // Kept in sync too: RetryPressed/BackToStart falls back to this very
++      // field whenever the caller passing `back` wasn't itself the current
++      // Failure's own `back` (e.g. a failure with no explicit `back` at all).
++      _lastChoosing = effectiveBack;
++    }
++    emit(InterpreterFailure(kind: kind, back: effectiveBack));
+   }
+ 
+   Future<void> _enterRoom({
+```
+
+Патч к `lib/features/interpreter/presentation/bloc/interpreter_state.dart`:
+
+```diff
+--- a/lib/features/interpreter/presentation/bloc/interpreter_state.dart
++++ b/lib/features/interpreter/presentation/bloc/interpreter_state.dart
+@@ -65,6 +65,17 @@
+         catalog: catalog,
+         myLang: myLang ?? this.myLang,
+         joinCode: joinCode,
++      );
++
++  /// Same catalog/language, but with no code left on screen — [copyWith]
++  /// has no way to force a nullable field back to `null`, and this is the
++  /// one place that needs to: a join code the server has just declared dead
++  /// (expired/used/own/not-found) must not keep coming back every time the
++  /// start view is reached, offering a retry that can only repeat the same
++  /// definitive error.
++  InterpreterChoosing withoutJoinCode() => InterpreterChoosing(
++        catalog: catalog,
++        myLang: myLang,
+       );
+ 
+   @override
+```
+
+- [ ] **Step 3: Проверить**
+
+```bash
+flutter test test/features/interpreter 2>&1 | tail -1
+flutter analyze lib/features/interpreter/presentation/bloc/interpreter_bloc.dart lib/features/interpreter/presentation/bloc/interpreter_state.dart test/features/interpreter/presentation/bloc/interpreter_bloc_test.dart
+```
+
+Ожидается: `+245: All tests passed!`; `No issues found!`.
+
+- [ ] **Step 4: Коммит**
+
+```bash
+git add test/features/interpreter/presentation/bloc/interpreter_bloc_test.dart lib/features/interpreter/presentation/bloc/interpreter_bloc.dart lib/features/interpreter/presentation/bloc/interpreter_state.dart
+git commit -m "fix(interpreter): мёртвый код из ссылки не застревает на старте" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 24g: Ссылка на разговор на десктопе никуда не ведёт
+
+- Вошедший пользователь десктопа, открыв `talerid://interp/<код>`, попадал на маршрут, которого на десктопе нет, — страница ошибки go_router. Разбор этой ссылки теперь только на мобильных, как и остальная фича.
+
+**Files:**
+- Modify: `test/core/router/deep_link_handler_test.dart`, `lib/core/router/deep_link_handler.dart`
+
+- [ ] **Step 1: Тесты (падают)**
+
+Патч к `test/core/router/deep_link_handler_test.dart`:
+
+```diff
+--- a/test/core/router/deep_link_handler_test.dart
++++ b/test/core/router/deep_link_handler_test.dart
+@@ -9,7 +9,8 @@
+ import 'package:taler_id_mobile/core/router/deep_link_handler.dart';
+ 
+ void main() {
+-  DeepLinkTarget? resolve(String url) => DeepLinkHandler.resolve(Uri.parse(url));
++  DeepLinkTarget? resolve(String url, {bool isMobile = true}) =>
++      DeepLinkHandler.resolve(Uri.parse(url), isMobile: isMobile);
+ 
+   group('OAuth links', () {
+     const hosts = [
+@@ -72,18 +73,24 @@
+     });
+ 
+     test('interpreter join code over the custom scheme', () {
+-      final t = resolve('talerid://interp/ABCD1234');
++      final t = resolve('talerid://interp/ABCD1234', isMobile: true);
+       expect(t!.location, '/dashboard/interpreter/join/ABCD1234');
+       expect(t.push, isFalse);
+     });
+ 
+     test('interpreter join link tolerates a trailing slash', () {
+-      expect(resolve('talerid://interp/ABCD1234/')!.location,
++      expect(resolve('talerid://interp/ABCD1234/', isMobile: true)!.location,
+           '/dashboard/interpreter/join/ABCD1234');
+     });
+ 
+     test('a talerid link to a different path is not an interpreter join', () {
+-      expect(resolve('talerid://interp/code/extra'), isNull);
++      expect(resolve('talerid://interp/code/extra', isMobile: true), isNull);
++    });
++
++    test(
++        'desktop does not resolve an interpreter join link — the feature '
++        'is mobile-only (see InterpreterEntryButton)', () {
++      expect(resolve('talerid://interp/ABCD1234', isMobile: false), isNull);
+     });
+ 
+     test('an invite link without a token is not acted on', () {
+```
+
+Run: `flutter test test/core/router/deep_link_handler_test.dart`
+Expected: `test/core/router/deep_link_handler_test.dart` — не запускается (нет ещё кода, который он импортирует). Всего тестов 0, падающих 0, не запустившихся файлов 1.
+
+- [ ] **Step 2: Код**
+
+Патч к `lib/core/router/deep_link_handler.dart`:
+
+```diff
+--- a/lib/core/router/deep_link_handler.dart
++++ b/lib/core/router/deep_link_handler.dart
+@@ -3,6 +3,7 @@
+ import 'package:go_router/go_router.dart';
+ 
+ import '../../features/interpreter/domain/interpreter_code.dart';
++import '../platform/platform_utils.dart';
+ import '../utils/constants.dart';
+ 
+ /// Hosts whose OAuth links this app may act on. Mirrors the associated-domains
+@@ -52,7 +53,7 @@
+       return;
+     }
+ 
+-    final target = resolve(uri);
++    final target = resolve(uri, isMobile: PlatformUtils.instance.isMobile);
+     if (target == null) return;
+     // OAuth is pushed so the flow can be backed out of, returning the user to
+     // wherever they were; the rest replace the location.
+@@ -87,7 +88,18 @@
+ 
+   /// Maps an incoming link to the in-app location it should open, or null when
+   /// the app has nothing to do with it.
+-  static DeepLinkTarget? resolve(Uri uri) {
++  ///
++  /// [isMobile] gates the interpreter branch below — kept as an injectable
++  /// parameter rather than this (static, pure) method reading
++  /// [PlatformUtils] itself, the same reason [InterpreterEntryButton] takes
++  /// the real platform check at its own call site: that global reads `false`
++  /// under `flutter test` on every host this repo builds on, which would
++  /// make the interpreter link silently stop resolving in every test, not
++  /// just the desktop ones. Defaults to `true` (the behaviour every other
++  /// branch here already has, since none of them are platform-gated) so
++  /// existing callers — including every test this method already had —
++  /// are unaffected unless they opt in.
++  static DeepLinkTarget? resolve(Uri uri, {bool isMobile = true}) {
+     // OAuth native login (Universal Links / App Links):
+     // https://<host>/oauth/auth?...
+     //
+@@ -147,9 +159,16 @@
+ 
+     // Handle interpreter join links:
+     // talerid://interp/{code}
+-    final interpCode = codeFromScan(uri.toString());
+-    if (interpCode != null) {
+-      return DeepLinkTarget('/dashboard/interpreter/join/$interpCode');
++    //
++    // Mobile-only — the routes this resolves to don't exist on desktop (see
++    // InterpreterEntryButton, which hides the feature's own entry point the
++    // same way), so a logged-in desktop user opening one would otherwise
++    // land on go_router's error page instead of just not matching here.
++    if (isMobile) {
++      final interpCode = codeFromScan(uri.toString());
++      if (interpCode != null) {
++        return DeepLinkTarget('/dashboard/interpreter/join/$interpCode');
++      }
+     }
+ 
+     return null;
+```
+
+- [ ] **Step 3: Проверить**
+
+```bash
+flutter test test/features/interpreter test/core/router 2>&1 | tail -1
+```
+
+Ожидается: `+273: All tests passed!`.
+
+- [ ] **Step 4: Коммит**
+
+```bash
+git add test/core/router/deep_link_handler_test.dart lib/core/router/deep_link_handler.dart
+git commit -m "fix(interpreter): ссылка на разговор с переводом — только на мобильных" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
