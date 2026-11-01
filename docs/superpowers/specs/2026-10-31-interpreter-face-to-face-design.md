@@ -55,7 +55,7 @@
 
 ### Вход в раздел
 - Вкладка «Звонки» (`call_history_screen.dart`): кнопка «Разговор с переводом» в одном ряду с «Создать встречу». Кнопка видна, только если сервер поддерживает режим (см. «Выключатель»).
-- Ассистент: инструмент `open_interpreter({action: 'host' | 'join'})` открывает экран старта или сканер.
+- Ассистент: инструмент `open_interpreter({action: 'host' | 'join'})` открывает экран старта или сканер. Инструменты ассистента объявляются в приложении (`assistant_tools_schema.dart`), поэтому он делается вместе с экранами; на бэкенде — только упоминание в промптах `src/assistant/prompts/`.
 
 ### Образец голоса
 Если у пользователя нет образца (`GET /voice-gate/owner-status`), перед стартом и перед входом открывается существующая шторка `owner_enrollment_sheet.dart`. Без образца дальше пройти нельзя. Сервер проверяет то же самое и отвечает `409 voice_print_required`; на этот ответ приложение тоже открывает шторку записи, а не только показывает текст.
@@ -119,22 +119,40 @@
 | `hostId` / `guestId` | uuid / uuid? | А / Б |
 | `hostLang` / `guestLang` | string / string? | ISO 639-1 |
 | `codeHash` | string?, unique | sha256 действующего кода; после входа Б — `null` |
-| `codeExpiresAt` | timestamptz? | |
+| `codeExpiresAt` | дата-время? | |
 | `status` | enum `waiting`, `active`, `ended` | |
 | `billingSessionId` | uuid? | `AiSession.id` |
-| `startedAt` / `endedAt` | timestamptz? | `startedAt` — момент входа Б |
+| `agentSeenAt` | дата-время? | когда сверка последний раз видела агента в комнате; по нему считается `agent_lost` |
+| `startedAt` / `endedAt` | дата-время? | `startedAt` — момент входа Б |
 | `endReason` | enum? | `hangup`, `partner_left`, `no_funds`, `max_duration`, `translation_failed`, `agent_lost`, `expired` |
-| `createdAt` | timestamptz | |
+| `createdAt` / `updatedAt` | дата-время | |
+
+Статус и причина завершения — enum-ы Prisma в верхнем регистре (как во всей схеме), в API отдаются в нижнем.
 
 **Ручки.** Все под `JwtAuthGuard`, кроме внутренней. Каждая проверяет, что вызывающий — участник именно этой сессии.
+
+Ошибка — код snake_case в `message`, как во всём бэкенде (глобальный фильтр пересобирает тело и `code` не сохранил бы):
+
+| Код | Когда |
+|---|---|
+| `403 interpreter_disabled` | выключатель выключен |
+| `400 unsupported_language` / `400 same_language` | язык не из списка / совпадает с языком хоста |
+| `409 voice_print_required` / `409 host_voice_print_required` | нет пригодного образца у вызывающего / у хоста |
+| `409 already_in_session` | у пользователя уже идёт разговор |
+| `402 insufficient_funds` / `403 feature_disabled` | при создании: у самого хоста нет резерва / выключен тумблер |
+| `402 host_insufficient_funds` / `403 host_feature_disabled` | при входе Б: то же у хоста |
+| `404 code_not_found` / `410 code_expired` / `409 own_code` / `409 code_used` | код |
+| `429 too_many_attempts` | больше 10 попыток входа в минуту |
+| `503 interpreter_unavailable` | агент не стартовал |
+| `404 session_not_found` / `409 not_waiting` | чужая или несуществующая сессия / новый код не в `waiting` |
 
 - `GET /interpreter/languages` → `{enabled, languages: [{code, name}]}`. Список — 81 язык агента, ровно коды `SUPPORTED_LANGS` из `livekit-agent/lang-names.js`, без регионов (`pt`, не `pt-BR`). Импортировать агентский файл в бэкенд нельзя: сборка не кладёт `livekit-agent/` в `dist/`. Поэтому в бэкенде своя копия списка и Jest-тест, который сверяет её с `lang-names.js`. Код, который бэкенд примет, а агент нет, закончится `503` уже после открытия биллинга. Синхронность зависит от пары и сообщается при входе Б.
 - `POST /interpreter/sessions` с телом `{lang}`. Проверки:
   - режим включён;
   - язык поддерживается;
   - у пользователя есть образец голоса;
-  - нет другой сессии в статусе `waiting` или `active`;
-  - резерв на `interpreter` есть (`GatingService`; при `billingEnforced=false` — только запись в лог).
+  - нет сессии в статусе `active` (`409 already_in_session`). Своя сессия в `waiting` закрывается как `hangup`: новый старт заменяет старый QR;
+  - резерв на `interpreter` есть. Проверяет новый `GatingService.assertCanStart` — те же проверки, что в `startSession`, но без открытия биллинг-сессии: `startSession` сразу начал бы списание. При `billingEnforced=false` — только запись в лог.
 
   Создаёт комнату LiveKit `interp-<uuid>` с `maxParticipants: 4` (двое, агент и запас на переподключение), `departureTimeout: 60` и строку `InterpreterSession` в статусе `waiting`. Генерирует код: 8 символов base32 без похожих букв, живёт 5 минут. Ответ: `{sessionId, code, expiresAt, roomName, token, livekitWsUrl}`.
 
@@ -151,9 +169,11 @@
   - у Б есть образец голоса.
 
   Действия строго по порядку:
-  1. Открывает `GatingService.startSession(hostId, 'interpreter', contextRef=sessionId)`. Если при `billingEnforced` у хоста не хватает средств, ответ `402 host_insufficient_funds`, и в сессии ничего не меняется: она остаётся `waiting`, код по-прежнему действует.
+  1. Открывает `GatingService.startSession(hostId, 'interpreter', contextRef=sessionId)`. Если при `billingEnforced` у хоста не хватает средств, ответ `402 host_insufficient_funds` (выключен тумблер — `403 host_feature_disabled`), и в сессии ничего не меняется: она остаётся `waiting`, код по-прежнему действует. Исключения биллинга — обычные `Error`, без перехвата они стали бы `500`.
   2. В одной транзакции, с условием `status = 'waiting'` (защита от двух одновременных входов по одному коду), записывает `guestId`, `guestLang`, `billingSessionId`, ставит `status=active` и `startedAt`, гасит код. Если транзакция не прошла, биллинг-сессия из шага 1 закрывается, ответ `409 code_used`.
-  3. Вызывает `POST {AI_AGENT_URL}/interpreter/start`, тело — в разделе «Агент». Если агент не стартовал, биллинг закрывается, сессия получает `ended/translation_failed`, Б видит ответ `503`.
+  3. Вызывает `POST {AI_AGENT_URL}/interpreter/start`, тело — в разделе «Агент». Если агент не стартовал, биллинг закрывается, сессия получает `ended/translation_failed`, Б видит ответ `503 interpreter_unavailable`.
+
+  Вызовы агента идут с заголовком `x-interpreter-secret`, с таймаутами (`start` — 35 с, `stop` — 10 с, `selftest` — 25 с) и с проверкой `res.ok`. Векторы образцов не попадают ни в логи, ни в тексты ошибок.
 
   Успешный ответ Б: `{sessionId, roomName, token, livekitWsUrl, partner: {firstName, avatarUrl, lang}, directions: {toMe: 'simultaneous'|'phrase', fromMe: 'simultaneous'|'phrase'}}`.
 - `GET /interpreter/sessions/:id` → `{status, endReason, partner, directions, startedAt}`. А узнаёт о входе Б из события LiveKit (подключился участник); эта ручка — запасной путь и источник причины завершения.
@@ -162,14 +182,15 @@
 
 **Периодическая сверка** раз в 10 с, по образцу `MeteringService`:
 - Активная сессия, чья биллинг-сессия уже не `active` (`terminated_no_funds` или `terminated_stale`), закрывается с причиной `no_funds` или `max_duration`.
-- Активная сессия, в комнате которой участника `voice-interpreter` нет дольше 60 с (`listParticipants`), закрывается с причиной `agent_lost`. Так ловятся рестарт и деплой агента: в этих случаях он сам `agent-ended` не пришлёт.
+- Активная сессия, в комнате которой участника `voice-interpreter` нет дольше 60 с (`listParticipants`), закрывается с причиной `agent_lost`. Так ловятся рестарт и деплой агента: в этих случаях он сам `agent-ended` не пришлёт. Отсчёт идёт от `agentSeenAt` (а до первой сверки — от `startedAt`). Если `listParticipants` упал, сверка в этот раз ничего не делает: сбой API — не пустая комната.
 - Сессия в `waiting`, у которой код истёк больше 5 минут назад и новый не запрошен, закрывается с причиной `expired`.
 
-Каждое закрытие по сверке идёт тем же путём, что и `end`: стоп агента, закрытие биллинга, удаление комнаты.
+Каждое закрытие по сверке идёт тем же путём, что и `end`: стоп агента, закрытие биллинга, удаление комнаты. Закрытие условное (`status ≠ ended` → `ended`), поэтому из двух app-нод PROD побочные действия выполняет одна. Биллинг закрывается, только если `AiSession` ещё `active` (`endSession` не идемпотентен): `translation_failed` и `agent_lost` — как `failed`, `no_funds` и `max_duration` — уже закрыт метерингом, остальное — `completed`.
 
 **Безопасность:**
 - Векторы образцов никакая ручка не отдаёт и в логи не пишет. Агенту они уходят только по внутренней сети: localhost на DEV и TEST, VPC `10.130.0.0/20` на PROD.
-- Перебор кодов: около 40 бит, TTL 5 минут, код одноразовый. На ручку входа — `@Throttle` 10 попыток в минуту на пользователя.
+- Перебор кодов: около 40 бит, TTL 5 минут, код одноразовый. На ручку входа — 10 попыток в минуту на пользователя, счётчиком в Redis. `@Throttle` для этого не годится: глобальный `ThrottlerGuard` считает по IP и срабатывает раньше проверки токена.
+- `RoomAccessGuard` пускает любой токен LiveKit своей комнаты на ручки записи встречи, публичного переводчика и чата. Для комнат `interp-*` он отвечает `403 interpreter_room`: иначе участник разговора с переводом мог бы своим токеном включить в нём запись встречи.
 
 **Выключатель** `INTERPRETER_ENABLED` (по умолчанию выключен). В выключенном состоянии `languages` отвечает `enabled=false`, остальные ручки — `403 interpreter_disabled`. Приложение показывает кнопку только при `enabled=true`.
 
