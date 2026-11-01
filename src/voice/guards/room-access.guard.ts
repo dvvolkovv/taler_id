@@ -53,6 +53,14 @@ export class RoomAccessGuard implements CanActivate {
     const req = ctx.switchToHttp().getRequest();
     const roomName: string | undefined = req.params?.roomName;
     if (!roomName) throw new ForbiddenException('room not specified');
+    // Interpreter rooms (src/interpreter) hold two people and the agent, and
+    // both people have a LiveKit grant for the room — which alone passes this
+    // guard. None of the routes behind it (recorder, public translator, room
+    // chat) belongs in such a room: a recorder there would capture the very
+    // speech the agent keeps off the other phone.
+    if (roomName.startsWith('interp-')) {
+      throw new ForbiddenException('interpreter_room');
+    }
 
     const auth = req.headers['authorization'];
     const token =
