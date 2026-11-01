@@ -50,7 +50,7 @@
 8. **Почти одинаковые образцы** (косинус ≥ 0,99) отклоняются на бэкенде до открытия биллинга — `409 same_voice_print`.
 9. **Завершение, отчёт агента, чтение сессии, сверка и самопроверка не зависят от выключателя.** Выключенная функция не должна держать платные разговоры и ломать смоук после деплоя.
 10. **Агент:** время по звуку во фразовом движке; сторож `FATAL interpreter: no translation …`.
-11. **По ревью кода** (раздел «Исправления по ревью», задачи 6b–20b): сверка закрывает биллинг, который не держит ни одна сессия; `agentSeenAt` только вперёд; ручки переводчика звонка, E2EE и музыки ожидания закрыты для `interp-*`; тело не того типа отвечает только кодом поля; в таблице ошибок — `same_voice_print` и `503` при создании.
+11. **По ревью кода** (раздел «Исправления по ревью», задачи 6b–20b и 11d): сверка закрывает биллинг, который не держит ни одна сессия (и не перебивает `close()`; индекс `AiSession` под неё); `agentSeenAt` только вперёд; ручки переводчика звонка, E2EE и музыки ожидания закрыты для `interp-*`; тело не того типа отвечает только кодом поля; в таблице ошибок — `same_voice_print` и `503` при создании.
 
 ## Карта файлов
 
@@ -7621,6 +7621,254 @@ sleep 6; kill -INT $RUN; wait $RUN; echo exit=$?; kill $SRV
 cd ~/Downloads/taler_id_tests
 git add interpreter_test.ts interpreter_selftest.ts
 git commit -m "test: test:interpreter — уборка по Ctrl-C; смоук не печатает токены" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 11d: Сверка биллинга не перебивает `close()`; индекс под неё
+
+Найдена повторным ревью исправлений; выполняется последней в этом разделе, после 20b. Миграция `20261101130000_interpreter_billing_index` применяется на DEV вместе с `20261101120000_interpreter` — `prisma migrate deploy` в задаче 22.
+
+По повторному ревью задачи 11b:
+- **Обычное завершение могло записаться как `failed` (важно).** `close()` сначала переводит строку в `ENDED`, потом останавливает агента (до 10 с) и только потом закрывает биллинг как `completed`. Если в этот промежуток попадал проход 11b, он не находил `ACTIVE`-сессию, закрывал биллинг как `failed`, а `close()` после этого видел уже не `active` и ничего не делал. Денег это не касалось — метеринг всё равно останавливался, — но причина завершения портилась у самого частого пути, и хосту уходил лишний `ai_session_terminated`. Теперь биллинг держит и сессия, закрытая меньше минуты назад. Если `close()` умер до шага биллинга, проход закроет его минутой позже — как и задумано в 11b.
+- **Запрос прохода шёл полным сканом `AiSession`** — растущей таблицы всех AI-функций, раз в 10 с на каждой ноде. Новый индекс `(featureKey, status, startedAt)` точно под него. Отдельная миграция `20261101130000_interpreter_billing_index`; SQL получен `prisma migrate diff` от схемы до правки. Проверено на временной базе: после миграции `migrate diff` против схемы пуст, запрос идёт `Index Scan` по новому индексу.
+
+**Files:**
+- Create: `prisma/migrations/20261101130000_interpreter_billing_index/migration.sql`
+- Modify: `src/interpreter/interpreter.reconciler.spec.ts`, `src/interpreter/interpreter.reconciler.ts`, `prisma/schema.prisma`, `docs/superpowers/specs/2026-10-31-interpreter-face-to-face-design.md`
+
+- [ ] **Step 1: Тесты (падают)**
+
+Патч к `src/interpreter/interpreter.reconciler.spec.ts`:
+
+```diff
+--- a/src/interpreter/interpreter.reconciler.spec.ts
++++ b/src/interpreter/interpreter.reconciler.spec.ts
+@@ -13,10 +13,20 @@
+   ...over,
+ });
+ 
++/** Whether a row satisfies the reconciler's status filter: one alternative or an OR. */
++function matches(row: any, where: any): boolean {
++  return (where.OR ?? [where]).some(
++    (alt: any) =>
++      alt.status === row.status &&
++      (!alt.endedAt || row.endedAt.getTime() > alt.endedAt.gt.getTime()),
++  );
++}
++
+ function setup(
+   rows: {
+     active?: unknown[];
+     waiting?: unknown[];
++    ended?: unknown[];
+     openBilling?: { id: string }[];
+   } = {},
+ ) {
+@@ -24,8 +34,17 @@
+     interpreterSession: {
+       findMany: jest.fn(async ({ where }: any) => {
+         if (where.billingSessionId) {
+-          return ((rows.active ?? []) as any[]).filter((s) =>
+-            where.billingSessionId.in.includes(s.billingSessionId),
++          const rowsWithStatus = [
++            ...((rows.active ?? []) as any[]).map((s) => ({
++              status: 'ACTIVE',
++              ...s,
++            })),
++            ...((rows.ended ?? []) as any[]),
++          ];
++          return rowsWithStatus.filter(
++            (s) =>
++              where.billingSessionId.in.includes(s.billingSessionId) &&
++              matches(s, where),
+           );
+         }
+         return where.status === 'ACTIVE'
+@@ -167,7 +186,7 @@
+ });
+ 
+ describe('InterpreterReconciler: billing no session holds', () => {
+-  it('closes open interpreter billing that no ACTIVE session holds', async () => {
++  it('closes open interpreter billing that no session holds', async () => {
+     // bill-1 belongs to a live conversation; bill-2 was opened by a join that
+     // died before claiming the code, or left open by a failed cleanup.
+     const { reconciler, prisma, interpreter } = setup({
+@@ -188,12 +207,51 @@
+     });
+     expect(prisma.interpreterSession.findMany).toHaveBeenCalledWith({
+       where: {
+-        status: 'ACTIVE',
+         billingSessionId: { in: ['bill-1', 'bill-2'] },
++        OR: [
++          { status: 'ACTIVE' },
++          {
++            status: 'ENDED',
++            endedAt: { gt: new Date(NOW.getTime() - 60_000) },
++          },
++        ],
+       },
+       select: { billingSessionId: true },
+     });
+     expect(interpreter.closeUnheldBilling).toHaveBeenCalledTimes(1);
++    expect(interpreter.closeUnheldBilling).toHaveBeenCalledWith('bill-2');
++  });
++
++  it('leaves billing of a session that ended moments ago to close()', async () => {
++    // close() marks the row ENDED first and closes billing after stopping the
++    // agent; closing it here would record a hang-up as 'failed'.
++    const { reconciler, interpreter } = setup({
++      ended: [
++        { billingSessionId: 'bill-2', status: 'ENDED', endedAt: secondsAgo(5) },
++      ],
++      openBilling: [{ id: 'bill-2' }],
++    });
++
++    await reconciler.runOnce(NOW);
++
++    expect(interpreter.closeUnheldBilling).not.toHaveBeenCalled();
++  });
++
++  it('closes billing a session left open after ending over a minute ago', async () => {
++    // close() died, or its billing step failed, before the billing was closed.
++    const { reconciler, interpreter } = setup({
++      ended: [
++        {
++          billingSessionId: 'bill-2',
++          status: 'ENDED',
++          endedAt: secondsAgo(61),
++        },
++      ],
++      openBilling: [{ id: 'bill-2' }],
++    });
++
++    await reconciler.runOnce(NOW);
++
+     expect(interpreter.closeUnheldBilling).toHaveBeenCalledWith('bill-2');
+   });
+ 
+```
+
+Run: `npx jest src/interpreter src/billing src/voice/guards`
+Expected: `src/interpreter/interpreter.reconciler.spec.ts` — падают 2 из 17. Всего наборов 19, тестов 200, падающих 2.
+
+- [ ] **Step 2: Код**
+
+Патч к `src/interpreter/interpreter.reconciler.ts`:
+
+```diff
+--- a/src/interpreter/interpreter.reconciler.ts
++++ b/src/interpreter/interpreter.reconciler.ts
+@@ -13,6 +13,9 @@
+ const WAITING_GRACE_MS = 5 * 60_000;
+ // A join links the billing it opened to the session a moment later.
+ const UNLINKED_BILLING_GRACE_MS = 60_000;
++// close() marks a session ENDED first and closes its billing after stopping
++// the agent (up to 10 s): until then that billing is still its to close.
++const CLOSING_GRACE_MS = 60_000;
+ 
+ const SESSION_FIELDS = {
+   id: true,
+@@ -88,9 +91,11 @@
+ 
+   /**
+    * The passes above start from a session row, so they never see billing that
+-   * no ACTIVE session holds: a join that died between opening billing and
+-   * claiming the code, a cleanup step that failed after a lost claim or in
+-   * close(). Metering would charge the host for it up to its 2-hour cap.
++   * no session holds: a join that died between opening billing and claiming
++   * the code, a cleanup step that failed after a lost claim or in close().
++   * Metering would charge the host for it up to its 2-hour cap. A session
++   * that ended under a minute ago still holds its billing: closing it here
++   * would race close() and record a hang-up as 'failed'.
+    */
+   private async reconcileBilling(now: Date): Promise<void> {
+     let unheld: string[];
+@@ -108,8 +113,14 @@
+       if (open.length === 0) return;
+       const held = await this.prisma.interpreterSession.findMany({
+         where: {
+-          status: 'ACTIVE',
+           billingSessionId: { in: open.map((b) => b.id) },
++          OR: [
++            { status: 'ACTIVE' },
++            {
++              status: 'ENDED',
++              endedAt: { gt: new Date(now.getTime() - CLOSING_GRACE_MS) },
++            },
++          ],
+         },
+         select: { billingSessionId: true },
+       });
+```
+
+Патч к `prisma/schema.prisma`:
+
+```diff
+--- a/prisma/schema.prisma
++++ b/prisma/schema.prisma
+@@ -897,6 +897,8 @@
+ 
+   @@index([userId, status])
+   @@index([contextRef])
++  // The interpreter's reconciler looks for open billing of one feature.
++  @@index([featureKey, status, startedAt])
+ }
+ 
+ model UserFeatureToggle {
+```
+
+`prisma/migrations/20261101130000_interpreter_billing_index/migration.sql` целиком:
+
+```sql
+-- Индекс под сверку разговора с переводом: раз в 10 с на каждой app-ноде она
+-- ищет открытый биллинг одной статьи (featureKey, status = 'active', startedAt).
+-- Без индекса это полный проход по "AiSession" — растущей таблице всех
+-- AI-функций.
+--
+-- Пока индекс строится, CREATE INDEX держит на "AiSession" блокировку, при
+-- которой записи метеринга (раз в 10 с) ждут. Таблица небольшая, строится
+-- быстро; короткий lock_timeout не даёт миграции самой встать в очередь за
+-- длинной транзакцией и задержать за собой всех. Упала по таймауту — файл
+-- откатится целиком, перед повтором:
+--   npx prisma migrate resolve --rolled-back 20261101130000_interpreter_billing_index
+SET LOCAL lock_timeout = '5s';
+
+-- CreateIndex
+CREATE INDEX "AiSession_featureKey_status_startedAt_idx" ON "AiSession"("featureKey", "status", "startedAt");
+```
+
+Патч к `docs/superpowers/specs/2026-10-31-interpreter-face-to-face-design.md`:
+
+```diff
+--- a/docs/superpowers/specs/2026-10-31-interpreter-face-to-face-design.md
++++ b/docs/superpowers/specs/2026-10-31-interpreter-face-to-face-design.md
+@@ -187,7 +187,7 @@
+ - Активная сессия, чья биллинг-сессия уже не `active` (`terminated_no_funds` или `terminated_stale`), закрывается с причиной `no_funds` или `max_duration`.
+ - Активная сессия, в комнате которой участника `voice-interpreter` нет дольше 60 с (`listParticipants`), закрывается с причиной `agent_lost`. Так ловятся рестарт и деплой агента: в этих случаях он сам `agent-ended` не пришлёт. Отсчёт идёт от `agentSeenAt` (а до первой сверки — от `startedAt`). Если `listParticipants` упал, сверка в этот раз ничего не делает: сбой API — не пустая комната.
+ - Сессия в `waiting`, у которой код истёк больше 5 минут назад и новый не запрошен, закрывается с причиной `expired`.
+-- Биллинг `interpreter` в `active`, открытый больше минуты назад, который не держит ни одна активная сессия, закрывается как `failed`. Остальные проходы идут от строки сессии и такой биллинг не видят: вход Б умер между открытием биллинга и захватом кода, или не прошла уборка после проигранного захвата либо в `close()`. Иначе метеринг списывал бы с хоста до потолка в 2 часа. Минута — запас на вход, который как раз открыл биллинг и вот-вот его привяжет.
++- Биллинг `interpreter` в `active`, открытый больше минуты назад, который не держит ни одна активная сессия, закрывается как `failed`. Остальные проходы идут от строки сессии и такой биллинг не видят: вход Б умер между открытием биллинга и захватом кода, или не прошла уборка после проигранного захвата либо в `close()`. Иначе метеринг списывал бы с хоста до потолка в 2 часа. Минута — запас на вход, который как раз открыл биллинг и вот-вот его привяжет. Сессия, закрытая меньше минуты назад, тоже держит свой биллинг: `close()` ставит `ended` сразу, а биллинг закрывает после стопа агента (до 10 с), и сверка не должна записать обычное завершение как `failed`. Под этот запрос — индекс `AiSession(featureKey, status, startedAt)`.
+ 
+ Каждое закрытие по сверке идёт тем же путём, что и `end`: стоп агента, закрытие биллинга, удаление комнаты. Закрытие условное (`status ≠ ended` → `ended`), поэтому из двух app-нод PROD побочные действия выполняет одна. Биллинг закрывается, только если `AiSession` ещё `active` (`endSession` не идемпотентен): `translation_failed` и `agent_lost` — как `failed`, `no_funds` и `max_duration` — уже закрыт метерингом, остальное — `completed`.
+ 
+```
+
+- [ ] **Step 3: Проверить**
+
+```bash
+npx jest src/interpreter src/billing src/voice/guards 2>&1 | tail -6
+npx tsc --noEmit -p tsconfig.build.json; echo tsc-exit=$?
+DATABASE_URL=postgresql://u:p@localhost:5432/x npx prisma validate
+```
+
+Ожидается: 19 наборов, 200 тестов, все зелёные; `tsc-exit=0`; `The schema at prisma/schema.prisma is valid`.
+
+- [ ] **Step 4: Коммит**
+
+```bash
+git add src/interpreter/interpreter.reconciler.spec.ts src/interpreter/interpreter.reconciler.ts prisma/schema.prisma prisma/migrations/20261101130000_interpreter_billing_index/migration.sql docs/superpowers/specs/2026-10-31-interpreter-face-to-face-design.md
+git commit -m "fix(interpreter): сверка биллинга не перебивает close(); индекс AiSession под неё" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
