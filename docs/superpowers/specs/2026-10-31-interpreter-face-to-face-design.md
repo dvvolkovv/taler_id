@@ -122,7 +122,7 @@
 | `codeExpiresAt` | дата-время? | |
 | `status` | enum `waiting`, `active`, `ended` | |
 | `billingSessionId` | uuid? | `AiSession.id` |
-| `agentSeenAt` | дата-время? | когда сверка последний раз видела агента в комнате; по нему считается `agent_lost` |
+| `agentSeenAt` | дата-время? | когда сверка последний раз видела агента в комнате; по нему считается `agent_lost`. Пишется только вперёд: запоздавшая запись медленной сверки с другой ноды не откатывает отметку назад |
 | `startedAt` / `endedAt` | дата-время? | `startedAt` — момент входа Б |
 | `endReason` | enum? | `hangup`, `partner_left`, `no_funds`, `max_duration`, `translation_failed`, `agent_lost`, `expired` |
 | `createdAt` / `updatedAt` | дата-время | |

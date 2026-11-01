@@ -93,8 +93,13 @@ describe('InterpreterReconciler: active sessions', () => {
     await reconciler.runOnce(NOW);
 
     expect(livekit.agentPresent).toHaveBeenCalledWith('interp-room-1');
+    // Only forward: another node may have written a later sighting already.
     expect(prisma.interpreterSession.updateMany).toHaveBeenCalledWith({
-      where: { id: 'sess-1', status: 'ACTIVE' },
+      where: {
+        id: 'sess-1',
+        status: 'ACTIVE',
+        OR: [{ agentSeenAt: null }, { agentSeenAt: { lt: NOW } }],
+      },
       data: { agentSeenAt: NOW },
     });
     expect(interpreter.close).not.toHaveBeenCalled();

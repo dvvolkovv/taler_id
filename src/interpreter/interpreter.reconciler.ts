@@ -150,7 +150,14 @@ export class InterpreterReconciler {
     if (present === null) return;
     if (present) {
       await this.prisma.interpreterSession.updateMany({
-        where: { id: s.id, status: 'ACTIVE' },
+        // Only forward: a slow tick on one node must not overwrite a fresher
+        // sighting another node wrote meanwhile, or the 60 s would count
+        // from too early and could end a conversation the agent never left.
+        where: {
+          id: s.id,
+          status: 'ACTIVE',
+          OR: [{ agentSeenAt: null }, { agentSeenAt: { lt: now } }],
+        },
         data: { agentSeenAt: now },
       });
       return;
