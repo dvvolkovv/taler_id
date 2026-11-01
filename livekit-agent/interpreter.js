@@ -89,7 +89,7 @@ function readConfig(env = process.env) {
     transcribeModel: optional(env.INTERPRETER_TRANSCRIBE_MODEL, 'gpt-4o-mini-transcribe'),
     noiseReduction: optional(env.INTERPRETER_NOISE_REDUCTION, 'near_field'),
     embedUrl: env.VOICE_EMBED_URL || 'http://127.0.0.1:18082',
-    threshold: num(env.INTERPRETER_VOICE_THRESHOLD, 0.25),
+    threshold: num(env.INTERPRETER_VOICE_THRESHOLD, 0.2),
     margin: num(env.INTERPRETER_VOICE_MARGIN, 0.05),
     // A chunk under ~100 ms floods the embed service (shared with the assistant's
     // voice gate); a zero one would hang the gate.
