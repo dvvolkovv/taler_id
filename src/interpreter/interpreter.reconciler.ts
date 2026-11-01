@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Interval } from '@nestjs/schedule';
 import type { InterpreterEndReason } from '@prisma/client';
+import { FEATURE_KEYS } from '../billing/constants/feature-keys';
 import { PrismaService } from '../prisma/prisma.service';
 import { InterpreterLivekitService } from './interpreter-livekit.service';
 import { InterpreterService } from './interpreter.service';
@@ -10,6 +11,8 @@ import { InterpreterService } from './interpreter.service';
 const AGENT_LOST_AFTER_MS = 60_000;
 // After a code expires the host can still ask for a new one this long.
 const WAITING_GRACE_MS = 5 * 60_000;
+// A join links the billing it opened to the session a moment later.
+const UNLINKED_BILLING_GRACE_MS = 60_000;
 
 const SESSION_FIELDS = {
   id: true,
@@ -32,6 +35,7 @@ type ReconciledSession = {
  * funds, the 2-hour cap), an agent gone without reporting (restart, deploy),
  * a QR nobody scanned. Every end goes through InterpreterService.close, the
  * same path as a hang-up. Runs on every app node; close() makes that safe.
+ * Last, it closes interpreter billing that no ACTIVE session holds.
  */
 @Injectable()
 export class InterpreterReconciler {
@@ -79,6 +83,49 @@ export class InterpreterReconciler {
         }),
       (s) => this.interpreter.close(s, 'EXPIRED', { stopAgent: false }),
     );
+    await this.reconcileBilling(now);
+  }
+
+  /**
+   * The passes above start from a session row, so they never see billing that
+   * no ACTIVE session holds: a join that died between opening billing and
+   * claiming the code, a cleanup step that failed after a lost claim or in
+   * close(). Metering would charge the host for it up to its 2-hour cap.
+   */
+  private async reconcileBilling(now: Date): Promise<void> {
+    let unheld: string[];
+    try {
+      const open = await this.prisma.aiSession.findMany({
+        where: {
+          featureKey: FEATURE_KEYS.INTERPRETER,
+          status: 'active',
+          startedAt: {
+            lt: new Date(now.getTime() - UNLINKED_BILLING_GRACE_MS),
+          },
+        },
+        select: { id: true },
+      });
+      if (open.length === 0) return;
+      const held = await this.prisma.interpreterSession.findMany({
+        where: {
+          status: 'ACTIVE',
+          billingSessionId: { in: open.map((b) => b.id) },
+        },
+        select: { billingSessionId: true },
+      });
+      const heldIds = new Set(held.map((s) => s.billingSessionId));
+      unheld = open.map((b) => b.id).filter((id) => !heldIds.has(id));
+    } catch (e) {
+      this.log.warn(`loading open billing failed: ${String(e)}`);
+      return;
+    }
+    for (const id of unheld) {
+      try {
+        await this.interpreter.closeUnheldBilling(id);
+      } catch (e) {
+        this.log.warn(`billing ${id}: closing failed: ${String(e)}`);
+      }
+    }
   }
 
   private async reconcileActive(

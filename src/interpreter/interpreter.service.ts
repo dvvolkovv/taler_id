@@ -521,6 +521,18 @@ export class InterpreterService {
     }
   }
 
+  /**
+   * Billing the reconciler found open with no ACTIVE session holding it.
+   * Nothing else would ever close it: every other path starts from the
+   * session row, and the row does not lead here.
+   */
+  async closeUnheldBilling(billingSessionId: string): Promise<void> {
+    this.log.warn(
+      `billing ${billingSessionId}: open with no active session, closing`,
+    );
+    await this.endBillingIfActive(billingSessionId, 'failed');
+  }
+
   /** Metering may have closed it already; endSession would overwrite that status. */
   private async endBillingIfActive(
     billingSessionId: string,

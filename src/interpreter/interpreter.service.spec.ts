@@ -893,6 +893,29 @@ describe('close', () => {
   });
 });
 
+describe('closeUnheldBilling', () => {
+  it('ends billing the reconciler found with no session holding it', async () => {
+    const { service, gating, prisma } = setup();
+
+    await service.closeUnheldBilling('bill-9');
+
+    expect(prisma.aiSession.findUnique).toHaveBeenCalledWith({
+      where: { id: 'bill-9' },
+      select: { status: true },
+    });
+    expect(gating.endSession).toHaveBeenCalledWith('bill-9', 'failed');
+  });
+
+  it('leaves it alone when metering or another node ended it first', async () => {
+    const { service, gating, prisma } = setup();
+    prisma.aiSession.findUnique.mockResolvedValue({ status: 'failed' });
+
+    await service.closeUnheldBilling('bill-9');
+
+    expect(gating.endSession).not.toHaveBeenCalled();
+  });
+});
+
 describe('selftest', () => {
   it("passes the agent's answer through", async () => {
     const { service, agent } = setup();

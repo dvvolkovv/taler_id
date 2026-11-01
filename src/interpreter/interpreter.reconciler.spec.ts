@@ -13,20 +13,37 @@ const active = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-function setup(rows: { active?: unknown[]; waiting?: unknown[] } = {}) {
+function setup(
+  rows: {
+    active?: unknown[];
+    waiting?: unknown[];
+    openBilling?: { id: string }[];
+  } = {},
+) {
   const prisma = {
     interpreterSession: {
-      findMany: jest.fn(async ({ where }: any) =>
-        where.status === 'ACTIVE' ? (rows.active ?? []) : (rows.waiting ?? []),
-      ),
+      findMany: jest.fn(async ({ where }: any) => {
+        if (where.billingSessionId) {
+          return ((rows.active ?? []) as any[]).filter((s) =>
+            where.billingSessionId.in.includes(s.billingSessionId),
+          );
+        }
+        return where.status === 'ACTIVE'
+          ? (rows.active ?? [])
+          : (rows.waiting ?? []);
+      }),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
     aiSession: {
       findUnique: jest.fn().mockResolvedValue({ status: 'active' }),
+      findMany: jest.fn(async () => rows.openBilling ?? []),
     },
   };
   const livekit = { agentPresent: jest.fn().mockResolvedValue(true) };
-  const interpreter = { close: jest.fn().mockResolvedValue(undefined) };
+  const interpreter = {
+    close: jest.fn().mockResolvedValue(undefined),
+    closeUnheldBilling: jest.fn().mockResolvedValue(undefined),
+  };
   const reconciler = new InterpreterReconciler(
     prisma as any,
     livekit as any,
@@ -141,6 +158,71 @@ describe('InterpreterReconciler: waiting sessions', () => {
     expect(interpreter.close).toHaveBeenCalledWith(stale, 'EXPIRED', {
       stopAgent: false,
     });
+  });
+});
+
+describe('InterpreterReconciler: billing no session holds', () => {
+  it('closes open interpreter billing that no ACTIVE session holds', async () => {
+    // bill-1 belongs to a live conversation; bill-2 was opened by a join that
+    // died before claiming the code, or left open by a failed cleanup.
+    const { reconciler, prisma, interpreter } = setup({
+      active: [active()],
+      openBilling: [{ id: 'bill-1' }, { id: 'bill-2' }],
+    });
+
+    await reconciler.runOnce(NOW);
+
+    expect(prisma.aiSession.findMany).toHaveBeenCalledWith({
+      where: {
+        featureKey: 'interpreter',
+        status: 'active',
+        // A join that is still running gets a minute to link it.
+        startedAt: { lt: new Date(NOW.getTime() - 60_000) },
+      },
+      select: { id: true },
+    });
+    expect(prisma.interpreterSession.findMany).toHaveBeenCalledWith({
+      where: {
+        status: 'ACTIVE',
+        billingSessionId: { in: ['bill-1', 'bill-2'] },
+      },
+      select: { billingSessionId: true },
+    });
+    expect(interpreter.closeUnheldBilling).toHaveBeenCalledTimes(1);
+    expect(interpreter.closeUnheldBilling).toHaveBeenCalledWith('bill-2');
+  });
+
+  it('does not look for sessions when no interpreter billing is open', async () => {
+    const { reconciler, prisma, interpreter } = setup();
+
+    await reconciler.runOnce(NOW);
+
+    // The active and the waiting pass; no third lookup.
+    expect(prisma.interpreterSession.findMany).toHaveBeenCalledTimes(2);
+    expect(interpreter.closeUnheldBilling).not.toHaveBeenCalled();
+  });
+
+  it('goes on with the other billing sessions when one fails to close', async () => {
+    const { reconciler, interpreter } = setup({
+      openBilling: [{ id: 'bill-2' }, { id: 'bill-3' }],
+    });
+    interpreter.closeUnheldBilling.mockRejectedValueOnce(new Error('db down'));
+
+    await expect(reconciler.runOnce(NOW)).resolves.toBeUndefined();
+    expect(interpreter.closeUnheldBilling).toHaveBeenCalledWith('bill-3');
+  });
+
+  it('runs even when the session passes could not load', async () => {
+    const { reconciler, prisma, interpreter } = setup({
+      openBilling: [{ id: 'bill-2' }],
+    });
+    prisma.interpreterSession.findMany
+      .mockRejectedValueOnce(new Error('db down'))
+      .mockRejectedValueOnce(new Error('db down'));
+
+    await reconciler.runOnce(NOW);
+
+    expect(interpreter.closeUnheldBilling).toHaveBeenCalledWith('bill-2');
   });
 });
 
