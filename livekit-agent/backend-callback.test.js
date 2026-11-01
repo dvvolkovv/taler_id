@@ -82,14 +82,15 @@ test('a backend that takes the connection and never answers is cut off at timeou
 });
 
 test('a response that stalls after its headers does not keep the connection open', async () => {
-  let open = 0;
+  // The socket that carried the request, not every connection: after it
+  // closes, Node 20's fetch opens one more idle connection of its own and
+  // drops it about 3 s later.
+  let requestSocketClosed = null;
   const server = http.createServer((req, res) => {
+    requestSocketClosed = false;
+    req.socket.on('close', () => { requestSocketClosed = true; });
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.write('{"ok":true'); // and nothing more
-  });
-  server.on('connection', (socket) => {
-    open += 1;
-    socket.on('close', () => { open -= 1; });
   });
   const url = await listen(server);
   try {
@@ -98,7 +99,7 @@ test('a response that stalls after its headers does not keep the connection open
       { ok: true, status: 200 },
     );
     await new Promise((resolve) => setTimeout(resolve, 300));
-    assert.strictEqual(open, 0);
+    assert.strictEqual(requestSocketClosed, true);
   } finally {
     server.closeAllConnections();
     server.close();
