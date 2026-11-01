@@ -86,15 +86,22 @@ export class InterpreterAgentClient {
 
   /** The agent's own answer and status; 503 when there was none. */
   async selftest(): Promise<{ status: number; body: unknown }> {
+    let status = 0;
     try {
       const res = await this.call(
         'GET',
         '/interpreter/selftest',
         SELFTEST_TIMEOUT_MS,
       );
-      return { status: res.status, body: await res.json() };
+      status = res.status;
+      return { status, body: await res.json() };
     } catch (e) {
-      return { status: 503, body: { ok: false, reason: errorText(e) } };
+      // An answer that is not JSON came from a proxy in front of the agent
+      // (nginx's 502 page): its status says more than the parser's error.
+      const reason = status
+        ? `agent answered ${status}, not JSON`
+        : errorText(e);
+      return { status: 503, body: { ok: false, reason } };
     }
   }
 

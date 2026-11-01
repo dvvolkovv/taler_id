@@ -178,6 +178,17 @@ describe('InterpreterAgentClient', () => {
       expect(timeout).toHaveBeenCalledWith(25_000);
     });
 
+    it('answers 503 with the status of an answer that is not JSON', async () => {
+      fetchFn.mockResolvedValue(
+        new Response('<html>502 Bad Gateway</html>', { status: 502 }),
+      );
+
+      await expect(client.selftest()).resolves.toEqual({
+        status: 503,
+        body: { ok: false, reason: 'agent answered 502, not JSON' },
+      });
+    });
+
     it('answers 503 when the agent cannot be reached', async () => {
       fetchFn.mockRejectedValue(
         new DOMException('The operation timed out.', 'TimeoutError'),

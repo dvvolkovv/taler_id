@@ -42,10 +42,28 @@ describe('interpreter DTOs', () => {
         code: 'A'.repeat(33),
         lang: 'de',
       }),
-    ).toHaveLength(1);
-    expect(
-      await messages(JoinInterpreterSessionDto, { code: 42, lang: 'de' }),
-    ).not.toEqual([]);
+    ).toEqual(['code_not_found']);
+  });
+
+  it('answer a field of the wrong type with the field code alone', async () => {
+    // A failed IsString does not stop Matches or MaxLength: both report.
+    for (const bad of [42, null, ['ru'], { a: 1 }]) {
+      for (const msg of [
+        ...(await messages(CreateInterpreterSessionDto, { lang: bad })),
+        ...(await messages(JoinInterpreterSessionDto, {
+          code: 'X',
+          lang: bad,
+        })),
+      ]) {
+        expect(msg).toBe('unsupported_language');
+      }
+      const code = await messages(JoinInterpreterSessionDto, {
+        code: bad,
+        lang: 'de',
+      });
+      expect(code.length).toBeGreaterThan(0);
+      for (const msg of code) expect(msg).toBe('code_not_found');
+    }
   });
 
   it('take only the endings the agent reports', async () => {
