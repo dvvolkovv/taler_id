@@ -340,6 +340,13 @@ export class CalendarService {
       include: { user: { select: { fcmToken: true } } },
     });
     for (const event of pending) {
+      // Claimed before the push: both app nodes run this every minute and see
+      // the same due event, and without the claim each would push it.
+      const { count } = await this.prisma.calendarEvent.updateMany({
+        where: { id: event.id, reminderSent: false },
+        data: { reminderSent: true },
+      });
+      if (count === 0) continue;
       try {
         if (event.user?.fcmToken) {
           const body = event.displayTime
@@ -352,12 +359,17 @@ export class CalendarService {
             event.id,
           );
         }
-        await this.prisma.calendarEvent.update({
-          where: { id: event.id },
-          data: { reminderSent: true },
-        });
       } catch (e) {
         this.logger.error('Reminder failed: ' + event.id, e);
+        // Given back so the next minute tries again. Only a throw here gets a
+        // retry: FcmService logs a failed push itself and does not throw, so a
+        // push that did not go through stays marked sent, as before the claim.
+        await this.prisma.calendarEvent
+          .updateMany({
+            where: { id: event.id },
+            data: { reminderSent: false },
+          })
+          .catch(() => {});
       }
     }
   }

@@ -131,3 +131,63 @@ describe('CalendarService.update', () => {
     ).rejects.toBeInstanceOf(ConflictException);
   });
 });
+
+describe('CalendarService.processReminders', () => {
+  let service: CalendarService;
+  let prisma: any;
+  let fcm: { sendCalendarReminder: jest.Mock };
+  const due = { id: 'ev-1', title: 'Coffee', displayTime: null, user: { fcmToken: 'tok' } };
+
+  beforeEach(async () => {
+    prisma = {
+      calendarEvent: {
+        findMany: jest.fn().mockResolvedValue([due]),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        update: jest.fn(),
+      },
+    };
+    fcm = { sendCalendarReminder: jest.fn().mockResolvedValue(undefined) };
+    const mod = await Test.createTestingModule({
+      providers: [
+        CalendarService,
+        { provide: PrismaService, useValue: prisma },
+        { provide: FcmService, useValue: fcm },
+      ],
+    }).compile();
+    service = mod.get(CalendarService);
+  });
+
+  it('claims the reminder before pushing it', async () => {
+    await service.processReminders();
+
+    expect(prisma.calendarEvent.updateMany).toHaveBeenCalledWith({
+      where: { id: 'ev-1', reminderSent: false },
+      data: { reminderSent: true },
+    });
+    expect(prisma.calendarEvent.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
+      fcm.sendCalendarReminder.mock.invocationCallOrder[0],
+    );
+    expect(fcm.sendCalendarReminder).toHaveBeenCalledWith('tok', 'Напоминание', 'Coffee', 'ev-1');
+  });
+
+  it('pushes nothing when another run claimed it first', async () => {
+    // Two app nodes run this every minute and both see the same due event.
+    prisma.calendarEvent.updateMany.mockResolvedValue({ count: 0 });
+
+    await service.processReminders();
+
+    expect(fcm.sendCalendarReminder).not.toHaveBeenCalled();
+  });
+
+  it('gives the claim back when something throws, so the next minute retries', async () => {
+    fcm.sendCalendarReminder.mockRejectedValue(new Error('boom'));
+    jest.spyOn((service as any).logger, 'error').mockImplementation(() => undefined);
+
+    await service.processReminders();
+
+    expect(prisma.calendarEvent.updateMany).toHaveBeenLastCalledWith({
+      where: { id: 'ev-1' },
+      data: { reminderSent: false },
+    });
+  });
+});
