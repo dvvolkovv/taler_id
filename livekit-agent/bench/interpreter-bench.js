@@ -81,13 +81,20 @@ async function createBot({ identity, roomName, listenTo }) {
       captions.push({ t: Date.now(), msg: JSON.parse(Buffer.from(payload).toString()) });
     } catch (_) { /* not ours */ }
   });
-  await room.connect(process.env.LIVEKIT_WS_URL || 'ws://localhost:7880', await tokenFor(identity, roomName), {
-    autoSubscribe: true,
-    dynacast: false,
-  });
-  const source = new rtc.AudioSource(SR, 1);
-  const track = rtc.LocalAudioTrack.createAudioTrack('mic', source);
-  await room.localParticipant.publishTrack(track, new rtc.TrackPublishOptions({ source: rtc.TrackSource.SOURCE_MICROPHONE }));
+  let source;
+  try {
+    await room.connect(process.env.LIVEKIT_WS_URL || 'ws://localhost:7880', await tokenFor(identity, roomName), {
+      autoSubscribe: true,
+      dynacast: false,
+    });
+    source = new rtc.AudioSource(SR, 1);
+    const track = rtc.LocalAudioTrack.createAudioTrack('mic', source);
+    await room.localParticipant.publishTrack(track, new rtc.TrackPublishOptions({ source: rtc.TrackSource.SOURCE_MICROPHONE }));
+  } catch (e) {
+    // Joined but not publishing: leave rather than stay in a room on a shared server.
+    await room.disconnect().catch(() => {});
+    throw e;
+  }
 
   const clips = []; // { at, samples, gain }
   let running = true;
@@ -110,6 +117,9 @@ async function createBot({ identity, roomName, listenTo }) {
       await sleep(t0 + (n + 1) * 10 - Date.now());
     }
   })();
+  // Handled at once: a captureFrame failure would otherwise be an unhandled
+  // rejection that kills the process before any cleanup. close() still awaits it.
+  pump.catch(() => {});
 
   return {
     heard,
@@ -153,26 +163,46 @@ async function sameLanguage(input, target) {
     },
     onTranslationText: (text) => { transcript += text; },
   });
-  await sleep(1500);
-  for (let i = 0; i < samples.length; i += 2400) {
-    session.sendAudio(samples.subarray(i, i + 2400));
-    await sleep(100);
+  try {
+    await sleep(1500);
+    for (let i = 0; i < samples.length; i += 2400) {
+      session.sendAudio(samples.subarray(i, i + 2400));
+      await sleep(100);
+    }
+    for (let i = 0; i < 40; i++) {
+      session.sendAudio(new Int16Array(2400));
+      await sleep(100);
+    }
+  } finally {
+    // A failed send must not leave the probe's OpenAI session open.
+    session.close();
   }
-  for (let i = 0; i < 40; i++) {
-    session.sendAudio(new Int16Array(2400));
-    await sleep(100);
-  }
-  session.close();
   return { input, target, voicedSeconds: voicedFrames / 100, transcript: transcript.trim() };
 }
 
-function captionTexts(name, bot) {
-  const byRole = {};
+/**
+ * Captions as the phone shows them, one entry per line: a line ends with a
+ * final phrase or after a pause of more than 1.2 s between deltas (the
+ * client's rule), and is labelled with its second of the script, so each
+ * phrase can be checked for its caption and for invented text.
+ */
+function captionLines(name, bot, T0) {
+  const lines = [];
+  const open = {}; // role → the line still being written
   for (const c of bot.captions) {
     if (c.msg.type !== 'caption') continue;
-    byRole[c.msg.role] = (byRole[c.msg.role] || '') + c.msg.text + (c.msg.final ? ' | ' : '');
+    const { role, text, final } = c.msg;
+    let line = open[role];
+    if (!line || c.t - line.last > 1200) {
+      line = { listener: name, role: `${role}, ${((c.t - T0) / 1000).toFixed(1)} с`, text: '', last: c.t };
+      lines.push(line);
+      open[role] = line;
+    }
+    line.text += text;
+    line.last = c.t;
+    if (final) open[role] = null;
   }
-  return Object.entries(byRole).map(([role, text]) => ({ listener: name, role, text: text.trim() }));
+  return lines.map(({ listener, role, text }) => ({ listener, role, text: text.trim() }));
 }
 
 async function runPair(pairName) {
@@ -196,30 +226,39 @@ async function runPair(pairName) {
     },
     { config: cfg, onDecision: (speaker, record) => decisions.push({ speaker, ...record }) },
   );
-  const a = await createBot({ identity: `${pair.a.id}#bench`, roomName, listenTo: `interp-for-${pair.a.id}` });
-  const b = await createBot({ identity: `${pair.b.id}#bench`, roomName, listenTo: `interp-for-${pair.b.id}` });
-  await sleep(3000); // let subscriptions settle
-
-  const startedAt = new Date().toISOString();
-  const T0 = Date.now();
+  let a = null;
+  let b = null;
+  let startedAt;
+  let T0;
   const at = (ms) => T0 + ms;
-  const A = (n) => clip(`${pair.a.voice}-${n}`);
-  const B = (n) => clip(`${pair.b.voice}-${n}`);
+  try {
+    a = await createBot({ identity: `${pair.a.id}#bench`, roomName, listenTo: `interp-for-${pair.a.id}` });
+    b = await createBot({ identity: `${pair.b.id}#bench`, roomName, listenTo: `interp-for-${pair.b.id}` });
+    await sleep(3000); // let subscriptions settle
 
-  a.schedule(at(2000), A('1'));
-  b.schedule(at(10000), B('1'));
-  a.schedule(at(18000), A('short'));
-  b.schedule(at(21000), B('short'));
-  a.schedule(at(25000), A('2'));
-  b.schedule(at(25300), B('2'));
-  b.schedule(at(35000), B('3'));
-  a.schedule(at(35030), B('3'), LEAK_GAIN);
-  await sleep(at(19000) - Date.now());
-  a.schedule(at(44000), a.recorded(at(10000), at(18000)), LEAK_GAIN);
-  await sleep(at(62000) - Date.now());
-  await a.close();
-  await b.close();
-  await interpreter.stopInterpreter(roomName);
+    startedAt = new Date().toISOString();
+    T0 = Date.now();
+    const A = (n) => clip(`${pair.a.voice}-${n}`);
+    const B = (n) => clip(`${pair.b.voice}-${n}`);
+
+    a.schedule(at(2000), A('1'));
+    b.schedule(at(10000), B('1'));
+    a.schedule(at(18000), A('short'));
+    b.schedule(at(21000), B('short'));
+    a.schedule(at(25000), A('2'));
+    b.schedule(at(25300), B('2'));
+    b.schedule(at(35000), B('3'));
+    a.schedule(at(35030), B('3'), LEAK_GAIN);
+    await sleep(at(19000) - Date.now());
+    a.schedule(at(44000), a.recorded(at(10000), at(18000)), LEAK_GAIN);
+    await sleep(at(62000) - Date.now());
+  } finally {
+    // Each step on its own: a run that dies part-way must not leave the bots
+    // or the agent's lanes on the shared DEV server.
+    if (a) await a.close().catch((e) => console.warn(`[BENCH] ${pairName}: closing bot a failed: ${e && e.message}`));
+    if (b) await b.close().catch((e) => console.warn(`[BENCH] ${pairName}: closing bot b failed: ${e && e.message}`));
+    await interpreter.stopInterpreter(roomName).catch((e) => console.warn(`[BENCH] ${pairName}: stopInterpreter failed: ${e && e.message}`));
+  }
 
   const eAB = chooseEngine(pair.a.lang, pair.b.lang);
   const eBA = chooseEngine(pair.b.lang, pair.a.lang);
@@ -262,7 +301,7 @@ async function runPair(pairName) {
       { group: `перевод из трубки в микрофоне ${pair.a.id}`, scores: echoA },
     ],
     suggestion: report.suggestThresholds([...ownA, ...ownB], [...leakA, ...echoA]),
-    captions: [...captionTexts(pair.a.id, a), ...captionTexts(pair.b.id, b)],
+    captions: [...captionLines(pair.a.id, a, T0), ...captionLines(pair.b.id, b, T0)],
     sameLanguage: sameLanguageChecks,
     embedLatency: report.summarize(decisions.filter((d) => !d.failOpen).map((d) => d.latencyMs)),
     failOpen: decisions.filter((d) => d.failOpen).length,
