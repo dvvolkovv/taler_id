@@ -140,8 +140,9 @@ function setup(config = {}) {
   return { rtc, made, deps };
 }
 
-// 400 ms of loud speech in 10 ms frames at 24 kHz: four 100 ms chunks.
-const speechFrames = (n = 40) => Array.from({ length: n }, () => new Int16Array(240).fill(3000));
+// 400 ms of loud speech in 10 ms frames at 24 kHz: four 100 ms chunks. `level`
+// lets a test that needs two voices tell them apart by their samples.
+const speechFrames = (n = 40, level = 3000) => Array.from({ length: n }, () => new Int16Array(240).fill(level));
 const settle = (ms = 30) => new Promise((r) => setTimeout(r, ms));
 const deferred = () => {
   let resolve;
@@ -177,17 +178,18 @@ function captureCallbacks(t) {
 test('configuration falls back to the documented defaults', () => {
   const c = interpreter.readConfig({});
   assert.deepStrictEqual(
-    [c.model, c.fallbackModel, c.transcribeModel, c.noiseReduction, c.embedUrl, c.threshold, c.margin, c.chunkMs, c.gateTimeoutMs, c.hysteresis, c.speechRms, c.gain, c.presenceGraceMs],
-    ['gpt-realtime-translate', 'gpt-realtime-2025-08-28', 'gpt-4o-mini-transcribe', 'near_field', 'http://127.0.0.1:18082', 0.2, 0.05, 500, 300, 2, 400, 1.4, 60000],
+    [c.model, c.fallbackModel, c.transcribeModel, c.noiseReduction, c.embedUrl, c.threshold, c.margin, c.chunkMs, c.gateTimeoutMs, c.hysteresis, c.speechRms, c.gain, c.presenceGraceMs, c.noTranslationFatalMs],
+    ['gpt-realtime-translate', 'gpt-realtime-2025-08-28', 'gpt-4o-mini-transcribe', 'near_field', 'http://127.0.0.1:18082', 0.2, 0.05, 500, 300, 2, 400, 1.4, 60000, 60000],
   );
 });
 
 test('configuration reads the environment and keeps values in range', () => {
   const c = interpreter.readConfig({
     INTERPRETER_VOICE_THRESHOLD: '0.4', INTERPRETER_GAIN: '9', INTERPRETER_GATE_HYSTERESIS: '0', INTERPRETER_NOISE_REDUCTION: 'off',
-    INTERPRETER_GATE_CHUNK_MS: '0',
+    INTERPRETER_GATE_CHUNK_MS: '0', INTERPRETER_NO_TRANSLATION_FATAL_MS: '1000',
   });
   assert.strictEqual(c.chunkMs, 100);
+  assert.strictEqual(c.noTranslationFatalMs, 15_000);
   assert.strictEqual(c.threshold, 0.4);
   assert.strictEqual(c.gain, 4);
   assert.strictEqual(c.hysteresis, 1);
@@ -674,6 +676,103 @@ test('gate fail-open is logged once per outage, FATAL after a minute, and again 
   } finally {
     Date.now = realNow;
     await interpreter.stopInterpreter('r-failopen');
+  }
+});
+
+// ── speech that never gets a translation ──
+
+/** Plays frames as `identity`'s microphone, on a track that ends after them. */
+async function playMic(room, identity, frames) {
+  room.emit('trackSubscribed', { kind: 1, frames }, { name: 'mic' }, { identity });
+  await settle();
+}
+const noTranslation = (lines) => lines.filter((l) => l.startsWith('FATAL interpreter: no translation'));
+
+test('speech that gets no translation is FATAL once, and the conversation goes on', async () => {
+  const { rtc, made, deps } = setup({ noTranslationFatalMs: 1000 });
+  await interpreter.startInterpreter({ sessionId: 's23', roomName: 'r-mute', participants: people() }, deps);
+  try {
+    const room = rtc.rooms[0];
+    const lines = await capture(async (seen) => {
+      await playMic(room, 'a#dev1', speechFrames(90));
+      assert.deepStrictEqual(noTranslation(seen), [], '0.9 s of speech is under the limit');
+      await playMic(room, 'a#dev1', speechFrames(30));
+      await playMic(room, 'a#dev1', speechFrames(200)); // on and on, still without a word back
+    });
+    assert.deepStrictEqual(noTranslation(lines), ['FATAL interpreter: no translation for 1 s of speech in r-mute ru→de']);
+    assert.strictEqual(interpreter.getInterpreterStatus('r-mute').running, true, "speech in the listener's language gets silence too: no end");
+    assert.ok(made.every((e) => !e.closed));
+    assert.strictEqual(made.find((e) => e.opts.targetLang === 'de').sent.length, 32, 'the direction is still fed');
+  } finally {
+    await interpreter.stopInterpreter('r-mute');
+  }
+});
+
+test('audio or text from the engine starts the count over; FATAL again only after a new run without either', async () => {
+  const { rtc, made, deps } = setup({ noTranslationFatalMs: 1000 });
+  await interpreter.startInterpreter({ sessionId: 's24', roomName: 'r-mute-reset', participants: people() }, deps);
+  try {
+    const room = rtc.rooms[0];
+    const toB = made.find((e) => e.opts.targetLang === 'de');
+    const lines = await capture(async (seen) => {
+      await playMic(room, 'a#dev1', speechFrames(90));
+      toB.opts.onAudio(new Int16Array(480).fill(5));
+      await playMic(room, 'a#dev1', speechFrames(90));
+      toB.opts.onTranslationText('Guten', false);
+      await playMic(room, 'a#dev1', speechFrames(90));
+      assert.deepStrictEqual(noTranslation(seen), [], 'each output started the count over');
+      await playMic(room, 'a#dev1', speechFrames(10)); // 1 s since the text
+      await playMic(room, 'a#dev1', speechFrames(90)); // still nothing back: no second line
+      assert.strictEqual(noTranslation(seen).length, 1);
+      toB.opts.onTranslationText('Tag', true);
+      await playMic(room, 'a#dev1', speechFrames(100)); // a new run without a word back
+    });
+    assert.strictEqual(noTranslation(lines).length, 2, lines.join('\n'));
+  } finally {
+    await interpreter.stopInterpreter('r-mute-reset');
+  }
+});
+
+test('what the gate silences is not counted: the partner on this phone, or quiet', async () => {
+  const { rtc, made, deps } = setup({ noTranslationFatalMs: 1000 });
+  await interpreter.startInterpreter({ sessionId: 's25', roomName: 'r-mute-zeros', participants: people() }, deps);
+  try {
+    const room = rtc.rooms[0];
+    const quiet = Array.from({ length: 150 }, () => new Int16Array(240));
+    const lines = await capture(async (seen) => {
+      await playMic(room, 'b#dev1', speechFrames(150)); // every window sounds like a: b's gate blocks it all
+      await playMic(room, 'a#dev1', quiet);
+      const toA = made.find((e) => e.opts.targetLang === 'ru');
+      assert.ok(toA.sent.length === 15 && toA.sent.every((c) => c.every((x) => x === 0)), 'b→a was handed only zeros');
+      assert.deepStrictEqual(noTranslation(seen), []);
+      await playMic(room, 'a#dev1', speechFrames(100)); // the same watch, on speech the gate let through
+    });
+    assert.deepStrictEqual(noTranslation(lines), ['FATAL interpreter: no translation for 1 s of speech in r-mute-zeros ru→de']);
+  } finally {
+    await interpreter.stopInterpreter('r-mute-zeros');
+  }
+});
+
+test('each direction keeps its own count', async () => {
+  const { rtc, made, deps } = setup({ noTranslationFatalMs: 1000 });
+  // a's microphone carries positive samples, b's negative: each gate hears its own owner.
+  deps.embed = { embedPcm: async (window) => print(window[0] > 0 ? 0 : 1) };
+  await interpreter.startInterpreter({ sessionId: 's26', roomName: 'r-mute-lanes', participants: people() }, deps);
+  try {
+    const room = rtc.rooms[0];
+    const toA = made.find((e) => e.opts.targetLang === 'ru');
+    const lines = await capture(async (seen) => {
+      await playMic(room, 'a#dev1', speechFrames(60));
+      await playMic(room, 'b#dev1', speechFrames(60, -3000));
+      assert.ok(toA.sent.length === 6 && toA.sent.every((c) => c[0] === -3000), "b's own speech went through");
+      assert.deepStrictEqual(noTranslation(seen), [], 'neither direction alone has had a second of speech');
+      toA.opts.onAudio(new Int16Array(480).fill(5)); // b→a speaks: only its own count starts over
+      await playMic(room, 'a#dev1', speechFrames(60));
+      await playMic(room, 'b#dev1', speechFrames(60, -3000));
+    });
+    assert.deepStrictEqual(noTranslation(lines), ['FATAL interpreter: no translation for 1 s of speech in r-mute-lanes ru→de']);
+  } finally {
+    await interpreter.stopInterpreter('r-mute-lanes');
   }
 });
 

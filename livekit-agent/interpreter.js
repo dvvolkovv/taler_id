@@ -106,6 +106,11 @@ function readConfig(env = process.env) {
     // Node runs a timer of 0, a negative value or more than 2^31-1 ms after
     // 1 ms: every conversation would end right after it started.
     presenceGraceMs: clamp(num(env.INTERPRETER_PRESENCE_GRACE_MS, 60_000), 10_000, 600_000),
+    // Speech that has gone this long without a translation is logged as FATAL.
+    // Below ~15 s one long phrase and the wait for its rendering would trip
+    // it; past ten minutes a mute direction would go unreported for most of a
+    // conversation the host is paying for.
+    noTranslationFatalMs: clamp(num(env.INTERPRETER_NO_TRANSLATION_FATAL_MS, 60_000), 15_000, 600_000),
     connectTimeoutMs: CONNECT_TIMEOUT_MS,
     disconnectTimeoutMs: DISCONNECT_TIMEOUT_MS,
     backendUrl: env.BACKEND_URL || null,
@@ -309,6 +314,7 @@ async function openLane(session, d) {
     listening: null,
     engine: null,
     gate: null,
+    untranslatedMs: 0, // speech let through since this direction last produced anything
   };
   try {
     await room.localParticipant.publishTrack(
@@ -332,6 +338,7 @@ async function openLane(session, d) {
         noiseReduction: cfg.noiseReduction,
         onAudio: (int16) => {
           if (session.stopping) return;
+          lane.untranslatedMs = 0;
           applyGain(int16, cfg.gain);
           for (let i = 0; i < int16.length; i += FRAME_SAMPLES) {
             // slice, not subarray: AudioFrame hands data.buffer to the native
@@ -341,7 +348,10 @@ async function openLane(session, d) {
             out.push(new rtc.AudioFrame(frame, SAMPLE_RATE, 1, frame.length));
           }
         },
-        onTranslationText: (text, final) => sendTo(session, d.listener, messages.caption('translation', d.speaker, text, final)),
+        onTranslationText: (text, final) => {
+          lane.untranslatedMs = 0;
+          sendTo(session, d.listener, messages.caption('translation', d.speaker, text, final));
+        },
         onSourceText: (text, final) => sendTo(session, d.speaker, messages.caption('source', d.speaker, text, final)),
         ...handlers,
       }),
@@ -362,7 +372,10 @@ async function openLane(session, d) {
         const vector = await session.embed.embedPcm(window, SAMPLE_RATE);
         return { own: cosine(vector, d.ownEmbedding), other: cosine(vector, d.otherEmbedding) };
       },
-      onOutput: (chunk) => lane.engine.sendAudio(chunk),
+      onOutput: (chunk) => {
+        noteUntranslated(session, lane, chunk);
+        lane.engine.sendAudio(chunk);
+      },
       onSpeaking: (on) => broadcast(session, messages.speaking(d.speaker, on)),
       onDecision: (record) => {
         noteFailOpen(session, record);
@@ -487,6 +500,31 @@ function noteFailOpen(session, record) {
     console.error(
       `FATAL interpreter: voice-embed unavailable for ${Math.round((now - session.failOpenSince) / 1000)} s in ${session.roomName}`
       + ` (${session.failOpenCount} chunks let through unchecked)`,
+    );
+  }
+}
+
+/**
+ * FATAL once a direction has been handed noTranslationFatalMs of speech and
+ * has produced neither audio nor text. OpenAI failing after the session was
+ * confirmed (quota, model errors) leaves either engine connected and mute: no
+ * close, no reconnect, nothing for the listener, while the host keeps paying.
+ * A log line, not an end: speech already in the listener's language is
+ * rightly met with silence too. One line per mute run; the next is reported
+ * after the direction has spoken again and the count has built up anew.
+ */
+function noteUntranslated(session, lane, chunk) {
+  // The gate hands on the speaker's audio or the same length of zeros (the
+  // partner, the earpiece, quiet): only the former asks for a translation.
+  if (chunk.every((sample) => sample === 0)) return;
+  const limit = session.cfg.noTranslationFatalMs;
+  const before = lane.untranslatedMs;
+  lane.untranslatedMs += (chunk.length * 1000) / SAMPLE_RATE;
+  if (before < limit && lane.untranslatedMs >= limit) {
+    const { sourceLang, targetLang } = lane.direction;
+    console.error(
+      `FATAL interpreter: no translation for ${Math.round(lane.untranslatedMs / 1000)} s of speech in ${session.roomName}`
+      + ` ${sourceLang}→${targetLang}`,
     );
   }
 }
