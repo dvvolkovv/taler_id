@@ -20,10 +20,16 @@ export function generateCode(): string {
   return code;
 }
 
+// What a phone may put between the groups instead of a plain space or '-':
+// smart punctuation turns '-' into a dash look-alike (U+2010–2015, minus sign),
+// a paste from a messenger brings zero-width characters and a BOM.
+const SEPARATORS = /[\s\-\u2010-\u2015\u2212\u200B-\u200D\uFEFF]/g;
+
 /** The code as generated, or null if the input cannot be one. */
 export function normalizeCode(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
-  const code = raw.toUpperCase().replace(/[\s-]/g, '');
+  // NFKC folds full-width letters and digits (a CJK keyboard) to ASCII.
+  const code = raw.normalize('NFKC').toUpperCase().replace(SEPARATORS, '');
   return CODE_SHAPE.test(code) ? code : null;
 }
 

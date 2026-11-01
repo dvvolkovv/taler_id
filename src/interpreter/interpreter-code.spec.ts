@@ -26,6 +26,25 @@ describe('interpreter code', () => {
     expect(normalizeCode(' AB CD EF 23 ')).toBe('ABCDEF23');
   });
 
+  it('takes what a phone puts in place of a dash or a space', () => {
+    for (const sep of [
+      '\u2010', // hyphen
+      '\u2011', // non-breaking hyphen
+      '\u2013', // en dash: iOS smart punctuation
+      '\u2014', // em dash: iOS smart punctuation, '--'
+      '\u2212', // minus sign
+      '\u00A0', // no-break space
+      '\u200B', // zero-width space from a paste
+    ]) {
+      expect(normalizeCode(`ABCD${sep}EFGH`)).toBe('ABCDEFGH');
+    }
+    expect(normalizeCode('\uFEFFABCDEFGH')).toBe('ABCDEFGH'); // BOM
+  });
+
+  it('folds full-width letters and digits from a CJK keyboard', () => {
+    expect(normalizeCode('\uFF41\uFF42\uFF43\uFF44EFG\uFF12')).toBe('ABCDEFG2');
+  });
+
   it('refuses anything that cannot be a code', () => {
     for (const raw of [
       'ABCDEFG', // too short
