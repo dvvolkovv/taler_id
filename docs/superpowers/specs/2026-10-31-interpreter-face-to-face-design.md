@@ -295,7 +295,7 @@
 
 Обычная структура фичи: data, domain, presentation; BLoC; GetIt. В `voice_call_screen.dart` (6,9 тыс. строк) ничего не добавляем.
 
-- `InterpreterRemoteDataSource` — `languages`, `create`, `newCode`, `join`, `get`, `end`.
+- `InterpreterRemoteDataSource` — `languages`, `create`, `newCode`, `join`, `get`, `end`. Таймаут ответа на `join` — не меньше 40 с: бэкенд ждёт старта агента до 35 с, а обычные 30 с клиента оборвали бы удачный вход. Коды ошибок — из `message` (таблица в разделе бэкенда); на `409 voice_print_required` открывается шторка записи образца.
 - `InterpreterRoomController` — своя логика комнаты, без общих со звонком циклов «подписаться на всё»:
   - подключение с `autoSubscribe: false`;
   - права на микрофон только для `voice-interpreter`, выставленные до публикации;
