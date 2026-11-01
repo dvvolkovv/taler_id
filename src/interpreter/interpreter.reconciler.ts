@@ -1,0 +1,211 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { Interval } from '@nestjs/schedule';
+import type { InterpreterEndReason } from '@prisma/client';
+import { FEATURE_KEYS } from '../billing/constants/feature-keys';
+import { PrismaService } from '../prisma/prisma.service';
+import { InterpreterLivekitService } from './interpreter-livekit.service';
+import { InterpreterService } from './interpreter.service';
+
+// As long as the agent waits for a person who left. A room without the agent
+// for that long means it was restarted or redeployed: it will not report.
+const AGENT_LOST_AFTER_MS = 60_000;
+// After a code expires the host can still ask for a new one this long.
+const WAITING_GRACE_MS = 5 * 60_000;
+// A join links the billing it opened to the session a moment later.
+const UNLINKED_BILLING_GRACE_MS = 60_000;
+// close() marks a session ENDED first and closes its billing after stopping
+// the agent (up to 10 s): until then that billing is still its to close.
+const CLOSING_GRACE_MS = 60_000;
+
+const SESSION_FIELDS = {
+  id: true,
+  roomName: true,
+  billingSessionId: true,
+  startedAt: true,
+  agentSeenAt: true,
+} as const;
+
+type ReconciledSession = {
+  id: string;
+  roomName: string;
+  billingSessionId: string | null;
+  startedAt: Date | null;
+  agentSeenAt: Date | null;
+};
+
+/**
+ * Ends the sessions nobody else will end: billing closed by metering (no
+ * funds, the 2-hour cap), an agent gone without reporting (restart, deploy),
+ * a QR nobody scanned. Every end goes through InterpreterService.close, the
+ * same path as a hang-up. Runs on every app node; close() makes that safe.
+ * Last, it closes interpreter billing that no ACTIVE session holds.
+ */
+@Injectable()
+export class InterpreterReconciler {
+  private readonly log = new Logger(InterpreterReconciler.name);
+  private running = false;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly livekit: InterpreterLivekitService,
+    private readonly interpreter: InterpreterService,
+  ) {}
+
+  @Interval(10_000)
+  async tick(): Promise<void> {
+    // An SFU that answers slowly can make a pass outlast the interval.
+    if (this.running) return;
+    this.running = true;
+    try {
+      await this.runOnce();
+    } finally {
+      this.running = false;
+    }
+  }
+
+  /** One pass. Never throws: each session is handled on its own. */
+  async runOnce(now = new Date()): Promise<void> {
+    await this.forEach(
+      'active sessions',
+      () =>
+        this.prisma.interpreterSession.findMany({
+          where: { status: 'ACTIVE' },
+          select: SESSION_FIELDS,
+        }),
+      (s) => this.reconcileActive(s, now),
+    );
+    await this.forEach(
+      'expired codes',
+      () =>
+        this.prisma.interpreterSession.findMany({
+          where: {
+            status: 'WAITING',
+            codeExpiresAt: { lt: new Date(now.getTime() - WAITING_GRACE_MS) },
+          },
+          select: SESSION_FIELDS,
+        }),
+      (s) => this.interpreter.close(s, 'EXPIRED', { stopAgent: false }),
+    );
+    await this.reconcileBilling(now);
+  }
+
+  /**
+   * The passes above start from a session row, so they never see billing that
+   * no session holds: a join that died between opening billing and claiming
+   * the code, a cleanup step that failed after a lost claim or in close().
+   * Metering would charge the host for it up to its 2-hour cap. A session
+   * that ended under a minute ago still holds its billing: closing it here
+   * would race close() and record a hang-up as 'failed'.
+   */
+  private async reconcileBilling(now: Date): Promise<void> {
+    let unheld: string[];
+    try {
+      const open = await this.prisma.aiSession.findMany({
+        where: {
+          featureKey: FEATURE_KEYS.INTERPRETER,
+          status: 'active',
+          startedAt: {
+            lt: new Date(now.getTime() - UNLINKED_BILLING_GRACE_MS),
+          },
+        },
+        select: { id: true },
+      });
+      if (open.length === 0) return;
+      const held = await this.prisma.interpreterSession.findMany({
+        where: {
+          billingSessionId: { in: open.map((b) => b.id) },
+          OR: [
+            { status: 'ACTIVE' },
+            {
+              status: 'ENDED',
+              endedAt: { gt: new Date(now.getTime() - CLOSING_GRACE_MS) },
+            },
+          ],
+        },
+        select: { billingSessionId: true },
+      });
+      const heldIds = new Set(held.map((s) => s.billingSessionId));
+      unheld = open.map((b) => b.id).filter((id) => !heldIds.has(id));
+    } catch (e) {
+      this.log.warn(`loading open billing failed: ${String(e)}`);
+      return;
+    }
+    for (const id of unheld) {
+      try {
+        await this.interpreter.closeUnheldBilling(id);
+      } catch (e) {
+        this.log.warn(`billing ${id}: closing failed: ${String(e)}`);
+      }
+    }
+  }
+
+  private async reconcileActive(
+    s: ReconciledSession,
+    now: Date,
+  ): Promise<void> {
+    if (s.billingSessionId) {
+      const billing = await this.prisma.aiSession.findUnique({
+        where: { id: s.billingSessionId },
+        select: { status: true },
+      });
+      if (billing?.status !== 'active') {
+        await this.interpreter.close(s, endedByBilling(billing?.status), {
+          stopAgent: true,
+        });
+        return;
+      }
+    }
+
+    const present = await this.livekit.agentPresent(s.roomName);
+    // LiveKit did not answer: nothing is known, so nothing is decided.
+    if (present === null) return;
+    if (present) {
+      await this.prisma.interpreterSession.updateMany({
+        // Only forward: a slow tick on one node must not overwrite a fresher
+        // sighting another node wrote meanwhile, or the 60 s would count
+        // from too early and could end a conversation the agent never left.
+        where: {
+          id: s.id,
+          status: 'ACTIVE',
+          OR: [{ agentSeenAt: null }, { agentSeenAt: { lt: now } }],
+        },
+        data: { agentSeenAt: now },
+      });
+      return;
+    }
+    const lastSeen = s.agentSeenAt ?? s.startedAt;
+    if (lastSeen && now.getTime() - lastSeen.getTime() > AGENT_LOST_AFTER_MS) {
+      // Stopped anyway: the agent may still hold the session while it
+      // tries to get back into the room.
+      await this.interpreter.close(s, 'AGENT_LOST', { stopAgent: true });
+    }
+  }
+
+  private async forEach(
+    what: string,
+    load: () => Promise<ReconciledSession[]>,
+    handle: (s: ReconciledSession) => Promise<void>,
+  ): Promise<void> {
+    let sessions: ReconciledSession[];
+    try {
+      sessions = await load();
+    } catch (e) {
+      this.log.warn(`loading ${what} failed: ${String(e)}`);
+      return;
+    }
+    for (const s of sessions) {
+      try {
+        await handle(s);
+      } catch (e) {
+        this.log.warn(`session ${s.id}: reconciling failed: ${String(e)}`);
+      }
+    }
+  }
+}
+
+function endedByBilling(status: string | undefined): InterpreterEndReason {
+  if (status === 'terminated_no_funds') return 'NO_FUNDS';
+  if (status === 'terminated_stale') return 'MAX_DURATION';
+  // Ended some other way, or gone: the conversation cannot go on unbilled.
+  return 'TRANSLATION_FAILED';
+}

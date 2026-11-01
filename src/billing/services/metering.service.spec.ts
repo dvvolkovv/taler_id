@@ -58,6 +58,7 @@ describe('MeteringService', () => {
         userId: 'u1',
         featureKey: 'voice_assistant',
         status: 'active',
+        startedAt,
         lastMeteredAt: startedAt,
         totalSpentPlanck: 0n,
       },
@@ -112,6 +113,7 @@ describe('MeteringService', () => {
         id: 's1',
         userId: 'u1',
         featureKey: 'voice_assistant',
+        startedAt: new Date(Date.now() - 10_000),
         lastMeteredAt: new Date(Date.now() - 10_000),
         totalSpentPlanck: 0n,
         contextRef: 'room42',
@@ -144,6 +146,7 @@ describe('MeteringService', () => {
         id: 's1',
         userId: 'u1',
         featureKey: 'voice_assistant',
+        startedAt: new Date(Date.now() - 10_000),
         lastMeteredAt: new Date(Date.now() - 10_000),
         totalSpentPlanck: 0n,
       },
@@ -169,6 +172,7 @@ describe('MeteringService', () => {
         id: 's1',
         userId: 'u1',
         featureKey: 'voice_assistant',
+        startedAt: new Date(Date.now() - 10_000),
         lastMeteredAt: new Date(Date.now() - 10_000),
         totalSpentPlanck: 0n,
       },
@@ -223,6 +227,7 @@ describe('MeteringService', () => {
         userId: 'u1',
         featureKey: 'voice_assistant',
         status: 'active',
+        startedAt: new Date(Date.now() - 10_000),
         lastMeteredAt: new Date(Date.now() - 10_000),
         totalSpentPlanck: 0n,
       },
@@ -235,5 +240,69 @@ describe('MeteringService', () => {
     expect(ledger.debit).not.toHaveBeenCalled();
     expect(pricing.calculatePlanckCost).not.toHaveBeenCalled();
     expect(prisma.usageLog.create).not.toHaveBeenCalled();
+  });
+
+  describe('interpreter', () => {
+    const now = new Date('2026-11-01T12:00:00Z');
+    const minutesAgo = (m: number) => new Date(now.getTime() - m * 60_000);
+    const conversation = (startedAt: Date) => ({
+      id: 's-int',
+      userId: 'host-1',
+      featureKey: 'interpreter',
+      status: 'active',
+      startedAt,
+      lastMeteredAt: minutesAgo(0.5),
+      totalSpentPlanck: 0n,
+      contextRef: 'interp-session-1',
+    });
+
+    beforeEach(() => {
+      jest.useFakeTimers({ now });
+      pricing.getConfig.mockResolvedValue({ billingEnforced: true });
+      pricing.calculatePlanckCost.mockResolvedValue(6_000_000n);
+      pricing.getMinReservePlanck.mockResolvedValue(24_000_000n);
+      ledger.debit.mockResolvedValue({ id: 'tx1' });
+      ledger.getBalance.mockResolvedValue(999_999_999n);
+    });
+
+    afterEach(() => jest.useRealTimers());
+
+    it('meters the host by the minute', async () => {
+      // 90 minutes in: past a 1-hour cap, still inside the 2-hour one.
+      prisma.aiSession.findMany.mockResolvedValue([
+        conversation(minutesAgo(90)),
+      ]);
+
+      await service.tick();
+
+      expect(pricing.calculatePlanckCost).toHaveBeenCalledWith(
+        'interpreter',
+        0.5,
+      );
+      expect(ledger.debit).toHaveBeenCalledWith(
+        'host-1',
+        6_000_000n,
+        'SPEND',
+        expect.objectContaining({
+          featureKey: 'interpreter',
+          sessionId: 's-int',
+        }),
+      );
+      expect(gating.endSession).not.toHaveBeenCalled();
+    });
+
+    it('reaps a conversation older than 2 hours as terminated_stale', async () => {
+      prisma.aiSession.findMany.mockResolvedValue([
+        conversation(minutesAgo(121)),
+      ]);
+
+      await service.tick();
+
+      expect(gating.endSession).toHaveBeenCalledWith(
+        's-int',
+        'terminated_stale',
+      );
+      expect(ledger.debit).not.toHaveBeenCalled();
+    });
   });
 });

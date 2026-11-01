@@ -61,5 +61,12 @@ export default () => ({
     projectId: process.env.SUMSUB_PROJECT_ID || 'taler',
     ttlInSecs: parseInt(process.env.SUMSUB_TTL_SECS || '600', 10) || 600,
     webhookSecret: process.env.SUMSUB_WEBHOOK_SECRET || '',
+    // Подпись серверных запросов к welID (exchange/common #1271/#1227).
+    // Пару выдаёт devops и кладёт в SUMSUB_APP_SECRETS нужного инстанса welID.
+    // Пусто = запросы уходят неподписанными: это рабочий режим, пока проверка
+    // на стороне welID выключена, и он позволяет выкатить код ДО появления
+    // ключей. Обратный порядок означает 401 и вставший KYC.
+    appToken: process.env.SUMSUB_APP_TOKEN || '',
+    appSecret: process.env.SUMSUB_APP_SECRET || '',
   },
 });

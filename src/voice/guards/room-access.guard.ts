@@ -11,6 +11,7 @@ import * as fs from 'fs';
 import { PrismaService } from '../../prisma/prisma.service';
 import { isApiAccessToken } from '../../common/utils/access-token.util';
 import { LK_API_SECRET } from '../../common/livekit-credentials';
+import { isInterpreterRoom } from './not-interpreter-room.guard';
 
 /**
  * Proves the caller is entitled to act on `:roomName` — and, on success,
@@ -53,6 +54,14 @@ export class RoomAccessGuard implements CanActivate {
     const req = ctx.switchToHttp().getRequest();
     const roomName: string | undefined = req.params?.roomName;
     if (!roomName) throw new ForbiddenException('room not specified');
+    // Interpreter rooms (src/interpreter) hold two people and the agent, and
+    // both people have a LiveKit grant for the room — which alone passes this
+    // guard. None of the routes behind it (recorder, public translator, room
+    // chat) belongs in such a room: a recorder there would capture the very
+    // speech the agent keeps off the other phone.
+    if (isInterpreterRoom(roomName)) {
+      throw new ForbiddenException('interpreter_room');
+    }
 
     const auth = req.headers['authorization'];
     const token =

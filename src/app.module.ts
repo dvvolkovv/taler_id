@@ -35,6 +35,7 @@ import { McpModule } from './mcp/mcp.module';
 import { PartnerModule } from './partner/partner.module';
 import { PartnerApiModule } from './partner-api/partner-api.module';
 import { SystemChannelModule } from './system-channel/system-channel.module';
+import { InterpreterModule } from './interpreter/interpreter.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import configuration from './config/configuration';
 
@@ -128,6 +129,7 @@ import configuration from './config/configuration';
     PartnerModule,
     PartnerApiModule,
     SystemChannelModule,
+    InterpreterModule,
   ],
   controllers: [AppController],
   providers: [
