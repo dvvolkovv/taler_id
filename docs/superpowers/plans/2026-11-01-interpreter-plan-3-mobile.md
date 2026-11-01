@@ -9798,6 +9798,941 @@ flutter build apk --debug --flavor dev -t lib/main_dev.dart --dart-define=FLAVOR
 
 ---
 
+## Исправления по финальному ревью (задачи с буквой)
+
+Финальное ревью ветки (задача 24, шаг 2) нашло то, что ниже. Выполняются после задачи 24, в этом порядке, до задачи 25. Числа в «Ожидается» — от состояния после задачи 24 и предыдущих задач этого раздела.
+
+### Task 24b: Код из ссылки ведёт ко входу
+
+- **Ссылка `talerid://interp/<код>` открывала раздел, но код пропадал (критично).** Системная камера, сканер профиля и вход после логина приводят к `InterpreterChoosing(joinCode)`, но `JoinPressed` не отправлял никто: человек видел обычный старт и должен был сканировать снова — первое, что попробует тестировщик. Теперь при ожидающем коде старт показывает «Вас пригласили…» и «Подключиться»: гость выбирает свой язык и входит, как в спеке. «Начать» в этот момент не показывается. Экрану не хватало теста — потому это и прошло; теперь он есть.
+
+**Files:**
+- Create: `test/features/interpreter/presentation/screens/interpreter_screen_test.dart`
+- Modify: `test/features/interpreter/presentation/widgets/start_view_test.dart`, `lib/features/interpreter/presentation/screens/interpreter_screen.dart`, `lib/features/interpreter/presentation/widgets/start_view.dart`, `lib/l10n/app_en.arb`, `lib/l10n/app_ru.arb`
+- Regenerate: `lib/l10n/app_localizations*.dart` (`flutter gen-l10n`)
+
+- [ ] **Step 1: Тесты (падают)**
+
+`test/features/interpreter/presentation/screens/interpreter_screen_test.dart` целиком:
+
+```dart
+import 'package:bloc_test/bloc_test.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:mocktail/mocktail.dart';
+import 'package:taler_id_mobile/core/di/service_locator.dart';
+import 'package:taler_id_mobile/core/theme/app_theme.dart';
+import 'package:taler_id_mobile/features/interpreter/domain/interpreter_models.dart';
+import 'package:taler_id_mobile/features/interpreter/presentation/bloc/interpreter_bloc.dart';
+import 'package:taler_id_mobile/features/interpreter/presentation/bloc/interpreter_event.dart';
+import 'package:taler_id_mobile/features/interpreter/presentation/bloc/interpreter_state.dart';
+import 'package:taler_id_mobile/features/interpreter/presentation/screens/interpreter_screen.dart';
+import 'package:taler_id_mobile/l10n/app_localizations.dart';
+
+class _MockInterpreterBloc extends MockBloc<InterpreterEvent, InterpreterState>
+    implements InterpreterBloc {}
+
+const _catalog = InterpreterCatalog(
+  enabled: true,
+  languages: [InterpreterLanguage(code: 'ru', name: 'Русский')],
+);
+
+/// f1: a `talerid://interp/<code>` link must actually lead to joining — this
+/// pumps the real screen (not just StartView in isolation) the way
+/// `app_router.dart` builds it for that link, with the bloc it obtains from
+/// GetIt (`sl<InterpreterBloc>(param1: ...)`, registered here the same way
+/// `service_locator.dart` does it: `registerFactoryParam`) mocked out.
+void main() {
+  late _MockInterpreterBloc bloc;
+
+  setUp(() {
+    bloc = _MockInterpreterBloc();
+    sl.registerFactoryParam<InterpreterBloc, String, void>((_, __) => bloc);
+  });
+
+  tearDown(() async {
+    await sl.reset();
+  });
+
+  Widget wrap(Widget child) => MaterialApp(
+        theme: AppTheme.dark,
+        locale: const Locale('en'),
+        supportedLocales: const [Locale('en')],
+        localizationsDelegates: const [
+          AppLocalizations.delegate,
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+        home: child,
+      );
+
+  testWidgets(
+      'a pending joinCode reaches a Choosing screen with a "Join" button '
+      'that fires JoinPressed with that code', (tester) async {
+    const state = InterpreterChoosing(
+      catalog: _catalog,
+      myLang: 'ru',
+      joinCode: 'ABCD2345',
+    );
+    when(() => bloc.state).thenReturn(state);
+    whenListen(bloc, const Stream<InterpreterState>.empty(),
+        initialState: state);
+
+    await tester
+        .pumpWidget(wrap(const InterpreterScreen(joinCode: 'ABCD2345')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Join'), findsOneWidget);
+    expect(find.text('Start'), findsNothing);
+
+    await tester.tap(find.text('Join'));
+    await tester.pump();
+
+    verify(() => bloc.add(const JoinPressed('ABCD2345'))).called(1);
+  });
+}
+```
+
+Патч к `test/features/interpreter/presentation/widgets/start_view_test.dart`:
+
+```diff
+--- a/test/features/interpreter/presentation/widgets/start_view_test.dart
++++ b/test/features/interpreter/presentation/widgets/start_view_test.dart
+@@ -36,6 +36,7 @@
+       onLanguageChosen: (_) {},
+       onStart: () {},
+       onScan: () {},
++      onJoin: (_) {},
+     )));
+ 
+     expect(find.text('I speak: Русский'), findsOneWidget);
+@@ -49,6 +50,7 @@
+       onLanguageChosen: (_) {},
+       onStart: () => started = true,
+       onScan: () {},
++      onJoin: (_) {},
+     )));
+ 
+     await tester.tap(find.text('Start'));
+@@ -65,6 +67,7 @@
+       onLanguageChosen: (_) {},
+       onStart: () {},
+       onScan: () => scanned = true,
++      onJoin: (_) {},
+     )));
+ 
+     await tester.tap(find.text('Scan QR'));
+@@ -83,6 +86,7 @@
+       onLanguageChosen: (code) => chosen = code,
+       onStart: () {},
+       onScan: () {},
++      onJoin: (_) {},
+     )));
+ 
+     await tester.tap(find.text('I speak: Русский'));
+@@ -103,6 +107,7 @@
+       onLanguageChosen: (_) {},
+       onStart: () {},
+       onScan: () {},
++      onJoin: (_) {},
+     )));
+ 
+     expect(
+@@ -110,4 +115,73 @@
+       findsOneWidget,
+     );
+   });
++
++  // f1: a code arriving via a scanned/deep-linked link must not be silently
++  // dropped on the plain start view — see interpreter_screen.dart's wiring
++  // and the "Вход (Б)" flow in the spec.
++  group('with a pending joinCode', () {
++    testWidgets(
++        'shows the invited hint and "Join" instead of "Start"; tapping '
++        '"Join" fires onJoin with that code', (tester) async {
++      String? joined;
++      await tester.pumpWidget(_wrap(StartView(
++        catalog: _catalog,
++        myLang: 'ru',
++        joinCode: 'ABCD2345',
++        onLanguageChosen: (_) {},
++        onStart: () {},
++        onScan: () {},
++        onJoin: (code) => joined = code,
++      )));
++
++      expect(
++        find.text(
++            'You were invited to a conversation with translation. Choose '
++            'your language and join.'),
++        findsOneWidget,
++      );
++      expect(find.text('Start'), findsNothing);
++      expect(find.text('Join'), findsOneWidget);
++
++      await tester.tap(find.text('Join'));
++      await tester.pump();
++
++      expect(joined, 'ABCD2345');
++    });
++
++    testWidgets('"Scan QR" is still shown', (tester) async {
++      await tester.pumpWidget(_wrap(StartView(
++        catalog: _catalog,
++        myLang: 'ru',
++        joinCode: 'ABCD2345',
++        onLanguageChosen: (_) {},
++        onStart: () {},
++        onScan: () {},
++        onJoin: (_) {},
++      )));
++
++      expect(find.text('Scan QR'), findsOneWidget);
++    });
++  });
++
++  testWidgets('without a joinCode, behaviour is unchanged: "Start" is shown, '
++      'no invited hint, no "Join"', (tester) async {
++    await tester.pumpWidget(_wrap(StartView(
++      catalog: _catalog,
++      myLang: 'ru',
++      onLanguageChosen: (_) {},
++      onStart: () {},
++      onScan: () {},
++      onJoin: (_) {},
++    )));
++
++    expect(find.text('Start'), findsOneWidget);
++    expect(find.text('Join'), findsNothing);
++    expect(
++      find.text(
++          'You were invited to a conversation with translation. Choose '
++          'your language and join.'),
++      findsNothing,
++    );
++  });
+ }
+```
+
+Run: `flutter test test/features/interpreter/presentation/screens/interpreter_screen_test.dart test/features/interpreter/presentation/widgets/start_view_test.dart`
+Expected: `test/features/interpreter/presentation/screens/interpreter_screen_test.dart` — не запускается (нет ещё кода, который он импортирует); `test/features/interpreter/presentation/widgets/start_view_test.dart` — не запускается (нет ещё кода, который он импортирует). Всего тестов 1, падающих 1, не запустившихся файлов 2.
+
+- [ ] **Step 2: Код**
+
+Патч к `lib/features/interpreter/presentation/screens/interpreter_screen.dart`:
+
+```diff
+--- a/lib/features/interpreter/presentation/screens/interpreter_screen.dart
++++ b/lib/features/interpreter/presentation/screens/interpreter_screen.dart
+@@ -34,9 +34,16 @@
+ 
+   @override
+   Widget build(BuildContext context) {
++    // Read on this (outer) context, not the one `create` receives: `provider`
++    // locks inherited-widget lookups for the whole duration of that callback
++    // (it only ever runs once, so it can't handle a locale change anyway),
++    // and `Localizations.localeOf` establishing a listener on it throws
++    // "Tried to listen to an InheritedWidget in a life-cycle that will never
++    // be called again" in debug builds every time this screen opens.
++    final localeCode = Localizations.localeOf(context).languageCode;
+     return BlocProvider<InterpreterBloc>(
+-      create: (ctx) => sl<InterpreterBloc>(
+-        param1: Localizations.localeOf(ctx).languageCode,
++      create: (_) => sl<InterpreterBloc>(
++        param1: localeCode,
+       )..add(Started(joinCode: joinCode)),
+       child: _InterpreterView(scanFirst: scanFirst),
+     );
+@@ -181,13 +188,19 @@
+         // listener) — this is just what shows behind/after it.
+         return Center(child: CircularProgressIndicator(color: colors.primary));
+ 
+-      case InterpreterChoosing(catalog: final catalog, myLang: final myLang):
++      case InterpreterChoosing(
++          catalog: final catalog,
++          myLang: final myLang,
++          joinCode: final joinCode,
++        ):
+         return StartView(
+           catalog: catalog,
+           myLang: myLang,
++          joinCode: joinCode,
+           onLanguageChosen: (code) => bloc.add(LanguageChosen(code)),
+           onStart: () => bloc.add(const HostPressed()),
+           onScan: _openScanner,
++          onJoin: (code) => bloc.add(JoinPressed(code)),
+         );
+ 
+       case InterpreterWorking(kind: final kind):
+```
+
+Патч к `lib/features/interpreter/presentation/widgets/start_view.dart`:
+
+```diff
+--- a/lib/features/interpreter/presentation/widgets/start_view.dart
++++ b/lib/features/interpreter/presentation/widgets/start_view.dart
+@@ -8,23 +8,30 @@
+ import 'language_picker_sheet.dart';
+ 
+ /// Pre-session screen: pick a language, then either host a new call or scan
+-/// a partner's QR code. [joinCode] is purely informational here — the
+-/// screen that owns the bloc is the one that resumes a join once the
+-/// language is picked; this view doesn't act on it.
++/// a partner's QR code. [joinCode] carries a code that arrived via a
++/// scanned/deep-linked `talerid://interp/<code>` link before any language
++/// was picked — per the spec's "Вход (Б)" flow the guest chooses a language
++/// first and only then joins, so while a code is pending this view swaps
++/// «Начать» for a short invitation hint and a «Подключиться» button that
++/// fires [onJoin] with that same code. «Сканировать QR» is shown either way.
+ class StartView extends StatelessWidget {
+   final InterpreterCatalog catalog;
+   final String myLang;
++  final String? joinCode;
+   final ValueChanged<String> onLanguageChosen;
+   final VoidCallback onStart;
+   final VoidCallback onScan;
++  final ValueChanged<String> onJoin;
+ 
+   const StartView({
+     super.key,
+     required this.catalog,
+     required this.myLang,
++    this.joinCode,
+     required this.onLanguageChosen,
+     required this.onStart,
+     required this.onScan,
++    required this.onJoin,
+   });
+ 
+   Future<void> _openPicker(BuildContext context) async {
+@@ -41,6 +48,7 @@
+     final colors = AppColors.of(context);
+     final l10n = AppLocalizations.of(context)!;
+     final langName = interpreterLanguageName(catalog.languages, myLang);
++    final code = joinCode;
+ 
+     return SafeArea(
+       child: Padding(
+@@ -72,14 +80,30 @@
+               ),
+             ),
+             const SizedBox(height: 28),
+-            SizedBox(
+-              width: double.infinity,
+-              height: 50,
+-              child: ElevatedButton(
+-                onPressed: onStart,
+-                child: Text(l10n.interpreterStartButton),
++            if (code != null) ...[
++              Text(
++                l10n.interpreterInvitedHint,
++                textAlign: TextAlign.center,
++                style: TextStyle(color: colors.textSecondary, fontSize: 13),
+               ),
+-            ),
++              const SizedBox(height: 16),
++              SizedBox(
++                width: double.infinity,
++                height: 50,
++                child: ElevatedButton(
++                  onPressed: () => onJoin(code),
++                  child: Text(l10n.interpreterJoinButton),
++                ),
++              ),
++            ] else
++              SizedBox(
++                width: double.infinity,
++                height: 50,
++                child: ElevatedButton(
++                  onPressed: onStart,
++                  child: Text(l10n.interpreterStartButton),
++                ),
++              ),
+             const SizedBox(height: 12),
+             SizedBox(
+               width: double.infinity,
+```
+
+Патч к `lib/l10n/app_en.arb`:
+
+```diff
+--- a/lib/l10n/app_en.arb
++++ b/lib/l10n/app_en.arb
+@@ -2030,6 +2030,8 @@
+   "interpreterStartButton": "Start",
+   "interpreterScanButton": "Scan QR",
+   "interpreterStartHint": "Both of you need a voice print. The host pays per minute.",
++  "interpreterInvitedHint": "You were invited to a conversation with translation. Choose your language and join.",
++  "interpreterJoinButton": "Join",
+   "interpreterChooseLanguage": "Choose a language",
+   "interpreterSearchLanguage": "Search language",
+   "interpreterShowCode": "Show this code to your partner",
+```
+
+Патч к `lib/l10n/app_ru.arb`:
+
+```diff
+--- a/lib/l10n/app_ru.arb
++++ b/lib/l10n/app_ru.arb
+@@ -2023,6 +2023,8 @@
+   "interpreterStartButton": "Начать",
+   "interpreterScanButton": "Сканировать QR",
+   "interpreterStartHint": "Нужен образец голоса — ваш и собеседника. Платит тот, кто начал разговор.",
++  "interpreterInvitedHint": "Вас пригласили в разговор с переводом. Выберите свой язык и подключитесь.",
++  "interpreterJoinButton": "Подключиться",
+   "interpreterChooseLanguage": "Выберите язык",
+   "interpreterSearchLanguage": "Поиск языка",
+   "interpreterShowCode": "Покажите код собеседнику",
+```
+
+Затем сгенерировать локализации:
+
+```bash
+flutter gen-l10n
+```
+
+- [ ] **Step 3: Проверить**
+
+```bash
+flutter test test/features/interpreter 2>&1 | tail -1
+flutter analyze lib/features/interpreter/presentation/screens/interpreter_screen.dart lib/features/interpreter/presentation/widgets/start_view.dart test/features/interpreter/presentation/screens/interpreter_screen_test.dart test/features/interpreter/presentation/widgets/start_view_test.dart
+```
+
+Ожидается: `+236: All tests passed!`; `No issues found!`.
+
+- [ ] **Step 4: Коммит**
+
+```bash
+git add test/features/interpreter/presentation/screens/interpreter_screen_test.dart test/features/interpreter/presentation/widgets/start_view_test.dart lib/features/interpreter/presentation/screens/interpreter_screen.dart lib/features/interpreter/presentation/widgets/start_view.dart lib/l10n/app_en.arb lib/l10n/app_ru.arb lib/l10n/app_localizations*.dart
+git commit -m "fix(interpreter): код из ссылки ведёт ко входу — «Подключиться» вместо пустого старта" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 24c: Ассистент: `open_interpreter` только на мобильных
+
+- Маршруты раздела есть только на мобильных, а инструмент предлагался и обрабатывался везде: на десктопе ассистент уводил бы на несуществующий маршрут. Теперь на десктопе инструмент отвечает «недоступно» и никуда не ведёт.
+
+**Files:**
+- Modify: `test/features/assistant/assistant_tools_schema_test.dart`, `lib/features/assistant/presentation/screens/assistant_screen.dart`, `lib/features/assistant/tools/assistant_tools_schema.dart`
+
+- [ ] **Step 1: Тесты (падают)**
+
+Патч к `test/features/assistant/assistant_tools_schema_test.dart`:
+
+```diff
+--- a/test/features/assistant/assistant_tools_schema_test.dart
++++ b/test/features/assistant/assistant_tools_schema_test.dart
+@@ -64,6 +64,21 @@
+     });
+   });
+ 
++  group('open_interpreter schema', () {
++    // f2: the feature's routes exist only on mobile (LiveKit room +
++    // device-level earpiece/proximity plumbing has no desktop equivalent —
++    // see app_router.dart's `if (PlatformUtils.instance.isMobile)` route
++    // guard), so the tool itself should not be offered to the model
++    // elsewhere. `PlatformUtils.instance.isMobile` has no fake/override hook
++    // in this codebase and is `false` under `flutter test` on every host
++    // this repo builds on (same convention as
++    // interpreter_entry_button_test.dart), so this also doubles as "absent
++    // on desktop".
++    test('is not offered on this (desktop) test host', () {
++      expect(tools.where((t) => t['name'] == 'open_interpreter'), isEmpty);
++    });
++  });
++
+   test('translator mode does not expose the pin tools (only its own two)', () {
+     final translatorTools = assistantToolSchemas(translatorMode: true);
+     final names = translatorTools.map((t) => t['name']).toSet();
+```
+
+Run: `flutter test test/features/assistant/assistant_tools_schema_test.dart`
+Expected: `test/features/assistant/assistant_tools_schema_test.dart` — падают 1 из 6. Всего тестов 6, падающих 1.
+
+- [ ] **Step 2: Код**
+
+Патч к `lib/features/assistant/presentation/screens/assistant_screen.dart`:
+
+```diff
+--- a/lib/features/assistant/presentation/screens/assistant_screen.dart
++++ b/lib/features/assistant/presentation/screens/assistant_screen.dart
+@@ -1244,6 +1244,28 @@
+         return; // Skip the default sendEvent below — already sent
+       }
+       if (name == 'open_interpreter') {
++        // The schema already keeps this tool off non-mobile sessions (see
++        // assistant_tools_schema.dart), but answer gracefully instead of
++        // navigating to a `/dashboard/interpreter` route that doesn't exist
++        // there (app_router.dart only registers it when
++        // PlatformUtils.instance.isMobile) if it is ever called anyway.
++        if (!PlatformUtils.instance.isMobile) {
++          debugPrint('[Assistant] tool open_interpreter (callId=$callId) — not available on this platform');
++          _sendEvent({
++            'type': 'conversation.item.create',
++            'item': {
++              'type': 'function_call_output',
++              'call_id': callId,
++              'output': jsonEncode({
++                'error': 'not_available_on_this_platform',
++                'instruction':
++                    'Tell the user this feature is only available on the mobile app, not here.',
++              }),
++            },
++          });
++          _sendEvent({'type': 'response.create'});
++          return;
++        }
+         Map<String, dynamic> args = const {};
+         try {
+           args = jsonDecode(argsJson) as Map<String, dynamic>;
+```
+
+Патч к `lib/features/assistant/tools/assistant_tools_schema.dart`:
+
+```diff
+--- a/lib/features/assistant/tools/assistant_tools_schema.dart
++++ b/lib/features/assistant/tools/assistant_tools_schema.dart
+@@ -1,3 +1,5 @@
++import '../../../core/platform/platform_utils.dart';
++
+ /// JSON tool schemas for the OpenAI Realtime session (flat format:
+ /// `{'type': 'function', 'name': ..., 'description': ..., 'parameters': ...}`).
+ /// Moved verbatim from assistant_screen.dart.
+@@ -308,23 +310,31 @@
+               'required': ['conversationId'],
+             },
+           },
+-          {
+-            'type': 'function',
+-            'name': 'open_interpreter',
+-            'description':
+-                'Open "Разговор с переводом" — face-to-face interpreter for two people sitting together, each with their own phone, each hearing only the translation of the other (NOT the "one phone on the table" translator mode — that is enter_translator_mode). action="host" opens the start screen to begin a new session and show a QR code; action="join" opens the QR scanner to join a session someone else started. Use when the user asks to "поговорить с переводом", "разговор с переводчиком на два телефона", "включи перевод для разговора вдвоём, у нас по телефону", "сканировать код для разговора с переводом", or similar.',
+-            'parameters': {
+-              'type': 'object',
+-              'properties': {
+-                'action': {
+-                  'type': 'string',
+-                  'enum': ['host', 'join'],
+-                  'description': '"host" to start a new session, "join" to scan a partner\'s code',
+-                },
+-              },
+-              'required': ['action'],
+-            },
+-          },
++          // open_interpreter's routes exist only on mobile (LiveKit room +
++          // device-level earpiece/proximity plumbing has no desktop
++          // equivalent — see app_router.dart's own
++          // `if (PlatformUtils.instance.isMobile)` route guard), so the tool
++          // itself is not offered elsewhere. The handler in
++          // assistant_screen.dart also answers it with a graceful refusal
++          // instead of navigating, as a second line of defense.
++          if (PlatformUtils.instance.isMobile)
++            {
++              'type': 'function',
++              'name': 'open_interpreter',
++              'description':
++                  'Open "Разговор с переводом" — face-to-face interpreter for two people sitting together, each with their own phone, each hearing only the translation of the other (NOT the "one phone on the table" translator mode — that is enter_translator_mode). action="host" opens the start screen to begin a new session and show a QR code; action="join" opens the QR scanner to join a session someone else started. Use when the user asks to "поговорить с переводом", "разговор с переводчиком на два телефона", "включи перевод для разговора вдвоём, у нас по телефону", "сканировать код для разговора с переводом", or similar.',
++              'parameters': {
++                'type': 'object',
++                'properties': {
++                  'action': {
++                    'type': 'string',
++                    'enum': ['host', 'join'],
++                    'description': '"host" to start a new session, "join" to scan a partner\'s code',
++                  },
++                },
++                'required': ['action'],
++              },
++            },
+           {
+             'type': 'function',
+             'name': 'send_message',
+```
+
+- [ ] **Step 3: Проверить**
+
+```bash
+flutter test test/features/interpreter test/features/assistant 2>&1 | tail -1
+```
+
+Ожидается: `+346: All tests passed!`.
+
+- [ ] **Step 4: Коммит**
+
+```bash
+git add test/features/assistant/assistant_tools_schema_test.dart lib/features/assistant/presentation/screens/assistant_screen.dart lib/features/assistant/tools/assistant_tools_schema.dart
+git commit -m "fix(interpreter): open_interpreter только на мобильных" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 24d: Ссылка до входа — только на мобильных
+
+- Код из ссылки, открытой до входа, запоминался и на десктопе, а после входа уводил на маршрут, которого там нет. Запоминание и продолжение — только на мобильных.
+
+**Files:**
+- Create: `test/core/router/post_login_redirect_test.dart`
+- Modify: `lib/core/router/app_router.dart`, `lib/core/router/post_login_redirect.dart`
+
+- [ ] **Step 1: Тесты (падают)**
+
+`test/core/router/post_login_redirect_test.dart` целиком:
+
+```dart
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
+import 'package:mocktail/mocktail.dart';
+import 'package:taler_id_mobile/core/di/service_locator.dart';
+import 'package:taler_id_mobile/core/router/post_login_redirect.dart';
+import 'package:taler_id_mobile/core/storage/secure_storage_service.dart';
+import 'package:taler_id_mobile/core/utils/constants.dart';
+import 'package:taler_id_mobile/features/interpreter/data/pending_interpreter_join.dart';
+import 'package:taler_id_mobile/features/mail/domain/repositories/i_mail_repository.dart';
+import 'package:taler_id_mobile/features/oauth/data/oauth_pending_request.dart';
+
+class _MockOAuthPendingRequest extends Mock implements OAuthPendingRequest {}
+
+class _MockSecureStorageService extends Mock implements SecureStorageService {}
+
+class _MockMailRepository extends Mock implements IMailRepository {}
+
+/// f3: `postLoginNavigate` consumed a pending face-to-face interpreter join
+/// code regardless of platform, which on desktop would `context.go()` to
+/// `/dashboard/interpreter/join/:code` — a route `app_router.dart` only
+/// registers `if (PlatformUtils.instance.isMobile)`. `PlatformUtils.instance.
+/// isMobile` has no fake/override hook in this codebase and is `false` under
+/// `flutter test` on every host this repo builds on (same convention as
+/// interpreter_entry_button_test.dart), so this test exercises exactly the
+/// desktop path.
+void main() {
+  late _MockOAuthPendingRequest oauthPending;
+  late PendingInterpreterJoin interpreterJoin;
+  late _MockSecureStorageService storage;
+  late _MockMailRepository mailRepo;
+
+  setUp(() {
+    oauthPending = _MockOAuthPendingRequest();
+    interpreterJoin = PendingInterpreterJoin();
+    storage = _MockSecureStorageService();
+    mailRepo = _MockMailRepository();
+
+    when(() => oauthPending.consume()).thenAnswer((_) async => null);
+    when(() => storage.isOnboardingSeen).thenAnswer((_) async => true);
+    when(() => storage.isMailSetupDismissed).thenAnswer((_) async => true);
+    when(() => storage.isMailSetupConfirmed).thenAnswer((_) async => false);
+
+    sl.registerSingleton<OAuthPendingRequest>(oauthPending);
+    sl.registerSingleton<PendingInterpreterJoin>(interpreterJoin);
+    sl.registerSingleton<SecureStorageService>(storage);
+    sl.registerSingleton<IMailRepository>(mailRepo);
+  });
+
+  tearDown(() async {
+    await sl.reset();
+  });
+
+  testWidgets(
+      'a pending interpreter join code is ignored on this (desktop) test '
+      'host — falls through to the normal default route instead of the '
+      'mobile-only join route', (tester) async {
+    interpreterJoin.save('ABCD2345');
+
+    String? landedOn;
+    final router = GoRouter(
+      initialLocation: '/start',
+      routes: [
+        GoRoute(path: '/start', builder: (_, __) => const SizedBox()),
+        GoRoute(
+          path: RouteConstants.messenger,
+          builder: (_, __) {
+            landedOn = RouteConstants.messenger;
+            return const SizedBox();
+          },
+        ),
+        GoRoute(
+          path: RouteConstants.interpreterJoin,
+          builder: (_, state) {
+            landedOn =
+                '${RouteConstants.interpreter}/join/${state.pathParameters['code']}';
+            return const SizedBox();
+          },
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+    await tester.pumpAndSettle();
+
+    final context = router.routerDelegate.navigatorKey.currentContext!;
+    await postLoginNavigate(context);
+    await tester.pumpAndSettle();
+
+    expect(landedOn, RouteConstants.messenger);
+  });
+}
+```
+
+Run: `flutter test test/core/router/post_login_redirect_test.dart`
+Expected: `test/core/router/post_login_redirect_test.dart` — падают 1 из 1. Всего тестов 1, падающих 1.
+
+- [ ] **Step 2: Код**
+
+Патч к `lib/core/router/app_router.dart`:
+
+```diff
+--- a/lib/core/router/app_router.dart
++++ b/lib/core/router/app_router.dart
+@@ -608,7 +608,12 @@
+   // while logged out: same pattern as the native OAuth flow above — save the
+   // code before sending the user to /login, so postLoginNavigate can resume
+   // it, instead of just losing it to the generic protected-route check below.
+-  if (state.matchedLocation.startsWith('${RouteConstants.interpreter}/join/')) {
++  // Mobile only — this route (and postLoginNavigate's resume of it) doesn't
++  // exist on desktop in the first place (app_router.dart's own
++  // `if (PlatformUtils.instance.isMobile)` route guard below), so saving the
++  // code here would just be lost work.
++  if (PlatformUtils.instance.isMobile &&
++      state.matchedLocation.startsWith('${RouteConstants.interpreter}/join/')) {
+     try {
+       final storage = sl<SecureStorageService>();
+       final hasToken = await storage.hasRefreshToken;
+```
+
+Патч к `lib/core/router/post_login_redirect.dart`:
+
+```diff
+--- a/lib/core/router/post_login_redirect.dart
++++ b/lib/core/router/post_login_redirect.dart
+@@ -22,11 +22,16 @@
+     return;
+   }
+ 
+-  final pendingJoinCode = sl<PendingInterpreterJoin>().consume();
+-  if (pendingJoinCode != null) {
+-    if (!context.mounted) return;
+-    context.go('${RouteConstants.interpreter}/join/$pendingJoinCode');
+-    return;
++  // Mobile only — app_router.dart never registers the join route on desktop
++  // (`if (PlatformUtils.instance.isMobile)`), so consuming a pending code
++  // there would `context.go()` straight into a route that doesn't exist.
++  if (PlatformUtils.instance.isMobile) {
++    final pendingJoinCode = sl<PendingInterpreterJoin>().consume();
++    if (pendingJoinCode != null) {
++      if (!context.mounted) return;
++      context.go('${RouteConstants.interpreter}/join/$pendingJoinCode');
++      return;
++    }
+   }
+ 
+   final storage = sl<SecureStorageService>();
+```
+
+- [ ] **Step 3: Проверить**
+
+```bash
+flutter test test/features/interpreter test/core/router 2>&1 | tail -1
+```
+
+Ожидается: `+263: All tests passed!`.
+
+- [ ] **Step 4: Коммит**
+
+```bash
+git add test/core/router/post_login_redirect_test.dart lib/core/router/app_router.dart lib/core/router/post_login_redirect.dart
+git commit -m "fix(interpreter): ожидающий код после входа — только на мобильных" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 24e: Закрытый BLoC завершает живой разговор
+
+- Если экран исчез не через «Завершить» (программная смена маршрута), BLoC освобождал комнату у себя, но сервер об этом не узнавал — хост платил, пока сверка не заметит пропажу (~70 с). Теперь при закрытии в состоянии «хост с QR» или «разговор» уходит `end` (без ожидания, ошибки не важны: ручка идемпотентна).
+
+**Files:**
+- Modify: `test/features/interpreter/presentation/bloc/interpreter_bloc_test.dart`, `lib/features/interpreter/presentation/bloc/interpreter_bloc.dart`
+
+- [ ] **Step 1: Тесты (падают)**
+
+Патч к `test/features/interpreter/presentation/bloc/interpreter_bloc_test.dart`:
+
+```diff
+--- a/test/features/interpreter/presentation/bloc/interpreter_bloc_test.dart
++++ b/test/features/interpreter/presentation/bloc/interpreter_bloc_test.dart
+@@ -961,14 +961,62 @@
+     );
+ 
+     test(
+-        'closing the bloc tears down the room without ending the session on the server',
++        'closing the bloc while a session is live tears down the room AND '
++        'ends the session on the server — otherwise the host keeps being '
++        'billed until the ~70s reconciler notices', () async {
++      when(() => repo.catalog()).thenAnswer((_) async => _catalog());
++      when(() => langStore.initial(any(), any())).thenAnswer((_) async => 'ru');
++      when(() => voice.getStatus())
++          .thenAnswer((_) async => const OwnerVoiceStatus(enrolled: true));
++      when(() => repo.create('ru')).thenAnswer((_) async => _hostedSession());
++      when(() => repo.get('sess-1')).thenAnswer((_) async => _activeView());
++      when(() => repo.end('sess-1')).thenAnswer((_) async {});
++
++      bloc.add(const Started());
++      await Future.delayed(_tinyDelay);
++      bloc.add(const HostPressed());
++      await Future.delayed(_tinyDelay);
++      port.emit(const ParticipantJoined(_partnerIdentity));
++      await Future.delayed(_tinyDelay);
++      expect(bloc.state, isA<InterpreterActive>());
++
++      await bloc.close();
++
++      verify(() => device.leaveConversation()).called(1);
++      verify(() => repo.end('sess-1')).called(1);
++      expect(port.disconnected, isTrue);
++    });
++  });
++
++  group('f4: close() notifies the server while a session is live', () {
++    test('close while Hosting (no partner yet) ends the session once',
+         () async {
+       when(() => repo.catalog()).thenAnswer((_) async => _catalog());
+       when(() => langStore.initial(any(), any())).thenAnswer((_) async => 'ru');
+       when(() => voice.getStatus())
+           .thenAnswer((_) async => const OwnerVoiceStatus(enrolled: true));
+       when(() => repo.create('ru')).thenAnswer((_) async => _hostedSession());
++      when(() => repo.end('sess-1')).thenAnswer((_) async {});
++
++      bloc.add(const Started());
++      await Future.delayed(_tinyDelay);
++      bloc.add(const HostPressed());
++      await Future.delayed(_tinyDelay);
++      expect(bloc.state, isA<InterpreterHosting>());
++
++      await bloc.close();
++
++      verify(() => repo.end('sess-1')).called(1);
++    });
++
++    test('close while Active ends the session once', () async {
++      when(() => repo.catalog()).thenAnswer((_) async => _catalog());
++      when(() => langStore.initial(any(), any())).thenAnswer((_) async => 'ru');
++      when(() => voice.getStatus())
++          .thenAnswer((_) async => const OwnerVoiceStatus(enrolled: true));
++      when(() => repo.create('ru')).thenAnswer((_) async => _hostedSession());
+       when(() => repo.get('sess-1')).thenAnswer((_) async => _activeView());
++      when(() => repo.end('sess-1')).thenAnswer((_) async {});
+ 
+       bloc.add(const Started());
+       await Future.delayed(_tinyDelay);
+@@ -980,9 +1028,49 @@
+ 
+       await bloc.close();
+ 
+-      verify(() => device.leaveConversation()).called(1);
++      verify(() => repo.end('sess-1')).called(1);
++    });
++
++    test(
++        'close after the call already Ended (via EndPressed) does not end '
++        'the session again beyond what that flow already did', () async {
++      when(() => repo.catalog()).thenAnswer((_) async => _catalog());
++      when(() => langStore.initial(any(), any())).thenAnswer((_) async => 'ru');
++      when(() => voice.getStatus())
++          .thenAnswer((_) async => const OwnerVoiceStatus(enrolled: true));
++      when(() => repo.create('ru')).thenAnswer((_) async => _hostedSession());
++      when(() => repo.get('sess-1')).thenAnswer((_) async => _activeView());
++      when(() => repo.end('sess-1')).thenAnswer((_) async {});
++
++      bloc.add(const Started());
++      await Future.delayed(_tinyDelay);
++      bloc.add(const HostPressed());
++      await Future.delayed(_tinyDelay);
++      port.emit(const ParticipantJoined(_partnerIdentity));
++      await Future.delayed(_tinyDelay);
++      bloc.add(const EndPressed());
++      await Future.delayed(_tinyDelay);
++      expect(bloc.state, isA<InterpreterEnded>());
++
++      await bloc.close();
++
++      // Exactly the one call EndPressed's own handler already made —
++      // close() must not pile another one on top of it.
++      verify(() => repo.end('sess-1')).called(1);
++    });
++
++    test('close while Choosing (no session ever started) never calls repo.end',
++        () async {
++      when(() => repo.catalog()).thenAnswer((_) async => _catalog());
++      when(() => langStore.initial(any(), any())).thenAnswer((_) async => 'ru');
++
++      bloc.add(const Started());
++      await Future.delayed(_tinyDelay);
++      expect(bloc.state, isA<InterpreterChoosing>());
++
++      await bloc.close();
++
+       verifyNever(() => repo.end(any()));
+-      expect(port.disconnected, isTrue);
+     });
+   });
+ 
+```
+
+Run: `flutter test test/features/interpreter/presentation/bloc/interpreter_bloc_test.dart`
+Expected: `test/features/interpreter/presentation/bloc/interpreter_bloc_test.dart` — падают 3 из 43. Всего тестов 43, падающих 3.
+
+- [ ] **Step 2: Код**
+
+Патч к `lib/features/interpreter/presentation/bloc/interpreter_bloc.dart`:
+
+```diff
+--- a/lib/features/interpreter/presentation/bloc/interpreter_bloc.dart
++++ b/lib/features/interpreter/presentation/bloc/interpreter_bloc.dart
+@@ -741,6 +741,22 @@
+ 
+   @override
+   Future<void> close() async {
++    final sessionId = _sessionId;
++    final current = state;
++    // The screen going away mid-call (a programmatic route change, not the
++    // «Завершить» button) must not leave the host billed until the ~70s
++    // reconciler notices — tell the server too, not just tear down locally.
++    // Fire-and-forget: close() must not block on the network, and the end
++    // route is idempotent, so a failure here is simply left to that same
++    // reconciler. Wrapped defensively — a call that throws synchronously
++    // (e.g. an unstubbed mock in a test that never exercises this path)
++    // must not stop teardown from running either.
++    if (sessionId != null &&
++        (current is InterpreterHosting || current is InterpreterActive)) {
++      try {
++        unawaited(repo.end(sessionId).catchError((_) {}));
++      } catch (_) {}
++    }
+     await _teardownRoom();
+     return super.close();
+   }
+```
+
+- [ ] **Step 3: Проверить**
+
+```bash
+flutter test test/features/interpreter 2>&1 | tail -1
+flutter analyze lib/features/interpreter/presentation/bloc/interpreter_bloc.dart test/features/interpreter/presentation/bloc/interpreter_bloc_test.dart
+```
+
+Ожидается: `+240: All tests passed!`; `No issues found!`.
+
+- [ ] **Step 4: Коммит**
+
+```bash
+git add test/features/interpreter/presentation/bloc/interpreter_bloc_test.dart lib/features/interpreter/presentation/bloc/interpreter_bloc.dart
+git commit -m "fix(interpreter): закрытый BLoC завершает живой разговор на сервере" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
 ### Task 25: Выкатка на DEV и сборки для проверки
 
 **Выполняет контроллер сам, не исполнитель-подагент.**
