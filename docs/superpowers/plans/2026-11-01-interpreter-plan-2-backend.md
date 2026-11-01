@@ -50,6 +50,7 @@
 8. **Почти одинаковые образцы** (косинус ≥ 0,99) отклоняются на бэкенде до открытия биллинга — `409 same_voice_print`.
 9. **Завершение, отчёт агента, чтение сессии, сверка и самопроверка не зависят от выключателя.** Выключенная функция не должна держать платные разговоры и ломать смоук после деплоя.
 10. **Агент:** время по звуку во фразовом движке; сторож `FATAL interpreter: no translation …`.
+11. **По ревью кода** (раздел «Исправления по ревью», задачи 6b–20b): сверка закрывает биллинг, который не держит ни одна сессия; `agentSeenAt` только вперёд; ручки переводчика звонка, E2EE и музыки ожидания закрыты для `interp-*`; тело не того типа отвечает только кодом поля; в таблице ошибок — `same_voice_print` и `503` при создании.
 
 ## Карта файлов
 
@@ -68,7 +69,7 @@
 | `interpreter-secret.guard.ts` | `x-interpreter-secret` для отчёта агента |
 | `interpreter.controller.ts`, `interpreter.module.ts` | ручки и модуль |
 
-**Бэкенд, правки:** `src/billing/constants/feature-keys.ts`, `src/billing/services/{metering,gating}.service.ts` (+ спеки), `prisma/schema.prisma` + миграция `20261101120000_interpreter`, `src/app.module.ts`, `src/voice/guards/room-access.guard.ts` (+ спека), `.env.example`.
+**Бэкенд, правки:** `src/billing/constants/feature-keys.ts`, `src/billing/services/{metering,gating}.service.ts` (+ спеки), `prisma/schema.prisma` + миграция `20261101120000_interpreter`, `src/app.module.ts`, `src/voice/guards/room-access.guard.ts` (+ спека), `.env.example`. По ревью: новый `src/voice/guards/not-interpreter-room.guard.ts` (+ спека) и `src/voice/voice.controller.ts`.
 
 **Агент** (`livekit-agent/`): `realtime-phrase-session.js`, `phrase-session.js`, `translator-turns.js` (комментарий), `interpreter.js` и их тесты.
 
@@ -6482,6 +6483,1148 @@ git commit -m "test: test:interpreter-selftest; test:billing ждёт 7 тумб
 
 ---
 
+## Исправления по ревью (задачи с буквой)
+
+Выполняются после задачи 20, в этом порядке, до задачи 21. Ревью кода по группам задач нашло то, что ниже; числа в «Ожидается» — от состояния после задачи 20 и предыдущих задач этого раздела. Сквозной набор и стенд с этими правками прогоняются в задаче 22.
+
+### Task 6b: Код QR принимает то, что телефон ставит вместо дефиса
+
+По ревью задач 4–6:
+- **Код, набранный руками, отклонялся как несуществующий.** Нормализация убирала только ASCII-дефис и пробелы. Умная пунктуация iOS превращает `-` в длинное или короткое тире, вставка из мессенджера приносит пробел нулевой ширины, клавиатура CJK — полноширинные цифры. Человек видит на экране правильный код и получает `404 code_not_found`. Теперь такие разделители убираются, а полноширинные знаки приводятся к ASCII (NFKC). Подчёркивание и прочая пунктуация по-прежнему не разделитель.
+
+**Files:**
+- Modify: `src/interpreter/interpreter-code.spec.ts`, `src/interpreter/interpreter-code.ts`
+
+- [ ] **Step 1: Тесты (падают)**
+
+Патч к `src/interpreter/interpreter-code.spec.ts`:
+
+```diff
+--- a/src/interpreter/interpreter-code.spec.ts
++++ b/src/interpreter/interpreter-code.spec.ts
+@@ -26,6 +26,25 @@
+     expect(normalizeCode(' AB CD EF 23 ')).toBe('ABCDEF23');
+   });
+ 
++  it('takes what a phone puts in place of a dash or a space', () => {
++    for (const sep of [
++      '\u2010', // hyphen
++      '\u2011', // non-breaking hyphen
++      '\u2013', // en dash: iOS smart punctuation
++      '\u2014', // em dash: iOS smart punctuation, '--'
++      '\u2212', // minus sign
++      '\u00A0', // no-break space
++      '\u200B', // zero-width space from a paste
++    ]) {
++      expect(normalizeCode(`ABCD${sep}EFGH`)).toBe('ABCDEFGH');
++    }
++    expect(normalizeCode('\uFEFFABCDEFGH')).toBe('ABCDEFGH'); // BOM
++  });
++
++  it('folds full-width letters and digits from a CJK keyboard', () => {
++    expect(normalizeCode('\uFF41\uFF42\uFF43\uFF44EFG\uFF12')).toBe('ABCDEFG2');
++  });
++
+   it('refuses anything that cannot be a code', () => {
+     for (const raw of [
+       'ABCDEFG', // too short
+```
+
+Run: `npx jest src/interpreter src/billing src/voice/guards`
+Expected: `src/interpreter/interpreter-code.spec.ts` — падают 2 из 7. Всего наборов 18, тестов 187, падающих 2.
+
+- [ ] **Step 2: Код**
+
+Патч к `src/interpreter/interpreter-code.ts`:
+
+```diff
+--- a/src/interpreter/interpreter-code.ts
++++ b/src/interpreter/interpreter-code.ts
+@@ -20,10 +20,16 @@
+   return code;
+ }
+ 
++// What a phone may put between the groups instead of a plain space or '-':
++// smart punctuation turns '-' into a dash look-alike (U+2010–2015, minus sign),
++// a paste from a messenger brings zero-width characters and a BOM.
++const SEPARATORS = /[\s\-\u2010-\u2015\u2212\u200B-\u200D\uFEFF]/g;
++
+ /** The code as generated, or null if the input cannot be one. */
+ export function normalizeCode(raw: unknown): string | null {
+   if (typeof raw !== 'string') return null;
+-  const code = raw.toUpperCase().replace(/[\s-]/g, '');
++  // NFKC folds full-width letters and digits (a CJK keyboard) to ASCII.
++  const code = raw.normalize('NFKC').toUpperCase().replace(SEPARATORS, '');
+   return CODE_SHAPE.test(code) ? code : null;
+ }
+ 
+```
+
+- [ ] **Step 3: Проверить**
+
+```bash
+npx jest src/interpreter src/billing src/voice/guards 2>&1 | tail -6
+npx tsc --noEmit -p tsconfig.build.json; echo tsc-exit=$?
+```
+
+Ожидается: 18 наборов, 187 тестов, все зелёные; `tsc-exit=0`.
+
+- [ ] **Step 4: Коммит**
+
+```bash
+git add src/interpreter/interpreter-code.spec.ts src/interpreter/interpreter-code.ts
+git commit -m "fix(interpreter): код из QR принимает тире-двойники, невидимые символы и полноширинные знаки" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 9b: Тело не того типа отвечает только кодом поля; самопроверка называет статус прокси
+
+По ревью задач 7–9:
+- **В `message` рядом с нашим кодом попадала английская фраза class-validator.** `{"lang": 42}` давал `["unsupported_language", "lang must be a string"]`: `IsString` не останавливает `Matches` и `MaxLength`, оба отчитываются. Теперь каждое правило поля называет один код, как в `src/partner-api/dto/verify-link-code.dto.ts`. Для кода — `code_not_found`: приложение его уже понимает, нового кода в таблице не появляется.
+- **Самопроверка теряла статус прокси.** Если перед агентом nginx отвечает HTML-страницей 502, `res.json()` падал, и в ответе оставалась только ошибка разбора `Unexpected token '<'`. Теперь причина — `agent answered 502, not JSON`, статус по-прежнему 503.
+
+**Files:**
+- Modify: `src/interpreter/dto/interpreter-dtos.spec.ts`, `src/interpreter/interpreter-agent.client.spec.ts`, `src/interpreter/dto/create-interpreter-session.dto.ts`, `src/interpreter/dto/join-interpreter-session.dto.ts`, `src/interpreter/interpreter-agent.client.ts`, `docs/superpowers/specs/2026-10-31-interpreter-face-to-face-design.md`
+
+- [ ] **Step 1: Тесты (падают)**
+
+Патч к `src/interpreter/dto/interpreter-dtos.spec.ts`:
+
+```diff
+--- a/src/interpreter/dto/interpreter-dtos.spec.ts
++++ b/src/interpreter/dto/interpreter-dtos.spec.ts
+@@ -42,10 +42,28 @@
+         code: 'A'.repeat(33),
+         lang: 'de',
+       }),
+-    ).toHaveLength(1);
+-    expect(
+-      await messages(JoinInterpreterSessionDto, { code: 42, lang: 'de' }),
+-    ).not.toEqual([]);
++    ).toEqual(['code_not_found']);
++  });
++
++  it('answer a field of the wrong type with the field code alone', async () => {
++    // A failed IsString does not stop Matches or MaxLength: both report.
++    for (const bad of [42, null, ['ru'], { a: 1 }]) {
++      for (const msg of [
++        ...(await messages(CreateInterpreterSessionDto, { lang: bad })),
++        ...(await messages(JoinInterpreterSessionDto, {
++          code: 'X',
++          lang: bad,
++        })),
++      ]) {
++        expect(msg).toBe('unsupported_language');
++      }
++      const code = await messages(JoinInterpreterSessionDto, {
++        code: bad,
++        lang: 'de',
++      });
++      expect(code.length).toBeGreaterThan(0);
++      for (const msg of code) expect(msg).toBe('code_not_found');
++    }
+   });
+ 
+   it('take only the endings the agent reports', async () => {
+```
+
+Патч к `src/interpreter/interpreter-agent.client.spec.ts`:
+
+```diff
+--- a/src/interpreter/interpreter-agent.client.spec.ts
++++ b/src/interpreter/interpreter-agent.client.spec.ts
+@@ -178,6 +178,17 @@
+       expect(timeout).toHaveBeenCalledWith(25_000);
+     });
+ 
++    it('answers 503 with the status of an answer that is not JSON', async () => {
++      fetchFn.mockResolvedValue(
++        new Response('<html>502 Bad Gateway</html>', { status: 502 }),
++      );
++
++      await expect(client.selftest()).resolves.toEqual({
++        status: 503,
++        body: { ok: false, reason: 'agent answered 502, not JSON' },
++      });
++    });
++
+     it('answers 503 when the agent cannot be reached', async () => {
+       fetchFn.mockRejectedValue(
+         new DOMException('The operation timed out.', 'TimeoutError'),
+```
+
+Run: `npx jest src/interpreter src/billing src/voice/guards`
+Expected: `src/interpreter/dto/interpreter-dtos.spec.ts` — падают 2 из 4; `src/interpreter/interpreter-agent.client.spec.ts` — падают 1 из 11. Всего наборов 18, тестов 189, падающих 3.
+
+- [ ] **Step 2: Код**
+
+Патч к `src/interpreter/dto/create-interpreter-session.dto.ts`:
+
+```diff
+--- a/src/interpreter/dto/create-interpreter-session.dto.ts
++++ b/src/interpreter/dto/create-interpreter-session.dto.ts
+@@ -2,7 +2,7 @@
+ 
+ export class CreateInterpreterSessionDto {
+   /** The host's language; whether the agent speaks it is the service's check. */
+-  @IsString()
++  @IsString({ message: 'unsupported_language' })
+   @Matches(/^[a-z]{2,3}$/, { message: 'unsupported_language' })
+   lang!: string;
+ }
+```
+
+Патч к `src/interpreter/dto/join-interpreter-session.dto.ts`:
+
+```diff
+--- a/src/interpreter/dto/join-interpreter-session.dto.ts
++++ b/src/interpreter/dto/join-interpreter-session.dto.ts
+@@ -1,13 +1,17 @@
+ import { IsString, Matches, MaxLength } from 'class-validator';
+ 
+ export class JoinInterpreterSessionDto {
+-  /** As scanned or typed: the service normalizes case, spaces and dashes. */
+-  @IsString()
+-  @MaxLength(32)
++  /**
++   * As scanned or typed: the service normalizes case, spaces and dashes.
++   * Every check names the same code, or class-validator's English sentence
++   * ("code must be a string") would ride along in `message`.
++   */
++  @IsString({ message: 'code_not_found' })
++  @MaxLength(32, { message: 'code_not_found' })
+   code!: string;
+ 
+   /** The guest's language; whether the agent speaks it is the service's check. */
+-  @IsString()
++  @IsString({ message: 'unsupported_language' })
+   @Matches(/^[a-z]{2,3}$/, { message: 'unsupported_language' })
+   lang!: string;
+ }
+```
+
+Патч к `src/interpreter/interpreter-agent.client.ts`:
+
+```diff
+--- a/src/interpreter/interpreter-agent.client.ts
++++ b/src/interpreter/interpreter-agent.client.ts
+@@ -86,15 +86,22 @@
+ 
+   /** The agent's own answer and status; 503 when there was none. */
+   async selftest(): Promise<{ status: number; body: unknown }> {
++    let status = 0;
+     try {
+       const res = await this.call(
+         'GET',
+         '/interpreter/selftest',
+         SELFTEST_TIMEOUT_MS,
+       );
+-      return { status: res.status, body: await res.json() };
++      status = res.status;
++      return { status, body: await res.json() };
+     } catch (e) {
+-      return { status: 503, body: { ok: false, reason: errorText(e) } };
++      // An answer that is not JSON came from a proxy in front of the agent
++      // (nginx's 502 page): its status says more than the parser's error.
++      const reason = status
++        ? `agent answered ${status}, not JSON`
++        : errorText(e);
++      return { status: 503, body: { ok: false, reason } };
+     }
+   }
+ 
+```
+
+Патч к `docs/superpowers/specs/2026-10-31-interpreter-face-to-face-design.md`:
+
+```diff
+--- a/docs/superpowers/specs/2026-10-31-interpreter-face-to-face-design.md
++++ b/docs/superpowers/specs/2026-10-31-interpreter-face-to-face-design.md
+@@ -146,6 +146,8 @@
+ | `503 interpreter_unavailable` | агент не стартовал |
+ | `404 session_not_found` / `409 not_waiting` | чужая или несуществующая сессия / новый код не в `waiting` |
+ 
++Поле тела не того типа (язык не строка, код не строка или длиннее 32 символов) — `400` с кодом своего поля: `unsupported_language` или `code_not_found`. Каждое правило проверки называет один и тот же код, иначе рядом с ним в `message` попала бы английская фраза class-validator.
++
+ - `GET /interpreter/languages` → `{enabled, languages: [{code, name}]}`. Список — 81 язык агента, ровно коды `SUPPORTED_LANGS` из `livekit-agent/lang-names.js`, без регионов (`pt`, не `pt-BR`). Импортировать агентский файл в бэкенд нельзя: сборка не кладёт `livekit-agent/` в `dist/`. Поэтому в бэкенде своя копия списка и Jest-тест, который сверяет её с `lang-names.js`. Код, который бэкенд примет, а агент нет, закончится `503` уже после открытия биллинга. Синхронность зависит от пары и сообщается при входе Б.
+ - `POST /interpreter/sessions` с телом `{lang}`. Проверки:
+   - режим включён;
+```
+
+- [ ] **Step 3: Проверить**
+
+```bash
+npx jest src/interpreter src/billing src/voice/guards 2>&1 | tail -6
+npx tsc --noEmit -p tsconfig.build.json; echo tsc-exit=$?
+```
+
+Ожидается: 18 наборов, 189 тестов, все зелёные; `tsc-exit=0`.
+
+- [ ] **Step 4: Коммит**
+
+```bash
+git add src/interpreter/dto/interpreter-dtos.spec.ts src/interpreter/interpreter-agent.client.spec.ts src/interpreter/dto/create-interpreter-session.dto.ts src/interpreter/dto/join-interpreter-session.dto.ts src/interpreter/interpreter-agent.client.ts docs/superpowers/specs/2026-10-31-interpreter-face-to-face-design.md
+git commit -m "fix(interpreter): тело не того типа — только код поля; самопроверка называет статус прокси" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 11b: Сверка закрывает биллинг, который не держит ни одна сессия
+
+По ревью задачи 10:
+- **Хост мог платить до двух часов за разговор, которого нет (критично).** Вход Б открывает биллинг (`startSession`) и только потом записывает его id в сессию. Все пути закрытия — `close()` и оба прохода сверки — идут от строки сессии. Если процесс умер между этими шагами, если не прошла уборка после проигранного захвата кода или шаг биллинга в `close()`, открытый `AiSession` не находит никто, кроме потолка метеринга в 2 часа. Теперь третий проход сверки берёт `interpreter`-биллинг в `active` старше минуты и закрывает как `failed` тот, что не держит ни одна `ACTIVE`-сессия. Минута — запас на вход, который как раз открыл биллинг и вот-вот его привяжет: между этими шагами нет ничего, кроме одного запроса к базе.
+- Две ноды PROD могут закрыть один и тот же биллинг почти одновременно — так же, как сегодня метеринг и `close()`: `endBillingIfActive` перечитывает статус и закрывает только `active`.
+- Заодно по тому же ревью — в таблицу ошибок спеки: `409 same_voice_print` (есть в коде с задачи 10, в таблице не было) и `503 interpreter_unavailable` при создании, когда LiveKit не создал комнату.
+
+**Files:**
+- Modify: `src/interpreter/interpreter.reconciler.spec.ts`, `src/interpreter/interpreter.service.spec.ts`, `src/interpreter/interpreter.reconciler.ts`, `src/interpreter/interpreter.service.ts`, `docs/superpowers/specs/2026-10-31-interpreter-face-to-face-design.md`
+
+- [ ] **Step 1: Тесты (падают)**
+
+Патч к `src/interpreter/interpreter.reconciler.spec.ts`:
+
+```diff
+--- a/src/interpreter/interpreter.reconciler.spec.ts
++++ b/src/interpreter/interpreter.reconciler.spec.ts
+@@ -13,20 +13,37 @@
+   ...over,
+ });
+ 
+-function setup(rows: { active?: unknown[]; waiting?: unknown[] } = {}) {
++function setup(
++  rows: {
++    active?: unknown[];
++    waiting?: unknown[];
++    openBilling?: { id: string }[];
++  } = {},
++) {
+   const prisma = {
+     interpreterSession: {
+-      findMany: jest.fn(async ({ where }: any) =>
+-        where.status === 'ACTIVE' ? (rows.active ?? []) : (rows.waiting ?? []),
+-      ),
++      findMany: jest.fn(async ({ where }: any) => {
++        if (where.billingSessionId) {
++          return ((rows.active ?? []) as any[]).filter((s) =>
++            where.billingSessionId.in.includes(s.billingSessionId),
++          );
++        }
++        return where.status === 'ACTIVE'
++          ? (rows.active ?? [])
++          : (rows.waiting ?? []);
++      }),
+       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+     },
+     aiSession: {
+       findUnique: jest.fn().mockResolvedValue({ status: 'active' }),
++      findMany: jest.fn(async () => rows.openBilling ?? []),
+     },
+   };
+   const livekit = { agentPresent: jest.fn().mockResolvedValue(true) };
+-  const interpreter = { close: jest.fn().mockResolvedValue(undefined) };
++  const interpreter = {
++    close: jest.fn().mockResolvedValue(undefined),
++    closeUnheldBilling: jest.fn().mockResolvedValue(undefined),
++  };
+   const reconciler = new InterpreterReconciler(
+     prisma as any,
+     livekit as any,
+@@ -144,6 +161,71 @@
+   });
+ });
+ 
++describe('InterpreterReconciler: billing no session holds', () => {
++  it('closes open interpreter billing that no ACTIVE session holds', async () => {
++    // bill-1 belongs to a live conversation; bill-2 was opened by a join that
++    // died before claiming the code, or left open by a failed cleanup.
++    const { reconciler, prisma, interpreter } = setup({
++      active: [active()],
++      openBilling: [{ id: 'bill-1' }, { id: 'bill-2' }],
++    });
++
++    await reconciler.runOnce(NOW);
++
++    expect(prisma.aiSession.findMany).toHaveBeenCalledWith({
++      where: {
++        featureKey: 'interpreter',
++        status: 'active',
++        // A join that is still running gets a minute to link it.
++        startedAt: { lt: new Date(NOW.getTime() - 60_000) },
++      },
++      select: { id: true },
++    });
++    expect(prisma.interpreterSession.findMany).toHaveBeenCalledWith({
++      where: {
++        status: 'ACTIVE',
++        billingSessionId: { in: ['bill-1', 'bill-2'] },
++      },
++      select: { billingSessionId: true },
++    });
++    expect(interpreter.closeUnheldBilling).toHaveBeenCalledTimes(1);
++    expect(interpreter.closeUnheldBilling).toHaveBeenCalledWith('bill-2');
++  });
++
++  it('does not look for sessions when no interpreter billing is open', async () => {
++    const { reconciler, prisma, interpreter } = setup();
++
++    await reconciler.runOnce(NOW);
++
++    // The active and the waiting pass; no third lookup.
++    expect(prisma.interpreterSession.findMany).toHaveBeenCalledTimes(2);
++    expect(interpreter.closeUnheldBilling).not.toHaveBeenCalled();
++  });
++
++  it('goes on with the other billing sessions when one fails to close', async () => {
++    const { reconciler, interpreter } = setup({
++      openBilling: [{ id: 'bill-2' }, { id: 'bill-3' }],
++    });
++    interpreter.closeUnheldBilling.mockRejectedValueOnce(new Error('db down'));
++
++    await expect(reconciler.runOnce(NOW)).resolves.toBeUndefined();
++    expect(interpreter.closeUnheldBilling).toHaveBeenCalledWith('bill-3');
++  });
++
++  it('runs even when the session passes could not load', async () => {
++    const { reconciler, prisma, interpreter } = setup({
++      openBilling: [{ id: 'bill-2' }],
++    });
++    prisma.interpreterSession.findMany
++      .mockRejectedValueOnce(new Error('db down'))
++      .mockRejectedValueOnce(new Error('db down'));
++
++    await reconciler.runOnce(NOW);
++
++    expect(interpreter.closeUnheldBilling).toHaveBeenCalledWith('bill-2');
++  });
++});
++
+ describe('InterpreterReconciler: robustness', () => {
+   it('goes on with the other sessions when one fails', async () => {
+     const { reconciler, livekit, interpreter } = setup({
+```
+
+Патч к `src/interpreter/interpreter.service.spec.ts`:
+
+```diff
+--- a/src/interpreter/interpreter.service.spec.ts
++++ b/src/interpreter/interpreter.service.spec.ts
+@@ -893,6 +893,29 @@
+   });
+ });
+ 
++describe('closeUnheldBilling', () => {
++  it('ends billing the reconciler found with no session holding it', async () => {
++    const { service, gating, prisma } = setup();
++
++    await service.closeUnheldBilling('bill-9');
++
++    expect(prisma.aiSession.findUnique).toHaveBeenCalledWith({
++      where: { id: 'bill-9' },
++      select: { status: true },
++    });
++    expect(gating.endSession).toHaveBeenCalledWith('bill-9', 'failed');
++  });
++
++  it('leaves it alone when metering or another node ended it first', async () => {
++    const { service, gating, prisma } = setup();
++    prisma.aiSession.findUnique.mockResolvedValue({ status: 'failed' });
++
++    await service.closeUnheldBilling('bill-9');
++
++    expect(gating.endSession).not.toHaveBeenCalled();
++  });
++});
++
+ describe('selftest', () => {
+   it("passes the agent's answer through", async () => {
+     const { service, agent } = setup();
+```
+
+Run: `npx jest src/interpreter src/billing src/voice/guards`
+Expected: `src/interpreter/interpreter.reconciler.spec.ts` — падают 3 из 15; `src/interpreter/interpreter.service.spec.ts` — падают 2 из 47. Всего наборов 18, тестов 195, падающих 5.
+
+- [ ] **Step 2: Код**
+
+Патч к `src/interpreter/interpreter.reconciler.ts`:
+
+```diff
+--- a/src/interpreter/interpreter.reconciler.ts
++++ b/src/interpreter/interpreter.reconciler.ts
+@@ -1,6 +1,7 @@
+ import { Injectable, Logger } from '@nestjs/common';
+ import { Interval } from '@nestjs/schedule';
+ import type { InterpreterEndReason } from '@prisma/client';
++import { FEATURE_KEYS } from '../billing/constants/feature-keys';
+ import { PrismaService } from '../prisma/prisma.service';
+ import { InterpreterLivekitService } from './interpreter-livekit.service';
+ import { InterpreterService } from './interpreter.service';
+@@ -10,6 +11,8 @@
+ const AGENT_LOST_AFTER_MS = 60_000;
+ // After a code expires the host can still ask for a new one this long.
+ const WAITING_GRACE_MS = 5 * 60_000;
++// A join links the billing it opened to the session a moment later.
++const UNLINKED_BILLING_GRACE_MS = 60_000;
+ 
+ const SESSION_FIELDS = {
+   id: true,
+@@ -32,6 +35,7 @@
+  * funds, the 2-hour cap), an agent gone without reporting (restart, deploy),
+  * a QR nobody scanned. Every end goes through InterpreterService.close, the
+  * same path as a hang-up. Runs on every app node; close() makes that safe.
++ * Last, it closes interpreter billing that no ACTIVE session holds.
+  */
+ @Injectable()
+ export class InterpreterReconciler {
+@@ -79,6 +83,49 @@
+         }),
+       (s) => this.interpreter.close(s, 'EXPIRED', { stopAgent: false }),
+     );
++    await this.reconcileBilling(now);
++  }
++
++  /**
++   * The passes above start from a session row, so they never see billing that
++   * no ACTIVE session holds: a join that died between opening billing and
++   * claiming the code, a cleanup step that failed after a lost claim or in
++   * close(). Metering would charge the host for it up to its 2-hour cap.
++   */
++  private async reconcileBilling(now: Date): Promise<void> {
++    let unheld: string[];
++    try {
++      const open = await this.prisma.aiSession.findMany({
++        where: {
++          featureKey: FEATURE_KEYS.INTERPRETER,
++          status: 'active',
++          startedAt: {
++            lt: new Date(now.getTime() - UNLINKED_BILLING_GRACE_MS),
++          },
++        },
++        select: { id: true },
++      });
++      if (open.length === 0) return;
++      const held = await this.prisma.interpreterSession.findMany({
++        where: {
++          status: 'ACTIVE',
++          billingSessionId: { in: open.map((b) => b.id) },
++        },
++        select: { billingSessionId: true },
++      });
++      const heldIds = new Set(held.map((s) => s.billingSessionId));
++      unheld = open.map((b) => b.id).filter((id) => !heldIds.has(id));
++    } catch (e) {
++      this.log.warn(`loading open billing failed: ${String(e)}`);
++      return;
++    }
++    for (const id of unheld) {
++      try {
++        await this.interpreter.closeUnheldBilling(id);
++      } catch (e) {
++        this.log.warn(`billing ${id}: closing failed: ${String(e)}`);
++      }
++    }
+   }
+ 
+   private async reconcileActive(
+```
+
+Патч к `src/interpreter/interpreter.service.ts`:
+
+```diff
+--- a/src/interpreter/interpreter.service.ts
++++ b/src/interpreter/interpreter.service.ts
+@@ -521,6 +521,18 @@
+     }
+   }
+ 
++  /**
++   * Billing the reconciler found open with no ACTIVE session holding it.
++   * Nothing else would ever close it: every other path starts from the
++   * session row, and the row does not lead here.
++   */
++  async closeUnheldBilling(billingSessionId: string): Promise<void> {
++    this.log.warn(
++      `billing ${billingSessionId}: open with no active session, closing`,
++    );
++    await this.endBillingIfActive(billingSessionId, 'failed');
++  }
++
+   /** Metering may have closed it already; endSession would overwrite that status. */
+   private async endBillingIfActive(
+     billingSessionId: string,
+```
+
+Патч к `docs/superpowers/specs/2026-10-31-interpreter-face-to-face-design.md`:
+
+```diff
+--- a/docs/superpowers/specs/2026-10-31-interpreter-face-to-face-design.md
++++ b/docs/superpowers/specs/2026-10-31-interpreter-face-to-face-design.md
+@@ -139,11 +139,12 @@
+ | `400 unsupported_language` / `400 same_language` | язык не из списка / совпадает с языком хоста |
+ | `409 voice_print_required` / `409 host_voice_print_required` | нет пригодного образца у вызывающего / у хоста |
+ | `409 already_in_session` | у пользователя уже идёт разговор |
++| `409 same_voice_print` | при входе Б: образцы хоста и гостя почти одинаковы (косинус от 0,99), до открытия биллинга |
+ | `402 insufficient_funds` / `403 feature_disabled` | при создании: у самого хоста нет резерва / выключен тумблер |
+ | `402 host_insufficient_funds` / `403 host_feature_disabled` | при входе Б: то же у хоста |
+ | `404 code_not_found` / `410 code_expired` / `409 own_code` / `409 code_used` | код |
+ | `429 too_many_attempts` | больше 10 попыток входа в минуту |
+-| `503 interpreter_unavailable` | агент не стартовал |
++| `503 interpreter_unavailable` | агент не стартовал (вход Б) / комнату LiveKit не создать (создание) |
+ | `404 session_not_found` / `409 not_waiting` | чужая или несуществующая сессия / новый код не в `waiting` |
+ 
+ Поле тела не того типа (язык не строка, код не строка или длиннее 32 символов) — `400` с кодом своего поля: `unsupported_language` или `code_not_found`. Каждое правило проверки называет один и тот же код, иначе рядом с ним в `message` попала бы английская фраза class-validator.
+@@ -186,6 +187,7 @@
+ - Активная сессия, чья биллинг-сессия уже не `active` (`terminated_no_funds` или `terminated_stale`), закрывается с причиной `no_funds` или `max_duration`.
+ - Активная сессия, в комнате которой участника `voice-interpreter` нет дольше 60 с (`listParticipants`), закрывается с причиной `agent_lost`. Так ловятся рестарт и деплой агента: в этих случаях он сам `agent-ended` не пришлёт. Отсчёт идёт от `agentSeenAt` (а до первой сверки — от `startedAt`). Если `listParticipants` упал, сверка в этот раз ничего не делает: сбой API — не пустая комната.
+ - Сессия в `waiting`, у которой код истёк больше 5 минут назад и новый не запрошен, закрывается с причиной `expired`.
++- Биллинг `interpreter` в `active`, открытый больше минуты назад, который не держит ни одна активная сессия, закрывается как `failed`. Остальные проходы идут от строки сессии и такой биллинг не видят: вход Б умер между открытием биллинга и захватом кода, или не прошла уборка после проигранного захвата либо в `close()`. Иначе метеринг списывал бы с хоста до потолка в 2 часа. Минута — запас на вход, который как раз открыл биллинг и вот-вот его привяжет.
+ 
+ Каждое закрытие по сверке идёт тем же путём, что и `end`: стоп агента, закрытие биллинга, удаление комнаты. Закрытие условное (`status ≠ ended` → `ended`), поэтому из двух app-нод PROD побочные действия выполняет одна. Биллинг закрывается, только если `AiSession` ещё `active` (`endSession` не идемпотентен): `translation_failed` и `agent_lost` — как `failed`, `no_funds` и `max_duration` — уже закрыт метерингом, остальное — `completed`.
+ 
+```
+
+- [ ] **Step 3: Проверить**
+
+```bash
+npx jest src/interpreter src/billing src/voice/guards 2>&1 | tail -6
+npx tsc --noEmit -p tsconfig.build.json; echo tsc-exit=$?
+```
+
+Ожидается: 18 наборов, 195 тестов, все зелёные; `tsc-exit=0`.
+
+- [ ] **Step 4: Коммит**
+
+```bash
+git add src/interpreter/interpreter.reconciler.spec.ts src/interpreter/interpreter.service.spec.ts src/interpreter/interpreter.reconciler.ts src/interpreter/interpreter.service.ts docs/superpowers/specs/2026-10-31-interpreter-face-to-face-design.md
+git commit -m "fix(interpreter): сверка закрывает биллинг, который не держит ни одна сессия" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 11c: `agentSeenAt` пишется только вперёд
+
+По ревью задач 11–13:
+- **Запоздавшая запись с другой ноды откатывала отметку назад.** Сверка пишет в `agentSeenAt` время начала своего прохода, а проход с медленным LiveKit идёт секунды. Нода А начала проход в T0, нода Б в T5 увидела агента и записала T5 раньше, чем дошла запись А — и отметка вернулась к T0. 60 с до `agent_lost` начинают считаться слишком рано, и короткое переподключение агента может закончить живой разговор. Теперь запись условная: только если отметки нет или она раньше.
+
+**Files:**
+- Modify: `src/interpreter/interpreter.reconciler.spec.ts`, `src/interpreter/interpreter.reconciler.ts`, `docs/superpowers/specs/2026-10-31-interpreter-face-to-face-design.md`
+
+- [ ] **Step 1: Тесты (падают)**
+
+Патч к `src/interpreter/interpreter.reconciler.spec.ts`:
+
+```diff
+--- a/src/interpreter/interpreter.reconciler.spec.ts
++++ b/src/interpreter/interpreter.reconciler.spec.ts
+@@ -93,8 +93,13 @@
+     await reconciler.runOnce(NOW);
+ 
+     expect(livekit.agentPresent).toHaveBeenCalledWith('interp-room-1');
++    // Only forward: another node may have written a later sighting already.
+     expect(prisma.interpreterSession.updateMany).toHaveBeenCalledWith({
+-      where: { id: 'sess-1', status: 'ACTIVE' },
++      where: {
++        id: 'sess-1',
++        status: 'ACTIVE',
++        OR: [{ agentSeenAt: null }, { agentSeenAt: { lt: NOW } }],
++      },
+       data: { agentSeenAt: NOW },
+     });
+     expect(interpreter.close).not.toHaveBeenCalled();
+```
+
+Run: `npx jest src/interpreter src/billing src/voice/guards`
+Expected: `src/interpreter/interpreter.reconciler.spec.ts` — падают 1 из 15. Всего наборов 18, тестов 195, падающих 1.
+
+- [ ] **Step 2: Код**
+
+Патч к `src/interpreter/interpreter.reconciler.ts`:
+
+```diff
+--- a/src/interpreter/interpreter.reconciler.ts
++++ b/src/interpreter/interpreter.reconciler.ts
+@@ -150,7 +150,14 @@
+     if (present === null) return;
+     if (present) {
+       await this.prisma.interpreterSession.updateMany({
+-        where: { id: s.id, status: 'ACTIVE' },
++        // Only forward: a slow tick on one node must not overwrite a fresher
++        // sighting another node wrote meanwhile, or the 60 s would count
++        // from too early and could end a conversation the agent never left.
++        where: {
++          id: s.id,
++          status: 'ACTIVE',
++          OR: [{ agentSeenAt: null }, { agentSeenAt: { lt: now } }],
++        },
+         data: { agentSeenAt: now },
+       });
+       return;
+```
+
+Патч к `docs/superpowers/specs/2026-10-31-interpreter-face-to-face-design.md`:
+
+```diff
+--- a/docs/superpowers/specs/2026-10-31-interpreter-face-to-face-design.md
++++ b/docs/superpowers/specs/2026-10-31-interpreter-face-to-face-design.md
+@@ -122,7 +122,7 @@
+ | `codeExpiresAt` | дата-время? | |
+ | `status` | enum `waiting`, `active`, `ended` | |
+ | `billingSessionId` | uuid? | `AiSession.id` |
+-| `agentSeenAt` | дата-время? | когда сверка последний раз видела агента в комнате; по нему считается `agent_lost` |
++| `agentSeenAt` | дата-время? | когда сверка последний раз видела агента в комнате; по нему считается `agent_lost`. Пишется только вперёд: запоздавшая запись медленной сверки с другой ноды не откатывает отметку назад |
+ | `startedAt` / `endedAt` | дата-время? | `startedAt` — момент входа Б |
+ | `endReason` | enum? | `hangup`, `partner_left`, `no_funds`, `max_duration`, `translation_failed`, `agent_lost`, `expired` |
+ | `createdAt` / `updatedAt` | дата-время | |
+```
+
+- [ ] **Step 3: Проверить**
+
+```bash
+npx jest src/interpreter src/billing src/voice/guards 2>&1 | tail -6
+npx tsc --noEmit -p tsconfig.build.json; echo tsc-exit=$?
+```
+
+Ожидается: 18 наборов, 195 тестов, все зелёные; `tsc-exit=0`.
+
+- [ ] **Step 4: Коммит**
+
+```bash
+git add src/interpreter/interpreter.reconciler.spec.ts src/interpreter/interpreter.reconciler.ts docs/superpowers/specs/2026-10-31-interpreter-face-to-face-design.md
+git commit -m "fix(interpreter): agentSeenAt пишется только вперёд" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 14b: Ручки переводчика звонка, E2EE и музыки ожидания закрыты для комнат разговора
+
+По ревью задач 14–15:
+- **Задача 14 закрыла `RoomAccessGuard`, но не ручки, которым хватает токена Taler ID.** `translator/start|stop`, `set-lang`, `disable-e2ee`, `hold-music/start|stop` стоят только под `JwtAuthGuard` и не проверяют, кто в комнате. Имя комнаты `interp-…` знают оба участника: любой из них мог бы запустить в разговоре переводчик звонка поверх агента или музыку ожидания в оба телефона. Теперь на этих шести ручках `NotInterpreterRoomGuard` → `403 interpreter_room`. `RoomAccessGuard` берёт ту же проверку `isInterpreterRoom`.
+- Остальные комнаты ведут себя как раньше: их права здесь не меняются (что эти ручки пускают любого с токеном в любую комнату по имени — давняя особенность, она вне этой работы).
+
+**Files:**
+- Create: `src/voice/guards/not-interpreter-room.guard.spec.ts`, `src/voice/guards/not-interpreter-room.guard.ts`
+- Modify: `src/voice/voice.controller.ts`, `src/voice/guards/room-access.guard.ts`, `docs/superpowers/specs/2026-10-31-interpreter-face-to-face-design.md`
+
+- [ ] **Step 1: Тесты (падают)**
+
+`src/voice/guards/not-interpreter-room.guard.spec.ts` целиком:
+
+```ts
+import { ForbiddenException } from '@nestjs/common';
+import { GUARDS_METADATA } from '@nestjs/common/constants';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { VoiceController } from '../voice.controller';
+import {
+  isInterpreterRoom,
+  NotInterpreterRoomGuard,
+} from './not-interpreter-room.guard';
+
+const ctxFor = (roomName?: string) =>
+  ({
+    switchToHttp: () => ({ getRequest: () => ({ params: { roomName } }) }),
+  }) as any;
+
+describe('NotInterpreterRoomGuard', () => {
+  const guard = new NotInterpreterRoomGuard();
+
+  it('refuses an interpreter room with 403 interpreter_room', () => {
+    let err: unknown;
+    try {
+      guard.canActivate(ctxFor('interp-0f8fad5b-d9cb-469f-a165-70867728950e'));
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ForbiddenException);
+    expect((err as ForbiddenException).message).toBe('interpreter_room');
+  });
+
+  it('lets every other room through', () => {
+    for (const room of ['call-1', 'group-1', 'personal-ab12cd34-1', 'tmp-1']) {
+      expect(guard.canActivate(ctxFor(room))).toBe(true);
+    }
+    expect(isInterpreterRoom(undefined)).toBe(false);
+  });
+
+  it('stands behind the token on every room route that has no room check', () => {
+    // These routes take any Taler ID token: without the guard a participant,
+    // who knows the room's name, could start them in an interpreter room.
+    for (const route of [
+      'disableE2EE',
+      'startTranslator',
+      'stopTranslator',
+      'setTranslatorLang',
+      'startHoldMusic',
+      'stopHoldMusic',
+    ] as const) {
+      expect(
+        Reflect.getMetadata(GUARDS_METADATA, VoiceController.prototype[route]),
+      ).toEqual([JwtAuthGuard, NotInterpreterRoomGuard]);
+    }
+  });
+});
+```
+
+Run: `npx jest src/interpreter src/billing src/voice/guards`
+Expected: `src/voice/guards/not-interpreter-room.guard.spec.ts` — не запускается: Cannot find module. Всего наборов 19, тестов 195, падающих 0, не запустившихся наборов 1.
+
+- [ ] **Step 2: Код**
+
+`src/voice/guards/not-interpreter-room.guard.ts` целиком:
+
+```ts
+import {
+  CanActivate,
+  ExecutionContext,
+  ForbiddenException,
+  Injectable,
+} from '@nestjs/common';
+
+/** Rooms of a conversation with translation, named by src/interpreter. */
+export function isInterpreterRoom(roomName: unknown): boolean {
+  return typeof roomName === 'string' && roomName.startsWith('interp-');
+}
+
+/**
+ * For the room routes that trust a Taler ID token alone: the call translator,
+ * the E2EE switch, hold music. Both people in an interpreter room know its
+ * name, and none of these belongs there: the call translator would talk over
+ * the agent, hold music would play into both phones.
+ */
+@Injectable()
+export class NotInterpreterRoomGuard implements CanActivate {
+  canActivate(ctx: ExecutionContext): boolean {
+    if (isInterpreterRoom(ctx.switchToHttp().getRequest().params?.roomName)) {
+      throw new ForbiddenException('interpreter_room');
+    }
+    return true;
+  }
+}
+```
+
+Патч к `src/voice/voice.controller.ts`:
+
+```diff
+--- a/src/voice/voice.controller.ts
++++ b/src/voice/voice.controller.ts
+@@ -25,6 +25,7 @@
+ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+ import { RecorderSecretGuard } from './guards/recorder-secret.guard';
+ import { RoomAccessGuard } from './guards/room-access.guard';
++import { NotInterpreterRoomGuard } from './guards/not-interpreter-room.guard';
+ import { LK_API_KEY, LK_API_SECRET } from '../common/livekit-credentials';
+ import { CurrentUser } from '../common/decorators/current-user.decorator';
+ import { RoomActor } from '../common/decorators/room-actor.decorator';
+@@ -440,7 +441,7 @@
+   // ─── E2EE ───
+ 
+   @Post('rooms/:roomName/disable-e2ee')
+-  @UseGuards(JwtAuthGuard)
++  @UseGuards(JwtAuthGuard, NotInterpreterRoomGuard)
+   disableE2EE(@Param('roomName') roomName: string) {
+     return this.service.disableE2EE(roomName);
+   }
+@@ -453,19 +454,19 @@
+   }
+ 
+   @Post('rooms/:roomName/translator/start')
+-  @UseGuards(JwtAuthGuard)
++  @UseGuards(JwtAuthGuard, NotInterpreterRoomGuard)
+   startTranslator(@Param('roomName') roomName: string) {
+     return this.service.startTranslator(roomName);
+   }
+ 
+   @Post('rooms/:roomName/translator/stop')
+-  @UseGuards(JwtAuthGuard)
++  @UseGuards(JwtAuthGuard, NotInterpreterRoomGuard)
+   stopTranslator(@Param('roomName') roomName: string) {
+     return this.service.stopTranslator(roomName);
+   }
+ 
+   @Post('rooms/:roomName/set-lang')
+-  @UseGuards(JwtAuthGuard)
++  @UseGuards(JwtAuthGuard, NotInterpreterRoomGuard)
+   setTranslatorLang(
+     @Param('roomName') roomName: string,
+     @Body('lang') lang: string,
+@@ -607,13 +608,13 @@
+   // ─── Hold Music ───
+ 
+   @Post('rooms/:roomName/hold-music/start')
+-  @UseGuards(JwtAuthGuard)
++  @UseGuards(JwtAuthGuard, NotInterpreterRoomGuard)
+   startHoldMusic(@Param('roomName') roomName: string) {
+     return this.service.startHoldMusic(roomName);
+   }
+ 
+   @Post('rooms/:roomName/hold-music/stop')
+-  @UseGuards(JwtAuthGuard)
++  @UseGuards(JwtAuthGuard, NotInterpreterRoomGuard)
+   stopHoldMusic(@Param('roomName') roomName: string) {
+     return this.service.stopHoldMusic(roomName);
+   }
+```
+
+Патч к `src/voice/guards/room-access.guard.ts`:
+
+```diff
+--- a/src/voice/guards/room-access.guard.ts
++++ b/src/voice/guards/room-access.guard.ts
+@@ -11,6 +11,7 @@
+ import { PrismaService } from '../../prisma/prisma.service';
+ import { isApiAccessToken } from '../../common/utils/access-token.util';
+ import { LK_API_SECRET } from '../../common/livekit-credentials';
++import { isInterpreterRoom } from './not-interpreter-room.guard';
+ 
+ /**
+  * Proves the caller is entitled to act on `:roomName` — and, on success,
+@@ -58,7 +59,7 @@
+     // guard. None of the routes behind it (recorder, public translator, room
+     // chat) belongs in such a room: a recorder there would capture the very
+     // speech the agent keeps off the other phone.
+-    if (roomName.startsWith('interp-')) {
++    if (isInterpreterRoom(roomName)) {
+       throw new ForbiddenException('interpreter_room');
+     }
+ 
+```
+
+Патч к `docs/superpowers/specs/2026-10-31-interpreter-face-to-face-design.md`:
+
+```diff
+--- a/docs/superpowers/specs/2026-10-31-interpreter-face-to-face-design.md
++++ b/docs/superpowers/specs/2026-10-31-interpreter-face-to-face-design.md
+@@ -195,6 +195,7 @@
+ - Векторы образцов никакая ручка не отдаёт и в логи не пишет. Агенту они уходят только по внутренней сети: localhost на DEV и TEST, VPC `10.130.0.0/20` на PROD.
+ - Перебор кодов: около 40 бит, TTL 5 минут, код одноразовый. На ручку входа — 10 попыток в минуту на пользователя, счётчиком в Redis. `@Throttle` для этого не годится: глобальный `ThrottlerGuard` считает по IP и срабатывает раньше проверки токена.
+ - `RoomAccessGuard` пускает любой токен LiveKit своей комнаты на ручки записи встречи, публичного переводчика и чата. Для комнат `interp-*` он отвечает `403 interpreter_room`: иначе участник разговора с переводом мог бы своим токеном включить в нём запись встречи.
++- Комнатные ручки, которым хватает одного токена Taler ID (переводчик звонка — `translator/start|stop`, `set-lang`; `disable-e2ee`; музыка ожидания), для `interp-*` отвечают тем же `403 interpreter_room` (`NotInterpreterRoomGuard`). Имя комнаты знают оба участника, и иначе любой из них мог бы запустить в разговоре переводчик звонка поверх агента или музыку в оба телефона.
+ 
+ **Выключатель** `INTERPRETER_ENABLED` (по умолчанию выключен). В выключенном состоянии `languages` отвечает `enabled=false`, остальные ручки — `403 interpreter_disabled`. Приложение показывает кнопку только при `enabled=true`.
+ 
+```
+
+- [ ] **Step 3: Проверить**
+
+```bash
+npx jest src/interpreter src/billing src/voice/guards 2>&1 | tail -6
+npx tsc --noEmit -p tsconfig.build.json; echo tsc-exit=$?
+```
+
+Ожидается: 19 наборов, 198 тестов, все зелёные; `tsc-exit=0`.
+
+- [ ] **Step 4: Коммит**
+
+```bash
+git add src/voice/guards/not-interpreter-room.guard.spec.ts src/voice/guards/not-interpreter-room.guard.ts src/voice/voice.controller.ts src/voice/guards/room-access.guard.ts docs/superpowers/specs/2026-10-31-interpreter-face-to-face-design.md
+git commit -m "fix(voice): переводчик звонка, E2EE и музыка ожидания закрыты для комнат разговора" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 20b: Сквозные наборы — уборка по Ctrl-C, токены не в выводе
+
+По ревью задач 18–20:
+- **Ctrl-C посреди `test:interpreter` оставлял разговор платным.** Уборка стояла в `finally`, а SIGINT по умолчанию убивает процесс без него. Это первый набор, который держит открытым поминутный биллинг: разговор с хоста списывал до 60–120 с, пока его не закроют агент и сверка, а записанные прогоном образцы голоса оставались. Теперь уборка — одна функция `cleanup()` для `finally` и для SIGINT/SIGTERM, выполняется один раз; после сигнала выход с кодом 130, второй Ctrl-C выходит сразу.
+- **Смоук самопроверки печатал ответ входа как есть.** При неожиданной форме ответа `/auth/login` в CI-лог ушло бы поле с токеном. Теперь вывод проходит `redact()`, как в основном наборе.
+- Подсказка `interpreter_disabled` в смоуке не срабатывала никогда: самопроверка не зависит от выключателя. Убрана, на её месте комментарий.
+- В шапке набора — какие коды ошибок оставлены Jest-тестам бэкенда и почему.
+
+**Files:**
+- Modify: `interpreter_test.ts`, `interpreter_selftest.ts` (репозиторий `taler_id_tests`)
+
+- [ ] **Step 1: Правки**
+
+Патч к `interpreter_test.ts`:
+
+```diff
+--- a/interpreter_test.ts
++++ b/interpreter_test.ts
+@@ -34,6 +34,14 @@
+  * the bot's speech and checks 11/12 fail with silence: call
+  * DELETE /voice-gate/owner for that account and rerun.
+  *
++ * Ctrl-C (or a CI timeout's SIGTERM) runs the same cleanup before leaving:
++ * from B's join on, the host pays by the minute. A second Ctrl-C leaves at once.
++ *
++ * Left to the backend's Jest suite: 410 code_expired (needs a 5-minute wait),
++ * 409 same_voice_print, 402/403 host_insufficient_funds/host_feature_disabled
++ * (would need the host's wallet or toggles changed), 429 too_many_attempts
++ * (would spend the minute's join attempts both accounts need).
++ *
+  * Limits this suite is built around:
+  *   - entering codes is capped at 10 attempts a minute per user, so the
+  *     negative join checks are split between the accounts (A makes 4, B 3):
+@@ -630,6 +638,59 @@
+ 
+ // ── the test ───────────────────────────────────────────────────────────────
+ 
++/** What the cleanup undoes; module-level, so a signal handler reaches it too. */
++type Run = { host: Account; accounts: Account[]; bots: Bot[]; openSessions: Set<string> };
++let run: Run | undefined;
++let cleaning: Promise<void> | undefined;
++
++/**
++ * Each step on its own: one failure must not skip the rest. The end comes
++ * first: it closes the host's billing and deletes the room. Runs once, from
++ * the main flow's finally or from a signal, whichever comes first.
++ */
++function cleanup(): Promise<void> {
++  cleaning ??= (async () => {
++    if (!run) return;
++    const { host, accounts, bots, openSessions } = run;
++    for (const id of openSessions) {
++      try {
++        const r = await http.post(`/interpreter/sessions/${id}/end`, {}, { ...auth(host.token), timeout: END_TIMEOUT_MS });
++        console.log(`  cleanup: end conversation ${id} → ${r.status}`);
++      } catch (e) {
++        console.log(`  cleanup: end conversation ${id} → error: ${(e as Error).message}`);
++      }
++    }
++    for (const bot of bots) {
++      try {
++        await bot.close();
++      } catch (e) {
++        console.log(`  cleanup: ${bot.label}'s bot → error: ${(e as Error).message}`);
++      }
++    }
++    for (const acct of accounts) {
++      if (!acct.enrolledByRun) continue;
++      try {
++        const del = await http.delete('/voice-gate/owner', auth(acct.token));
++        const status = await http.get('/voice-gate/owner-status', auth(acct.token));
++        check(`cleanup. ${acct.label}: the voice print this run enrolled is deleted again`,
++          del.status === 204 && status.data?.enrolled === false, { delete: del.status, ownerStatus: status.data });
++      } catch (e) {
++        check(`cleanup. ${acct.label}: the voice print this run enrolled is deleted again`, false, (e as Error).message);
++      }
++    }
++  })();
++  return cleaning;
++}
++
++// The default handler would kill the process with the conversation still
++// billed. `once`: a second signal finds no handler and leaves at once.
++for (const signal of ['SIGINT', 'SIGTERM'] as const) {
++  process.once(signal, () => {
++    console.log(`\n  ${signal}: cleaning up before leaving (again to leave at once)`);
++    void cleanup().finally(() => process.exit(130));
++  });
++}
++
+ async function main() {
+   console.log(`\nInterpreter E2E → ${BASE_URL}\n`);
+   const clips = loadFixtures();
+@@ -641,6 +702,7 @@
+   const bots: Bot[] = [];
+   // Every conversation a create answered with, so the cleanup can end what the run left open.
+   const openSessions = new Set<string>();
++  run = { host: A, accounts, bots, openSessions };
+   const noteSession = (res: AxiosResponse) => {
+     if (ok2xx(res) && typeof res.data?.sessionId === 'string') openSessions.add(res.data.sessionId);
+   };
+@@ -947,34 +1009,7 @@
+       throw e;
+     }
+   } finally {
+-    // Each step on its own: one failure must not skip the rest. The end
+-    // comes first: it closes the host's billing and deletes the room.
+-    for (const id of openSessions) {
+-      try {
+-        const r = await http.post(`/interpreter/sessions/${id}/end`, {}, { ...auth(A.token), timeout: END_TIMEOUT_MS });
+-        console.log(`  cleanup: end conversation ${id} → ${r.status}`);
+-      } catch (e) {
+-        console.log(`  cleanup: end conversation ${id} → error: ${(e as Error).message}`);
+-      }
+-    }
+-    for (const bot of bots) {
+-      try {
+-        await bot.close();
+-      } catch (e) {
+-        console.log(`  cleanup: ${bot.label}'s bot → error: ${(e as Error).message}`);
+-      }
+-    }
+-    for (const acct of accounts) {
+-      if (!acct.enrolledByRun) continue;
+-      try {
+-        const del = await http.delete('/voice-gate/owner', auth(acct.token));
+-        const status = await http.get('/voice-gate/owner-status', auth(acct.token));
+-        check(`cleanup. ${acct.label}: the voice print this run enrolled is deleted again`,
+-          del.status === 204 && status.data?.enrolled === false, { delete: del.status, ownerStatus: status.data });
+-      } catch (e) {
+-        check(`cleanup. ${acct.label}: the voice print this run enrolled is deleted again`, false, (e as Error).message);
+-      }
+-    }
++    await cleanup();
+   }
+ 
+   console.log(`\n${passed} passed, ${failed} failed`);
+```
+
+Патч к `interpreter_selftest.ts`:
+
+```diff
+--- a/interpreter_selftest.ts
++++ b/interpreter_selftest.ts
+@@ -33,8 +33,19 @@
+ 
+ function fail(msg: string, details?: unknown): never {
+   console.error(`\n❌ ${msg}`);
+-  if (details !== undefined) console.error(details);
++  if (details !== undefined) console.error(redact(details));
+   process.exit(1);
++}
++
++/** Output lands in CI logs and chats: no token, whatever field it hides in. */
++function redact(value: unknown): unknown {
++  if (Array.isArray(value)) return value.map(redact);
++  if (value && typeof value === 'object') {
++    return Object.fromEntries(
++      Object.entries(value).map(([k, v]) => [k, /token/i.test(k) ? '<redacted>' : redact(v)]),
++    );
++  }
++  return value;
+ }
+ 
+ function engineLine(name: string, result: any): string {
+@@ -54,11 +65,8 @@
+   });
+   const body = res.data;
+   if (res.status !== 200) {
+-    const hint = res.status === 404
+-      ? ': this backend build predates the interpreter'
+-      : body?.message === 'interpreter_disabled'
+-        ? ': INTERPRETER_ENABLED is not "true" in the backend .env'
+-        : '';
++    // Not behind INTERPRETER_ENABLED: the smoke runs on TEST and PROD while it is off.
++    const hint = res.status === 404 ? ': this backend build predates the interpreter' : '';
+     fail(`GET /interpreter/selftest → ${res.status}${hint}`, body);
+   }
+   if (body?.ok !== true || body?.simultaneous?.ok !== true || body?.phrase?.ok !== true) {
+```
+
+- [ ] **Step 2: Типы и сигнал**
+
+```bash
+cd ~/Downloads/taler_id_tests
+npx tsc --noEmit -p tsconfig.json 2>&1 | grep -cE "interpreter_test|interpreter_selftest" ; true
+# Ctrl-C до входа: сервер, который не отвечает, держит набор на логине
+node -e "require('http').createServer(() => {}).listen(18999)" & SRV=$!
+BASE_URL=http://127.0.0.1:18999 ./node_modules/.bin/ts-node interpreter_test.ts & RUN=$!
+sleep 6; kill -INT $RUN; wait $RUN; echo exit=$?; kill $SRV
+```
+
+Ожидается: `0`; строка `SIGINT: cleaning up before leaving (again to leave at once)`; `exit=130`.
+
+- [ ] **Step 3: Коммит**
+
+```bash
+cd ~/Downloads/taler_id_tests
+git add interpreter_test.ts interpreter_selftest.ts
+git commit -m "test: test:interpreter — уборка по Ctrl-C; смоук не печатает токены" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
 ### Task 21: CLAUDE.md — новые наборы в обязательном списке
 
 **Files:**
@@ -6505,6 +7648,7 @@ cd ~/Downloads/taler_id_tests && npm run test:interpreter
 ```
 - Около 60 проверок, пара минут, настоящие сессии OpenAI (центы).
 - Образцы голоса записывает сам и удаляет только те, что записал. Если у тестового аккаунта уже был образец живого человека — проверки перевода упадут тишиной с подсказкой «`DELETE /voice-gate/owner` и перезапустить».
+- Ctrl-C проходит ту же уборку: завершает разговор (с хоста идёт поминутное списание), отключает ботов, удаляет записанные образцы. Второй Ctrl-C выходит сразу.
 - На TEST — `test:interpreter:prod`, на PROD набора нет. Оба — только после выкатки фичи на эти окружения (план 3).
 
 ### 22. Самопроверка переводчика разговора (post-deploy, ~10 с)
@@ -6513,6 +7657,7 @@ cd ~/Downloads/taler_id_tests && npm run test:interpreter
 cd ~/Downloads/taler_id_tests && npm run test:interpreter-selftest          # DEV
 ```
 - `:prod` (TEST) и `:talerid` (PROD) — после выкатки агента с разговором на эти окружения.
+- Строка `FATAL interpreter: no translation for N s of speech in <комната> <src>→<dst>` в мониторинге: фильтр пропустил речь, а движок не вернул ни звука, ни текста. Не всегда авария — так же выглядит человек, который долго говорит на языке собеседника. Повторяется в разных комнатах — прогнать этот смоук и смотреть ключ и модели OpenAI.
 
 ````
 
