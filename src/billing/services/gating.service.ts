@@ -30,6 +30,41 @@ export class GatingService {
     featureKey: string,
     contextRef?: string,
   ): Promise<{ id: string }> {
+    await this.assertCanStart(userId, featureKey);
+
+    const session = await this.prisma.aiSession.create({
+      data: {
+        userId,
+        featureKey,
+        contextRef,
+        status: 'active',
+      },
+      select: { id: true },
+    });
+
+    // Notify all of this user's sockets that an AI session just became active.
+    // Mobile can use this to show a "session live" indicator or close any pre-session modal.
+    try {
+      this.gateway.emitToUser(userId, 'ai_session_started', {
+        sessionId: session.id,
+        featureKey,
+      });
+    } catch (err) {
+      this.log.warn(
+        `emitToUser ai_session_started failed for ${userId}: ${String(err)}`,
+      );
+    }
+
+    return session;
+  }
+
+  /**
+   * The checks of startSession without opening a session, so nothing is
+   * metered: for a feature that must refuse up front but bills only later
+   * (the interpreter checks the host when the QR is shown and opens billing
+   * when the guest joins). Throws the same exceptions as startSession.
+   */
+  async assertCanStart(userId: string, featureKey: string): Promise<void> {
     // Ensure a wallet exists before any balance check or session creation. This is
     // idempotent — if the wallet already exists, it's a single findUnique.
     await this.wallet.getOrCreate(userId);
@@ -59,31 +94,6 @@ export class GatingService {
         `[dry-run] insufficient funds for ${userId}/${featureKey}: need ${minReserve}, have ${balance}`,
       );
     }
-
-    const session = await this.prisma.aiSession.create({
-      data: {
-        userId,
-        featureKey,
-        contextRef,
-        status: 'active',
-      },
-      select: { id: true },
-    });
-
-    // Notify all of this user's sockets that an AI session just became active.
-    // Mobile can use this to show a "session live" indicator or close any pre-session modal.
-    try {
-      this.gateway.emitToUser(userId, 'ai_session_started', {
-        sessionId: session.id,
-        featureKey,
-      });
-    } catch (err) {
-      this.log.warn(
-        `emitToUser ai_session_started failed for ${userId}: ${String(err)}`,
-      );
-    }
-
-    return session;
   }
 
   async endSession(
