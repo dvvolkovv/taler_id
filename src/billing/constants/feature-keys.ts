@@ -5,6 +5,7 @@ export const FEATURE_KEYS = {
   OUTBOUND_CALL: 'outbound_call',
   WHISPER_TRANSCRIBE: 'whisper_transcribe',
   MEETING_SUMMARY: 'meeting_summary',
+  INTERPRETER: 'interpreter',
 } as const;
 
 export type FeatureKey = (typeof FEATURE_KEYS)[keyof typeof FEATURE_KEYS];

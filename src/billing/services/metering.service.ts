@@ -19,7 +19,12 @@ export interface MeteringGateway {
 // Minute-based features: cron debits elapsed time automatically.
 // whisper_transcribe is NOT here — it's a one-shot post-call debit owned by the transcription service.
 // web_search / meeting_summary are one-shot debits done by their owning service.
-const MINUTE_BASED = new Set(['voice_assistant', 'ai_twin', 'outbound_call']);
+const MINUTE_BASED = new Set([
+  'voice_assistant',
+  'ai_twin',
+  'outbound_call',
+  'interpreter',
+]);
 
 // Hard upper bound per session. If a client never calls closeVoiceSession
 // (app crash, network loss, old build without billingSessionId in the WS
@@ -31,6 +36,7 @@ const MAX_SESSION_HOURS: Record<string, number> = {
   voice_assistant: 2,
   ai_twin: 1,
   outbound_call: 1,
+  interpreter: 2,
 };
 
 @Injectable()
