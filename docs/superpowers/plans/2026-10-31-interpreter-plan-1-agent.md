@@ -11588,6 +11588,94 @@ git commit -m "fix(interpreter): стенд — сбой не оставляет
 
 ---
 
+### Task 15c: Тест застрявшего ответа — следить за сокетом запроса, а не за всеми соединениями
+
+Нашлось на шаге 1 задачи 20: на DEV под Node 20 один тест из 292 падал. На маке под Node 26 все проходили. DEV, TEST и `do-media` на PROD работают на Node 20.20.
+- Отмена тела из задачи 15b работает и под Node 20: сокет, по которому пришёл застрявший ответ, закрывается за миллисекунды.
+- Но после этого fetch в Node 20 (undici) открывает к серверу ещё одно соединение, без запроса, и сам закрывает его примерно через 3 с. Тест считал все соединения сервера и принимал это служебное соединение за утечку.
+
+Теперь тест следит ровно за сокетом, который нёс запрос. Без отмены тела он по-прежнему падает под обоими Node. Набор теперь гонять и под Node 20: `~/.nvm/versions/node/v20.20.2/bin/node --test`.
+
+**Files:**
+- Modify: `livekit-agent/backend-callback.test.js` (один тест)
+
+- [ ] **Step 1: Заменить тест**
+
+Было:
+
+```js
+test('a response that stalls after its headers does not keep the connection open', async () => {
+  let open = 0;
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.write('{"ok":true'); // and nothing more
+  });
+  server.on('connection', (socket) => {
+    open += 1;
+    socket.on('close', () => { open -= 1; });
+  });
+  const url = await listen(server);
+  try {
+    assert.deepStrictEqual(
+      await notifyAgentEnded({ backendUrl: url, secret: 's', sessionId: 'x', reason: 'r', timeoutMs: 1000, retries: 0, log: quietLog }),
+      { ok: true, status: 200 },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.strictEqual(open, 0);
+  } finally {
+    server.closeAllConnections();
+    server.close();
+  }
+});
+```
+
+Стало:
+
+```js
+test('a response that stalls after its headers does not keep the connection open', async () => {
+  // The socket that carried the request, not every connection: after it
+  // closes, Node 20's fetch opens one more idle connection of its own and
+  // drops it about 3 s later.
+  let requestSocketClosed = null;
+  const server = http.createServer((req, res) => {
+    requestSocketClosed = false;
+    req.socket.on('close', () => { requestSocketClosed = true; });
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.write('{"ok":true'); // and nothing more
+  });
+  const url = await listen(server);
+  try {
+    assert.deepStrictEqual(
+      await notifyAgentEnded({ backendUrl: url, secret: 's', sessionId: 'x', reason: 'r', timeoutMs: 1000, retries: 0, log: quietLog }),
+      { ok: true, status: 200 },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.strictEqual(requestSocketClosed, true);
+  } finally {
+    server.closeAllConnections();
+    server.close();
+  }
+});
+```
+
+- [ ] **Step 2: Проверить под обоими Node**
+
+```bash
+npm test 2>&1 | grep -E "^ℹ (pass|fail)"
+~/.nvm/versions/node/v20.20.2/bin/node --test 2>&1 | grep -E "^# (pass|fail)"
+```
+
+Ожидается: `ℹ pass 292`, `ℹ fail 0`; `# pass 292`, `# fail 0`.
+
+- [ ] **Step 3: Коммит**
+
+```bash
+git add backend-callback.test.js
+git commit -m "test(interpreter): застрявший ответ — следить за сокетом запроса, а не за всеми соединениями" -m "Под Node 20 (DEV, TEST, PROD) fetch после отмены тела открывает ещё одно пустое соединение и сам закрывает его через ~3 с; тест принимал его за утечку. Отмена тела работает под обоими Node." -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
 ### Task 20: Прогон стенда на DEV
 
 - [ ] **Step 1: Доставить свежий код**
