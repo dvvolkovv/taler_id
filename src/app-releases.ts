@@ -11,6 +11,36 @@ export interface AppRelease {
 // Keep notes user-facing (no internal jargon, no commit hashes).
 export const APP_RELEASES: AppRelease[] = [
   {
+    version: '1.1.40',
+    build: 241,
+    date: '2026-11-02',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.40 — разговор с переводом для двоих рядом.\n\n' +
+      '🗣 Новый раздел «Звонки» → «Разговор с переводом»: каждый говорит в свой телефон на своём языке, ' +
+      'а в трубке звучит только перевод речи собеседника — ни своего голоса, ни живого голоса собеседника.\n' +
+      '📷 Один выбирает свой язык и нажимает «Начать» — на экране появляется QR-код. Второй сканирует его ' +
+      'в том же разделе или обычной камерой телефона, выбирает свой язык и подключается.\n' +
+      '🎙 Голоса различаются по образцу голоса — если его ещё нет, приложение предложит записать. ' +
+      'Платит тот, кто начал разговор, поминутно.\n' +
+      '💬 Во время разговора видны субтитры перевода и своей речи и кто сейчас говорит, ' +
+      'а у начавшего — время и потраченная сумма. Говорите в трубку: у уха экран гаснет.\n' +
+      '🤖 Можно попросить ассистента: «начни разговор с переводом».\n' +
+      'ℹ️ Раздел есть только в приложении для телефона.',
+    notes_en:
+      'Release 1.1.40 — interpreted conversation for two people side by side.\n\n' +
+      '🗣 New in Calls → Interpreted conversation: each person speaks into their own phone in their own language, ' +
+      'and the earpiece plays only the translation of the other person — neither your own voice nor theirs.\n' +
+      '📷 One person picks their language and taps Start — a QR code appears. The other scans it ' +
+      'in the same section or with the regular phone camera, picks their language and joins.\n' +
+      '🎙 Voices are told apart by a voice sample — if you have none yet, the app offers to record one. ' +
+      'The person who started pays per minute.\n' +
+      '💬 During the conversation you see subtitles of the translation and of your own speech and who is speaking, ' +
+      'and the person who started also sees the time and the amount spent. Hold the phone to your ear: the screen turns off.\n' +
+      '🤖 You can ask the assistant: "start an interpreted conversation".\n' +
+      'ℹ️ The section is available in the phone app only.',
+  },
+  {
     version: '1.1.39',
     build: 240,
     date: '2026-10-31',
