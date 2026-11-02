@@ -386,10 +386,12 @@ export class InterpreterService {
     partner: Partner | null;
     directions: Directions | null;
     startedAt: Date | null;
+    spentPlanck: string | null;
   }> {
     const s = await this.participantSession(userId, sessionId);
     const status = s.status.toLowerCase();
     const endReason = s.endReason?.toLowerCase() ?? null;
+    const spentPlanck = await this.spentPlanck(s, userId);
     if (!s.guestId || !s.guestLang) {
       return {
         status,
@@ -397,6 +399,7 @@ export class InterpreterService {
         partner: null,
         directions: null,
         startedAt: s.startedAt,
+        spentPlanck,
       };
     }
     const iAmHost = s.hostId === userId;
@@ -419,7 +422,21 @@ export class InterpreterService {
         fromMe: engineFor(myLang, partnerLang),
       },
       startedAt: s.startedAt,
+      spentPlanck,
     };
+  }
+
+  /** What the host has paid so far, for the app's cost line; the guest pays nothing. */
+  private async spentPlanck(
+    s: InterpreterSession,
+    userId: string,
+  ): Promise<string | null> {
+    if (s.hostId !== userId || !s.billingSessionId) return null;
+    const billing = await this.prisma.aiSession.findUnique({
+      where: { id: s.billingSessionId },
+      select: { totalSpentPlanck: true },
+    });
+    return billing ? billing.totalSpentPlanck.toString() : null;
   }
 
   /**

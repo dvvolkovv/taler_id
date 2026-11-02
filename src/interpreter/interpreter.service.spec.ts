@@ -98,7 +98,9 @@ function setup() {
       findUnique: jest.fn(async ({ where }: any) => profiles[where.userId]),
     },
     aiSession: {
-      findUnique: jest.fn().mockResolvedValue({ status: 'active' }),
+      findUnique: jest
+        .fn()
+        .mockResolvedValue({ status: 'active', totalSpentPlanck: 0n }),
     },
   };
   const gating = {
@@ -669,12 +671,16 @@ describe('get', () => {
       partner: null,
       directions: null,
       startedAt: null,
+      spentPlanck: null,
     });
   });
 
   it('shows each side the other one', async () => {
-    const { service, rows } = setup();
+    const { service, rows, prisma } = setup();
     rows.push(activeRow({ guestLang: 'sk' }));
+    prisma.aiSession.findUnique.mockResolvedValue({
+      totalSpentPlanck: 1_234_567n,
+    });
 
     await expect(service.get(HOST, 'sess-1')).resolves.toEqual({
       status: 'active',
@@ -682,6 +688,11 @@ describe('get', () => {
       partner: { firstName: 'Boris', avatarUrl: null, lang: 'sk' },
       directions: { toMe: 'simultaneous', fromMe: 'phrase' },
       startedAt: NOW,
+      spentPlanck: '1234567',
+    });
+    expect(prisma.aiSession.findUnique).toHaveBeenCalledWith({
+      where: { id: 'bill-1' },
+      select: { totalSpentPlanck: true },
     });
     await expect(service.get(GUEST, 'sess-1')).resolves.toEqual(
       expect.objectContaining({
@@ -691,6 +702,8 @@ describe('get', () => {
           lang: 'ru',
         },
         directions: { toMe: 'phrase', fromMe: 'simultaneous' },
+        // The guest pays nothing and is not shown the host's spending.
+        spentPlanck: null,
       }),
     );
   });
