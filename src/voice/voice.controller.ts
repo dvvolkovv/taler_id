@@ -25,6 +25,7 @@ import { VoiceService } from './voice.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RecorderSecretGuard } from './guards/recorder-secret.guard';
 import { RoomAccessGuard } from './guards/room-access.guard';
+import { NotInterpreterRoomGuard } from './guards/not-interpreter-room.guard';
 import { LK_API_KEY, LK_API_SECRET } from '../common/livekit-credentials';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { RoomActor } from '../common/decorators/room-actor.decorator';
@@ -440,7 +441,7 @@ export class VoiceController {
   // ─── E2EE ───
 
   @Post('rooms/:roomName/disable-e2ee')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, NotInterpreterRoomGuard)
   disableE2EE(@Param('roomName') roomName: string) {
     return this.service.disableE2EE(roomName);
   }
@@ -453,19 +454,19 @@ export class VoiceController {
   }
 
   @Post('rooms/:roomName/translator/start')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, NotInterpreterRoomGuard)
   startTranslator(@Param('roomName') roomName: string) {
     return this.service.startTranslator(roomName);
   }
 
   @Post('rooms/:roomName/translator/stop')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, NotInterpreterRoomGuard)
   stopTranslator(@Param('roomName') roomName: string) {
     return this.service.stopTranslator(roomName);
   }
 
   @Post('rooms/:roomName/set-lang')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, NotInterpreterRoomGuard)
   setTranslatorLang(
     @Param('roomName') roomName: string,
     @Body('lang') lang: string,
@@ -607,13 +608,13 @@ export class VoiceController {
   // ─── Hold Music ───
 
   @Post('rooms/:roomName/hold-music/start')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, NotInterpreterRoomGuard)
   startHoldMusic(@Param('roomName') roomName: string) {
     return this.service.startHoldMusic(roomName);
   }
 
   @Post('rooms/:roomName/hold-music/stop')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, NotInterpreterRoomGuard)
   stopHoldMusic(@Param('roomName') roomName: string) {
     return this.service.stopHoldMusic(roomName);
   }

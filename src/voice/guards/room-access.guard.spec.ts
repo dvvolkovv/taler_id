@@ -83,6 +83,18 @@ describe('RoomAccessGuard', () => {
     expect(req.roomActor).toBe('guest-1');
   });
 
+  it('rejects interpreter rooms, even with a LiveKit grant for one', async () => {
+    // Both people in an interpreter room hold a grant for it; none of the
+    // routes behind this guard (recorder, translator, chat) belongs there.
+    const room = 'interp-0f8fad5b-d9cb-469f-a165-70867728950e';
+    const err = await guard
+      .canActivate(ctxFor(room, `Bearer ${livekitToken(room)}`))
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ForbiddenException);
+    expect((err as ForbiddenException).message).toBe('interpreter_room');
+  });
+
   it('rejects a LiveKit grant for a different room', async () => {
     // The core of the finding: knowing a room name must not be enough.
     const ctx = ctxFor('call-victim', `Bearer ${livekitToken('call-mine')}`);

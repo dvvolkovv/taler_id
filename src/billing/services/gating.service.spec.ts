@@ -131,6 +131,83 @@ describe('GatingService', () => {
     expect(s.id).toBe('sBoundary');
   });
 
+  it('startSession runs assertCanStart before opening the session', async () => {
+    const check = jest
+      .spyOn(service, 'assertCanStart')
+      .mockResolvedValue(undefined);
+    prisma.aiSession.create.mockResolvedValue({ id: 's4' });
+
+    await service.startSession('u1', 'interpreter', 'ctx-1');
+
+    expect(check).toHaveBeenCalledWith('u1', 'interpreter');
+    expect(check.mock.invocationCallOrder[0]).toBeLessThan(
+      prisma.aiSession.create.mock.invocationCallOrder[0],
+    );
+  });
+
+  describe('assertCanStart', () => {
+    it('passes without opening a session, so nothing is metered yet', async () => {
+      pricing.getConfig.mockResolvedValue(baseConfig);
+      prisma.userFeatureToggle.findUnique.mockResolvedValue(null);
+      pricing.getMinReservePlanck.mockResolvedValue(24_000_000n);
+      ledger.getBalance.mockResolvedValue(24_000_000n);
+
+      await expect(
+        service.assertCanStart('u1', 'interpreter'),
+      ).resolves.toBeUndefined();
+
+      expect(pricing.getMinReservePlanck).toHaveBeenCalledWith('interpreter');
+      expect(prisma.aiSession.create).not.toHaveBeenCalled();
+      expect(gateway.emitToUser).not.toHaveBeenCalled();
+    });
+
+    it('creates the wallet before reading the balance', async () => {
+      pricing.getConfig.mockResolvedValue(baseConfig);
+      prisma.userFeatureToggle.findUnique.mockResolvedValue(null);
+      pricing.getMinReservePlanck.mockResolvedValue(1n);
+      ledger.getBalance.mockResolvedValue(1n);
+
+      await service.assertCanStart('u1', 'interpreter');
+
+      expect(wallet.getOrCreate).toHaveBeenCalledWith('u1');
+      expect(wallet.getOrCreate.mock.invocationCallOrder[0]).toBeLessThan(
+        ledger.getBalance.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('throws FeatureDisabledException when the toggle is off', async () => {
+      pricing.getConfig.mockResolvedValue(baseConfig);
+      prisma.userFeatureToggle.findUnique.mockResolvedValue({ enabled: false });
+
+      await expect(service.assertCanStart('u1', 'interpreter')).rejects.toThrow(
+        FeatureDisabledException,
+      );
+    });
+
+    it('throws InsufficientFundsException below the reserve', async () => {
+      pricing.getConfig.mockResolvedValue(baseConfig);
+      prisma.userFeatureToggle.findUnique.mockResolvedValue({ enabled: true });
+      pricing.getMinReservePlanck.mockResolvedValue(24_000_000n);
+      ledger.getBalance.mockResolvedValue(23_999_999n);
+
+      await expect(service.assertCanStart('u1', 'interpreter')).rejects.toThrow(
+        InsufficientFundsException,
+      );
+    });
+
+    it('only logs when billing is not enforced', async () => {
+      pricing.getConfig.mockResolvedValue({ billingEnforced: false });
+      prisma.userFeatureToggle.findUnique.mockResolvedValue({ enabled: false });
+      pricing.getMinReservePlanck.mockResolvedValue(24_000_000n);
+      ledger.getBalance.mockResolvedValue(0n);
+
+      await expect(
+        service.assertCanStart('u1', 'interpreter'),
+      ).resolves.toBeUndefined();
+      expect(prisma.aiSession.create).not.toHaveBeenCalled();
+    });
+  });
+
   it('endSession marks completed and does NOT emit ai_session_terminated', async () => {
     prisma.aiSession.update.mockResolvedValue({
       id: 's1',
