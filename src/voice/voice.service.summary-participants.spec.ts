@@ -84,7 +84,10 @@ async function runToCompletion(service: any, userId: string, id: string) {
   await service.transcribeExistingRecording(userId, id);
   await settled(() =>
     mockPrisma.meetingSummary.update.mock.calls.some(
-      ([arg]: any) => arg.data.status === 'done' || arg.data.status === 'failed',
+      ([arg]: any) =>
+        arg.data.status === 'done' ||
+        arg.data.status === 'partial' ||
+        arg.data.status === 'failed',
     ),
   );
 }
@@ -213,5 +216,19 @@ describe('transcribeExistingRecording — participant roster in the summary prom
     await runToCompletion(service, OWNER_ID, 'm-1');
 
     expect(promptText(fetchMock)).not.toMatch(/Участники встречи/i);
+  });
+
+  it('keeps a partial recording partial after a successful transcription', async () => {
+    mockPrisma.meetingSummary.findUnique.mockResolvedValue(
+      meeting({ status: 'partial' }),
+    );
+
+    await runToCompletion(service, OWNER_ID, 'm-1');
+
+    const finalUpdate = mockPrisma.meetingSummary.update.mock.calls
+      .map(([arg]: any) => arg)
+      .find((arg: any) => arg.data.transcript !== undefined);
+    expect(finalUpdate).toBeDefined();
+    expect(finalUpdate.data.status).toBe('partial');
   });
 });
