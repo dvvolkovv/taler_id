@@ -27,6 +27,8 @@ const RECORDER_SECRET = process.env.RECORDER_SHARED_SECRET || '';
 const RECORDINGS_DIR = process.env.RECORDINGS_DIR || '/var/www/recordings';
 
 const { TrackEnergy, mergeIntervals } = require('./speaker-timeline');
+const { runFfmpegProcess } = require('./ffmpeg-process');
+const { recordingStatus } = require('./recording-result');
 
 const SAMPLE_RATE = 48000; // LiveKit default
 const CHANNELS = 1;
@@ -40,20 +42,6 @@ try {
   livekitRtc = require('@livekit/rtc-node');
 } catch (e) {
   console.warn('[RECORDER] LiveKit RTC not available:', e.message);
-}
-
-// ─── Timeout helpers ─────────────────────────────────────
-
-/** Dynamic ffmpeg timeout: 60s base + 30s per 100 MB of input, min 60s */
-function calcFfmpegTimeout(inputBytes) {
-  const mb = inputBytes / (1024 * 1024);
-  return Math.max(60000, 60000 + Math.ceil(mb / 100) * 30000);
-}
-
-/** Dynamic mix timeout: 120s base + 20s per input file + 30s per 100 MB total */
-function calcMixTimeout(inputFiles, totalBytes) {
-  const mb = totalBytes / (1024 * 1024);
-  return Math.max(120000, 120000 + inputFiles * 20000 + Math.ceil(mb / 100) * 30000);
 }
 
 // ─── Public API ──────────────────────────────────────────
@@ -195,8 +183,10 @@ async function startRecording(roomName, withAi = true) {
       )),
     ]);
   } catch (e) {
-    recorderSessions.delete(roomName);
-    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+    if (recorderSessions.get(roomName) === session) recorderSessions.delete(roomName);
+    if (session.stopping !== true) {
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+    }
     try { room.disconnect(); } catch (_) {}
     console.error('[RECORDER] Connect failed for', roomName + ':', e.message);
     throw e;
@@ -324,7 +314,7 @@ async function processAndSave(session) {
       console.warn('[RECORDER] Failed to save failed_no_audio summary:', e.message);
     }
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
-    recorderSessions.delete(roomName);
+    if (recorderSessions.get(roomName) === session) recorderSessions.delete(roomName);
     return;
   }
 
@@ -361,11 +351,13 @@ async function processAndSave(session) {
   }
 
   let hadErrors = false;
+  let recordingUrl = null;
+  let finalSaveSucceeded = false;
 
   try {
     // 1. For each participant: convert PCM tracks → OGG, mix if multiple tracks
     //    Process SEQUENTIALLY with per-participant error handling
-    const audioFiles = []; // { identity, name, oggPath, oggSize }
+    const audioFiles = []; // { identity, name, oggPath }
     for (const [identity, tracks] of byIdentity) {
       const name = tracks[0].name;
 
@@ -374,17 +366,13 @@ async function processAndSave(session) {
           // Single track — straightforward convert
           const entry = tracks[0];
           const pcmSizeMB = (entry.bytesWritten / 1024 / 1024).toFixed(1);
-          const timeout = calcFfmpegTimeout(entry.bytesWritten);
-          console.log('[RECORDER]', name, ': 1 track,', pcmSizeMB, 'MB PCM (timeout:', Math.round(timeout/1000), 's)');
+          console.log('[RECORDER]', name, ': 1 track,', pcmSizeMB, 'MB PCM (progress watchdog)');
 
           const oggPath = path.join(tmpDir, `${identity}.ogg`);
-          await ffmpegConvert(entry.pcmPath, oggPath, SAMPLE_RATE, CHANNELS, timeout, entry.offsetMs);
+          await ffmpegConvert(entry.pcmPath, oggPath, SAMPLE_RATE, CHANNELS, entry.offsetMs);
           const oggSize = fs.statSync(oggPath).size;
           console.log('[RECORDER]', name, ':', (oggSize / 1024 / 1024).toFixed(1), 'MB OGG');
-          audioFiles.push({ identity, name, oggPath, oggSize });
-
-          // Delete PCM only after successful conversion
-          try { fs.unlinkSync(entry.pcmPath); } catch (_) {}
+          audioFiles.push({ identity, name, oggPath });
         } else {
           // Multiple tracks — convert each to OGG, then mix them
           console.log('[RECORDER]', name, ':', tracks.length, 'tracks');
@@ -392,15 +380,11 @@ async function processAndSave(session) {
           for (let i = 0; i < tracks.length; i++) {
             const entry = tracks[i];
             const pcmSizeMB = (entry.bytesWritten / 1024 / 1024).toFixed(1);
-            const timeout = calcFfmpegTimeout(entry.bytesWritten);
-            console.log('[RECORDER]   track', i, ':', pcmSizeMB, 'MB PCM (timeout:', Math.round(timeout/1000), 's)');
+            console.log('[RECORDER]   track', i, ':', pcmSizeMB, 'MB PCM (progress watchdog)');
 
             const trackOgg = path.join(tmpDir, `${identity}_t${i}.ogg`);
-            await ffmpegConvert(entry.pcmPath, trackOgg, SAMPLE_RATE, CHANNELS, timeout, entry.offsetMs);
+            await ffmpegConvert(entry.pcmPath, trackOgg, SAMPLE_RATE, CHANNELS, entry.offsetMs);
             trackOggs.push(trackOgg);
-
-            // Delete PCM only after successful conversion
-            try { fs.unlinkSync(entry.pcmPath); } catch (_) {}
           }
 
           // Mix all tracks of this participant into one OGG
@@ -408,7 +392,7 @@ async function processAndSave(session) {
           await ffmpegMixTracks(trackOggs, mixedOgg);
           const oggSize = fs.statSync(mixedOgg).size;
           console.log('[RECORDER]', name, ': mixed', tracks.length, 'tracks →', (oggSize / 1024 / 1024).toFixed(1), 'MB OGG');
-          audioFiles.push({ identity, name, oggPath: mixedOgg, oggSize });
+          audioFiles.push({ identity, name, oggPath: mixedOgg });
 
           // Cleanup individual track OGGs
           for (const t of trackOggs) {
@@ -418,7 +402,7 @@ async function processAndSave(session) {
       } catch (e) {
         // Per-participant error — log and continue with remaining participants
         hadErrors = true;
-        console.error('[RECORDER] FAILED to process participant', name, '(' + identity + '):', e.message);
+        console.error('[RECORDER] FAILED to process participant', name, '(' + identity + '):', e.message, e.stderr || '');
         console.error('[RECORDER] PCM files preserved in:', tmpDir);
         // Do NOT delete PCM files for this participant — leave for manual recovery
       }
@@ -444,44 +428,29 @@ async function processAndSave(session) {
     console.log('[RECORDER] Speech timeline:', speakerTimeline.map(s => `${s.name}:${s.intervals.length}`).join(' ') || '(empty)');
 
     // 2. Mix all successfully converted participant audio into a single MP3, upload to S3
-    let recordingUrl = null;
     if (audioFiles.length > 0) {
       try {
         const recId = uuidv4();
         const outMp3 = path.join(tmpDir, recId + '.mp3');
-        const totalOggBytes = audioFiles.reduce((sum, f) => sum + f.oggSize, 0);
-
         if (audioFiles.length === 1) {
-          const timeout = calcMixTimeout(1, totalOggBytes);
-          console.log('[RECORDER] Converting single OGG to MP3 (timeout:', Math.round(timeout/1000), 's)');
-          await new Promise((resolve, reject) => {
-            execFile('ffmpeg', [
-              '-y', '-i', audioFiles[0].oggPath,
-              '-c:a', 'libmp3lame', '-q:a', '4',
-              outMp3,
-            ], { timeout }, (err, _stdout, stderr) => {
-              if (err) reject(new Error('ffmpeg single mix failed: ' + stderr));
-              else resolve();
-            });
-          });
+          console.log('[RECORDER] Converting single OGG to MP3 (progress watchdog)');
+          await runFfmpegProcess([
+            '-y', '-i', audioFiles[0].oggPath,
+            '-c:a', 'libmp3lame', '-q:a', '4',
+            outMp3,
+          ]);
         } else {
-          const timeout = calcMixTimeout(audioFiles.length, totalOggBytes);
-          console.log('[RECORDER] Mixing', audioFiles.length, 'OGG files to MP3 (timeout:', Math.round(timeout/1000), 's)');
-          const inputs = audioFiles.flatMap(f => ['-i', f.oggPath]);
+          console.log('[RECORDER] Mixing', audioFiles.length, 'OGG files to MP3 (progress watchdog)');
+          const inputs = audioFiles.flatMap((f) => ['-i', f.oggPath]);
           const filterAr = audioFiles.map((_, i) => `[${i}:a]`).join('');
           const filterComplex = `${filterAr}amix=inputs=${audioFiles.length}:duration=longest[aout]`;
-          await new Promise((resolve, reject) => {
-            execFile('ffmpeg', [
-              '-y', ...inputs,
-              '-filter_complex', filterComplex,
-              '-map', '[aout]',
-              '-c:a', 'libmp3lame', '-q:a', '4',
-              outMp3,
-            ], { timeout }, (err, _stdout, stderr) => {
-              if (err) reject(new Error('ffmpeg multi mix failed: ' + stderr));
-              else resolve();
-            });
-          });
+          await runFfmpegProcess([
+            '-y', ...inputs,
+            '-filter_complex', filterComplex,
+            '-map', '[aout]',
+            '-c:a', 'libmp3lame', '-q:a', '4',
+            outMp3,
+          ]);
         }
 
         // Upload to S3 via backend
@@ -490,18 +459,30 @@ async function processAndSave(session) {
         const blob = new Blob([fileBuffer], { type: 'audio/mpeg' });
         formData.append('file', blob, `${recId}.mp3`);
 
-        const uploadRes = await fetch(`${BACKEND_URL}/voice/recordings/upload`, {
-          method: 'POST',
-          headers: { 'x-recorder-secret': RECORDER_SECRET },
-          body: formData,
-        });
+        let uploadRes = null;
+        let uploadData = null;
+        try {
+          uploadRes = await fetch(`${BACKEND_URL}/voice/recordings/upload`, {
+            method: 'POST',
+            headers: { 'x-recorder-secret': RECORDER_SECRET },
+            body: formData,
+          });
+          if (uploadRes.ok) uploadData = await uploadRes.json().catch(() => null);
+        } catch (e) {
+          console.error('[RECORDER] S3 upload request failed:', e.message);
+        }
 
-        if (uploadRes.ok) {
-          const uploadData = await uploadRes.json();
-          recordingUrl = uploadData.url;
+        const uploadedUrl = uploadData && typeof uploadData.url === 'string' ? uploadData.url.trim() : '';
+        if (uploadedUrl) {
+          recordingUrl = uploadedUrl;
           console.log('[RECORDER] Recording uploaded to S3:', recordingUrl);
         } else {
-          console.error('[RECORDER] S3 upload failed:', uploadRes.status, await uploadRes.text());
+          if (uploadRes && uploadRes.ok) {
+            console.error('[RECORDER] S3 upload returned no usable URL');
+          } else if (uploadRes) {
+            const responseText = typeof uploadRes.text === 'function' ? await uploadRes.text().catch(() => '') : '';
+            console.error('[RECORDER] S3 upload failed:', uploadRes.status, responseText);
+          }
           // Fallback: save locally
           const fallbackDir = process.env.RECORDINGS_DIR || '/var/www/recordings';
           const fallbackPath = path.join(fallbackDir, recId + '.mp3');
@@ -514,7 +495,8 @@ async function processAndSave(session) {
           console.warn('[RECORDER] Recording created from', audioFiles.length, '/', byIdentity.size, 'participants (some tracks failed)');
         }
       } catch (e) {
-        console.error('[RECORDER] Audio mix/upload failed:', e.message);
+        hadErrors = true;
+        console.error('[RECORDER] Audio mix/upload failed:', e.message, e.stderr || '');
       }
     }
 
@@ -534,7 +516,7 @@ async function processAndSave(session) {
     };
 
     if (pendingId) payload.id = pendingId;
-    payload.status = 'done';
+    payload.status = recordingStatus(recordingUrl, hadErrors);
     console.log('[RECORDER] Saving to backend...');
     try {
       const res = await fetch(`${BACKEND_URL}/voice/meetings/save`, {
@@ -542,7 +524,9 @@ async function processAndSave(session) {
         headers: { 'Content-Type': 'application/json', 'x-recorder-secret': RECORDER_SECRET },
         body: JSON.stringify(payload),
       });
+      if (!res.ok) throw new Error(`Meeting save failed with HTTP ${res.status}`);
       const data = await res.json();
+      finalSaveSucceeded = true;
       console.log('[RECORDER] Saved meeting summary:', data.id || 'ok');
     } catch (e) {
       console.error('[RECORDER] Failed to save to backend:', e.message);
@@ -551,10 +535,9 @@ async function processAndSave(session) {
       console.log('[RECORDER] Saved fallback to:', fallbackPath);
     }
   } finally {
-    // Only cleanup temp dir if there were NO errors
-    // If there were errors, PCM files are preserved for manual recovery
-    if (hadErrors) {
-      // Clean up only OGG/MP3 intermediaries, keep PCM
+    // Preserve the complete PCM set for recovery unless a clean usable recording exists.
+    if (hadErrors || !recordingUrl || !finalSaveSucceeded) {
+      // Clean up only OGG/MP3 intermediaries, keep every PCM and the tmpDir itself.
       const files = fs.readdirSync(tmpDir);
       for (const f of files) {
         if (!f.endsWith('.pcm')) {
@@ -564,66 +547,52 @@ async function processAndSave(session) {
       const remainingPcm = files.filter(f => f.endsWith('.pcm'));
       if (remainingPcm.length > 0) {
         console.warn('[RECORDER] ⚠️  PRESERVED', remainingPcm.length, 'PCM files in', tmpDir, 'for manual recovery');
-      } else {
-        // All PCM were successfully converted, safe to delete
-        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
       }
     } else {
       try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
     }
-    recorderSessions.delete(roomName);
+    if (recorderSessions.get(roomName) === session) recorderSessions.delete(roomName);
     console.log('[RECORDER] Done processing room:', roomName);
   }
 }
 
 // ─── Helpers ──────────────────────────────────────────────
 
-function ffmpegConvert(pcmPath, oggPath, sampleRate, channels, timeout, delayMs) {
-  // A participant's PCM starts when THEY started publishing, so converting it
-  // as-is and amix-ing puts a latecomer's first word at second zero of the
-  // recording. Padding by the join offset keeps the mixdown on the meeting's
-  // own clock — the same clock the speech timeline and Whisper timestamps use.
+// A participant's PCM starts when THEY started publishing, so converting it
+// as-is and amix-ing puts a latecomer's first word at second zero of the
+// recording. Padding by the join offset keeps the mixdown on the meeting's
+// own clock — the same clock the speech timeline and Whisper timestamps use.
+function ffmpegConvert(pcmPath, oggPath, sampleRate, channels, delayMs) {
   const delay = Math.round(delayMs || 0);
   const pad = delay > 0 ? ['-af', `adelay=${delay}:all=1`] : [];
-  return new Promise((resolve, reject) => {
-    execFile('ffmpeg', [
-      '-y', '-f', 's16le', '-ar', String(sampleRate), '-ac', String(channels),
-      '-i', pcmPath,
-      ...pad,
-      '-c:a', 'libopus', '-b:a', '48k',
-      oggPath,
-    ], { timeout: timeout || 120000 }, (err, stdout, stderr) => {
-      if (err) reject(new Error(`ffmpeg failed: ${err.message}\n${stderr}`));
-      else resolve();
-    });
-  });
+  return runFfmpegProcess([
+    '-y', '-f', 's16le', '-ar', String(sampleRate), '-ac', String(channels),
+    '-i', pcmPath,
+    ...pad,
+    '-c:a', 'libopus', '-b:a', '48k',
+    oggPath,
+  ]);
 }
 
 /**
  * Mix multiple OGG tracks into one OGG file.
  * Uses amix filter to overlay them (all tracks play simultaneously).
  */
-function ffmpegMixTracks(inputOggs, outputOgg) {
-  return new Promise((resolve, reject) => {
-    if (inputOggs.length === 1) {
-      // Just copy
-      fs.copyFileSync(inputOggs[0], outputOgg);
-      return resolve();
-    }
-    const inputs = inputOggs.flatMap(f => ['-i', f]);
-    const filterAr = inputOggs.map((_, i) => `[${i}:a]`).join('');
-    const filterComplex = `${filterAr}amix=inputs=${inputOggs.length}:duration=longest:normalize=0[aout]`;
-    execFile('ffmpeg', [
-      '-y', ...inputs,
-      '-filter_complex', filterComplex,
-      '-map', '[aout]',
-      '-c:a', 'libopus', '-b:a', '48k',
-      outputOgg,
-    ], { timeout: 120000 }, (err, _stdout, stderr) => {
-      if (err) reject(new Error(`ffmpeg mix failed: ${err.message}\n${stderr}`));
-      else resolve();
-    });
-  });
+async function ffmpegMixTracks(inputOggs, outputOgg) {
+  if (inputOggs.length === 1) {
+    fs.copyFileSync(inputOggs[0], outputOgg);
+    return;
+  }
+  const inputs = inputOggs.flatMap((f) => ['-i', f]);
+  const filterAr = inputOggs.map((_, i) => `[${i}:a]`).join('');
+  const filterComplex = `${filterAr}amix=inputs=${inputOggs.length}:duration=longest:normalize=0[aout]`;
+  await runFfmpegProcess([
+    '-y', ...inputs,
+    '-filter_complex', filterComplex,
+    '-map', '[aout]',
+    '-c:a', 'libopus', '-b:a', '48k',
+    outputOgg,
+  ]);
 }
 
 function splitOggFile(oggPath, tmpDir, identity) {
@@ -738,4 +707,9 @@ async function summarizeWithGpt(transcript, participantNames) {
   }
 }
 
-module.exports = { startRecording, stopRecording, getRecordingStatus };
+module.exports = {
+  startRecording,
+  stopRecording,
+  getRecordingStatus,
+  _test: { processAndSave, recorderSessions },
+};
