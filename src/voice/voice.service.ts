@@ -2515,6 +2515,7 @@ export class VoiceService implements OnModuleInit {
     }
 
     // Update meeting summary
+    const finalStatus = meeting.status === 'partial' ? 'partial' : 'done';
     const updated = await this.prisma.meetingSummary.update({
       where: { id: meetingId },
       data: {
@@ -2523,11 +2524,11 @@ export class VoiceService implements OnModuleInit {
         keyPoints: summary.keyPoints || [],
         actionItems: summary.actionItems || [],
         decisions: summary.decisions || [],
-        status: 'done',
+        status: finalStatus,
       },
     });
 
-    return { id: updated.id, status: 'done' };
+    return { id: updated.id, status: finalStatus };
   }
 
   // ─── Hold Music ───
