@@ -183,8 +183,10 @@ async function startRecording(roomName, withAi = true) {
       )),
     ]);
   } catch (e) {
-    recorderSessions.delete(roomName);
-    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+    if (recorderSessions.get(roomName) === session) recorderSessions.delete(roomName);
+    if (session.stopping !== true) {
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+    }
     try { room.disconnect(); } catch (_) {}
     console.error('[RECORDER] Connect failed for', roomName + ':', e.message);
     throw e;

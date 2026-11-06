@@ -34,6 +34,7 @@ describe('processAndSave recording outcomes', () => {
   const originalEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
 
   let processAndSave;
+  let startRecording;
   let recorderSessions;
   let ffmpegHandler;
   let uploadHandler;
@@ -42,15 +43,62 @@ describe('processAndSave recording outcomes', () => {
   let tmpDir;
   let fallbackDir;
   let savedPayloads;
+  const rooms = [];
+
+  function deferred() {
+    let resolve;
+    let reject;
+    const promise = new Promise((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  class FakeRoom {
+    constructor() {
+      this.connectDeferred = deferred();
+      this.remoteParticipants = new Map();
+      this.localParticipant = { publishData: async () => {} };
+      rooms.push(this);
+    }
+
+    on() {}
+
+    connect() {
+      return this.connectDeferred.promise;
+    }
+
+    disconnect() {}
+  }
 
   before(() => {
     Module._load = function (request, parent, isMain) {
       if (parent && parent.filename === recorderPath) {
-        if (request === 'livekit-server-sdk') return { AccessToken: class AccessToken {} };
+        if (request === 'livekit-server-sdk') {
+          return {
+            AccessToken: class AccessToken {
+              addGrant() {}
+              async toJwt() { return 'test-token'; }
+            },
+          };
+        }
         if (request === 'livekit-credentials' || request === './livekit-credentials') {
           return { readLivekitCredentials: () => ({ apiKey: 'test-key', apiSecret: 'test-secret' }) };
         }
-        if (request === '@livekit/rtc-node') return {};
+        if (request === '@livekit/rtc-node') {
+          return {
+            Room: FakeRoom,
+            RoomEvent: {
+              TrackSubscribed: 'trackSubscribed',
+              ParticipantConnected: 'participantConnected',
+              ParticipantDisconnected: 'participantDisconnected',
+              Disconnected: 'disconnected',
+            },
+            AudioStream: class AudioStream {},
+            TrackKind: { KIND_AUDIO: 'audio' },
+          };
+        }
         if (request === './ffmpeg-process') {
           return { runFfmpegProcess: (args) => ffmpegHandler(args) };
         }
@@ -60,8 +108,10 @@ describe('processAndSave recording outcomes', () => {
     process.env.BACKEND_URL = backendUrl;
     process.env.RECORDER_SHARED_SECRET = 'test-recorder-secret';
     delete require.cache[recorderPath];
-    const testApi = require(recorderPath)._test;
+    const recorder = require(recorderPath);
+    const testApi = recorder._test;
     processAndSave = testApi.processAndSave;
+    startRecording = recorder.startRecording;
     recorderSessions = testApi.recorderSessions;
   });
 
@@ -86,6 +136,7 @@ describe('processAndSave recording outcomes', () => {
     process.env.RECORDINGS_DIR = fallbackDir;
     savedPayloads = [];
     finalSaveHandler = null;
+    rooms.length = 0;
 
     ffmpegHandler = async (args) => {
       fs.writeFileSync(args[args.length - 1], 'fake media');
@@ -316,5 +367,61 @@ describe('processAndSave recording outcomes', () => {
     assertFinalPayload('done', expectedUrl);
     assert.equal(fs.existsSync(tmpDir), false);
     assert.equal(fs.readFileSync(path.join(fallbackDir, fallbackFiles[0]), 'utf8'), 'fake media');
+  });
+
+  it('keeps the replacement session and old PCM when a stale connect rejects after stopping', async () => {
+    const roomName = 'room-connect-race';
+    const realSetTimeout = global.setTimeout;
+    const realDateNow = Date.now;
+    let now = 1700000000000;
+    let oldSession;
+    let replacementSession;
+    let oldStart;
+    let replacementStart;
+
+    global.setTimeout = (fn, ms, ...args) => {
+      if (ms === 15000) return { unref() {} };
+      return realSetTimeout(fn, ms, ...args);
+    };
+    Date.now = () => now;
+
+    try {
+      oldStart = startRecording(roomName, false);
+      await Promise.resolve();
+      assert.equal(rooms.length, 1);
+      oldSession = recorderSessions.get(roomName);
+      assert.ok(oldSession, 'old session must be registered while connect is pending');
+      const markerPath = path.join(oldSession.tmpDir, 'recoverable.pcm');
+      fs.writeFileSync(markerPath, 'original PCM');
+      oldSession.stopping = true;
+
+      now += 1;
+      replacementStart = startRecording(roomName, false);
+      await Promise.resolve();
+      assert.equal(rooms.length, 2);
+      replacementSession = recorderSessions.get(roomName);
+      assert.ok(replacementSession, 'replacement session must be registered');
+      assert.notEqual(replacementSession, oldSession);
+
+      rooms[0].connectDeferred.reject(new Error('late connect failed'));
+      await assert.rejects(oldStart, /late connect failed/);
+
+      assert.equal(recorderSessions.get(roomName), replacementSession);
+      assert.equal(fs.readFileSync(markerPath, 'utf8'), 'original PCM');
+
+      rooms[1].connectDeferred.resolve();
+      await replacementStart;
+    } finally {
+      if (rooms[0]) rooms[0].connectDeferred.reject(new Error('test cleanup'));
+      if (oldStart) await oldStart.catch(() => {});
+      if (rooms[1]) rooms[1].connectDeferred.resolve();
+      if (replacementStart) await replacementStart.catch(() => {});
+      recorderSessions.delete(roomName);
+      for (const session of [oldSession, replacementSession]) {
+        if (session) fs.rmSync(session.tmpDir, { recursive: true, force: true });
+      }
+      global.setTimeout = realSetTimeout;
+      Date.now = realDateNow;
+    }
   });
 });
