@@ -29,12 +29,15 @@ describe('processAndSave recording outcomes', () => {
   const uploadedUrl = 'https://cdn.test/recording.mp3';
   const originalLoad = Module._load;
   const originalFetch = global.fetch;
+  const originalHomedir = os.homedir;
   const envKeys = ['BACKEND_URL', 'RECORDER_SHARED_SECRET', 'RECORDINGS_DIR'];
   const originalEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
 
   let processAndSave;
+  let recorderSessions;
   let ffmpegHandler;
   let uploadHandler;
+  let finalSaveHandler;
   let rootDir;
   let tmpDir;
   let fallbackDir;
@@ -57,12 +60,15 @@ describe('processAndSave recording outcomes', () => {
     process.env.BACKEND_URL = backendUrl;
     process.env.RECORDER_SHARED_SECRET = 'test-recorder-secret';
     delete require.cache[recorderPath];
-    processAndSave = require(recorderPath)._test.processAndSave;
+    const testApi = require(recorderPath)._test;
+    processAndSave = testApi.processAndSave;
+    recorderSessions = testApi.recorderSessions;
   });
 
   after(() => {
     Module._load = originalLoad;
     global.fetch = originalFetch;
+    os.homedir = originalHomedir;
     for (const key of envKeys) {
       if (originalEnv[key] === undefined) delete process.env[key];
       else process.env[key] = originalEnv[key];
@@ -76,8 +82,10 @@ describe('processAndSave recording outcomes', () => {
     fallbackDir = path.join(rootDir, 'fallback');
     fs.mkdirSync(tmpDir);
     fs.mkdirSync(fallbackDir);
+    os.homedir = () => rootDir;
     process.env.RECORDINGS_DIR = fallbackDir;
     savedPayloads = [];
+    finalSaveHandler = null;
 
     ffmpegHandler = async (args) => {
       fs.writeFileSync(args[args.length - 1], 'fake media');
@@ -92,7 +100,12 @@ describe('processAndSave recording outcomes', () => {
       if (url === `${backendUrl}/voice/meetings/save`) {
         const payload = JSON.parse(options.body);
         savedPayloads.push(payload);
-        return { json: async () => ({ id: payload.status === 'processing' ? 'pending-id' : 'meeting-id' }) };
+        if (payload.status !== 'processing' && finalSaveHandler) return finalSaveHandler(payload);
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: payload.status === 'processing' ? 'pending-id' : 'meeting-id' }),
+        };
       }
       if (url === `${backendUrl}/voice/recordings/upload`) return uploadHandler(url, options);
       throw new Error(`Unexpected fetch: ${url}`);
@@ -101,6 +114,7 @@ describe('processAndSave recording outcomes', () => {
 
   afterEach(() => {
     global.fetch = originalFetch;
+    os.homedir = originalHomedir;
     fs.rmSync(rootDir, { recursive: true, force: true });
   });
 
@@ -230,5 +244,77 @@ describe('processAndSave recording outcomes', () => {
 
     assertFinalPayload('failed', null);
     assertOnlyOriginalPcm(pcmFiles);
+  });
+
+  it('preserves every PCM when the final save returns HTTP 500 with Nest JSON', async () => {
+    const { session, pcmFiles } = makeSession([{ identity: 'alice', tracks: 2 }]);
+    finalSaveHandler = async () => ({
+      ok: false,
+      status: 500,
+      json: async () => ({ statusCode: 500, message: 'Internal server error' }),
+    });
+
+    await processAndSave(session);
+
+    assertFinalPayload('done', uploadedUrl);
+    assertOnlyOriginalPcm(pcmFiles);
+  });
+
+  it('preserves every PCM when the final save rejects on the network', async () => {
+    const { session, pcmFiles } = makeSession([{ identity: 'alice' }]);
+    finalSaveHandler = async () => {
+      throw new Error('final save network failure');
+    };
+
+    await processAndSave(session);
+
+    assertFinalPayload('done', uploadedUrl);
+    assertOnlyOriginalPcm(pcmFiles);
+  });
+
+  it('preserves every PCM when fallback JSON cannot be written', async () => {
+    const { session, pcmFiles } = makeSession([{ identity: 'alice' }]);
+    finalSaveHandler = async () => {
+      throw new Error('final save network failure');
+    };
+    os.homedir = () => path.join(rootDir, 'missing-home');
+
+    await assert.rejects(processAndSave(session), /ENOENT/);
+
+    assertFinalPayload('done', uploadedUrl);
+    assertOnlyOriginalPcm(pcmFiles);
+  });
+
+  it('does not delete a newer session for the same room in the main finally', async () => {
+    assert.ok(recorderSessions, 'recorderSessions must be exposed through the test API');
+    const { session } = makeSession([{ identity: 'alice' }]);
+    const newSession = { roomName: session.roomName, tmpDir: path.join(rootDir, 'new-tmp') };
+    uploadHandler = async () => {
+      recorderSessions.set(session.roomName, newSession);
+      return { ok: true, status: 200, json: async () => ({ url: uploadedUrl }) };
+    };
+
+    try {
+      await processAndSave(session);
+      assert.equal(recorderSessions.get(session.roomName), newSession);
+    } finally {
+      recorderSessions.delete(session.roomName);
+    }
+  });
+
+  it('uses local fallback when upload fetch rejects and still reports done', async () => {
+    const { session } = makeSession([{ identity: 'alice' }]);
+    uploadHandler = async () => {
+      throw new Error('upload network failure');
+    };
+
+    await processAndSave(session);
+
+    const fallbackFiles = fs.readdirSync(fallbackDir);
+    assert.equal(fallbackFiles.length, 1);
+    const expectedUrl = `${backendUrl}/recordings/${fallbackFiles[0]}`;
+    assertFinalPayload('done', expectedUrl);
+    assert.equal(fs.existsSync(tmpDir), false);
+    assert.equal(fs.readFileSync(path.join(fallbackDir, fallbackFiles[0]), 'utf8'), 'fake media');
   });
 });

@@ -312,7 +312,7 @@ async function processAndSave(session) {
       console.warn('[RECORDER] Failed to save failed_no_audio summary:', e.message);
     }
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
-    recorderSessions.delete(roomName);
+    if (recorderSessions.get(roomName) === session) recorderSessions.delete(roomName);
     return;
   }
 
@@ -350,6 +350,7 @@ async function processAndSave(session) {
 
   let hadErrors = false;
   let recordingUrl = null;
+  let finalSaveSucceeded = false;
 
   try {
     // 1. For each participant: convert PCM tracks → OGG, mix if multiple tracks
@@ -456,22 +457,29 @@ async function processAndSave(session) {
         const blob = new Blob([fileBuffer], { type: 'audio/mpeg' });
         formData.append('file', blob, `${recId}.mp3`);
 
-        const uploadRes = await fetch(`${BACKEND_URL}/voice/recordings/upload`, {
-          method: 'POST',
-          headers: { 'x-recorder-secret': RECORDER_SECRET },
-          body: formData,
-        });
+        let uploadRes = null;
+        let uploadData = null;
+        try {
+          uploadRes = await fetch(`${BACKEND_URL}/voice/recordings/upload`, {
+            method: 'POST',
+            headers: { 'x-recorder-secret': RECORDER_SECRET },
+            body: formData,
+          });
+          if (uploadRes.ok) uploadData = await uploadRes.json().catch(() => null);
+        } catch (e) {
+          console.error('[RECORDER] S3 upload request failed:', e.message);
+        }
 
-        const uploadData = uploadRes.ok ? await uploadRes.json().catch(() => null) : null;
         const uploadedUrl = uploadData && typeof uploadData.url === 'string' ? uploadData.url.trim() : '';
         if (uploadedUrl) {
           recordingUrl = uploadedUrl;
           console.log('[RECORDER] Recording uploaded to S3:', recordingUrl);
         } else {
-          if (uploadRes.ok) {
+          if (uploadRes && uploadRes.ok) {
             console.error('[RECORDER] S3 upload returned no usable URL');
-          } else {
-            console.error('[RECORDER] S3 upload failed:', uploadRes.status, await uploadRes.text());
+          } else if (uploadRes) {
+            const responseText = typeof uploadRes.text === 'function' ? await uploadRes.text().catch(() => '') : '';
+            console.error('[RECORDER] S3 upload failed:', uploadRes.status, responseText);
           }
           // Fallback: save locally
           const fallbackDir = process.env.RECORDINGS_DIR || '/var/www/recordings';
@@ -514,7 +522,9 @@ async function processAndSave(session) {
         headers: { 'Content-Type': 'application/json', 'x-recorder-secret': RECORDER_SECRET },
         body: JSON.stringify(payload),
       });
+      if (!res.ok) throw new Error(`Meeting save failed with HTTP ${res.status}`);
       const data = await res.json();
+      finalSaveSucceeded = true;
       console.log('[RECORDER] Saved meeting summary:', data.id || 'ok');
     } catch (e) {
       console.error('[RECORDER] Failed to save to backend:', e.message);
@@ -524,7 +534,7 @@ async function processAndSave(session) {
     }
   } finally {
     // Preserve the complete PCM set for recovery unless a clean usable recording exists.
-    if (hadErrors || !recordingUrl) {
+    if (hadErrors || !recordingUrl || !finalSaveSucceeded) {
       // Clean up only OGG/MP3 intermediaries, keep every PCM and the tmpDir itself.
       const files = fs.readdirSync(tmpDir);
       for (const f of files) {
@@ -539,7 +549,7 @@ async function processAndSave(session) {
     } else {
       try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
     }
-    recorderSessions.delete(roomName);
+    if (recorderSessions.get(roomName) === session) recorderSessions.delete(roomName);
     console.log('[RECORDER] Done processing room:', roomName);
   }
 }
@@ -695,4 +705,9 @@ async function summarizeWithGpt(transcript, participantNames) {
   }
 }
 
-module.exports = { startRecording, stopRecording, getRecordingStatus, _test: { processAndSave } };
+module.exports = {
+  startRecording,
+  stopRecording,
+  getRecordingStatus,
+  _test: { processAndSave, recorderSessions },
+};
