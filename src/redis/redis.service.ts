@@ -57,6 +57,22 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     await this.client.del(key);
   }
 
+  /**
+   * Deletes the key only while it still holds `value` — releases a lock
+   * taken with `setNxEx` without deleting one that expired and was taken
+   * over by another holder in the meantime. Compare and delete run as one
+   * script, so nothing can slip in between them.
+   */
+  async delIfEquals(key: string, value: string): Promise<boolean> {
+    const deleted = await this.client.eval(
+      "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+      1,
+      key,
+      value,
+    );
+    return deleted === 1;
+  }
+
   async incr(key: string): Promise<number> {
     return this.client.incr(key);
   }

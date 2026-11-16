@@ -267,6 +267,25 @@ export function formatRefundResult(
   result: OperatorWalletRefundResult,
   target: RefundTarget,
 ): string {
+  if (result.status === 'pending') {
+    // 202 (GSMSoft common#1471): the platform is still looking for the
+    // payer. A repeat would only queue the same refund again, and
+    // suggesting an explicit address instead is unsafe until the platform
+    // confirms that it cancels the queued one.
+    return [
+      `[B:blue]⏳ Возврат в очереди[/B] для кошелька **#${result.wallet_id}**`,
+      '',
+      'Платформа ещё ищет адрес плательщика по истории транзакций — на некоторых ' +
+        'сетях это занимает несколько часов. Найдя его, вернёт деньги сама. ' +
+        '**Деньги ещё не ушли.**',
+      '',
+      'Повторять возврат не нужно. Итог виден в списке кошельков: после возврата ' +
+        'кошелёк из него исчезнет, а если вернуть автоматически не получится — ' +
+        'останется в списке с причиной.',
+      '',
+      OPERATOR_BUTTONS,
+    ].join('\n');
+  }
   const where =
     'refundAddress' in target
       ? `Получатель: \`${target.refundAddress}\``
