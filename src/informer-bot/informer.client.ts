@@ -30,6 +30,17 @@ export interface InformerClientConfig {
 const EMPTY_BODY_SHA256 =
   'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 
+function isJsonObject(body: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(body);
+    return (
+      typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+    );
+  } catch {
+    return false;
+  }
+}
+
 @Injectable()
 export class InformerClient {
   private readonly logger = new Logger(InformerClient.name);
@@ -56,7 +67,16 @@ export class InformerClient {
     if (status === 400) return new InformerBadRequestError(body);
     if (status === 401) return new InformerAuthError(body);
     if (status === 403) return new InformerTotpError(body);
-    if (status === 404) return new InformerNotConfiguredError(404, body);
+    if (status === 404) {
+      // The admin-API (echo) always answers in JSON: an unmounted informer
+      // group gives {"message":"Not Found"}, a missing wallet the error
+      // envelope. Anything else came from a proxy in front of it — e.g. the
+      // ingress after a domain move (2026-11-16) — so the request never
+      // reached the admin-API.
+      return isJsonObject(body)
+        ? new InformerNotConfiguredError(404, body)
+        : new InformerUnavailableError(404, body);
+    }
     if (status === 422) return new InformerOperatorInterventionError(body);
     if (status === 503) {
       if (body.includes('nonce store unavailable'))
@@ -198,7 +218,7 @@ export class InformerClient {
    */
   private static readonly REFUND_TIMEOUT_MS = 45000;
 
-  refundOperatorWallet(
+  async refundOperatorWallet(
     walletId: number,
     target: RefundTarget,
     totpCode: string,
@@ -211,18 +231,29 @@ export class InformerClient {
         ? { refund_address: target.refundAddress }
         : { refund_to_payer: true as const };
 
-    return this.signedPost<OperatorWalletRefundResult>(
-      `/informer/v1/operator-required-wallets/${walletId}/refund`,
-      {
-        wallet_id: walletId,
-        ...targetField,
-        totp_code: totpCode,
-        // Only ever sent when true — the guide asks not to send it by
-        // default, and its presence is logged upstream as a deliberate
-        // operator decision.
-        ...(verifiedAbsent ? { withdrawal_verified_absent: true } : {}),
-      },
-      InformerClient.REFUND_TIMEOUT_MS,
-    );
+    try {
+      return await this.signedPost<OperatorWalletRefundResult>(
+        `/informer/v1/operator-required-wallets/${walletId}/refund`,
+        {
+          wallet_id: walletId,
+          ...targetField,
+          totp_code: totpCode,
+          // Only ever sent when true — the guide asks not to send it by
+          // default, and its presence is logged upstream as a deliberate
+          // operator decision.
+          ...(verifiedAbsent ? { withdrawal_verified_absent: true } : {}),
+        },
+        InformerClient.REFUND_TIMEOUT_MS,
+      );
+    } catch (e) {
+      // 202: the platform queued a refund to the payer whose address it has
+      // yet to find (GSMSoft common#1471) — accepted, but the money has NOT
+      // left. Whatever the body says, it is neither a failure nor a reason
+      // to send the refund again.
+      if (e instanceof InformerUnavailableError && e.upstreamStatus === 202) {
+        return { wallet_id: walletId, status: 'pending' };
+      }
+      throw e;
+    }
   }
 }

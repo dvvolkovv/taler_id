@@ -356,8 +356,40 @@ export function formatDowntimeAlert(): string {
   return [
     '⚠️ **Informer API недоступен 15+ минут**',
     '',
-    'Watcher временно остановлен. Алёрты о новых кошельках могут запаздывать.',
-    'Когда API восстановится, watcher автоматически продолжит работу.',
+    'Алёрты о новых кошельках придут, когда API снова ответит, — об этом напишу отдельно.',
+    'Если сбой затянется, напомню через сутки.',
+  ].join('\n');
+}
+
+/** Errors that won't pass in five minutes: the watcher pauses between checks. */
+export function formatInformerConfigAlert(
+  kind: 'auth' | 'not_configured',
+): string {
+  const [title, cause] =
+    kind === 'auth'
+      ? [
+          '⛔ **Informer не принимает запросы бота**',
+          'Admin-API отвергает подпись запроса (401): ключ, секрет или часы сервера.',
+        ]
+      : [
+          '⛔ **Informer выключен на стороне платформы**',
+          'Admin-API отвечает, что informer на этом стенде не настроен.',
+        ];
+  return [
+    title,
+    '',
+    cause,
+    'Алёрты о новых кошельках остановлены, пока это не исправят. Сообщи администратору.',
+    '',
+    'Проверяю снова каждые 30 минут; если не исправят, напомню через сутки.',
+  ].join('\n');
+}
+
+export function formatInformerRecovered(): string {
+  return [
+    '✅ **Informer снова отвечает**',
+    '',
+    'Алёрты о новых кошельках возобновлены. Если за время сбоя появились новые кошельки, они придут следом.',
   ].join('\n');
 }
 

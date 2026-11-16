@@ -234,6 +234,23 @@ export class InformerRefundService {
       return [formatRefundTimeout(op.walletId)];
     }
 
+    if (e instanceof InformerUnavailableError && e.upstreamStatus === 404) {
+      // A non-JSON 404 is a proxy answering in front of the admin-API (see
+      // InformerClient.mapStatusToError): the request never reached the
+      // platform, so — unlike the other unavailable shapes below — the
+      // outcome is not in doubt.
+      this.logger.warn(
+        `refund #${op.walletId} rejected before send (proxy 404):${this.upstreamDetail(e.upstreamStatus, e.upstreamBody)}`,
+      );
+      return [
+        formatRefundRejectedBeforeSend(
+          op.walletId,
+          'admin-API не найден по настроенному адресу — сообщи администратору',
+          '',
+        ),
+      ];
+    }
+
     if (e instanceof InformerUnavailableError) {
       const failure = classifyRefundFailure(
         upstreamMessageFrom(e.upstreamBody, 500),
