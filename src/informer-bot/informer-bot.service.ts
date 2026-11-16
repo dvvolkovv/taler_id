@@ -578,6 +578,16 @@ export class InformerBotService {
           'Устрани причину и повтори вручную.',
       );
     }
+    if (e instanceof InformerUnavailableError && e.upstreamStatus === 404) {
+      // A non-JSON 404 comes from a proxy in front of the admin-API (see
+      // InformerClient.mapStatusToError): the configured address no longer
+      // leads to it. Its HTML page means nothing to an operator, and a retry
+      // button would only hit the same 404.
+      return formatClientError(
+        'Informer: admin-API не найден по настроенному адресу (404). ' +
+          'Похоже, адрес сменился — сообщи администратору.',
+      );
+    }
     if (e instanceof InformerUnavailableError) {
       // Include upstream status+message so operators can distinguish "their
       // backend service is down" (e.g. 502 mini-crypto-acquiring unavailable)

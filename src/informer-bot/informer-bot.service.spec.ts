@@ -588,6 +588,28 @@ describe('InformerBotService.handleUserMessage (retry wallet, flow B)', () => {
     expect(m.published[2]).not.toContain('#857');
   });
 
+  // Regression: 2026-11-16 — the admin-API moved and its old address
+  // answered with the proxy's HTML 404. The operator got "not configured on
+  // this stand"; the cause is the address, and a retry button would only hit
+  // the same 404.
+  it('OPERATOR_WALLETS on a proxy HTML 404 names the admin-API address, without HTML or a retry button', async () => {
+    const m = makeMocks();
+    m.client.getOperatorRequiredList = jest.fn(async () => {
+      throw new InformerUnavailableError(
+        404,
+        '<html><head><title>404 Not Found</title></head><body><center><h1>404 Not Found</h1></center><hr><center>nginx</center></body></html>',
+      );
+    });
+
+    const svc = makeService(m);
+    await svc.handleUserMessage('u1', 'c1', '📋 Кошельки оператора');
+
+    expect(m.published).toHaveLength(1);
+    expect(m.published[0]).toContain('admin-API не найден');
+    expect(m.published[0]).not.toContain('<html');
+    expect(m.published[0]).not.toContain('[ACTION:');
+  });
+
   it('TOTP rejected by admin-API re-arms pending for the same wallet (no nav back)', async () => {
     const m = makeMocks();
     // Make admin-API simulate a TOTP rejection on the first call only.
@@ -964,6 +986,33 @@ describe('мастер возврата в сервисе', () => {
     expect(out).not.toContain('могла');
     expect(out).not.toContain('[ACTION:💸 Вернуть #1611]');
     expect(out).not.toContain('[ACTION:🔄 Повторить');
+  });
+
+  // Regression: 2026-11-16 — после переезда admin-API старый адрес отвечал
+  // HTML-404 прокси. Запрос до платформы не доходит, поэтому «могла уйти»
+  // здесь — ложная тревога по необратимой операции.
+  it('HTML-404 от прокси: запрос не дошёл, ничего не ушло, причина — адрес admin-API', async () => {
+    const m = mocksWithWallet();
+    (m.client as any).refundOperatorWallet = jest.fn(async () => {
+      throw new InformerUnavailableError(
+        404,
+        '<html><head><title>404 Not Found</title></head><body><center><h1>404 Not Found</h1></center><hr><center>nginx</center></body></html>',
+      );
+    });
+    const svc = makeService(m);
+
+    await walkToTotp(svc, m);
+    await svc.handleUserMessage('u1', 'c1', '123456');
+
+    expect((m.client as any).refundOperatorWallet).toHaveBeenCalledTimes(1);
+
+    const out = m.published.join('');
+    expect(out).toContain('ничего не ушло');
+    expect(out).toContain('admin-API не найден');
+    expect(out).not.toContain('могла');
+    expect(out).not.toContain('<html');
+    expect(out).not.toContain('[ACTION:💸 Вернуть #1611]');
+    expect(m.redis.store.has('informer:refund_inflight:1611')).toBe(false);
   });
 
   it('блокировка по кошельку отклоняет параллельный возврат', async () => {

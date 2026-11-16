@@ -191,6 +191,22 @@ describe('мастер возврата — карточки', () => {
     expect(md).toContain('0xB1c4');
   });
 
+  // 202 pending (GSMSoft common#1471): платформа ещё ищет плательщика.
+  // «✅ Возврат выполнен» и «ушёл плательщику» здесь — неправда о деньгах.
+  it('возврат в очереди не называет себя выполненным и не зовёт повторять', () => {
+    const md = formatRefundResult(
+      { wallet_id: 1611, status: 'pending' },
+      { refundToPayer: true },
+    );
+    expect(md).toContain('#1611');
+    expect(md).toContain('в очереди');
+    expect(md).toContain('ещё не ушли');
+    expect(md).not.toContain('выполнен');
+    expect(md).not.toContain('ушёл');
+    expect(md).not.toContain('[ACTION:💸 Вернуть');
+    expect(md).toMatch(HAS_ACTION_BUTTON);
+  });
+
   it('карточка гейта перечисляет проверки и не содержит слова «повторить»', () => {
     const md = formatRefundGate(1611, CTX, 'refund would be a second payout');
     expect(md).toContain('[ACTION:✅ Сверил, выплаты не было #1611]');

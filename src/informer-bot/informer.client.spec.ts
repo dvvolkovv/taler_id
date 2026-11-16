@@ -195,9 +195,30 @@ describe('InformerClient.mapStatusToError', () => {
     expect(client.mapStatusToError(401, '{}')).toBeInstanceOf(InformerAuthError);
   });
 
-  it('404 → InformerNotConfiguredError', () => {
+  // echo answers this way on /informer/v1/* when INFORMER_API_KEYS is empty
+  // and the route group is not mounted (§6 of GSMSoft's integration guide).
+  it('404 with a JSON body (admin-API itself) → InformerNotConfiguredError', () => {
+    expect(
+      client.mapStatusToError(404, '{"message":"Not Found"}'),
+    ).toBeInstanceOf(InformerNotConfiguredError);
+  });
+
+  // Regression: 2026-11-16 — GSMSoft moved the admin-API to a new domain and
+  // the old one started answering every path with the ingress's HTML 404.
+  // We read that as "informer is not configured on this stand": the watcher
+  // latched until a restart and operators were told the wrong cause.
+  it('404 with the proxy HTML page → InformerUnavailableError(404)', () => {
+    const body =
+      '<html>\r\n<head><title>404 Not Found</title></head>\r\n<body>\r\n<center><h1>404 Not Found</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n';
+    const err = client.mapStatusToError(404, body);
+    expect(err).toBeInstanceOf(InformerUnavailableError);
+    expect(err.upstreamStatus).toBe(404);
+    expect(err.upstreamBody).toBe(body);
+  });
+
+  it('404 with plain text → InformerUnavailableError', () => {
     expect(client.mapStatusToError(404, 'Not Found')).toBeInstanceOf(
-      InformerNotConfiguredError,
+      InformerUnavailableError,
     );
   });
 
@@ -448,5 +469,53 @@ describe('InformerClient.refundOperatorWallet', () => {
     expect(delays).toContain(25000);
     expect(delays).not.toContain(45000);
     spy.mockRestore();
+  });
+
+  // GSMSoft common#1471 (ветка task/1471-refund-queued, 2026-11-16): возврат
+  // плательщику, чей адрес ещё не найден, встаёт в очередь — 202 pending,
+  // деньги ещё НЕ ушли. Это не сбой и не должно выглядеть как сбой.
+  it('202 — возврат в очереди: результат pending, а не ошибка', async () => {
+    global.fetch = (async () => ({
+      status: 202,
+      text: async () =>
+        JSON.stringify({
+          resultCode: 'ERCD0000',
+          data: { wallet_id: 1611, status: 'pending' },
+        }),
+    })) as any;
+
+    await expect(
+      makeClient().refundOperatorWallet(
+        1611,
+        { refundToPayer: true },
+        '123456',
+      ),
+    ).resolves.toEqual({ wallet_id: 1611, status: 'pending' });
+  });
+
+  it('202 с неожиданным телом — всё равно pending: 202 значит «принято», а не «не вышло»', async () => {
+    global.fetch = (async () => ({
+      status: 202,
+      text: async () => '',
+    })) as any;
+
+    await expect(
+      makeClient().refundOperatorWallet(
+        1611,
+        { refundToPayer: true },
+        '123456',
+      ),
+    ).resolves.toEqual({ wallet_id: 1611, status: 'pending' });
+  });
+
+  it('202 на GET по-прежнему ошибка', async () => {
+    global.fetch = (async () => ({
+      status: 202,
+      text: async () => '',
+    })) as any;
+
+    await expect(
+      makeClient().getOperatorRequiredCount(),
+    ).rejects.toBeInstanceOf(InformerUnavailableError);
   });
 });
