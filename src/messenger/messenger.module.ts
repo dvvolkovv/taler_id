@@ -10,6 +10,7 @@ import { InviteService } from './invite.service';
 import { ReadReceiptsService } from './read-receipts.service';
 import { ScheduledMessageService } from './scheduled-message.service';
 import { AiTwinService } from './ai-twin.service';
+import { CallReconciler, CallRoomProbe } from './call-reconciler';
 import { AiAnalystService } from '../ai-analyst/ai-analyst.service';
 import { BillingModule } from '../billing/billing.module';
 import { AssistantModule } from '../assistant/assistant.module';
@@ -45,6 +46,8 @@ import { PartnerConversationScope } from './partner-conversation-scope.service';
     ScheduledMessageService,
     MessengerGateway,
     AiTwinService,
+    CallRoomProbe,
+    CallReconciler,
     AiAnalystService,
     FcmService,
     ApnsService,
