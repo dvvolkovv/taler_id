@@ -94,6 +94,22 @@ describe('DeviceApprovalService.createPending', () => {
     );
   });
 
+  it('tells the push when the request expires, so it does not outlive it', async () => {
+    const before = Date.now();
+    await service.createPending({
+      userId: 'u1',
+      deviceId: 'dev-new',
+      deviceInfo: 'Pixel',
+      ip: '1.2.3.4',
+      email: 'a@b.c',
+    });
+
+    const { expiresAt } = fcm.sendDeviceApprovalRequest.mock.calls[0][1];
+    const deadline = Date.parse(expiresAt);
+    expect(deadline).toBeGreaterThanOrEqual(before + 10 * 60 * 1000);
+    expect(deadline).toBeLessThanOrEqual(Date.now() + 10 * 60 * 1000);
+  });
+
   it('never pushes the secret token — only the public approval id', async () => {
     await service.createPending({
       userId: 'u1',

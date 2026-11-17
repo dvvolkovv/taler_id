@@ -85,6 +85,9 @@ export class DeviceApprovalService {
       status: 'pending',
       createdAt: new Date().toISOString(),
     };
+    const expiresAt = new Date(
+      Date.parse(record.createdAt) + APPROVAL_TTL_SECONDS * 1000,
+    ).toISOString();
 
     await this.redis.setEx(
       approvalKey(approvalToken),
@@ -120,6 +123,7 @@ export class DeviceApprovalService {
           deviceInfo: record.deviceInfo,
           ip: record.ip,
           location: record.location,
+          expiresAt,
         });
       } catch (e) {
         // Недоставленный пуш не должен ронять вход: на этот случай есть код

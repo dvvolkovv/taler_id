@@ -394,9 +394,15 @@ export class FcmService {
       deviceInfo: string;
       ip: string;
       location?: string | null;
+      /** ISO-время, когда ожидание истекает. */
+      expiresAt: string;
     },
   ): Promise<void> {
     if (!this.initialized || !fcmToken) return;
+    // Пуш живёт ровно столько, сколько само ожидание. С ретеншеном FCM по
+    // умолчанию (четыре недели) выключенный на ночь телефон получал запрос
+    // утром, и обе кнопки отвечали 404 — так было 2026-11-17.
+    const ttlMs = Math.max(0, Date.parse(data.expiresAt) - Date.now());
     const where = data.location ? `${data.location}, ` : '';
     const title = 'Вход в аккаунт';
     const body = `Попытка входа: ${
@@ -411,10 +417,14 @@ export class FcmService {
           deviceInfo: data.deviceInfo ?? '',
           ip: data.ip ?? '',
           location: data.location ?? '',
+          // Клиенту — чтобы опоздавшее уведомление сразу сказало «устарело»,
+          // а не отправляло ответ, который сервер уже не примет.
+          expiresAt: data.expiresAt,
         },
         notification: { title, body },
         android: {
           priority: 'high',
+          ttl: ttlMs,
           notification: {
             channelId: 'messages',
             defaultSound: true,
@@ -430,6 +440,7 @@ export class FcmService {
           headers: {
             'apns-priority': '10',
             'apns-push-type': 'alert',
+            'apns-expiration': apnsExpiryIn(ttlMs),
           },
         },
       });
