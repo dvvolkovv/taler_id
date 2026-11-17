@@ -12,7 +12,7 @@ export interface AppRelease {
 export const APP_RELEASES: AppRelease[] = [
   {
     version: '1.1.41',
-    build: 243,
+    build: 244,
     date: '2026-11-17',
     flavor: 'both',
     notes_ru:
@@ -22,7 +22,9 @@ export const APP_RELEASES: AppRelease[] = [
       '↩️ Нажатие на полосу «Активный звонок» снова открывает сам звонок, а не бесконечное «Подключение...».\n' +
       '⏺ Если вы вошли во встречу, где уже идёт запись, и вышли из неё, запись больше не останавливается у всех.\n' +
       '🎙 Если запись встречи сохранилась не полностью, в истории звонков появится пометка «Запись частичная» с пояснением, ' +
-      'и ассистент тоже скажет об этом. В списке встреч теперь время начала встречи, а не её конца.',
+      'и ассистент тоже скажет об этом. В списке встреч теперь время начала встречи, а не её конца.\n' +
+      '🔐 Уведомление «Вход в аккаунт», открытое позже чем через 10 минут, теперь прямо говорит, что запрос больше ' +
+      'не действует, вместо непонятной ошибки.',
     notes_en:
       'Release 1.1.41 — a call no longer lingers after the other person has left, and meeting recordings no longer get cut off.\n\n' +
       '📞 If the other person ends the call while yours is minimized, the "Active call" bar at the top of the screen ' +
@@ -30,7 +32,9 @@ export const APP_RELEASES: AppRelease[] = [
       '↩️ Tapping the "Active call" bar opens the call itself again instead of an endless "Connecting...".\n' +
       '⏺ If you join a meeting that is already being recorded and then leave, the recording no longer stops for everyone.\n' +
       '🎙 If a meeting recording was only partly saved, call history now marks it "Partial recording" with an explanation, ' +
-      'and the assistant mentions it too. The meetings list now shows when a meeting started, not when it ended.',
+      'and the assistant mentions it too. The meetings list now shows when a meeting started, not when it ended.\n' +
+      '🔐 An "Account sign-in" notification opened more than 10 minutes later now says the request is no longer ' +
+      'valid instead of showing a confusing error.',
   },
   {
     version: '1.1.40',
