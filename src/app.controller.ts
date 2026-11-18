@@ -152,11 +152,11 @@ export class AppController {
     // как её артефакт реально на месте.
     const latestAndroid = {
       version: env.APP_LATEST_VERSION || '1.1.41',
-      build: parseInt(env.APP_LATEST_BUILD || '244', 10),
+      build: parseInt(env.APP_LATEST_BUILD || '245', 10),
     };
     const latestIos = {
       version: env.APP_LATEST_IOS_VERSION || '1.1.41',
-      build: parseInt(env.APP_LATEST_IOS_BUILD || '244', 10),
+      build: parseInt(env.APP_LATEST_IOS_BUILD || '245', 10),
     };
     const androidUrl =
       env.APP_UPDATE_URL_ANDROID ||
