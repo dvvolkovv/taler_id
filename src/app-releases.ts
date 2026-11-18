@@ -12,7 +12,7 @@ export interface AppRelease {
 export const APP_RELEASES: AppRelease[] = [
   {
     version: '1.1.41',
-    build: 244,
+    build: 245,
     date: '2026-11-17',
     flavor: 'both',
     notes_ru:
@@ -20,6 +20,8 @@ export const APP_RELEASES: AppRelease[] = [
       '📞 Если собеседник завершил разговор, пока ваш звонок был свёрнут, полоса «Активный звонок» вверху экрана ' +
       'больше не остаётся: звонок завершается сам — даже если у собеседника закрылось приложение или пропала сеть.\n' +
       '↩️ Нажатие на полосу «Активный звонок» снова открывает сам звонок, а не бесконечное «Подключение...».\n' +
+      '📶 Когда телефон переключается между Wi-Fi и мобильной сетью, звонок больше не обрывается на несколько секунд ' +
+      'со звуковым сигналом.\n' +
       '⏺ Если вы вошли во встречу, где уже идёт запись, и вышли из неё, запись больше не останавливается у всех.\n' +
       '🎙 Если запись встречи сохранилась не полностью, в истории звонков появится пометка «Запись частичная» с пояснением, ' +
       'и ассистент тоже скажет об этом. В списке встреч теперь время начала встречи, а не её конца.\n' +
@@ -30,6 +32,8 @@ export const APP_RELEASES: AppRelease[] = [
       '📞 If the other person ends the call while yours is minimized, the "Active call" bar at the top of the screen ' +
       'no longer stays behind: the call ends on its own — even if their app closed or lost connection.\n' +
       '↩️ Tapping the "Active call" bar opens the call itself again instead of an endless "Connecting...".\n' +
+      '📶 When the phone switches between Wi-Fi and mobile data, a call no longer drops for a few seconds ' +
+      'with a reconnect beep.\n' +
       '⏺ If you join a meeting that is already being recorded and then leave, the recording no longer stops for everyone.\n' +
       '🎙 If a meeting recording was only partly saved, call history now marks it "Partial recording" with an explanation, ' +
       'and the assistant mentions it too. The meetings list now shows when a meeting started, not when it ended.\n' +
