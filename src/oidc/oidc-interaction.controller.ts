@@ -8,6 +8,7 @@ import {
   Res,
   UnauthorizedException,
   ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -225,6 +226,11 @@ export class OidcInteractionController {
     status: 303,
     description: 'Redirect to client with authorization code',
   })
+  @ApiResponse({
+    status: 400,
+    description:
+      'approved_scopes malformed, or a company in act_as/company_ids is not available to this user',
+  })
   @ApiResponse({ status: 401, description: 'Not logged in' })
   async consent(
     @Param('uid') _uid: string,
@@ -240,7 +246,20 @@ export class OidcInteractionController {
     }
 
     const requestedScopes = (params.scope as string).split(' ');
-    const approvedScopes: string[] = body.approved_scopes || requestedScopes;
+    const raw = body.approved_scopes;
+    if (
+      raw !== undefined &&
+      (!Array.isArray(raw) || raw.some((s: unknown) => typeof s !== 'string'))
+    ) {
+      throw new BadRequestException(
+        'approved_scopes must be an array of strings',
+      );
+    }
+    // Одобрить можно только то, что сайт запросил: иначе выбор компаний и
+    // аудит «передано» записались бы для scope, которого в токене не будет.
+    const approvedScopes: string[] = raw
+      ? requestedScopes.filter((s) => (raw as string[]).includes(s))
+      : requestedScopes;
     // Выбор компаний проверяем до создания согласия: неподходящая — 400.
     const selection = approvedScopes.includes(COMPANIES_SCOPE)
       ? await this.companies.validate(session.accountId, {
