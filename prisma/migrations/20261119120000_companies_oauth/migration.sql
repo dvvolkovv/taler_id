@@ -35,7 +35,7 @@ CREATE TABLE "OAuthCompanySelection" (
     "userId" TEXT NOT NULL,
     "clientId" TEXT NOT NULL,
     "actAsTenantId" TEXT,
-    "sharedTenantIds" TEXT[],
+    "sharedTenantIds" TEXT[] DEFAULT ARRAY[]::TEXT[],
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "OAuthCompanySelection_pkey" PRIMARY KEY ("grantId")

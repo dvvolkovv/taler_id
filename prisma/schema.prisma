@@ -1285,7 +1285,7 @@ model OAuthCompanySelection {
   userId          String
   clientId        String
   actAsTenantId   String?
-  sharedTenantIds String[]
+  sharedTenantIds String[] @default([])
   createdAt       DateTime @default(now())
 
   @@index([userId, clientId, createdAt])
