@@ -573,6 +573,8 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 ### Task 5: Опросчик KYB компаний
 
+> **Выполнено (a2fc72c, 4ee7ebd).** Итог строже текста ниже: решения только при `reviewStatus = completed`; RED `RETRY` оставляет PENDING; GREEN — интерактивной транзакцией с условием `kybStatus in (PENDING, VERIFIED)`; `orderBy updatedAt desc`, окно 30 дней на обе ветки; `verifiedAt` из `review.reviewDate`; id анкеты — нормализованный из маппера. Хелпер тестов кладёт реквизиты в корневой `companyInfo`.
+
 **Files:**
 - Create: `src/kyb/kyb-poller.service.ts`, `src/kyb/kyb.module.ts`
 - Test: `src/kyb/kyb-poller.service.spec.ts`
@@ -2697,7 +2699,7 @@ cd ~/Downloads/taler_id_tests && npm run test:companies
 ```
 Expected: `N passed, 0 failed`. С мака TLS до DEV может не проходить — тогда гонять с бот-сервера из временного клона, как партнёрский набор (CLAUDE.md, набор 20).
 
-- [ ] **Step 4: Опросчик KYB вживую** — на DEV завести компанию в приложении, пройти KYB, одобрить в админке welID; в течение минуты: `pm2 logs taler-id-dev | grep "KYB poll"` → `→ VERIFIED (snapshot saved)`, у компании появился `CompanyKybProfile`.
+- [ ] **Step 4: Опросчик KYB вживую** — заодно проверить, что у одобренной анкеты welID `review.reviewStatus` равен именно `completed` (иначе опросчик молча ничего не делает; править `kyb-poller.service.ts`). — на DEV завести компанию в приложении, пройти KYB, одобрить в админке welID; в течение минуты: `pm2 logs taler-id-dev | grep "KYB poll"` → `→ VERIFIED (snapshot saved)`, у компании появился `CompanyKybProfile`.
 
 - [ ] **Step 5: Веб-согласие в браузере** — задача 13, шаг 6.
 
