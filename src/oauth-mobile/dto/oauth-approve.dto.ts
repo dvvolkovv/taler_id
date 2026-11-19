@@ -1,4 +1,13 @@
-import { IsIn, IsNotEmpty, IsOptional, IsString, IsUrl } from 'class-validator';
+import {
+  ArrayMaxSize,
+  IsArray,
+  IsIn,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  IsUrl,
+  MaxLength,
+} from 'class-validator';
 
 export class OAuthApproveDto {
   @IsString()
@@ -33,4 +42,17 @@ export class OAuthApproveDto {
   @IsOptional()
   @IsString()
   nonce?: string;
+
+  /** 'person' или id компании (scope companies). */
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  act_as?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(100)
+  @IsString({ each: true })
+  @MaxLength(100, { each: true })
+  company_ids?: string[];
 }

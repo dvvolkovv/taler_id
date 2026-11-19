@@ -5,8 +5,10 @@ import { RedisService } from '../redis/redis.service';
 import { OidcInteractionController } from './oidc-interaction.controller.js';
 import { OidcService, OIDC_PROVIDER } from './oidc.service.js';
 import { createOidcProvider } from './oidc-provider.factory.js';
+import { CompaniesModule } from '../companies/companies.module';
 
 @Module({
+  imports: [CompaniesModule],
   controllers: [OidcInteractionController],
   providers: [
     OidcService,

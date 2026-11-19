@@ -3,6 +3,7 @@ import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { OAuthMobileService, mergeScopes, validateRedirectUri } from './oauth-mobile.service';
 import { OidcService } from '../oidc/oidc.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { CompanyConsentService } from '../companies/company-consent.service';
 
 describe('validateRedirectUri', () => {
   it('accepts exact-match registered URI for non-desktop client', () => {
@@ -53,6 +54,7 @@ describe('OAuthMobileService.getGrantInfo', () => {
   let oidc: jest.Mocked<OidcService>;
   let prisma: jest.Mocked<PrismaService>;
   let providerMock: any;
+  let companies: any;
 
   beforeEach(async () => {
     providerMock = {
@@ -63,11 +65,19 @@ describe('OAuthMobileService.getGrantInfo', () => {
       oAuthGrant: { findFirst: jest.fn() },
       oAuthClient: { findUnique: jest.fn().mockResolvedValue({ isDesktopClient: false }) },
     } as any;
+    companies = {
+      consentBlock: jest.fn(),
+      validate: jest
+        .fn()
+        .mockResolvedValue({ actAsTenantId: null, sharedTenantIds: [] }),
+      save: jest.fn().mockResolvedValue(undefined),
+    };
     const moduleRef = await Test.createTestingModule({
       providers: [
         OAuthMobileService,
         { provide: OidcService, useValue: oidc },
         { provide: PrismaService, useValue: prisma },
+        { provide: CompanyConsentService, useValue: companies },
       ],
     }).compile();
     svc = moduleRef.get(OAuthMobileService);
@@ -136,7 +146,7 @@ describe('OAuthMobileService.getGrantInfo', () => {
     });
   });
 
-  it('throws BadRequestException with error=confidential_client_not_supported_via_mobile for confidential client', async () => {
+  it('serves a confidential client (a site with a secret) — PKCE binds the code', async () => {
     providerMock.Client.find.mockResolvedValue({
       clientId: 'mybook',
       clientName: 'MyBook',
@@ -144,11 +154,10 @@ describe('OAuthMobileService.getGrantInfo', () => {
       scope: 'profile email',
       tokenEndpointAuthMethod: 'client_secret_basic',
     });
-    const promise = svc.getGrantInfo('user-1', baseParams);
-    await expect(promise).rejects.toBeInstanceOf(BadRequestException);
-    await expect(promise).rejects.toMatchObject({
-      response: { error: 'confidential_client_not_supported_via_mobile' },
-    });
+    (prisma.oAuthGrant as any).findFirst.mockResolvedValue(null);
+    await expect(svc.getGrantInfo('user-1', baseParams)).resolves.toMatchObject(
+      { client_name: 'MyBook' },
+    );
   });
 
   it('returns grant info with remembered=false when no existing grant', async () => {
@@ -250,6 +259,122 @@ describe('OAuthMobileService.getGrantInfo', () => {
     const result = await svc.getGrantInfo('user-1', baseParams);
     expect(result.scopeDescriptions).toEqual({});
   });
+
+  const companiesClient = {
+    clientId: 'mybook',
+    clientName: 'MyBook',
+    redirectUris: ['https://example.com/cb'],
+    scope: 'openid profile companies',
+    tokenEndpointAuthMethod: 'client_secret_basic',
+  };
+
+  it('carries the companies block and is never "remembered" when a company can be chosen', async () => {
+    providerMock.Client.find.mockResolvedValue(companiesClient);
+    (prisma.oAuthGrant as any).findFirst.mockResolvedValue({
+      scope: 'openid profile companies',
+    });
+    companies.consentBlock.mockResolvedValue({
+      person: { name: 'Иван' },
+      eligible: [{ id: 'a' }],
+      unverified: [],
+      last_selection: null,
+    });
+    const info = await svc.getGrantInfo('user-1', {
+      ...baseParams,
+      scope: 'openid profile companies',
+    });
+    expect(companies.consentBlock).toHaveBeenCalledWith('user-1', 'mybook');
+    expect(info.companies?.eligible).toEqual([{ id: 'a' }]);
+    expect(info.remembered).toBe(false);
+  });
+
+  it('companies requested but nothing eligible → remembered as before, block still present', async () => {
+    providerMock.Client.find.mockResolvedValue(companiesClient);
+    (prisma.oAuthGrant as any).findFirst.mockResolvedValue({
+      scope: 'openid profile companies',
+    });
+    companies.consentBlock.mockResolvedValue({
+      person: { name: 'Иван' },
+      eligible: [],
+      unverified: [{ id: 'b', name: 'Лютик' }],
+      last_selection: null,
+    });
+    const info = await svc.getGrantInfo('user-1', {
+      ...baseParams,
+      scope: 'openid profile companies',
+    });
+    expect(info.remembered).toBe(true);
+    expect(info.companies?.unverified).toEqual([{ id: 'b', name: 'Лютик' }]);
+  });
+
+  it('no companies scope → no block', async () => {
+    providerMock.Client.find.mockResolvedValue({
+      clientId: 'mybook',
+      clientName: 'MyBook',
+      redirectUris: ['https://example.com/cb'],
+      scope: 'profile email',
+      tokenEndpointAuthMethod: 'none',
+    });
+    (prisma.oAuthGrant as any).findFirst.mockResolvedValue(null);
+    const info = await svc.getGrantInfo('user-1', baseParams);
+    expect(info.companies).toBeUndefined();
+    expect(companies.consentBlock).not.toHaveBeenCalled();
+  });
+
+  // Сайт с секретом и offline_access получает refresh-токен — только через экран.
+  it('confidential client + offline_access, granted before → not remembered', async () => {
+    providerMock.Client.find.mockResolvedValue({
+      clientId: 'mybook',
+      clientName: 'MyBook',
+      redirectUris: ['https://example.com/cb'],
+      scope: 'openid profile offline_access',
+      tokenEndpointAuthMethod: 'client_secret_basic',
+    });
+    (prisma.oAuthGrant as any).findFirst.mockResolvedValue({
+      scope: 'openid profile offline_access',
+    });
+    const info = await svc.getGrantInfo('user-1', {
+      ...baseParams,
+      scope: 'openid profile offline_access',
+    });
+    expect(info.remembered).toBe(false);
+  });
+
+  it('public client + offline_access, granted before → remembered as before', async () => {
+    providerMock.Client.find.mockResolvedValue({
+      clientId: 'mybook',
+      clientName: 'MyBook',
+      redirectUris: ['https://example.com/cb'],
+      scope: 'openid profile offline_access',
+      tokenEndpointAuthMethod: 'none',
+    });
+    (prisma.oAuthGrant as any).findFirst.mockResolvedValue({
+      scope: 'openid profile offline_access',
+    });
+    const info = await svc.getGrantInfo('user-1', {
+      ...baseParams,
+      scope: 'openid profile offline_access',
+    });
+    expect(info.remembered).toBe(true);
+  });
+
+  it('confidential client without offline_access, granted before → remembered', async () => {
+    providerMock.Client.find.mockResolvedValue({
+      clientId: 'mybook',
+      clientName: 'MyBook',
+      redirectUris: ['https://example.com/cb'],
+      scope: 'openid profile',
+      tokenEndpointAuthMethod: 'client_secret_basic',
+    });
+    (prisma.oAuthGrant as any).findFirst.mockResolvedValue({
+      scope: 'openid profile',
+    });
+    const info = await svc.getGrantInfo('user-1', {
+      ...baseParams,
+      scope: 'openid profile',
+    });
+    expect(info.remembered).toBe(true);
+  });
 });
 
 describe('OAuthMobileService.approve', () => {
@@ -257,6 +382,7 @@ describe('OAuthMobileService.approve', () => {
   let oidc: jest.Mocked<OidcService>;
   let prisma: any;
   let providerMock: any;
+  let companies: any;
 
   const baseParams = {
     client_id: 'mybook',
@@ -306,11 +432,19 @@ describe('OAuthMobileService.approve', () => {
         findUnique: jest.fn().mockResolvedValue({ isDesktopClient: false }),
       },
     };
+    companies = {
+      consentBlock: jest.fn(),
+      validate: jest
+        .fn()
+        .mockResolvedValue({ actAsTenantId: null, sharedTenantIds: [] }),
+      save: jest.fn().mockResolvedValue(undefined),
+    };
     const moduleRef = await Test.createTestingModule({
       providers: [
         OAuthMobileService,
         { provide: OidcService, useValue: oidc },
         { provide: PrismaService, useValue: prisma },
+        { provide: CompanyConsentService, useValue: companies },
       ],
     }).compile();
     svc = moduleRef.get(OAuthMobileService);
@@ -370,7 +504,7 @@ describe('OAuthMobileService.approve', () => {
     expect(result.redirect_uri).toBe('https://example.com/cb?code=code-value-XYZ');
   });
 
-  it('rejects confidential client', async () => {
+  it('approves for a confidential client too', async () => {
     providerMock.Client.find.mockResolvedValue({
       clientId: 'mybook',
       clientName: 'MyBook',
@@ -378,11 +512,8 @@ describe('OAuthMobileService.approve', () => {
       scope: 'profile email',
       tokenEndpointAuthMethod: 'client_secret_basic',
     });
-    const promise = svc.approve('user-1', baseParams);
-    await expect(promise).rejects.toBeInstanceOf(BadRequestException);
-    await expect(promise).rejects.toMatchObject({
-      response: { error: 'confidential_client_not_supported_via_mobile' },
-    });
+    const out = await svc.approve('user-1', baseParams);
+    expect(out.redirect_uri).toContain('code=code-value-XYZ');
   });
 
   it('rejects invalid redirect_uri', async () => {
@@ -417,6 +548,88 @@ describe('OAuthMobileService.approve', () => {
       redirect_uri: 'http://127.0.0.1:52437/cb',
     });
     expect(result.redirect_uri).toMatch(/^http:\/\/127\.0\.0\.1:52437\/cb\?code=/);
+  });
+
+  const companiesClient = {
+    clientId: 'mybook',
+    clientName: 'MyBook',
+    redirectUris: ['https://example.com/cb'],
+    scope: 'openid companies',
+    tokenEndpointAuthMethod: 'client_secret_basic',
+  };
+
+  it('validates the company choice before the grant and stores it under the grant', async () => {
+    providerMock.Client.find.mockResolvedValue(companiesClient);
+    companies.validate.mockResolvedValue({
+      actAsTenantId: 'a',
+      sharedTenantIds: ['a'],
+    });
+    await svc.approve('user-1', {
+      ...baseParams,
+      scope: 'openid companies',
+      act_as: 'a',
+      company_ids: ['a'],
+    });
+    expect(companies.validate).toHaveBeenCalledWith('user-1', {
+      actAs: 'a',
+      companyIds: ['a'],
+    });
+    expect(companies.save).toHaveBeenCalledWith({
+      grantId: 'grant-jti-789',
+      userId: 'user-1',
+      clientId: 'mybook',
+      selection: { actAsTenantId: 'a', sharedTenantIds: ['a'] },
+    });
+    expect(companies.validate.mock.invocationCallOrder[0]).toBeLessThan(
+      providerMock.Grant.mock.invocationCallOrder[0],
+    );
+    expect(companies.validate.mock.invocationCallOrder[0]).toBeLessThan(
+      providerMock._grantSpy.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('a forged company: 400 and no grant', async () => {
+    providerMock.Client.find.mockResolvedValue(companiesClient);
+    companies.validate.mockRejectedValue(
+      new BadRequestException('company is not available'),
+    );
+    await expect(
+      svc.approve('user-1', {
+        ...baseParams,
+        scope: 'openid companies',
+        act_as: 'zzz',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(companies.validate).toHaveBeenCalled();
+    expect(providerMock._grantSpy).not.toHaveBeenCalled();
+  });
+
+  it('companies not requested → no validation, no selection stored', async () => {
+    await svc.approve('user-1', { ...baseParams, act_as: 'a' });
+    expect(companies.validate).not.toHaveBeenCalled();
+    expect(companies.save).not.toHaveBeenCalled();
+  });
+
+  // Старая версия приложения выбора не присылает → физлицо, ничего не передаётся.
+  it('companies requested without a choice (old app) → validated as person', async () => {
+    providerMock.Client.find.mockResolvedValue(companiesClient);
+    await svc.approve('user-1', { ...baseParams, scope: 'openid companies' });
+    expect(companies.validate).toHaveBeenCalledWith('user-1', {
+      actAs: undefined,
+      companyIds: undefined,
+    });
+    expect(companies.save).toHaveBeenCalled();
+  });
+
+  it('storing the selection fails → no code is returned', async () => {
+    providerMock.Client.find.mockResolvedValue(companiesClient);
+    companies.save.mockRejectedValue(new Error('db down'));
+    await expect(
+      svc.approve('user-1', { ...baseParams, scope: 'openid companies' }),
+    ).rejects.toThrow('db down');
+    expect(providerMock.AuthorizationCode).not.toHaveBeenCalled();
+    expect(providerMock._codeSpy).not.toHaveBeenCalled();
+    expect(prisma.oAuthGrant.upsert).not.toHaveBeenCalled();
   });
 });
 

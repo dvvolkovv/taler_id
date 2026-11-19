@@ -387,6 +387,33 @@ h1 {
 }
 .foot svg { width: 12px; height: 12px; }
 
+/* ── Компании: «войти как» и «что передать» ───────────────────────── */
+/* fieldset — чтобы на время запроса выключать весь выбор одним disabled,
+   не трогая собственный disabled заблокированной галочки. */
+.companies { margin-top: 20px; border: 0; min-width: 0; }
+.choices { display: flex; flex-direction: column; gap: 7px; color-scheme: dark; }
+.choices + .eyebrow { margin-top: 18px; }
+.choice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 13px;
+  background: var(--inset);
+  border: 1px solid var(--hair);
+  border-radius: 13px;
+  cursor: pointer;
+  transition: border-color .18s;
+}
+.choice:hover { border-color: var(--hair-strong); }
+.choice:has(input:checked) { border-color: rgba(34,197,94,.32); }
+.choice input { flex: none; width: 16px; height: 16px; accent-color: var(--primary); cursor: inherit; }
+.choice > div { min-width: 0; }
+.choice-name { font-size: 13.5px; font-weight: 550; line-height: 1.35; overflow-wrap: anywhere; }
+.choice-meta { margin-top: 1px; font-size: 12px; color: var(--muted); }
+.choice[aria-disabled='true'] { opacity: .7; cursor: default; }
+.companies:disabled .choice { cursor: default; }
+.hint { margin-top: 10px; font-size: 12px; line-height: 1.45; color: var(--muted); }
+
 [hidden] { display: none !important; }
 
 @media (max-width: 380px) {
@@ -487,6 +514,14 @@ h1 {
       <p class="eyebrow" data-i18n="grantsLabel"></p>
       <div class="scopes" id="scope-list"></div>
 
+      <fieldset class="companies" id="companies" hidden>
+        <p class="eyebrow" id="act-as-label" data-i18n="actAsLabel"></p>
+        <div class="choices" id="act-as-list" role="radiogroup" aria-labelledby="act-as-label"></div>
+        <p class="eyebrow" id="share-label" data-i18n="shareLabel"></p>
+        <div class="choices" id="share-list" role="group" aria-labelledby="share-label"></div>
+        <p class="hint" id="unverified-hint" hidden></p>
+      </fieldset>
+
       <div class="alert" id="consent-error" role="alert"></div>
 
       <div class="actions">
@@ -556,6 +591,13 @@ h1 {
       loading: 'Загружаем запрос авторизации',
       showPassword: 'Показать пароль',
       hidePassword: 'Скрыть пароль',
+      actAsLabel: 'Войти как',
+      shareLabel: 'Передать данные компаний',
+      kybPassed: 'KYB пройден',
+      you: 'Вы',
+      individual: 'Физлицо',
+      unverifiedHint: 'Не прошли KYB: {names}. Пройдите проверку компании в приложении Taler ID — тогда её можно будет выбрать.',
+      companyUnavailable: 'Выбранная компания больше недоступна. Обновите страницу и выберите заново.',
     },
     en: {
       loginEyebrow: 'Account sign-in',
@@ -586,6 +628,13 @@ h1 {
       loading: 'Loading the authorization request',
       showPassword: 'Show password',
       hidePassword: 'Hide password',
+      actAsLabel: 'Sign in as',
+      shareLabel: 'Share company details',
+      kybPassed: 'KYB verified',
+      you: 'You',
+      individual: 'Individual',
+      unverifiedHint: 'Not KYB-verified: {names}. Verify the company in the Taler ID app to be able to choose it.',
+      companyUnavailable: 'The selected company is no longer available. Reload the page and choose again.',
     },
   };
 
@@ -625,6 +674,7 @@ h1 {
     chat: svg('<path d="M20.5 12c0 4-3.8 7-8.5 7-1 0-2-.1-2.9-.4L4 20.5l1.4-3.6C4.2 15.6 3.5 13.9 3.5 12c0-4 3.8-7 8.5-7s8.5 3 8.5 7Z"/>'),
     send: svg('<path d="m4 12 16-7-6.5 16-2.5-6.5L4 12Z"/>'),
     doc: svg('<rect x="4.5" y="3.5" width="15" height="17" rx="2"/><path d="M8 8.5h8M8 12.5h8M8 16.5h5"/>'),
+    building: svg('<path d="M4 20.5V5.5A1.5 1.5 0 0 1 5.5 4h7A1.5 1.5 0 0 1 14 5.5v15M14 9.5h4.5A1.5 1.5 0 0 1 20 11v9.5M2.5 20.5h19M7.5 8h3M7.5 12h3M7.5 16h3"/>'),
   };
 
   // Известные права описываем сами; для MCP-прав описания приходят с
@@ -638,6 +688,7 @@ h1 {
     kyc:             { icon: 'shield',   ru: ['Статус проверки', 'Пройдена ли проверка личности'],                  en: ['Verification status', 'Whether your identity is verified'] },
     wallet:          { icon: 'wallet',   ru: ['Кошелёк', 'Адрес кошелька'],                                         en: ['Wallet', 'Wallet address'] },
     offline_access:  { icon: 'refresh',  ru: ['Постоянный доступ', 'Работа без повторного входа'],                  en: ['Offline access', 'Stay connected without signing in again'] },
+    companies:       { icon: 'building', ru: ['Компании', 'Вход от имени компании и данные выбранных компаний, прошедших KYB'], en: ['Companies', 'Sign in as a company and share chosen KYB-verified companies'] },
   };
   // У MCP-прав сервер присылает описание, но не название. Без своего
   // заголовка в списке оказывались обрубки идентификатора — «messages.read»
@@ -653,7 +704,7 @@ h1 {
 
   // ── Мелочи ──────────────────────────────────────────────────────────
   var $ = function (id) { return document.getElementById(id); };
-  var state = { data: null, notice: null, busy: false };
+  var state = { data: null, notice: null, busy: false, selection: null };
 
   function show(view) {
     ['loading', 'login', 'consent', 'notice'].forEach(function (v) {
@@ -684,6 +735,7 @@ h1 {
     state.busy = on;
     btn.setAttribute('aria-busy', String(on));
     document.querySelectorAll('.btn').forEach(function (b) { b.disabled = on; });
+    $('companies').disabled = on;
   }
 
   // Сообщения бэкенда — служебные и только английские; показывать их
@@ -694,15 +746,17 @@ h1 {
     'Invalid credentials': 'badCredentials',
     'Email/phone and password are required': 'missingFields',
     'Account locked due to too many failed attempts': 'locked',
+    // Тоже 400, но запрос жив: компания перестала подходить, пока открыт экран.
+    'company is not available': 'companyUnavailable',
   };
 
   // Ответ сервера — всегда JSON, в том числе на ошибке, поэтому по факту
   // разбора отличить их нельзя: смотреть надо на статус. Пока этого не
   // делали, устаревший запрос выглядел как пустая карточка без объяснений.
   function readError(status, data, fallbackKey) {
-    if (status === 400 || data.message === 'invalid_request') return t('expired');
     var known = SERVER_ERRORS[data.message];
     if (known) return t(known);
+    if (status === 400 || data.message === 'invalid_request') return t('expired');
     return data.message || t(fallbackKey);
   }
 
@@ -794,6 +848,91 @@ h1 {
       row.appendChild(text);
       list.appendChild(row);
     });
+
+    renderCompanies(data.companies);
+  }
+
+  // Выбор «войти как» и «что передать» (спека 2026-11-19-companies-oauth).
+  // Блок виден, только если сайт просит companies и есть подходящая компания;
+  // иначе экран прежний и согласие уходит пустым телом.
+  function renderCompanies(block) {
+    var eligible = (block && block.eligible) || [];
+    var unverified = (block && block.unverified) || [];
+    $('companies').hidden = eligible.length === 0;
+    var hint = $('unverified-hint');
+    hint.hidden = unverified.length === 0;
+    hint.textContent = unverified.length
+      ? t('unverifiedHint').replace('{names}', unverified.map(function (c) { return c.name; }).join(', '))
+      : '';
+    if (!eligible.length) { state.selection = null; return; }
+
+    // Заводим один раз: при смене языка блок перерисовывается, выбор остаётся.
+    if (!state.selection) {
+      var last = block.last_selection || { act_as: 'person', company_ids: [] };
+      var ids = (last.company_ids || []).slice();
+      if (last.act_as !== 'person' && ids.indexOf(last.act_as) === -1) ids.push(last.act_as);
+      state.selection = { actAs: last.act_as, companyIds: ids };
+    }
+    var sel = state.selection;
+
+    var actList = $('act-as-list');
+    actList.textContent = '';
+    var person = { id: 'person', name: (block.person && block.person.name) || t('you'), meta: t('individual') };
+    [person].concat(eligible.map(companyOption)).forEach(function (o) {
+      actList.appendChild(choice('radio', 'act-as', o, sel.actAs === o.id, false, function () {
+        sel.actAs = o.id;
+        if (o.id !== 'person' && sel.companyIds.indexOf(o.id) === -1) sel.companyIds.push(o.id);
+        // Только «передать»: пересборка радиокнопок сбросила бы фокус с той,
+        // по которой человек ходит стрелками.
+        renderShare(eligible);
+      }));
+    });
+    renderShare(eligible);
+  }
+
+  function companyOption(c) {
+    return { id: c.id, name: c.legal_name || c.name, meta: t('kybPassed') };
+  }
+
+  // Компанию, от имени которой входят, сервер передаёт всегда — здесь она
+  // отмечена и заблокирована, чтобы экран показывал то, что уйдёт сайту.
+  function renderShare(eligible) {
+    var sel = state.selection;
+    var list = $('share-list');
+    list.textContent = '';
+    eligible.forEach(function (c) {
+      var locked = sel.actAs === c.id;
+      var checked = locked || sel.companyIds.indexOf(c.id) !== -1;
+      list.appendChild(choice('checkbox', 'share', companyOption(c), checked, locked, function (on) {
+        sel.companyIds = sel.companyIds.filter(function (x) { return x !== c.id; });
+        if (on) sel.companyIds.push(c.id);
+      }));
+    });
+  }
+
+  // Названия компаний вводят люди — только textContent.
+  function choice(type, name, o, checked, locked, onChange) {
+    var label = document.createElement('label');
+    label.className = 'choice';
+    if (locked) label.setAttribute('aria-disabled', 'true');
+    var input = document.createElement('input');
+    input.type = type;
+    input.name = name;
+    input.checked = checked;
+    input.disabled = locked;
+    input.addEventListener('change', function () { onChange(input.checked); });
+    var text = document.createElement('div');
+    var n = document.createElement('div');
+    n.className = 'choice-name';
+    n.textContent = o.name;
+    var m = document.createElement('div');
+    m.className = 'choice-meta';
+    m.textContent = o.meta;
+    text.appendChild(n);
+    text.appendChild(m);
+    label.appendChild(input);
+    label.appendChild(text);
+    return label;
   }
 
   // ── Действия ────────────────────────────────────────────────────────
@@ -843,7 +982,9 @@ h1 {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({}),
+        body: JSON.stringify(state.selection
+          ? { act_as: state.selection.actAs, company_ids: state.selection.companyIds }
+          : {}),
       });
       var data = await res.json().catch(function () { return {}; });
       if (res.ok) return navigate(data.redirectTo);

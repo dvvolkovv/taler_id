@@ -6,6 +6,12 @@ import { RedisOidcAdapter } from './adapters/redis-adapter.js';
 import { PrismaClientAdapter } from './adapters/prisma-client-adapter.js';
 import { MCP_SCOPES } from '../mcp/mcp.constants';
 import { MESSENGER_SCOPE } from '../partner-core/partner.constants';
+import {
+  COMPANIES_SCOPE,
+  SELECTION_TTL_DAYS,
+} from '../companies/companies.constants';
+import { createLoadExistingGrant } from '../companies/load-existing-grant';
+import { createFindAccount } from './find-account';
 
 export interface OidcProviderConfig {
   issuer: string;
@@ -57,6 +63,7 @@ export async function createOidcProvider(config: OidcProviderConfig) {
       phone: ['phone_number', 'phone_number_verified'],
       kyc: ['kyc_status', 'kyc_type', 'kyc_verified_at'],
       wallet: ['wallet_address'],
+      [COMPANIES_SCOPE]: ['acting_as', 'companies'],
     },
 
     scopes: [
@@ -66,6 +73,9 @@ export async function createOidcProvider(config: OidcProviderConfig) {
       'phone',
       'kyc',
       'wallet',
+      // Только клиентам, которым выдан вручную; через DCR не получить
+      // (prisma-client-adapter). Спека 2026-11-19-companies-oauth-design.md.
+      COMPANIES_SCOPE,
       'offline_access',
       // единый источник — mcp.constants: новый MCP-scope нельзя «забыть» в OIDC
       ...MCP_SCOPES,
@@ -105,7 +115,9 @@ export async function createOidcProvider(config: OidcProviderConfig) {
       RefreshToken: 30 * 24 * 3600,
       Interaction: 600,
       Session: 14 * 24 * 3600,
-      Grant: 30 * 24 * 3600,
+      // Выбор компаний чистится по тому же сроку (company-selection.ts): если
+      // поднять одно без другого, второй вход стирал бы ещё живой выбор.
+      Grant: SELECTION_TTL_DAYS * 24 * 3600,
     },
 
     cookies: {
@@ -120,58 +132,9 @@ export async function createOidcProvider(config: OidcProviderConfig) {
       },
     },
 
-    findAccount: async (_ctx: any, sub: string) => {
-      const user = await config.prisma.user.findUnique({
-        where: { id: sub },
-        include: { profile: true, kycRecord: true },
-      });
-      if (!user) return undefined;
+    loadExistingGrant: createLoadExistingGrant(config.prisma),
 
-      return {
-        accountId: sub,
-        async claims(_use: string, scope: string) {
-          const scopes = typeof scope === 'string' ? scope.split(' ') : [];
-          const result: Record<string, any> = { sub };
-
-          if (scopes.includes('profile') && user.profile) {
-            result.given_name = user.profile.firstName;
-            result.family_name = user.profile.lastName;
-            result.middle_name = user.profile.middleName;
-            result.name = [user.profile.firstName, user.profile.lastName]
-              .filter(Boolean)
-              .join(' ');
-            result.locale = user.profile.language;
-            result.updated_at = Math.floor(
-              user.profile.updatedAt.getTime() / 1000,
-            );
-          }
-
-          if (scopes.includes('email')) {
-            result.email = user.email;
-            result.email_verified = user.emailVerified;
-          }
-
-          if (scopes.includes('phone')) {
-            result.phone_number = user.phone;
-            result.phone_number_verified = user.phoneVerified;
-          }
-
-          if (scopes.includes('kyc') && user.kycRecord) {
-            result.kyc_status = user.kycRecord.status;
-            result.kyc_type = user.kycRecord.kycType;
-            result.kyc_verified_at = user.kycRecord.verifiedAt
-              ? user.kycRecord.verifiedAt.toISOString()
-              : null;
-          }
-
-          if (scopes.includes('wallet') && user.profile) {
-            result.wallet_address = user.profile.walletAddress;
-          }
-
-          return result;
-        },
-      };
-    },
+    findAccount: createFindAccount(config.prisma),
 
     rotateRefreshToken: true,
   });

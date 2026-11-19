@@ -236,6 +236,7 @@ model Tenant {
   createdAt         DateTime       @default(now())
   updatedAt         DateTime       @updatedAt
   members           TenantMember[]
+  kybProfile        CompanyKybProfile?
 }
 
 model TenantMember {
@@ -248,6 +249,7 @@ model TenantMember {
   user      User       @relation(fields: [userId], references: [id])
 
   @@unique([tenantId, userId])
+  @@index([userId])
 }
 
 model PendingInvite {
@@ -1252,4 +1254,40 @@ model InterpreterSession {
   @@index([hostId, status])
   @@index([guestId, status])
   @@index([status, codeExpiresAt])
+}
+
+/// Снимок реквизитов компании из анкеты KYB в welID — на момент одобрения.
+/// Отдельно от редактируемых полей Tenant: проверенное не смешивается с тем,
+/// что владелец может поменять сам. Спека 2026-11-19-companies-oauth-design.md.
+model CompanyKybProfile {
+  id                 String    @id @default(uuid())
+  tenantId           String    @unique
+  tenant             Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  applicantId        String
+  legalName          String?
+  registrationNumber String?
+  taxId              String?
+  legalForm          String?
+  incorporatedOn     DateTime? @db.Date
+  country            String?
+  city               String?
+  legalAddress       String?
+  website            String?
+  raw                Json
+  verifiedAt         DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+}
+
+/// Выбор на экране согласия: под кем вошёл и какие компании передал.
+/// Одна запись на согласие (grantId) — входы с разных устройств не путаются,
+/// refresh-токен видит выбор своего входа.
+model OAuthCompanySelection {
+  grantId         String   @id
+  userId          String
+  clientId        String
+  actAsTenantId   String?
+  sharedTenantIds String[] @default([])
+  createdAt       DateTime @default(now())
+
+  @@index([userId, clientId, createdAt])
 }

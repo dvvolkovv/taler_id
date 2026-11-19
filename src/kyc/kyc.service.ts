@@ -514,7 +514,21 @@ export class KycService {
     return data.id;
   }
 
-  private async apiGet(urlPath: string): Promise<any> {
+  /**
+   * Вся анкета по externalUserId (для KYB компании это tenantId).
+   * null — анкеты ещё нет: человек открыл KYB, но ничего не отправил.
+   */
+  async getApplicantByExternalUserId(externalUserId: string): Promise<any | null> {
+    return this.apiGet(
+      `/resources/applicants/-;externalUserId=${encodeURIComponent(externalUserId)}/one`,
+      { allowNotFound: true },
+    );
+  }
+
+  private async apiGet(
+    urlPath: string,
+    opts: { allowNotFound?: boolean } = {},
+  ): Promise<any> {
     // ⚠️ Подписывается РОВНО тот путь, что уходит в сеть: welID берёт сырой
     // raw_path и не декодирует проценты. urlPath уже собран с
     // encodeURIComponent — декодировать перед подписью нельзя, подпись не
@@ -531,6 +545,17 @@ export class KycService {
       },
       signal: AbortSignal.timeout(8000),
     });
+    if (response.status === 404 && opts.allowNotFound) {
+      // «Анкеты нет» у welID — JSON с code 20404. Другой 404 — нет такого
+      // маршрута или чужой прокси (неверный адрес welID), это должно быть
+      // видно в логах, а не выглядеть как «анкеты ещё нет». Чтение тела
+      // заодно освобождает ответ.
+      const body: any = await response.json().catch(() => null);
+      if (body?.code === 20404) return null;
+      throw new BadRequestException(
+        'KYC API error: ' + (body?.description || body?.detail || response.statusText),
+      );
+    }
     const data = await response.json();
     if (!response.ok) {
       throw new BadRequestException(

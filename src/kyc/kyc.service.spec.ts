@@ -610,3 +610,94 @@ describe('KycService', () => {
     });
   });
 });
+
+describe('KycService.getApplicantByExternalUserId', () => {
+  const makeService = () =>
+    new KycService(
+      {} as any,
+      { get: () => '' } as any,
+      {} as any,
+      {} as any,
+    );
+
+  // Describe'ы выше присваивают global.fetch = jest.fn() и не возвращают его,
+  // поэтому jest.spyOn вернул бы чужой мок, а restoreAllMocks ничего бы не
+  // восстановил. Свой мок на каждый тест и честный возврат в конце.
+  let realFetch: typeof global.fetch;
+  let fetchMock: jest.Mock;
+
+  beforeAll(() => {
+    realFetch = global.fetch;
+  });
+
+  beforeEach(() => {
+    fetchMock = jest.fn();
+    global.fetch = fetchMock as any;
+  });
+
+  afterAll(() => {
+    global.fetch = realFetch;
+  });
+
+  it('returns the whole applicant', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ id: 'app-1', type: 'company' }), { status: 200 }),
+    );
+    const a = await makeService().getApplicantByExternalUserId('tenant-1');
+    expect(a).toEqual({ id: 'app-1', type: 'company' });
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      expect.stringContaining('/resources/applicants/-;externalUserId=tenant-1/one'),
+      expect.anything(),
+    );
+  });
+
+  it('returns null while the applicant does not exist yet (welID 404 with code 20404)', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({ description: 'Applicant not found: x', code: 20404 }),
+        { status: 404 },
+      ),
+    );
+    await expect(makeService().getApplicantByExternalUserId('tenant-1')).resolves.toBeNull();
+  });
+
+  it('a 404 from an unknown route is an error, not "no applicant yet"', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ detail: 'Not Found' }), { status: 404 }),
+    );
+    await expect(makeService().getApplicantByExternalUserId('tenant-1')).rejects.toThrow(
+      'Not Found',
+    );
+  });
+
+  it('a 404 HTML page from a foreign proxy is an error, not "no applicant yet"', async () => {
+    fetchMock.mockResolvedValue(
+      new Response('<html>404</html>', {
+        status: 404,
+        headers: { 'content-type': 'text/html' },
+      }),
+    );
+    await expect(makeService().getApplicantByExternalUserId('tenant-1')).rejects.toThrow(
+      'KYC API error',
+    );
+  });
+
+  it('other errors still throw', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ description: 'boom' }), { status: 500 }),
+    );
+    await expect(makeService().getApplicantByExternalUserId('tenant-1')).rejects.toThrow('boom');
+  });
+
+  it('without allowNotFound even a welID 20404 still throws', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({ description: 'Applicant not found: x', code: 20404 }),
+        { status: 404 },
+      ),
+    );
+    await expect((makeService() as any).apiGet('/x')).rejects.toThrow(
+      'Applicant not found: x',
+    );
+  });
+});

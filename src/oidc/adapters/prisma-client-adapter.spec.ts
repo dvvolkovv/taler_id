@@ -44,6 +44,43 @@ describe('PrismaClientAdapter DCR', () => {
     expect(createCall.data.allowedScopes).toEqual(['openid', 'mcp:calendar']);
   });
 
+  it('upsert strips companies: company data only for clients granted it by hand', async () => {
+    prisma.oAuthClient.findUnique.mockResolvedValue(null);
+    await adapter.upsert(
+      'dyn-client-3',
+      {
+        client_name: 'Someone',
+        redirect_uris: ['https://example.com/cb'],
+        token_endpoint_auth_method: 'none',
+        scope: 'openid companies profile',
+      },
+      0,
+    );
+    const createCall = prisma.oAuthClient.create.mock.calls[0][0];
+    expect(createCall.data.dcrMetadata.scope).toBe('openid profile');
+    expect(createCall.data.allowedScopes).toEqual(['openid', 'profile']);
+  });
+
+  it('upsert strips companies when an existing dynamic client re-registers', async () => {
+    // PUT /reg/:clientId от уже зарегистрированного клиента — та же граница:
+    // companies не дописать себе и через обновление.
+    prisma.oAuthClient.findUnique.mockResolvedValue({ isDynamic: true });
+    await adapter.upsert(
+      'dyn-client-3',
+      {
+        client_name: 'Someone',
+        redirect_uris: ['https://example.com/cb'],
+        token_endpoint_auth_method: 'none',
+        scope: 'openid companies',
+      },
+      0,
+    );
+    expect(prisma.oAuthClient.create).not.toHaveBeenCalled();
+    const updateCall = prisma.oAuthClient.update.mock.calls[0][0];
+    expect(updateCall.where).toEqual({ clientId: 'dyn-client-3' });
+    expect(updateCall.data.dcrMetadata.scope).toBe('openid');
+  });
+
   it('find returns dcrMetadata for dynamic client', async () => {
     prisma.oAuthClient.findUnique.mockResolvedValue({
       clientId: 'dyn-client-1',

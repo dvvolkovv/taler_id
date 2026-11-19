@@ -137,7 +137,7 @@ Decomposition парент: `taler_id_mobile/docs/superpowers/specs/2026-04-28-o
 
 `POST /oauth/mobile/approve` (Bearer JWT, body = OAuth params)
 - 200: `{redirect_uri: <full URL with code+state>}`
-- 400: invalid params, confidential client (PKCE-only enforcement), redirect_uri mismatch, scope не в `allowedScopes`
+- 400: invalid params, ~~confidential client (PKCE-only enforcement)~~ (снято 2026-11-19, см. `2026-11-19-companies-oauth-design.md`), redirect_uri mismatch, scope не в `allowedScopes`
 - 401: missing/invalid JWT
 - 429: throttle exceeded
 
@@ -146,7 +146,7 @@ Decomposition парент: `taler_id_mobile/docs/superpowers/specs/2026-04-28-o
 1. const client = await provider.Client.find(client_id) → 404 если нет
 2. validate redirect_uri ∈ client.redirectUris → 400
 3. validate scopes ⊆ client.allowedScopes → 400
-4. if client.token_endpoint_auth_method !== 'none' → 400 'confidential_client_not_supported_via_mobile'
+4. ~~if client.token_endpoint_auth_method !== 'none' → 400 'confidential_client_not_supported_via_mobile'~~ — снято 2026-11-19: конфиденциальные клиенты проходят, PKCE обязателен всем
 5. const grant = await prisma.findGrant(userId, client_id) (или provider.Grant.find если будет нужно)
 6. const remembered = grant && requestedScopes ⊆ grant.scopes
 7. return { client_name, client_logo, scopes: scopeDescriptors, remembered }
@@ -283,7 +283,7 @@ location = /.well-known/apple-app-site-association {
 | `redirect_uri` mismatch | 400 | `{ error: 'redirect_uri_mismatch' }` |
 | Unknown scope | 400 | `{ error: 'invalid_scope' }` |
 | `code_challenge_method ≠ S256` | 400 | `{ error: 'invalid_code_challenge_method' }` |
-| Confidential client | 400 | `{ error: 'confidential_client_not_supported_via_mobile' }` |
+| ~~Confidential client~~ | ~~400~~ | ~~`{ error: 'confidential_client_not_supported_via_mobile' }`~~ — снято 2026-11-19 (`2026-11-19-companies-oauth-design.md`) |
 | Throttle exceeded | 429 | (default NestJS throttle response) |
 | JWT missing/invalid | 401 | (default JwtAuthGuard) |
 

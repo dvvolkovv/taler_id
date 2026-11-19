@@ -11,6 +11,7 @@ import { RedisModule } from './redis/redis.module';
 import { KycModule } from './kyc/kyc.module';
 import { ProfileModule } from './profile/profile.module';
 import { TenantModule } from './tenant/tenant.module';
+import { KybModule } from './kyb/kyb.module';
 import { BlockchainModule } from './blockchain/blockchain.module';
 import { EmailModule } from './email/email.module';
 import { AdminModule } from './admin/admin.module';
@@ -104,6 +105,7 @@ import configuration from './config/configuration';
     KycModule,
     ProfileModule,
     TenantModule,
+    KybModule,
     BlockchainModule,
     EmailModule,
     AdminModule,

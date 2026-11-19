@@ -8,6 +8,11 @@ export const KNOWN_SCOPES: Record<string, Omit<ScopeDescriptor, 'key'>> = {
   openid: { label: 'OpenID', description: 'Идентификатор аккаунта' },
   profile: { label: 'Профиль', description: 'Имя, фамилия, аватар' },
   email: { label: 'Email', description: 'Email адрес' },
+  companies: {
+    label: 'Компании',
+    description:
+      'Вход от имени компании и данные выбранных компаний, прошедших KYB',
+  },
   offline_access: { label: 'Offline доступ', description: 'Поддержка работы без сети (refresh token)' },
 };
 

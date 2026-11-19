@@ -8,6 +8,7 @@ import {
   Res,
   UnauthorizedException,
   ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -21,6 +22,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { OidcService } from './oidc.service';
 import { MCP_SCOPE_DESCRIPTIONS } from '../mcp/mcp.constants';
+import { COMPANIES_SCOPE } from '../companies/companies.constants';
+import { CompanyConsentService } from '../companies/company-consent.service';
 import * as bcrypt from 'bcrypt';
 
 @ApiTags('oauth-interaction')
@@ -30,6 +33,7 @@ export class OidcInteractionController {
     private readonly oidcService: OidcService,
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
+    private readonly companies: CompanyConsentService,
   ) {}
 
   @Get(':uid')
@@ -96,6 +100,14 @@ export class OidcInteractionController {
         params.client_id as string,
       );
       const consentScopes = (params.scope as string).split(' ').filter(Boolean);
+      const accountId = details.session?.accountId as string | undefined;
+      const companies =
+        accountId && consentScopes.includes(COMPANIES_SCOPE)
+          ? await this.companies.consentBlock(
+              accountId,
+              params.client_id as string,
+            )
+          : undefined;
       return res.json({
         interaction: 'consent',
         uid,
@@ -109,6 +121,7 @@ export class OidcInteractionController {
             .filter((s) => MCP_SCOPE_DESCRIPTIONS[s])
             .map((s) => [s, MCP_SCOPE_DESCRIPTIONS[s]]),
         ),
+        companies,
       });
     }
 
@@ -194,12 +207,29 @@ export class OidcInteractionController {
             'Scopes to approve. If omitted, all requested scopes are approved.',
           example: ['openid', 'profile', 'email'],
         },
+        act_as: {
+          type: 'string',
+          description:
+            "'person' or a company id to sign in on behalf of. Only with the `companies` scope.",
+          example: 'person',
+        },
+        company_ids: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Company ids to share with the site. Only with the `companies` scope.',
+        },
       },
     },
   })
   @ApiResponse({
     status: 303,
     description: 'Redirect to client with authorization code',
+  })
+  @ApiResponse({
+    status: 400,
+    description:
+      'approved_scopes malformed, or a company in act_as/company_ids is not available to this user',
   })
   @ApiResponse({ status: 401, description: 'Not logged in' })
   async consent(
@@ -215,6 +245,29 @@ export class OidcInteractionController {
       throw new UnauthorizedException('Not logged in');
     }
 
+    const requestedScopes = (params.scope as string).split(' ');
+    const raw = body.approved_scopes;
+    if (
+      raw !== undefined &&
+      (!Array.isArray(raw) || raw.some((s: unknown) => typeof s !== 'string'))
+    ) {
+      throw new BadRequestException(
+        'approved_scopes must be an array of strings',
+      );
+    }
+    // Одобрить можно только то, что сайт запросил: иначе выбор компаний и
+    // аудит «передано» записались бы для scope, которого в токене не будет.
+    const approvedScopes: string[] = raw
+      ? requestedScopes.filter((s) => (raw as string[]).includes(s))
+      : requestedScopes;
+    // Выбор компаний проверяем до создания согласия: неподходящая — 400.
+    const selection = approvedScopes.includes(COMPANIES_SCOPE)
+      ? await this.companies.validate(session.accountId, {
+          actAs: body.act_as,
+          companyIds: body.company_ids,
+        })
+      : null;
+
     const provider = this.oidcService.getProvider();
     const Grant = provider.Grant;
     const grant = new Grant({
@@ -222,11 +275,18 @@ export class OidcInteractionController {
       clientId: params.client_id,
     });
 
-    const requestedScopes = (params.scope as string).split(' ');
-    const approvedScopes = body.approved_scopes || requestedScopes;
     grant.addOIDCScope(approvedScopes.join(' '));
 
     const grantId = await grant.save();
+
+    if (selection) {
+      await this.companies.save({
+        grantId,
+        userId: session.accountId,
+        clientId: params.client_id,
+        selection,
+      });
+    }
 
     const result = {
       consent: { grantId },
