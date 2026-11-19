@@ -143,15 +143,15 @@
     <p>Taler ID is an OpenID Connect (OIDC) provider that allows external applications to authenticate users and access their identity data (profile, email, KYC status, wallet address) using the standard <strong>Authorization Code + PKCE</strong> flow.</p>
 
     <div class="links">
-      <a class="link-card" href="https://id.taler.tirol/docs" target="_blank">
-        <h4>Swagger UI</h4>
-        <p>Interactive API documentation</p>
+      <a class="link-card" href="/developers/" target="_blank">
+        <h4>Developer Portal</h4>
+        <p>Register and manage your applications</p>
       </a>
-      <a class="link-card" href="https://id.taler.tirol/oauth/.well-known/openid-configuration" target="_blank">
+      <a class="link-card" href="https://api.talerid.io/oauth/.well-known/openid-configuration" target="_blank">
         <h4>OIDC Discovery</h4>
         <p>Provider configuration</p>
       </a>
-      <a class="link-card" href="https://id.taler.tirol/oauth/jwks" target="_blank">
+      <a class="link-card" href="https://api.talerid.io/oauth/jwks" target="_blank">
         <h4>JWKS</h4>
         <p>Public keys for JWT verification</p>
       </a>
@@ -159,7 +159,7 @@
 
     <table>
       <tr><th>Parameter</th><th>Value</th></tr>
-      <tr><td>Issuer</td><td><code>https://id.taler.tirol/oauth</code></td></tr>
+      <tr><td>Issuer</td><td><code>https://api.talerid.io/oauth</code></td></tr>
       <tr><td>Protocol</td><td>OpenID Connect 1.0 over OAuth 2.0</td></tr>
       <tr><td>Grant type</td><td>Authorization Code + PKCE (S256)</td></tr>
       <tr><td>Token format</td><td>JWT (RS256, kid: <code>taler-id-rsa</code>)</td></tr>
@@ -210,7 +210,7 @@
     <p>Any email-verified Taler ID user can register an OAuth client without contacting the Taler team. Self-registered clients are auto-approved with the default scope set (<code>openid profile email offline_access</code>). Sensitive scopes (<code>kyc</code>, <code>wallet</code>, <code>phone</code>) require a manual upgrade — email <a href="mailto:support@taler.tirol">support@taler.tirol</a>.</p>
 
     <h3>POST /oauth/register</h3>
-    <pre><code class="lang-bash">curl -X POST https://id.taler.tirol/oauth/register \
+    <pre><code class="lang-bash">curl -X POST https://api.talerid.io/oauth/register \
   -H "Authorization: Bearer YOUR_TALER_ID_JWT" \
   -H "Content-Type: application/json" \
   -d '{
@@ -271,7 +271,7 @@
       Use any logged-in Taler ID user (with <code>email_verified=true</code>) to register
       your demo client. <code>redirect_uris</code> must include the local callback URL:
     </p>
-<pre><code class="lang-bash">curl -X POST https://id.taler.tirol/oauth/register \
+<pre><code class="lang-bash">curl -X POST https://api.talerid.io/oauth/register \
   -H "Authorization: Bearer YOUR_TALER_ID_JWT" \
   -H "Content-Type: application/json" \
   -d '{
@@ -297,7 +297,7 @@
 }</code></pre>
 
     <h4><code>.env</code></h4>
-<pre><code class="lang-ini">TALER_ISSUER=https://id.taler.tirol/oauth
+<pre><code class="lang-ini">TALER_ISSUER=https://api.talerid.io/oauth
 TALER_CLIENT_ID=&lt;paste from step 1&gt;
 TALER_CLIENT_SECRET=&lt;paste from step 1&gt;
 APP_BASE_URL=http://localhost:3000</code></pre>
@@ -609,7 +609,7 @@ npm start
     <pre><code><span class="keyword">import</span> { Issuer, generators } <span class="keyword">from</span> <span class="string">'openid-client'</span>;
 
 <span class="comment">// 1. Discover provider configuration</span>
-<span class="keyword">const</span> issuer = <span class="keyword">await</span> Issuer.<span class="func">discover</span>(<span class="string">'https://id.taler.tirol/oauth'</span>);
+<span class="keyword">const</span> issuer = <span class="keyword">await</span> Issuer.<span class="func">discover</span>(<span class="string">'https://api.talerid.io/oauth'</span>);
 
 <span class="comment">// 2. Create client</span>
 <span class="keyword">const</span> client = <span class="keyword">new</span> issuer.<span class="func">Client</span>({
@@ -673,19 +673,19 @@ session = <span class="func">OAuth2Session</span>(
 
 <span class="comment"># 2. Build authorization URL</span>
 auth_url, state = session.<span class="func">create_authorization_url</span>(
-    <span class="string">'https://id.taler.tirol/oauth/auth'</span>,
+    <span class="string">'https://api.talerid.io/oauth/auth'</span>,
     scope=<span class="string">'openid profile email kyc wallet'</span>,
 )
 <span class="comment"># Redirect user to auth_url</span>
 
 <span class="comment"># 3. Handle callback</span>
 token = session.<span class="func">fetch_token</span>(
-    <span class="string">'https://id.taler.tirol/oauth/token'</span>,
+    <span class="string">'https://api.talerid.io/oauth/token'</span>,
     authorization_response=callback_url,
 )
 
 <span class="comment"># 4. Get user info</span>
-resp = session.<span class="func">get</span>(<span class="string">'https://id.taler.tirol/oauth/me'</span>)
+resp = session.<span class="func">get</span>(<span class="string">'https://api.talerid.io/oauth/me'</span>)
 userinfo = resp.<span class="func">json</span>()
 <span class="func">print</span>(userinfo)
 <span class="comment"># {'sub': '...', 'email': '...', 'kyc_status': 'APPROVED', ...}</span></code></pre>
@@ -700,7 +700,7 @@ userinfo = resp.<span class="func">json</span>()
   <span class="func">AuthorizationTokenRequest</span>(
     <span class="string">'your-client-id'</span>,
     <span class="string">'com.yourapp://callback'</span>,  <span class="comment">// custom scheme redirect</span>
-    issuer: <span class="string">'https://id.taler.tirol/oauth'</span>,
+    issuer: <span class="string">'https://api.talerid.io/oauth'</span>,
     scopes: [<span class="string">'openid'</span>, <span class="string">'profile'</span>, <span class="string">'email'</span>, <span class="string">'kyc'</span>, <span class="string">'wallet'</span>],
   ),
 );
@@ -711,7 +711,7 @@ userinfo = resp.<span class="func">json</span>()
 
 <span class="comment">// Get user info</span>
 <span class="keyword">final</span> response = <span class="keyword">await</span> http.<span class="func">get</span>(
-  <span class="func">Uri.parse</span>(<span class="string">'https://id.taler.tirol/oauth/me'</span>),
+  <span class="func">Uri.parse</span>(<span class="string">'https://api.talerid.io/oauth/me'</span>),
   headers: {<span class="string">'Authorization'</span>: <span class="string">'Bearer ${result?.accessToken}'</span>},
 );</code></pre>
 
@@ -723,7 +723,7 @@ CODE_CHALLENGE=$(echo -n "$CODE_VERIFIER" | \
   openssl base64 | tr '+/' '-_' | tr -d '=')
 
 <span class="comment"># 2. Open this URL in browser (user logs in + consents)</span>
-echo "https://id.taler.tirol/oauth/auth?\
+echo "https://api.talerid.io/oauth/auth?\
 client_id=walletx&amp;\
 response_type=code&amp;\
 scope=openid%20profile%20email%20kyc%20wallet&amp;\
@@ -733,7 +733,7 @@ code_challenge_method=S256&amp;\
 state=test123"
 
 <span class="comment"># 3. After login, copy the "code" from redirect URL and exchange:</span>
-curl -X POST https://id.taler.tirol/oauth/token \
+curl -X POST https://api.talerid.io/oauth/token \
   -u "walletx:your_client_secret" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "grant_type=authorization_code&amp;\
@@ -743,16 +743,16 @@ code_verifier=$CODE_VERIFIER"
 
 <span class="comment"># 4. Use access_token to get user info</span>
 curl -H "Authorization: Bearer ACCESS_TOKEN_HERE" \
-  https://id.taler.tirol/oauth/me
+  https://api.talerid.io/oauth/me
 
 <span class="comment"># 5. Refresh token</span>
-curl -X POST https://id.taler.tirol/oauth/token \
+curl -X POST https://api.talerid.io/oauth/token \
   -u "walletx:your_client_secret" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "grant_type=refresh_token&amp;refresh_token=REFRESH_TOKEN_HERE"
 
 <span class="comment"># 6. Revoke token</span>
-curl -X POST https://id.taler.tirol/oauth/token/revocation \
+curl -X POST https://api.talerid.io/oauth/token/revocation \
   -u "walletx:your_client_secret" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "token=ACCESS_OR_REFRESH_TOKEN"</code></pre>
@@ -807,9 +807,34 @@ curl -X POST https://id.taler.tirol/oauth/token/revocation \
     </table>
 
     <div class="success-note">
-      <strong>Questions?</strong> Full API docs at <a href="https://id.taler.tirol/docs">id.taler.tirol/docs</a>. Contact the Taler team for client registration and support.
+      <strong>Questions?</strong> Register and manage your applications in the <a href="/developers/">Developer Portal</a>. Contact the Taler team for client registration and support.
     </div>
 
   </div>
+
+  <script>
+    // The examples name the production server. The same page is served by every
+    // environment (staging, test), so show the addresses of the server it came
+    // from: its OIDC discovery says which issuer it is. Off-line or on error the
+    // production addresses stay.
+    (function () {
+      var PROD = 'https://api.talerid.io';
+      fetch('/oauth/.well-known/openid-configuration', { credentials: 'omit' })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+          if (!d || !d.issuer) return;
+          var origin = new URL(d.issuer).origin;
+          if (origin === PROD) return;
+          var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          for (var n = walker.nextNode(); n; n = walker.nextNode()) {
+            if (n.nodeValue.indexOf(PROD) !== -1) n.nodeValue = n.nodeValue.split(PROD).join(origin);
+          }
+          document.querySelectorAll('a[href^="' + PROD + '"]').forEach(function (a) {
+            a.setAttribute('href', origin + a.getAttribute('href').slice(PROD.length));
+          });
+        })
+        .catch(function () {});
+    })();
+  </script>
 </body>
 </html>
