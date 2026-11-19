@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
+import type { TenantRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { loadCompanies } from './company-eligibility';
 import {
@@ -13,7 +14,7 @@ import {
 /** Что экраны согласия (веб и приложение) показывают в блоке «компании». */
 export interface CompanyConsentBlock {
   person: { name: string };
-  eligible: { id: string; name: string; legal_name: string | null; logo_url: string | null; role: string }[];
+  eligible: { id: string; name: string; legal_name: string | null; logo_url: string | null; role: TenantRole }[];
   unverified: { id: string; name: string }[];
   last_selection: { act_as: string; company_ids: string[] } | null;
 }
@@ -30,7 +31,7 @@ export class CompanyConsentService {
     ]);
     const ids = new Set(eligible.map((c) => c.tenantId));
     return {
-      person: { name: [profile?.firstName, profile?.lastName].filter(Boolean).join(' ') },
+      person: { name: [profile?.firstName, profile?.lastName].map((s) => s?.trim()).filter(Boolean).join(' ') },
       eligible: eligible.map((c) => ({
         id: c.tenantId,
         name: c.name,
@@ -61,16 +62,24 @@ export class CompanyConsentService {
     }
   }
 
-  async save(args: { grantId: string; userId: string; clientId: string; selection: ResolvedSelection }) {
-    await saveSelection(this.prisma, args);
+  /** Выбор и запись аудита — одной транзакцией: без аудита выбор не сохраняется. */
+  async save(args: { grantId: string; userId: string; clientId: string; selection: ResolvedSelection }): Promise<void> {
     const { actAsTenantId, sharedTenantIds } = args.selection;
-    if (actAsTenantId === null && sharedTenantIds.length === 0) return;
-    await this.prisma.auditLog.create({
-      data: {
-        userId: args.userId,
-        action: 'OAUTH_COMPANIES_SHARED',
-        meta: { clientId: args.clientId, actAs: actAsTenantId ?? 'person', companyIds: sharedTenantIds },
-      },
+    await this.prisma.$transaction(async (tx) => {
+      await saveSelection(tx, args);
+      if (actAsTenantId === null && sharedTenantIds.length === 0) return;
+      await tx.auditLog.create({
+        data: {
+          userId: args.userId,
+          action: 'OAUTH_COMPANIES_SHARED',
+          meta: {
+            grantId: args.grantId,
+            clientId: args.clientId,
+            actAs: actAsTenantId ?? 'person',
+            companyIds: sharedTenantIds,
+          },
+        },
+      });
     });
   }
 }
