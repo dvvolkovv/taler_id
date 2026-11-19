@@ -77,6 +77,8 @@ Expected: записать числа. На 2026-11-17 падало 33 стар�
 - Create: `scripts/kyb-probe.ts`
 - Create: `src/kyb/__fixtures__/welid-company-applicant.json`
 
+> **Выполнено 2026-11-19 (исход B).** Анкета компании заводится через API, но реквизиты welID берёт только из корневого `companyInfo` в теле (`info.companyInfo` игнорирует) и отдаёт их там же; поля: `companyName, registrationNumber, country, legalAddress, postalAddress, incorporatedOn, type, email, phone, website, registrationLocation, taxId, controlScheme, beneficiaries`. Структурного адреса нет. `status/testCompleted` → 404: тестового одобрения нет, e2e — через сид (задача 15). У уровня `prj:taler/kyb-level` есть опросник `talerid-kyb-v1` — что он соберёт при живом KYB, видно только по живой анкете. Фикстура — `GET /one` анкеты `d4bc40632a73404c972c42c3c3039d95` (синтетическая компания, `review.reviewStatus = init`).
+
 - [ ] **Step 1: Скрипт разведки**
 
 ```ts
@@ -302,31 +304,30 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 import { mapWelidCompany } from './welid-company.mapper';
 import fixture from './__fixtures__/welid-company-applicant.json';
 
-// Формат Sumsub, с которым welID совместим: реквизиты в info.companyInfo,
-// данные, заданные при создании анкеты, — в fixedInfo.companyInfo.
-const sumsubShaped = {
+// Формат welID (разведка на DEV 2026-11-19): реквизиты в корневом
+// companyInfo, а не в Sumsub-овском info.companyInfo; структурного адреса нет,
+// место регистрации — registrationLocation.
+const welidShaped = {
   id: 'app-1',
   externalUserId: 'tenant-1',
   type: 'company',
-  info: {
-    companyInfo: {
-      companyName: '  ООО «Ромашка» ',
-      registrationNumber: '1027700132195',
-      country: 'RUS',
-      legalAddress: 'Москва, ул. Пробная, 1',
-      incorporatedOn: '2015-03-02',
-      type: 'LLC',
-      taxId: '7701234567',
-      website: 'https://romashka.example',
-      address: { town: 'Москва', street: 'ул. Пробная, 1' },
-    },
+  companyInfo: {
+    companyName: '  ООО «Ромашка» ',
+    registrationNumber: '1027700132195',
+    country: 'RUS',
+    legalAddress: 'Москва, ул. Пробная, 1',
+    incorporatedOn: '2015-03-02',
+    type: 'LLC',
+    taxId: '7701234567',
+    website: 'https://romashka.example',
+    registrationLocation: 'Москва',
   },
-  review: { reviewResult: { reviewAnswer: 'GREEN' } },
+  review: { reviewStatus: 'completed', reviewResult: { reviewAnswer: 'GREEN' } },
 };
 
 describe('mapWelidCompany', () => {
-  it('takes company details from info.companyInfo', () => {
-    const d = mapWelidCompany(sumsubShaped);
+  it('takes company details from companyInfo', () => {
+    const d = mapWelidCompany(welidShaped);
     expect(d).toMatchObject({
       applicantId: 'app-1',
       legalName: 'ООО «Ромашка»',
@@ -339,16 +340,11 @@ describe('mapWelidCompany', () => {
       website: 'https://romashka.example',
     });
     expect(d.incorporatedOn?.toISOString()).toBe('2015-03-02T00:00:00.000Z');
-    expect(d.raw).toBe(sumsubShaped);
-  });
-
-  it('falls back to fixedInfo.companyInfo', () => {
-    const d = mapWelidCompany({ id: 'app-2', fixedInfo: { companyInfo: { companyName: 'Лютик' } } });
-    expect(d.legalName).toBe('Лютик');
+    expect(d.raw).toBe(welidShaped);
   });
 
   it('keeps missing or blank fields as null instead of guessing', () => {
-    const d = mapWelidCompany({ id: 'app-3', info: { companyInfo: { companyName: ' ', incorporatedOn: 'вчера' } } });
+    const d = mapWelidCompany({ id: 'app-3', companyInfo: { companyName: ' ', incorporatedOn: 'вчера' } });
     expect(d).toMatchObject({ legalName: null, incorporatedOn: null, city: null, country: null });
   });
 
@@ -360,9 +356,15 @@ describe('mapWelidCompany', () => {
 
   it('reads the real welID answer captured on DEV', () => {
     const d = mapWelidCompany(fixture);
-    expect(d.applicantId).toBe((fixture as any).id);
-    expect(d.legalName).toEqual(expect.any(String));
-    expect(d.registrationNumber).toEqual(expect.any(String));
+    expect(d.applicantId).toBe('d4bc40632a73404c972c42c3c3039d95');
+    expect(d).toMatchObject({
+      legalName: 'ООО «Пробная Ромашка»',
+      registrationNumber: '1027700132195',
+      country: 'RUS',
+      taxId: '7701234567',
+      legalForm: 'LLC',
+    });
+    expect(d.city).toBeNull(); // registrationLocation в фикстуре пустое
   });
 });
 ```
@@ -376,11 +378,13 @@ Expected: FAIL — `Cannot find module './welid-company.mapper'`.
 
 ```ts
 /**
- * Анкета компании из welID (формат Sumsub) → снимок реквизитов для
- * CompanyKybProfile. Спека 2026-11-19-companies-oauth-design.md.
+ * Анкета компании из welID → снимок реквизитов для CompanyKybProfile.
+ * Спека 2026-11-19-companies-oauth-design.md.
  *
- * Ничего не угадываем: нет поля или оно пустое — null. Город берём только из
- * структурного адреса, строку адреса не разбираем.
+ * У welID реквизиты в корневом companyInfo (не в info.companyInfo, как у
+ * Sumsub) — проверено на DEV 2026-11-19, фикстура рядом. Ничего не угадываем:
+ * нет поля или оно пустое — null. Город — поле места регистрации
+ * (registrationLocation), строку адреса не разбираем.
  */
 export interface CompanyKybData {
   applicantId: string;
@@ -410,8 +414,7 @@ function day(v: unknown): Date | null {
 }
 
 export function mapWelidCompany(applicant: any): CompanyKybData {
-  const ci = applicant?.info?.companyInfo ?? applicant?.fixedInfo?.companyInfo ?? {};
-  const address = ci.address ?? {};
+  const ci = applicant?.companyInfo ?? {};
   return {
     applicantId: String(applicant?.id ?? ''),
     legalName: text(ci.companyName),
@@ -420,7 +423,7 @@ export function mapWelidCompany(applicant: any): CompanyKybData {
     legalForm: text(ci.type),
     incorporatedOn: day(ci.incorporatedOn),
     country: text(ci.country),
-    city: text(address.town) ?? text(address.city),
+    city: text(ci.registrationLocation),
     legalAddress: text(ci.legalAddress),
     website: text(ci.website),
     raw: applicant,
@@ -428,14 +431,12 @@ export function mapWelidCompany(applicant: any): CompanyKybData {
 }
 ```
 
-Если в задаче 1 реквизиты нашлись не в `info.companyInfo`/`fixedInfo.companyInfo` или под другими именами — добавить этот путь/имена в `ci` и `mapWelidCompany`, а в первый тест — проверку значения из фикстуры. Последний тест должен пройти на настоящей фикстуре.
-
 `resolveJsonModule` должен быть включён в `tsconfig.json` (проверить: `grep resolveJsonModule tsconfig.json`). Если нет — в тесте заменить импорт на `const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, '__fixtures__/welid-company-applicant.json'), 'utf8'));`.
 
 - [ ] **Step 4: Run, expect PASS**
 
 Run: `npx jest src/kyb/welid-company.mapper.spec.ts`
-Expected: 5 passed.
+Expected: 4 passed.
 
 - [ ] **Step 5: Commit**
 

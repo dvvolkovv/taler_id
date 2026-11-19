@@ -1,0 +1,78 @@
+{
+  "id": "d4bc40632a73404c972c42c3c3039d95",
+  "createdAt": "2026-11-19T08:30:22.776335+00:00",
+  "key": "welid",
+  "clientId": "welid-client",
+  "inspectionId": "4ecf8860e29440a9b57fcf7a05aacd90",
+  "externalUserId": "kyb-probe2-1795077022603",
+  "sourceKey": null,
+  "info": {
+    "firstName": null,
+    "firstNameEn": null,
+    "middleName": null,
+    "middleNameEn": null,
+    "lastName": null,
+    "lastNameEn": null,
+    "dob": null,
+    "gender": null,
+    "country": null,
+    "nationality": null,
+    "placeOfBirth": null,
+    "email": null,
+    "phone": null,
+    "lang": null,
+    "idDocs": [],
+    "addresses": []
+  },
+  "fixedInfo": {
+    "firstName": null,
+    "firstNameEn": null,
+    "middleName": null,
+    "middleNameEn": null,
+    "lastName": null,
+    "lastNameEn": null,
+    "dob": null,
+    "gender": null,
+    "country": null,
+    "nationality": null,
+    "placeOfBirth": null,
+    "email": null,
+    "phone": null,
+    "lang": null,
+    "idDocs": [],
+    "addresses": []
+  },
+  "companyInfo": {
+    "companyName": "ООО «Пробная Ромашка»",
+    "registrationNumber": "1027700132195",
+    "country": "RUS",
+    "legalAddress": "Москва, ул. Пробная, 1",
+    "postalAddress": null,
+    "incorporatedOn": "2015-03-02",
+    "type": "LLC",
+    "email": null,
+    "phone": null,
+    "website": "https://romashka.example",
+    "registrationLocation": null,
+    "taxId": "7701234567",
+    "controlScheme": null,
+    "beneficiaries": []
+  },
+  "applicantPlatform": "API",
+  "ipCountry": null,
+  "lang": null,
+  "type": "company",
+  "review": {
+    "reviewStatus": "init",
+    "reviewResult": null
+  },
+  "riskLabels": [],
+  "scoringResult": null,
+  "questionnaires": [
+    {
+      "id": "talerid-kyb-v1",
+      "sections": {}
+    }
+  ],
+  "faceDedup": null
+}
