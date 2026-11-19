@@ -6,6 +6,9 @@ import { RedisOidcAdapter } from './adapters/redis-adapter.js';
 import { PrismaClientAdapter } from './adapters/prisma-client-adapter.js';
 import { MCP_SCOPES } from '../mcp/mcp.constants';
 import { MESSENGER_SCOPE } from '../partner-core/partner.constants';
+import { COMPANIES_SCOPE, SELECTION_TTL_DAYS } from '../companies/companies.constants';
+import { companyClaimsFor } from '../companies/company-claims';
+import { createLoadExistingGrant } from '../companies/load-existing-grant';
 
 export interface OidcProviderConfig {
   issuer: string;
@@ -57,6 +60,7 @@ export async function createOidcProvider(config: OidcProviderConfig) {
       phone: ['phone_number', 'phone_number_verified'],
       kyc: ['kyc_status', 'kyc_type', 'kyc_verified_at'],
       wallet: ['wallet_address'],
+      [COMPANIES_SCOPE]: ['acting_as', 'companies'],
     },
 
     scopes: [
@@ -66,6 +70,9 @@ export async function createOidcProvider(config: OidcProviderConfig) {
       'phone',
       'kyc',
       'wallet',
+      // Только клиентам, которым выдан вручную; через DCR не получить
+      // (prisma-client-adapter). Спека 2026-11-19-companies-oauth-design.md.
+      COMPANIES_SCOPE,
       'offline_access',
       // единый источник — mcp.constants: новый MCP-scope нельзя «забыть» в OIDC
       ...MCP_SCOPES,
@@ -105,7 +112,9 @@ export async function createOidcProvider(config: OidcProviderConfig) {
       RefreshToken: 30 * 24 * 3600,
       Interaction: 600,
       Session: 14 * 24 * 3600,
-      Grant: 30 * 24 * 3600,
+      // Выбор компаний чистится по тому же сроку (company-selection.ts): если
+      // поднять одно без другого, второй вход стирал бы ещё живой выбор.
+      Grant: SELECTION_TTL_DAYS * 24 * 3600,
     },
 
     cookies: {
@@ -120,7 +129,9 @@ export async function createOidcProvider(config: OidcProviderConfig) {
       },
     },
 
-    findAccount: async (_ctx: any, sub: string) => {
+    loadExistingGrant: createLoadExistingGrant(config.prisma),
+
+    findAccount: async (_ctx: any, sub: string, token?: any) => {
       const user = await config.prisma.user.findUnique({
         where: { id: sub },
         include: { profile: true, kycRecord: true },
@@ -129,7 +140,7 @@ export async function createOidcProvider(config: OidcProviderConfig) {
 
       return {
         accountId: sub,
-        async claims(_use: string, scope: string) {
+        async claims(use: string, scope: string) {
           const scopes = typeof scope === 'string' ? scope.split(' ') : [];
           const result: Record<string, any> = { sub };
 
@@ -166,6 +177,12 @@ export async function createOidcProvider(config: OidcProviderConfig) {
 
           if (scopes.includes('wallet') && user.profile) {
             result.wallet_address = user.profile.walletAddress;
+          }
+
+          // Только в /oauth/me: в ID-токен claims из scope при входе с кодом не
+          // идут (conformIdTokenClaims). Выбор берём по согласию этого входа.
+          if (scopes.includes(COMPANIES_SCOPE) && use === 'userinfo') {
+            Object.assign(result, await companyClaimsFor(config.prisma, sub, token?.grantId));
           }
 
           return result;
