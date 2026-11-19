@@ -130,6 +130,7 @@
       <a href="#endpoints">Endpoints</a>
       <a href="#scopes">Scopes & Claims</a>
       <a href="#examples">Code Examples</a>
+      <a href="#companies">Companies</a>
       <a href="#errors">Error Handling</a>
       <a href="#security">Security</a>
       <a href="/brand/" style="margin-left: auto;">Brand assets →</a>
@@ -756,6 +757,18 @@ curl -X POST https://api.talerid.io/oauth/token/revocation \
   -u "walletx:your_client_secret" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "token=ACCESS_OR_REFRESH_TOKEN"</code></pre>
+
+    <!-- COMPANIES -->
+    <h2 id="companies">Companies (sign in as a company)</h2>
+    <p>Request the <code>companies</code> scope (granted to a client on request, not via dynamic registration). On every sign-in the user chooses whether to sign in as themselves or as one of their KYB-verified companies (where they are OWNER or ADMIN), and which companies to share.</p>
+    <p><code>/oauth/me</code> then returns <code>acting_as</code> — <code>{"type":"person"}</code> or <code>{"type":"company","company_id":"…","name":"…"}</code>, with <code>"revoked": true</code> once the company is no longer available — and <code>companies</code>: the shared companies with KYB-verified details (<code>legal_name</code>, <code>registration_number</code>, <code>tax_id</code>, <code>country</code>, <code>city</code>, <code>legal_address</code>, …). <code>name</code> and <code>logo_url</code> are not verified. These claims are in the UserInfo response only, not in the ID token.</p>
+    <pre><code class="lang-json">{
+  "sub": "8d3c…",
+  "acting_as": { "type": "company", "company_id": "6f1c…", "name": "Romashka" },
+  "companies": [{ "company_id": "6f1c…", "legal_name": "Romashka LLC", "registration_number": "1027700132195", "country": "RUS", "kyb_status": "verified", "role": "OWNER" }]
+}</code></pre>
+    <p>Because the choice is shown on every sign-in, <code>prompt=none</code> with <code>companies</code> returns <code>consent_required</code> for a user who has an eligible company — it means "interactive sign-in needed", not "signed out". Keep the session alive with a refresh token (<code>offline_access</code>, granted on request; requires <code>prompt=consent</code> in the authorization request): the choice survives token refresh.</p>
+    <p>On a phone with the Taler ID app installed, the app opens the <code>/oauth/auth</code> link and the user signs in and makes the same choice there. The code always comes back to your <code>redirect_uri</code> in the query string (<code>?code=…&amp;state=…</code>) — <code>response_mode=form_post</code> and <code>fragment</code> are not supported on this path. <code>prompt</code>, <code>max_age</code> and <code>login_hint</code> are not honoured there, and PAR (<code>request_uri</code>) does not work — pass the parameters in the link itself. PKCE (S256) and the code exchange work as usual.</p>
 
     <!-- ERRORS -->
     <h2 id="errors">Error Handling</h2>
