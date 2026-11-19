@@ -180,6 +180,9 @@ describe('ProfileService.deleteAccount with onlyIfManagedBy', () => {
         }),
       }),
     );
+    expect(mockPrisma.oAuthCompanySelection.deleteMany).toHaveBeenCalledWith({
+      where: { userId: 'user-1' },
+    });
     expect(mockPartnerLinks.revokeAllForUser).toHaveBeenCalledWith('user-1');
   });
 
@@ -210,6 +213,7 @@ describe('ProfileService.deleteAccount with onlyIfManagedBy', () => {
       expect(mockPrisma.kycRecord.deleteMany).not.toHaveBeenCalled();
       expect(mockPrisma.session.deleteMany).not.toHaveBeenCalled();
       expect(mockPrisma.totpSecret.deleteMany).not.toHaveBeenCalled();
+      expect(mockPrisma.oAuthCompanySelection.deleteMany).not.toHaveBeenCalled();
       expect(mockPrisma.profile.deleteMany).not.toHaveBeenCalled();
       expect(mockPrisma.user.update).not.toHaveBeenCalled();
       expect(mockPartnerLinks.revokeAllForUser).not.toHaveBeenCalled();

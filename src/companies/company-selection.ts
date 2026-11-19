@@ -1,3 +1,4 @@
+import type { OAuthCompanySelection, Prisma } from '@prisma/client';
 import { SELECTION_TTL_DAYS } from './companies.constants';
 
 /** Как выбор приходит со страницы согласия или из приложения. */
@@ -28,31 +29,30 @@ export function resolveSelection(
   if (!Array.isArray(ids) || ids.some((x) => typeof x !== 'string')) {
     throw new CompanySelectionError('company_ids must be an array of strings');
   }
+  // Всё, что не 'person', — id компании, включая пустую строку: она пройдёт
+  // проверку ниже и получит отказ, а не станет тихим «физлицом».
   const actAsTenantId = actAs === 'person' ? null : actAs;
-  const shared = [...new Set([...(actAsTenantId ? [actAsTenantId] : []), ...(ids as string[])])];
+  const shared = [
+    ...new Set([...(actAsTenantId !== null ? [actAsTenantId] : []), ...(ids as string[])]),
+  ];
   for (const id of shared) {
-    if (!eligibleIds.has(id)) throw new CompanySelectionError(`company ${id} is not available`);
+    // id в текст не кладём: сообщение уходит телом 400, а прислать могут что угодно.
+    if (!eligibleIds.has(id)) throw new CompanySelectionError('company is not available');
   }
   return { actAsTenantId, sharedTenantIds: shared };
 }
 
-type Db = {
-  oAuthCompanySelection: {
-    deleteMany: (args: any) => Promise<unknown>;
-    create: (args: any) => Promise<unknown>;
-    findFirst: (args: any) => Promise<any>;
-    findUnique: (args: any) => Promise<any>;
-  };
-};
+/** PrismaService, PrismaClient и клиент транзакции подходят одинаково. */
+type SelectionDb = Pick<Prisma.TransactionClient, 'oAuthCompanySelection'>;
 
 /**
  * Новая запись на каждое согласие. Экрана отзыва доступа нет, поэтому заодно
  * убираем записи этой пары человек–сайт старше срока жизни согласия.
  */
 export async function saveSelection(
-  db: Pick<Db, 'oAuthCompanySelection'> | any,
+  db: SelectionDb,
   args: { grantId: string; userId: string; clientId: string; selection: ResolvedSelection },
-) {
+): Promise<void> {
   const cutoff = new Date(Date.now() - SELECTION_TTL_DAYS * 24 * 60 * 60 * 1000);
   await db.oAuthCompanySelection.deleteMany({
     where: { userId: args.userId, clientId: args.clientId, createdAt: { lt: cutoff } },
@@ -68,14 +68,22 @@ export async function saveSelection(
   });
 }
 
-export function findSelection(db: any, grantId: string) {
+export function findSelection(
+  db: SelectionDb,
+  grantId: string,
+): Promise<OAuthCompanySelection | null> {
   return db.oAuthCompanySelection.findUnique({ where: { grantId } });
 }
 
 /** Отметки по умолчанию для следующего входа на тот же сайт. */
-export function findLastSelection(db: any, userId: string, clientId: string) {
+export function findLastSelection(
+  db: SelectionDb,
+  userId: string,
+  clientId: string,
+): Promise<OAuthCompanySelection | null> {
+  // grantId — второй ключ, чтобы при одинаковом createdAt ответ не плавал.
   return db.oAuthCompanySelection.findFirst({
     where: { userId, clientId },
-    orderBy: { createdAt: 'desc' },
+    orderBy: [{ createdAt: 'desc' }, { grantId: 'desc' }],
   });
 }
