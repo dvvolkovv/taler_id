@@ -132,6 +132,28 @@ describe('PrismaClientAdapter.find', () => {
     expect(out?.logo_uri).toBeUndefined();
   });
 
+  it('lets the Developer Portal log out to the same pages it logs in from', async () => {
+    // Портал возвращается после выхода туда же, куда после входа. Адреса
+    // берутся из строки клиента: в коде были зашиты только aeza, и на PROD
+    // выход на talerid.io/developers/ отклонялся бы.
+    const prisma = buildPrismaMock({
+      clientId: 'taler-id-developers',
+      clientSecret: 'unused',
+      name: 'Taler ID Developer Portal',
+      redirectUris: ['https://talerid.io/developers/', 'https://api.talerid.io/developers/'],
+      allowedScopes: ['openid', 'profile', 'email', 'offline_access'],
+      logoUri: null,
+    });
+    const adapter = new PrismaClientAdapter(prisma, 'unused');
+    const out = await adapter.find('taler-id-developers');
+
+    expect(out?.token_endpoint_auth_method).toBe('none');
+    expect(out?.post_logout_redirect_uris).toEqual([
+      'https://talerid.io/developers/',
+      'https://api.talerid.io/developers/',
+    ]);
+  });
+
   it('returns undefined for a missing client', async () => {
     const prisma = buildPrismaMock(null);
     const adapter = new PrismaClientAdapter(prisma, 'unused');
