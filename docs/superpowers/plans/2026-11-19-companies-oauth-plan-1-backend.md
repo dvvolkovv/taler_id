@@ -2726,4 +2726,20 @@ Expected: `N passed, 0 failed`. С мака TLS до DEV может не про�
 
 - [ ] **Step 6: Регрессия входа** — `npm run test:mcp` и `npm run test:device-approval` на DEV (OAuth и вход не сломаны).
 
-TEST и PROD — отдельными командами по указанию пользователя: тот же порядок (`migrate deploy` → build → restart), на PROD — rolling по нодам; сид на PROD не запускается, клиент Trientes заводится отдельно с redirect URI сайта.
+### Выкатка на TEST и PROD — чек-лист
+
+TEST и PROD — отдельными командами по указанию пользователя. Порядок обязателен:
+
+1. **`npx prisma migrate deploy` до рестарта приложения.** Удаление аккаунта пишет в `OAuthCompanySelection`: без таблицы `DELETE /profile` отвечает 500, а опросчик KYB падает каждую минуту (запрос с `kybProfile` упирается в `CompanyKybProfile`). На PROD миграция — один раз (через HAProxy в лидера Patroni), до rolling-рестарта `do-app-1` / `do-app-2`; затем на каждой ноде `npx prisma generate` → build → restart → health.
+2. **PROD, после миграции — права роли приложения** на `CompanyKybProfile` и `OAuthCompanySelection` (чтение и запись): один раз resync с aeza уже стирал GRANT-ы (память «DO PG GRANTs wiped by aeza resync»). Проверка: `\dp "CompanyKybProfile"` и `\dp "OAuthCompanySelection"` в psql под владельцем.
+3. **Scope `companies` клиенту (`allowedScopes`) — только когда все ноды на новой сборке.** Старая сборка не знает `companies`: oidc-provider отвергает метаданные клиента с неизвестным scope (`Client.find` бросает `InvalidClientMetadata`), и у этого клиента ломается любой вход — `invalid_client_metadata` на `/oauth/auth` и `/oauth/token`, ошибка и на мобильном пути (то же исключение из `Client.find`). При откате — сначала убрать `companies` у клиентов, потом откатывать сборку.
+4. **До PROD — конфиденциальные клиенты с redirect URI:**
+   ```sql
+   SELECT "clientId", "redirectUris", "allowedScopes" FROM "OAuthClient"
+   WHERE NOT "isDynamic" AND cardinality("redirectUris") > 0
+     AND "clientId" NOT IN ('taler-id-developers', 'linkeon-partner-web'); -- эти два публичные
+   ```
+   Убедиться, что ни один не полагается на `prompt=login`, `max_age` или `response_mode=form_post`: мобильный путь их не учитывает, а теперь пускает и клиентов с секретом. DCR-клиенты (MCP) с секретом тоже туда попадают — при сомнении посмотреть `"dcrMetadata"->>'token_endpoint_auth_method'` у `"isDynamic"`.
+5. **Живой KYB на welID TEST/PROD:** у одобренной анкеты `review.reviewStatus = completed`; как выглядит отказ «можно исправить» (есть ли `reviewRejectType = RETRY`); у несуществующей анкеты 404 с `code: 20404` в теле. Иначе опросчик молча ничего не делает или шумит ошибками.
+6. **Общий инстанс welID у окружений.** `externalUserId` анкеты — голый `tenantId`. Проверить `SUMSUB_BASE_URL` и `SUMSUB_KYB_LEVEL_NAME` на TEST и обеих нодах PROD (спека пишет TEST — `welid.trientes.com`, DEV и PROD — `welid.test.gsmsoft.eu`; CLAUDE.md на 2026-09-22 — все три на `welid.test.gsmsoft.eu`). Данные PROD засеяны с aeza, id компаний на TEST и PROD могут совпадать: если окружения смотрят в один инстанс и уровень, KYB, пройденный на одном, сделает проверенной компанию с тем же id на другом.
+7. **Сид (`scripts/seed-companies-e2e.ts`) на PROD не запускается.** Клиент Trientes заводится вручную: redirect URI сайта, `companies` в `allowedScopes` (при условии из п. 3), `offline_access` — если согласовано.
