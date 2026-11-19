@@ -1,3 +1,4 @@
+import type { Prisma } from '@prisma/client';
 import { EligibleCompany, loadCompanies } from './company-eligibility';
 import { findSelection } from './company-selection';
 
@@ -83,8 +84,11 @@ export function buildCompanyClaims(
   return { acting_as, companies };
 }
 
+/** PrismaService, PrismaClient и клиент транзакции подходят одинаково. */
+type ClaimsDb = Pick<Prisma.TransactionClient, 'oAuthCompanySelection' | 'tenantMember' | 'tenant'>;
+
 /** Для findAccount провайдера: выбор этого согласия + текущая проверка. */
-export async function companyClaimsFor(db: any, userId: string, grantId: string | undefined) {
+export async function companyClaimsFor(db: ClaimsDb, userId: string, grantId: string | undefined) {
   if (!grantId) return buildCompanyClaims(null, [], new Map());
   const [stored, { eligible }] = await Promise.all([
     findSelection(db, grantId),
