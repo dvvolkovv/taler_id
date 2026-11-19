@@ -31,10 +31,10 @@ export class PrismaClientAdapter {
         'https://id.taler.tirol/demo/',
       ];
     } else if (c.clientId === 'taler-id-developers') {
-      postLogoutRedirectUris = [
-        'https://staging.id.taler.tirol/developers/',
-        'https://id.taler.tirol/developers/',
-      ];
+      // The portal returns to /developers/ on its own origin after both login
+      // and logout, so the row's redirect_uris are the right list on every
+      // environment (PROD on talerid.io is not in any hardcoded aeza list).
+      postLogoutRedirectUris = c.redirectUris;
     }
 
     // Public clients (browser SPAs using PKCE) authenticate via PKCE alone —
