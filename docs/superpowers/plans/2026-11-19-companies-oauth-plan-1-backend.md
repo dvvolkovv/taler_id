@@ -340,7 +340,9 @@ describe('mapWelidCompany', () => {
       website: 'https://romashka.example',
     });
     expect(d.incorporatedOn?.toISOString()).toBe('2015-03-02T00:00:00.000Z');
-    expect(d.raw).toBe(welidShaped);
+    // Храним только реквизиты компании, не анкету целиком (риск-метки, скоринг,
+    // бенефициары и прочее бессрочно держать незачем).
+    expect(d.raw).toBe(welidShaped.companyInfo);
   });
 
   it('keeps missing or blank fields as null instead of guessing', () => {
@@ -348,10 +350,11 @@ describe('mapWelidCompany', () => {
     expect(d).toMatchObject({ legalName: null, incorporatedOn: null, city: null, country: null });
   });
 
-  it('a GREEN applicant without company details still maps (all nulls, raw kept)', () => {
+  it('a GREEN applicant without company details still maps (all nulls, empty raw)', () => {
     const d = mapWelidCompany({ id: 'app-4' });
     expect(d.applicantId).toBe('app-4');
     expect(d.legalName).toBeNull();
+    expect(d.raw).toEqual({});
   });
 
   it('reads the real welID answer captured on DEV', () => {
@@ -397,7 +400,8 @@ export interface CompanyKybData {
   city: string | null;
   legalAddress: string | null;
   website: string | null;
-  raw: unknown;
+  /** Сырой companyInfo из welID — только реквизиты, не анкета целиком. */
+  raw: Record<string, unknown>;
 }
 
 function text(v: unknown): string | null {
@@ -426,7 +430,7 @@ export function mapWelidCompany(applicant: any): CompanyKybData {
     city: text(ci.registrationLocation),
     legalAddress: text(ci.legalAddress),
     website: text(ci.website),
-    raw: applicant,
+    raw: ci,
   };
 }
 ```
@@ -1110,10 +1114,38 @@ export function findLastSelection(db: any, userId: string, clientId: string) {
 Run: `npx jest src/companies/company-selection.spec.ts`
 Expected: 7 passed.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Удаление аккаунта убирает выбор**
+
+Внешнего ключа на `User` у `OAuthCompanySelection` нет (намеренно), а `ProfileService.deleteAccount` чистит связанные таблицы вручную — иначе записи «какие компании человек передал какому сайту» пережили бы аккаунт.
+
+Тест — в `src/profile/profile.service.delete-account.spec.ts`: в `mockPrisma` добавить `oAuthCompanySelection: { deleteMany: jest.fn() },` и в `describe('ProfileService.deleteAccount')`:
+
+```ts
+  it('drops the person’s company choices on OAuth sites', async () => {
+    mockPrisma.profile.findUnique.mockResolvedValue(null);
+    await service.deleteAccount('user-1');
+    expect(mockPrisma.oAuthCompanySelection.deleteMany).toHaveBeenCalledWith({
+      where: { userId: 'user-1' },
+    });
+  });
+```
+Run: `npx jest src/profile/profile.service.delete-account.spec.ts` → новый тест FAIL.
+
+В `src/profile/profile.service.ts`, `deletionStatements`, после `db.totpSecret.deleteMany(...)`:
+
+```ts
+      // Выбор компаний на согласии OAuth (OAuthCompanySelection) — без внешнего
+      // ключа на User, поэтому только здесь.
+      db.oAuthCompanySelection.deleteMany({ where: { userId } }),
+```
+и в комментарии над методом «Same six statements» → «Same seven statements».
+
+Run: `npx jest src/profile/profile.service.delete-account.spec.ts` → PASS.
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/companies/company-selection.ts src/companies/company-selection.spec.ts
+git add src/companies/company-selection.ts src/companies/company-selection.spec.ts src/profile/profile.service.ts src/profile/profile.service.delete-account.spec.ts
 git commit -qm "feat(companies): проверка и хранение выбора «войти как» и «что передать»
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
