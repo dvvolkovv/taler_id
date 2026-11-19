@@ -1,5 +1,6 @@
 import type { PrismaService } from '../../prisma/prisma.service';
 import { MESSENGER_SCOPE } from '../../partner-core/partner.constants';
+import { COMPANIES_SCOPE } from '../../companies/companies.constants';
 
 export class PrismaClientAdapter {
   constructor(
@@ -80,7 +81,8 @@ export class PrismaClientAdapter {
   // Dynamic Client Registration (DCR): oidc-provider calls upsert() to persist
   // a newly-registered client. We strip offline_access from scope — that grant
   // is reserved for manually-verified B2B partners (verifiedPartner=true) and
-  // must not be auto-granted via open registration.
+  // must not be auto-granted via open registration. messenger (partner API
+  // only) and companies (granted by hand only) are stripped the same way.
   //
   // Security: we explicitly check whether the target row is a static client
   // before updating, so a DCR PUT /reg/:clientId request cannot overwrite
@@ -89,8 +91,15 @@ export class PrismaClientAdapter {
     const scope = String(payload.scope ?? '')
       .split(' ')
       // offline_access — только для проверенных партнёров, messenger — только
-      // для партнёрского API: через открытую регистрацию их не получить.
-      .filter((s) => s && s !== 'offline_access' && s !== MESSENGER_SCOPE)
+      // для партнёрского API, companies — только выданным вручную: через
+      // открытую регистрацию их не получить.
+      .filter(
+        (s) =>
+          s &&
+          s !== 'offline_access' &&
+          s !== MESSENGER_SCOPE &&
+          s !== COMPANIES_SCOPE,
+      )
       .join(' ');
     const metadata = { ...payload, scope };
 

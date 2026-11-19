@@ -21,6 +21,15 @@ describe('scope-descriptors', () => {
     expect(result.map((s) => s.key)).toEqual(['email', 'profile', 'openid']);
   });
 
+  it('describes companies', () => {
+    expect(describeScopes(['companies'])[0]).toEqual({
+      key: 'companies',
+      label: 'Компании',
+      description:
+        'Вход от имени компании и данные выбранных компаний, прошедших KYB',
+    });
+  });
+
   it('exposes KNOWN_SCOPES constant for tests', () => {
     expect(Object.keys(KNOWN_SCOPES)).toEqual(
       expect.arrayContaining(['openid', 'profile', 'email', 'offline_access']),
