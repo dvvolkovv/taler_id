@@ -1,5 +1,6 @@
 -- Вход от имени компании и передача проверенных компаний через OAuth.
 -- Спека: docs/superpowers/specs/2026-11-19-companies-oauth-design.md
+-- Индекс TenantMember(userId) — выбор компаний человека идёт на каждый /oauth/me.
 --
 -- Всё аддитивно: две новые таблицы, старый код о них не знает — миграцию можно
 -- накатить до рестарта нод. Внешний ключ на "Tenant" встаёт в очередь за живыми
@@ -46,6 +47,9 @@ CREATE UNIQUE INDEX "CompanyKybProfile_tenantId_key" ON "CompanyKybProfile"("ten
 
 -- CreateIndex
 CREATE INDEX "OAuthCompanySelection_userId_clientId_createdAt_idx" ON "OAuthCompanySelection"("userId", "clientId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "TenantMember_userId_idx" ON "TenantMember"("userId");
 
 -- AddForeignKey
 ALTER TABLE "CompanyKybProfile" ADD CONSTRAINT "CompanyKybProfile_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE;

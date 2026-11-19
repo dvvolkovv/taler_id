@@ -29,16 +29,30 @@ describe('classifyCompanies', () => {
     expect(r.eligible).toEqual([]);
     expect(r.unverified).toEqual([{ tenantId: 't-1', name: 'Компания t-1' }]);
   });
+
+  it('a snapshot that outlived a KYB revocation does not make the company eligible', () => {
+    const r = classifyCompanies([
+      row('OWNER', 'REJECTED', profile),
+      row('ADMIN', 'PENDING', profile, 't-2'),
+      row('OWNER', 'UNVERIFIED', profile, 't-3'),
+    ] as any);
+    expect(r.eligible).toEqual([]);
+    expect(r.unverified).toEqual([
+      { tenantId: 't-1', name: 'Компания t-1' },
+      { tenantId: 't-2', name: 'Компания t-2' },
+      { tenantId: 't-3', name: 'Компания t-3' },
+    ]);
+  });
 });
 
 describe('loadCompanies', () => {
-  it('reads all memberships of the person with the company snapshot, oldest first, and classifies them', async () => {
+  it('reads memberships of a non-deleted person with the company snapshot, oldest first (tie by tenant), and classifies them', async () => {
     const findMany = jest.fn().mockResolvedValue([row('OWNER', 'VERIFIED', profile, 'a'), row('VIEWER', 'VERIFIED', profile, 'b')]);
     const r = await loadCompanies({ tenantMember: { findMany } }, 'u-1');
     expect(findMany).toHaveBeenCalledWith({
-      where: { userId: 'u-1' },
+      where: { userId: 'u-1', user: { deletedAt: null } },
       include: { tenant: { include: { kybProfile: true } } },
-      orderBy: { invitedAt: 'asc' },
+      orderBy: [{ invitedAt: 'asc' }, { tenantId: 'asc' }],
     });
     expect(r.eligible.map((c) => c.tenantId)).toEqual(['a']);
     expect(r.unverified).toEqual([]);

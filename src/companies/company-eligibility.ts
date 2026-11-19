@@ -58,9 +58,12 @@ type Db = { tenantMember: { findMany: (args: any) => Promise<any[]> } };
 /** Все компании человека, разложенные по правилу выше. */
 export async function loadCompanies(db: Db, userId: string) {
   const rows = await db.tenantMember.findMany({
-    where: { userId },
+    // Заблокированный админом (выставлен только deletedAt) не должен по живому
+    // refresh-токену представлять компанию — у такого человека компаний нет.
+    where: { userId, user: { deletedAt: null } },
     include: { tenant: { include: { kybProfile: true } } },
-    orderBy: { invitedAt: 'asc' },
+    // tenantId — чтобы порядок на экране согласия не прыгал при равном invitedAt.
+    orderBy: [{ invitedAt: 'asc' }, { tenantId: 'asc' }],
   });
   return classifyCompanies(rows as MembershipRow[]);
 }
