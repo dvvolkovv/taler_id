@@ -11,6 +11,32 @@ export interface AppRelease {
 // Keep notes user-facing (no internal jargon, no commit hashes).
 export const APP_RELEASES: AppRelease[] = [
   {
+    version: '1.1.42',
+    build: 246,
+    date: '2026-11-19',
+    flavor: 'both',
+    notes_ru:
+      'Релиз 1.1.42 — вход на сайты через Taler ID от имени компании.\n\n' +
+      '🏢 Если сайт просит данные компаний, на экране «Вход через Taler ID» можно выбрать, от чьего имени войти: ' +
+      'как вы сами или как ваша компания. В списке — компании, где вы владелец или администратор и KYB пройден.\n' +
+      '📄 Можно отметить, данные каких компаний передать сайту: он получит реквизиты, проверенные KYB, — название, ' +
+      'регистрационный номер, ИНН, страну и адрес. Компания, от имени которой вы входите, передаётся всегда.\n' +
+      '✅ Если компания ещё не прошла KYB, экран подскажет пройти проверку в разделе «Организации».\n' +
+      '🔁 Если компания перестала быть доступной, пока открыт экран, приложение сообщит об этом и обновит список.\n' +
+      '🔐 Вход через Taler ID на сайтах с серверным подключением больше не заканчивается ошибкой, если на телефоне ' +
+      'установлено приложение.',
+    notes_en:
+      'Release 1.1.42 — sign in to websites with Taler ID on behalf of your company.\n\n' +
+      '🏢 When a website asks for company details, the "Sign in with Taler ID" screen lets you choose who signs in: ' +
+      'you or your company. The list shows companies where you are the owner or an admin and KYB is passed.\n' +
+      '📄 You can tick which companies to share: the website receives their KYB-verified details — name, ' +
+      'registration number, tax ID, country and address. The company you sign in as is always shared.\n' +
+      '✅ If a company has not passed KYB yet, the screen suggests verifying it under "Organizations".\n' +
+      '🔁 If a company stops being available while the screen is open, the app says so and refreshes the list.\n' +
+      '🔐 Signing in with Taler ID on websites with a server-side integration no longer ends in an error ' +
+      'when the app is installed on the phone.',
+  },
+  {
     version: '1.1.41',
     build: 245,
     date: '2026-11-17',
