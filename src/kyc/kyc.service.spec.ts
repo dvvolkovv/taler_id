@@ -610,3 +610,40 @@ describe('KycService', () => {
     });
   });
 });
+
+describe('KycService.getApplicantByExternalUserId', () => {
+  const makeService = () =>
+    new KycService(
+      {} as any,
+      { get: () => '' } as any,
+      {} as any,
+      {} as any,
+    );
+
+  afterEach(() => jest.restoreAllMocks());
+
+  it('returns the whole applicant', async () => {
+    jest.spyOn(global, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ id: 'app-1', type: 'company' }), { status: 200 }),
+    );
+    const a = await makeService().getApplicantByExternalUserId('tenant-1');
+    expect(a).toEqual({ id: 'app-1', type: 'company' });
+    expect((global.fetch as jest.Mock).mock.calls[0][0]).toContain(
+      '/resources/applicants/-;externalUserId=tenant-1/one',
+    );
+  });
+
+  it('returns null while the applicant does not exist yet (404)', async () => {
+    jest.spyOn(global, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ description: 'not found' }), { status: 404 }),
+    );
+    await expect(makeService().getApplicantByExternalUserId('tenant-1')).resolves.toBeNull();
+  });
+
+  it('other errors still throw', async () => {
+    jest.spyOn(global, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ description: 'boom' }), { status: 500 }),
+    );
+    await expect(makeService().getApplicantByExternalUserId('tenant-1')).rejects.toThrow('boom');
+  });
+});

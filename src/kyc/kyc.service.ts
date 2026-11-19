@@ -514,7 +514,21 @@ export class KycService {
     return data.id;
   }
 
-  private async apiGet(urlPath: string): Promise<any> {
+  /**
+   * Вся анкета по externalUserId (для KYB компании это tenantId).
+   * null — анкеты ещё нет: человек открыл KYB, но ничего не отправил.
+   */
+  async getApplicantByExternalUserId(externalUserId: string): Promise<any | null> {
+    return this.apiGet(
+      `/resources/applicants/-;externalUserId=${encodeURIComponent(externalUserId)}/one`,
+      { allowNotFound: true },
+    );
+  }
+
+  private async apiGet(
+    urlPath: string,
+    opts: { allowNotFound?: boolean } = {},
+  ): Promise<any> {
     // ⚠️ Подписывается РОВНО тот путь, что уходит в сеть: welID берёт сырой
     // raw_path и не декодирует проценты. urlPath уже собран с
     // encodeURIComponent — декодировать перед подписью нельзя, подпись не
@@ -531,6 +545,7 @@ export class KycService {
       },
       signal: AbortSignal.timeout(8000),
     });
+    if (response.status === 404 && opts.allowNotFound) return null;
     const data = await response.json();
     if (!response.ok) {
       throw new BadRequestException(
