@@ -80,7 +80,8 @@ trientes.org (другая сессия): вход + предзаполнени�
   - `tenantId` (unique), `applicantId`, `verifiedAt`;
   - `legalName`, `registrationNumber`, `taxId`, `legalForm`, `incorporatedOn`;
   - `country` (как отдаёт welID; у Sumsub это ISO 3166-1 alpha-3, например `RUS`), `city`, `legalAddress`, `website`;
-  - `raw` (Json) — сырой `companyInfo` из welID (только реквизиты, не анкета целиком).
+  - `raw` (Json) — сырой `companyInfo` из welID без данных владельцев (`beneficiaries`, `controlScheme`) — только реквизиты, не анкета целиком.
+  - Даты, которых нет в календаре, раньше 1800 года или в будущем, — `null`; сайт — только `http(s)`-адрес, иначе `null`: наружу эти поля уходят как проверенные.
 - **Повторный отказ или отзыв KYB:** `kybStatus` меняется, снимок остаётся, но наружу компания не отдаётся.
 - **Поля welID не проверены вживую.** Первый шаг реализации — пройти KYB тестовой компанией на DEV и сохранить настоящий ответ welID как фикстуру. Поле, которого в ответе нет, остаётся пустым. Разведка 2026-11-19: у welID реквизиты в корневом `companyInfo` (не `info.companyInfo`), структурного адреса нет — город берётся из поля места регистрации `registrationLocation`; строку адреса не разбираем. Тестового одобрения анкеты у welID нет.
 - Логотипа в KYB нет: в ответе берётся `Tenant.logoUrl` с пометкой «не проверен».
@@ -123,7 +124,7 @@ trientes.org (другая сессия): вход + предзаполнени�
   "tax_id": "7701234567",
   "legal_form": "LLC",
   "incorporated_on": "2015-03-02",
-  "country": "RU",
+  "country": "RUS",
   "city": "Москва",
   "legal_address": "…",
   "website": "https://romashka.example",

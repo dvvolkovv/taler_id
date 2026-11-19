@@ -294,6 +294,8 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 ### Task 3: Разбор анкеты welID
 
+> **Выполнено (c526b75, 6e46aa0, 1b1b011).** Итоговый код строже, чем ниже: `raw` — только 12 известных реквизитов (белый список), даты не из календаря / до 1800 / в будущем → `null`, сайт — только разбираемый `http(s)`-URL, параметр `unknown`, не-объект → `{}`. Сигнатура `mapWelidCompany(applicant): CompanyKybData` та же.
+
 **Files:**
 - Create: `src/kyb/welid-company.mapper.ts`
 - Test: `src/kyb/welid-company.mapper.spec.ts`
@@ -638,6 +640,12 @@ describe('KybPollerService', () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
+  it('an applicant without id is skipped — no snapshot keyed by an empty id', async () => {
+    kyc.getApplicantByExternalUserId.mockResolvedValue({ ...applicant('GREEN'), id: undefined });
+    await svc.syncTenant('t-1', 'PENDING');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
   it('no applicant yet or no decision yet → nothing changes', async () => {
     kyc.getApplicantByExternalUserId.mockResolvedValueOnce(null).mockResolvedValueOnce(applicant());
     await svc.syncTenant('t-1', 'PENDING');
@@ -723,7 +731,7 @@ export class KybPollerService {
   async syncTenant(tenantId: string, status: KycStatus) {
     const applicant = await this.kyc.getApplicantByExternalUserId(tenantId);
     const answer = applicant?.review?.reviewResult?.reviewAnswer;
-    if (!applicant || !answer) return;
+    if (!applicant?.id || !answer) return;
 
     if (answer === 'RED') {
       if (status !== 'PENDING') return;
@@ -775,7 +783,7 @@ export class KybModule {}
 - [ ] **Step 4: Run, expect PASS**
 
 Run: `npx jest src/kyb && npx tsc --noEmit -p tsconfig.build.json && echo ok`
-Expected: 5 + 5 passed, `ok`.
+Expected: все тесты `src/kyb` проходят (19 разбора + 6 опросчика), `ok`.
 
 - [ ] **Step 5: Commit**
 
