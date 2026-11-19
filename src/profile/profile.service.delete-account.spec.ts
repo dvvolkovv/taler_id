@@ -24,6 +24,7 @@ const mockPrisma = {
   totpSecret: {
     deleteMany: jest.fn(),
   },
+  oAuthCompanySelection: { deleteMany: jest.fn() },
   user: {
     update: jest.fn(),
   },
@@ -118,6 +119,14 @@ describe('ProfileService.deleteAccount', () => {
     );
     await expect(service.deleteAccount('user-1')).resolves.toEqual({
       success: true,
+    });
+  });
+
+  it('drops the person’s company choices on OAuth sites', async () => {
+    mockPrisma.profile.findUnique.mockResolvedValue(null);
+    await service.deleteAccount('user-1');
+    expect(mockPrisma.oAuthCompanySelection.deleteMany).toHaveBeenCalledWith({
+      where: { userId: 'user-1' },
     });
   });
 });

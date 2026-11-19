@@ -301,7 +301,7 @@ export class ProfileService {
     return { success: true };
   }
 
-  /** Same six statements either way — only whether they run via `this.prisma` (array transaction) or `tx` (interactive transaction, guarded path) differs. */
+  /** Same seven statements either way — only whether they run via `this.prisma` (array transaction) or `tx` (interactive transaction, guarded path) differs. */
   private deletionStatements(
     db: PrismaService | Prisma.TransactionClient,
     userId: string,
@@ -314,6 +314,9 @@ export class ProfileService {
       db.kycRecord.deleteMany({ where: { userId } }),
       db.session.deleteMany({ where: { userId } }),
       db.totpSecret.deleteMany({ where: { userId } }),
+      // Выбор компаний на согласии OAuth (OAuthCompanySelection) — без внешнего
+      // ключа на User, поэтому только здесь.
+      db.oAuthCompanySelection.deleteMany({ where: { userId } }),
       db.profile.deleteMany({ where: { userId } }),
       db.user.update({
         where: { id: userId },
