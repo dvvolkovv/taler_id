@@ -2612,9 +2612,14 @@ Discovery: `<issuer>/.well-known/openid-configuration`. Scope `companies` выд
 - `country` — как отдаёт welID (ISO 3166-1 alpha-3, например `RUS`).
 - `company_id` постоянен — по нему связывайте карточку на сайте.
 
-## Перепроверка
+## Тихий вход (`prompt=none`) и продление
 
-С `offline_access` (по согласованию) refresh-токен позволяет позже вызвать `/oauth/me` и увидеть `revoked` или исчезнувшую компанию без нового входа.
+Выбор «войти как» Taler ID показывает на **каждом** входе, если сайт просит `companies`, а у человека есть подходящая компания. Поэтому:
+
+- **`prompt=none` со scope `companies`** у такого человека всегда отвечает `error=consent_required` (в описании — `requested scopes not granted`). Это значит «нужен обычный вход с экраном», а не «человек вышел из Taler ID». Библиотеки тихого продления (например, `signinSilent` / `automaticSilentRenew` в oidc-client-ts) часто трактуют такой ответ как «сессии нет» — не разлогинивайте человека по нему.
+- **Продлевайте сессию refresh-токеном**, а не тихим входом. Выбор привязан к согласию и переживает обновление токена: `/oauth/me` с новым access-токеном вернёт тот же `acting_as` (или `revoked`, если компания перестала быть доступной). Refresh-токен выдаётся по scope `offline_access` (включается клиенту по согласованию), и только если в запросе авторизации есть `prompt=consent` — без него `offline_access` молча отбрасывается.
+- **Тихий вход без `companies`** пройдёт, но новый токен `acting_as` и `companies` не вернёт. От имени кого человек вошёл — храните у себя с момента входа.
+- `revoked` может прийти и при перепроверке через refresh-токен — считайте, что человек больше не представляет компанию, и предложите войти заново.
 
 ## Пример (Node.js, openid-client)
 
@@ -2654,6 +2659,7 @@ if (me.acting_as?.type === 'company' && !me.acting_as.revoked) {
     <h2 id="companies">Companies (sign in as a company)</h2>
     <p>Request the <code>companies</code> scope (granted to a client on request, not via dynamic registration). On every sign-in the user chooses whether to sign in as themselves or as one of their KYB-verified companies (where they are OWNER or ADMIN), and which companies to share.</p>
     <p><code>/oauth/me</code> then returns <code>acting_as</code> — <code>{"type":"person"}</code> or <code>{"type":"company","company_id":"…","name":"…"}</code>, with <code>"revoked": true</code> once the company is no longer available — and <code>companies</code>: the shared companies with KYB-verified details (<code>legal_name</code>, <code>registration_number</code>, <code>tax_id</code>, <code>country</code>, <code>city</code>, <code>legal_address</code>, …). <code>name</code> and <code>logo_url</code> are not verified. These claims are in the UserInfo response only, not in the ID token.</p>
+    <p>Because the choice is shown on every sign-in, <code>prompt=none</code> with <code>companies</code> returns <code>consent_required</code> for a user who has an eligible company — it means "interactive sign-in needed", not "signed out". Keep the session alive with a refresh token (<code>offline_access</code>, granted on request; requires <code>prompt=consent</code> in the authorization request): the choice survives token refresh.</p>
     <pre><code class="lang-json">{
   "sub": "8d3c…",
   "acting_as": { "type": "company", "company_id": "6f1c…", "name": "Romashka" },
