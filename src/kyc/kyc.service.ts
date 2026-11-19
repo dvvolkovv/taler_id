@@ -545,7 +545,17 @@ export class KycService {
       },
       signal: AbortSignal.timeout(8000),
     });
-    if (response.status === 404 && opts.allowNotFound) return null;
+    if (response.status === 404 && opts.allowNotFound) {
+      // «Анкеты нет» у welID — JSON с code 20404. Другой 404 — нет такого
+      // маршрута или чужой прокси (неверный адрес welID), это должно быть
+      // видно в логах, а не выглядеть как «анкеты ещё нет». Чтение тела
+      // заодно освобождает ответ.
+      const body: any = await response.json().catch(() => null);
+      if (body?.code === 20404) return null;
+      throw new BadRequestException(
+        'KYC API error: ' + (body?.description || body?.detail || response.statusText),
+      );
+    }
     const data = await response.json();
     if (!response.ok) {
       throw new BadRequestException(
