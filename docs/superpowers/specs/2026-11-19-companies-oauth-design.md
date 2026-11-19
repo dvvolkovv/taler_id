@@ -158,7 +158,7 @@ trientes.org (другая сессия): вход + предзаполнени�
 
 Блоки показываются только если запрошен `companies` и есть подходящие компании; иначе экран прежний.
 
-- **Веб:** `GET /oauth/interaction/:uid` (JSON для SPA) дополнительно отдаёт `person`, `eligibleCompanies`, `unverifiedCompanies`, `lastSelection`. `POST /oauth/interaction/:uid/consent` принимает `act_as` (`"person"` или `tenantId`) и `company_ids`.
+- **Веб:** `GET /oauth/interaction/:uid` (JSON для SPA) дополнительно отдаёт блок `companies: { person, eligible, unverified, last_selection }` (`person.name` пустой, если имени в профиле нет, — экран подставляет «Вы»). `POST /oauth/interaction/:uid/consent` принимает `act_as` (`"person"` или `tenantId`) и `company_ids`.
 - **Мобильное приложение:** `GET /oauth/mobile/grant-info` и `POST /oauth/mobile/approve` — те же поля. Нативный экран согласия получает оба блока.
 - **Сервер не верит клиенту:** каждая компания из `act_as` и `company_ids` проверяется `CompanyEligibility`; хоть одна неподходящая — 400, согласие не создаётся.
 - **Конфиденциальные клиенты** проходят мобильное согласие так же, как публичные (снимается запрет `confidential_client_not_supported_via_mobile`).
@@ -168,7 +168,7 @@ trientes.org (другая сессия): вход + предзаполнени�
 ### Часть 4. Ошибки, безопасность, аудит
 
 - Подмена выбора — 400 (см. выше).
-- Каждая передача компаний пишется в `AuditLog`: `OAUTH_COMPANIES_SHARED`, `meta: { clientId, actAs, companyIds }`.
+- Каждая передача компаний пишется в `AuditLog`: `OAUTH_COMPANIES_SHARED`, `meta: { grantId, clientId, actAs, companyIds }` — в одной транзакции с записью выбора: без аудита выбор не сохраняется.
 - **Известное ограничение:** PROD смотрит в тестовый инстанс welID (`welid.test.gsmsoft.eu`). Пока PROD не переведён на боевой welID, «проверенные» компании на PROD проверены тестовым инстансом. Переезд — вне этого спека.
 
 ## Тестирование
