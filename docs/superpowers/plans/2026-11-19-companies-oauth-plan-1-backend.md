@@ -654,6 +654,18 @@ describe('KybPollerService', () => {
     expect(prisma.tenant.updateMany).not.toHaveBeenCalled();
   });
 
+  it('a round still running → the next tick is skipped (rounds never overlap)', async () => {
+    let release!: () => void;
+    prisma.tenant.findMany.mockReturnValueOnce(new Promise((r) => { release = () => r([]); }));
+    const first = svc.pollCompanies();
+    await svc.pollCompanies(); // второй тик, пока первый ждёт
+    expect(prisma.tenant.findMany).toHaveBeenCalledTimes(1);
+    release();
+    await first;
+    await svc.pollCompanies();
+    expect(prisma.tenant.findMany).toHaveBeenCalledTimes(2);
+  });
+
   it('one failing company does not stop the round', async () => {
     prisma.tenant.findMany.mockResolvedValue([
       { id: 't-1', kybStatus: 'PENDING' },
@@ -699,6 +711,8 @@ const PENDING_WINDOW_DAYS = 30;
 @Injectable()
 export class KybPollerService {
   private readonly logger = new Logger(KybPollerService.name);
+  /** До 50 запросов по 8 с — круг может пережить минуту; не накладываем. */
+  private running = false;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -707,6 +721,16 @@ export class KybPollerService {
 
   @Cron(CronExpression.EVERY_MINUTE)
   async pollCompanies() {
+    if (this.running) return;
+    this.running = true;
+    try {
+      await this.pollRound();
+    } finally {
+      this.running = false;
+    }
+  }
+
+  private async pollRound() {
     const since = new Date(Date.now() - PENDING_WINDOW_DAYS * 24 * 60 * 60 * 1000);
     const tenants = await this.prisma.tenant.findMany({
       where: {
