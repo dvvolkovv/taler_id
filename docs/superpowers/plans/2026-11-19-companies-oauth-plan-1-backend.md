@@ -1691,6 +1691,12 @@ import { createLoadExistingGrant } from '../companies/load-existing-grant';
 ```ts
     loadExistingGrant: createLoadExistingGrant(config.prisma),
 ```
+4б. В `ttl` заменить `Grant: 30 * 24 * 3600,` на значение из той же константы, что чистит выбор (импорт `SELECTION_TTL_DAYS` из `../companies/companies.constants`):
+```ts
+      // Выбор компаний чистится по тому же сроку (company-selection.ts): если
+      // поднять одно без другого, второй вход стирал бы ещё живой выбор.
+      Grant: SELECTION_TTL_DAYS * 24 * 3600,
+```
 5. Сигнатура и claims в `findAccount`:
 ```ts
     findAccount: async (_ctx: any, sub: string, token?: any) => {
