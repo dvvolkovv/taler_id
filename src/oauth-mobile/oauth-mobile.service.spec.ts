@@ -320,6 +320,61 @@ describe('OAuthMobileService.getGrantInfo', () => {
     expect(info.companies).toBeUndefined();
     expect(companies.consentBlock).not.toHaveBeenCalled();
   });
+
+  // Сайт с секретом и offline_access получает refresh-токен — только через экран.
+  it('confidential client + offline_access, granted before → not remembered', async () => {
+    providerMock.Client.find.mockResolvedValue({
+      clientId: 'mybook',
+      clientName: 'MyBook',
+      redirectUris: ['https://example.com/cb'],
+      scope: 'openid profile offline_access',
+      tokenEndpointAuthMethod: 'client_secret_basic',
+    });
+    (prisma.oAuthGrant as any).findFirst.mockResolvedValue({
+      scope: 'openid profile offline_access',
+    });
+    const info = await svc.getGrantInfo('user-1', {
+      ...baseParams,
+      scope: 'openid profile offline_access',
+    });
+    expect(info.remembered).toBe(false);
+  });
+
+  it('public client + offline_access, granted before → remembered as before', async () => {
+    providerMock.Client.find.mockResolvedValue({
+      clientId: 'mybook',
+      clientName: 'MyBook',
+      redirectUris: ['https://example.com/cb'],
+      scope: 'openid profile offline_access',
+      tokenEndpointAuthMethod: 'none',
+    });
+    (prisma.oAuthGrant as any).findFirst.mockResolvedValue({
+      scope: 'openid profile offline_access',
+    });
+    const info = await svc.getGrantInfo('user-1', {
+      ...baseParams,
+      scope: 'openid profile offline_access',
+    });
+    expect(info.remembered).toBe(true);
+  });
+
+  it('confidential client without offline_access, granted before → remembered', async () => {
+    providerMock.Client.find.mockResolvedValue({
+      clientId: 'mybook',
+      clientName: 'MyBook',
+      redirectUris: ['https://example.com/cb'],
+      scope: 'openid profile',
+      tokenEndpointAuthMethod: 'client_secret_basic',
+    });
+    (prisma.oAuthGrant as any).findFirst.mockResolvedValue({
+      scope: 'openid profile',
+    });
+    const info = await svc.getGrantInfo('user-1', {
+      ...baseParams,
+      scope: 'openid profile',
+    });
+    expect(info.remembered).toBe(true);
+  });
 });
 
 describe('OAuthMobileService.approve', () => {
@@ -526,6 +581,9 @@ describe('OAuthMobileService.approve', () => {
       selection: { actAsTenantId: 'a', sharedTenantIds: ['a'] },
     });
     expect(companies.validate.mock.invocationCallOrder[0]).toBeLessThan(
+      providerMock.Grant.mock.invocationCallOrder[0],
+    );
+    expect(companies.validate.mock.invocationCallOrder[0]).toBeLessThan(
       providerMock._grantSpy.mock.invocationCallOrder[0],
     );
   });
@@ -547,7 +605,7 @@ describe('OAuthMobileService.approve', () => {
   });
 
   it('companies not requested → no validation, no selection stored', async () => {
-    await svc.approve('user-1', { ...baseParams, act_as: 'a' } as any);
+    await svc.approve('user-1', { ...baseParams, act_as: 'a' });
     expect(companies.validate).not.toHaveBeenCalled();
     expect(companies.save).not.toHaveBeenCalled();
   });
@@ -569,6 +627,7 @@ describe('OAuthMobileService.approve', () => {
     await expect(
       svc.approve('user-1', { ...baseParams, scope: 'openid companies' }),
     ).rejects.toThrow('db down');
+    expect(providerMock.AuthorizationCode).not.toHaveBeenCalled();
     expect(providerMock._codeSpy).not.toHaveBeenCalled();
     expect(prisma.oAuthGrant.upsert).not.toHaveBeenCalled();
   });

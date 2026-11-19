@@ -92,11 +92,22 @@ export class OAuthMobileService {
       remembered = requestedScopes.every((s) => grantedScopes.has(s));
     }
 
+    // Сайт с секретом и offline_access получает refresh-токен — в вебе это
+    // всегда через экран согласия (prompt=consent), здесь так же.
+    if (
+      client.tokenEndpointAuthMethod !== 'none' &&
+      requestedScopes.includes('offline_access')
+    ) {
+      remembered = false;
+    }
+
     // С компаниями выбор «войти как» — на каждом входе: «запомнено» тогда нет.
-    const companies = requestedScopes.includes(COMPANIES_SCOPE)
+    const companiesBlock = requestedScopes.includes(COMPANIES_SCOPE)
       ? await this.companies.consentBlock(userId, params.client_id)
       : undefined;
-    if (companies && companies.eligible.length > 0) remembered = false;
+    if (companiesBlock && companiesBlock.eligible.length > 0) {
+      remembered = false;
+    }
 
     return {
       client_name: client.clientName,
@@ -108,7 +119,7 @@ export class OAuthMobileService {
           .map((s) => [s, MCP_SCOPE_DESCRIPTIONS[s]]),
       ),
       remembered,
-      companies,
+      companies: companiesBlock,
     };
   }
 
