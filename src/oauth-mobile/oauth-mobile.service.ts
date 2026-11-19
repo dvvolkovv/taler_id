@@ -3,6 +3,11 @@ import { OidcService } from '../oidc/oidc.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { describeScopes, ScopeDescriptor } from './scope-descriptors';
 import { MCP_SCOPE_DESCRIPTIONS } from '../mcp/mcp.constants';
+import { COMPANIES_SCOPE } from '../companies/companies.constants';
+import {
+  CompanyConsentBlock,
+  CompanyConsentService,
+} from '../companies/company-consent.service';
 import type { OAuthAuthorizeQueryDto } from './dto/oauth-authorize-query.dto';
 import type { OAuthApproveDto } from './dto/oauth-approve.dto';
 
@@ -12,6 +17,7 @@ export interface GrantInfo {
   scopes: ScopeDescriptor[];
   scopeDescriptions: Record<string, { ru: string; en: string }>;
   remembered: boolean;
+  companies?: CompanyConsentBlock;
 }
 
 // oidc-provider's Client.find() wraps PrismaClientAdapter's snake_case payload
@@ -67,6 +73,7 @@ export class OAuthMobileService {
   constructor(
     private readonly oidc: OidcService,
     private readonly prisma: PrismaService,
+    private readonly companies: CompanyConsentService,
   ) {}
 
   async getGrantInfo(userId: string, params: OAuthAuthorizeQueryDto): Promise<GrantInfo> {
@@ -85,6 +92,12 @@ export class OAuthMobileService {
       remembered = requestedScopes.every((s) => grantedScopes.has(s));
     }
 
+    // С компаниями выбор «войти как» — на каждом входе: «запомнено» тогда нет.
+    const companies = requestedScopes.includes(COMPANIES_SCOPE)
+      ? await this.companies.consentBlock(userId, params.client_id)
+      : undefined;
+    if (companies && companies.eligible.length > 0) remembered = false;
+
     return {
       client_name: client.clientName,
       client_logo: client.logoUri ?? undefined,
@@ -95,6 +108,7 @@ export class OAuthMobileService {
           .map((s) => [s, MCP_SCOPE_DESCRIPTIONS[s]]),
       ),
       remembered,
+      companies,
     };
   }
 
@@ -105,6 +119,14 @@ export class OAuthMobileService {
     await this.findAndValidateClient(params);
     const requestedScope = params.scope.trim().split(/\s+/).filter(Boolean).join(' ');
 
+    // Выбор компаний проверяется до согласия: подделанная компания — 400, согласия нет.
+    const selection = requestedScope.split(' ').includes(COMPANIES_SCOPE)
+      ? await this.companies.validate(userId, {
+          actAs: params.act_as,
+          companyIds: params.company_ids,
+        })
+      : null;
+
     const provider = this.oidc.getProvider();
 
     const grant = new provider.Grant({
@@ -113,6 +135,16 @@ export class OAuthMobileService {
     });
     grant.addOIDCScope(requestedScope);
     await grant.save();
+
+    // Выбор сохраняется до выпуска кода: не сохранился — кода нет.
+    if (selection) {
+      await this.companies.save({
+        grantId: grant.jti,
+        userId,
+        clientId: params.client_id,
+        selection,
+      });
+    }
 
     const code = new provider.AuthorizationCode({
       accountId: userId,
@@ -186,13 +218,10 @@ export class OAuthMobileService {
       });
     }
 
-    if (client.tokenEndpointAuthMethod !== 'none') {
-      throw new BadRequestException({
-        error: 'confidential_client_not_supported_via_mobile',
-        error_description:
-          'This client requires client_secret; only public PKCE clients are supported in mobile flow.',
-      });
-    }
+    // Конфиденциальные клиенты (сайты с сервером и секретом) тоже проходят:
+    // PKCE обязателен всем, а код на токены обменивает только сервер сайта со
+    // своим секретом. Раньше такой вход на телефоне с Taler ID кончался
+    // ошибкой — App Links перехватывают /oauth/auth независимо от типа клиента.
 
     return client;
   }

@@ -1,4 +1,11 @@
-import { IsIn, IsNotEmpty, IsOptional, IsString, IsUrl } from 'class-validator';
+import {
+  IsArray,
+  IsIn,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  IsUrl,
+} from 'class-validator';
 
 export class OAuthApproveDto {
   @IsString()
@@ -33,4 +40,14 @@ export class OAuthApproveDto {
   @IsOptional()
   @IsString()
   nonce?: string;
+
+  /** 'person' или id компании (scope companies). */
+  @IsOptional()
+  @IsString()
+  act_as?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  company_ids?: string[];
 }
