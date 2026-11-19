@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import * as vm from 'vm';
 import { mapWelidCompany } from './welid-company.mapper';
 
 const fixture: unknown = JSON.parse(
@@ -73,6 +74,32 @@ describe('mapWelidCompany', () => {
     expect(d.raw).not.toHaveProperty('controlScheme');
   });
 
+  it('stores only known company fields — an unknown new field is not kept', () => {
+    const d = mapWelidCompany({
+      id: 'app-11',
+      companyInfo: {
+        companyName: 'ООО «Ромашка»',
+        taxId: '7701234567',
+        directors: [{ name: 'Иван' }],
+      },
+    });
+    expect(d.raw).toEqual({
+      companyName: 'ООО «Ромашка»',
+      taxId: '7701234567',
+    });
+    expect(d.raw).not.toHaveProperty('directors');
+  });
+
+  it('accepts objects from another realm (Response.json() under Jest)', () => {
+    const foreign: unknown = vm.runInNewContext(
+      '({ id: "app-12", companyInfo: { companyName: "ООО «Ромашка»" } })',
+    );
+    const d = mapWelidCompany(foreign);
+    expect(d.applicantId).toBe('app-12');
+    expect(d.legalName).toBe('ООО «Ромашка»');
+    expect(d.raw).toEqual({ companyName: 'ООО «Ромашка»' });
+  });
+
   it('keeps missing or blank fields as null instead of guessing', () => {
     const d = mapWelidCompany({
       id: 'app-3',
@@ -121,7 +148,9 @@ describe('mapWelidCompany', () => {
     ['javascript:alert(1)'],
     ['romashka.example'],
     ['ftp://romashka.example'],
-  ])('website %s → null (only http/https)', (value) => {
+    ['https://'],
+    ['https://exa mple.com'],
+  ])('website %s → null (only valid http/https URLs)', (value) => {
     const d = mapWelidCompany({ id: 'app-9', companyInfo: { website: value } });
     expect(d.website).toBeNull();
   });

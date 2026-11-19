@@ -18,14 +18,13 @@ export interface CompanyKybData {
   city: string | null;
   legalAddress: string | null;
   website: string | null;
-  /** Сырой companyInfo из welID без данных владельцев — только реквизиты, не анкета целиком. */
+  /** Известные реквизиты из companyInfo welID — без данных людей, не анкета целиком. */
   raw: Record<string, unknown>;
 }
 
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  if (typeof v !== 'object' || v === null) return false;
-  const proto: unknown = Object.getPrototypeOf(v);
-  return proto === Object.prototype || proto === null;
+// Без проверки прототипа: объекты из Response.json() под Jest — из другого realm.
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
 function text(v: unknown): string | null {
@@ -48,15 +47,37 @@ function day(v: unknown): Date | null {
 function httpUrl(v: unknown): string | null {
   const s = text(v);
   // Наружу уходит как проверенное — только http(s), никаких javascript: и голых доменов.
-  return s && /^https?:\/\//i.test(s) ? s : null;
+  if (!s || !/^https?:\/\//i.test(s)) return null;
+  try {
+    const u = new URL(s);
+    const ok =
+      (u.protocol === 'http:' || u.protocol === 'https:') && u.hostname !== '';
+    return ok ? s : null;
+  } catch {
+    return null;
+  }
 }
 
-// Персональные данные владельцев не храним — в снимке только реквизиты компании.
-const OWNER_KEYS = new Set(['beneficiaries', 'controlScheme']);
+// Только известные реквизиты компании: новое поле welID с данными людей
+// (бенефициары, директора…) не должно молча попасть в бессрочный снимок.
+const COMPANY_FIELDS = new Set([
+  'companyName',
+  'registrationNumber',
+  'country',
+  'legalAddress',
+  'postalAddress',
+  'incorporatedOn',
+  'type',
+  'email',
+  'phone',
+  'website',
+  'registrationLocation',
+  'taxId',
+]);
 
 export function mapWelidCompany(applicant: unknown): CompanyKybData {
-  const a: Record<string, unknown> = isPlainObject(applicant) ? applicant : {};
-  const ci: Record<string, unknown> = isPlainObject(a.companyInfo)
+  const a: Record<string, unknown> = isRecord(applicant) ? applicant : {};
+  const ci: Record<string, unknown> = isRecord(a.companyInfo)
     ? a.companyInfo
     : {};
   return {
@@ -72,7 +93,7 @@ export function mapWelidCompany(applicant: unknown): CompanyKybData {
     legalAddress: text(ci.legalAddress),
     website: httpUrl(ci.website),
     raw: Object.fromEntries(
-      Object.entries(ci).filter(([k]) => !OWNER_KEYS.has(k)),
+      Object.entries(ci).filter(([k]) => COMPANY_FIELDS.has(k)),
     ),
   };
 }
