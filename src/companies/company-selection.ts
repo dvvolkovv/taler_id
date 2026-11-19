@@ -43,7 +43,10 @@ export function resolveSelection(
 }
 
 /** PrismaService, PrismaClient и клиент транзакции подходят одинаково. */
-type SelectionDb = Pick<Prisma.TransactionClient, 'oAuthCompanySelection'>;
+export type SelectionDb = Pick<
+  Prisma.TransactionClient,
+  'oAuthCompanySelection'
+>;
 
 /**
  * Новая запись на каждое согласие. Экрана отзыва доступа нет, поэтому заодно

@@ -6,7 +6,10 @@ import { RedisOidcAdapter } from './adapters/redis-adapter.js';
 import { PrismaClientAdapter } from './adapters/prisma-client-adapter.js';
 import { MCP_SCOPES } from '../mcp/mcp.constants';
 import { MESSENGER_SCOPE } from '../partner-core/partner.constants';
-import { COMPANIES_SCOPE, SELECTION_TTL_DAYS } from '../companies/companies.constants';
+import {
+  COMPANIES_SCOPE,
+  SELECTION_TTL_DAYS,
+} from '../companies/companies.constants';
 import { companyClaimsFor } from '../companies/company-claims';
 import { createLoadExistingGrant } from '../companies/load-existing-grant';
 
@@ -131,7 +134,11 @@ export async function createOidcProvider(config: OidcProviderConfig) {
 
     loadExistingGrant: createLoadExistingGrant(config.prisma),
 
-    findAccount: async (_ctx: any, sub: string, token?: any) => {
+    findAccount: async (
+      _ctx: any,
+      sub: string,
+      token?: { grantId?: string },
+    ) => {
       const user = await config.prisma.user.findUnique({
         where: { id: sub },
         include: { profile: true, kycRecord: true },
@@ -182,7 +189,10 @@ export async function createOidcProvider(config: OidcProviderConfig) {
           // Только в /oauth/me: в ID-токен claims из scope при входе с кодом не
           // идут (conformIdTokenClaims). Выбор берём по согласию этого входа.
           if (scopes.includes(COMPANIES_SCOPE) && use === 'userinfo') {
-            Object.assign(result, await companyClaimsFor(config.prisma, sub, token?.grantId));
+            Object.assign(
+              result,
+              await companyClaimsFor(config.prisma, sub, token?.grantId),
+            );
           }
 
           return result;
