@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { expandOccurrences } from '../calendar/recurrence.util';
+import { expandRoutineOccurrences } from '../calendar/recurrence.util';
 
 // Occurrence dates are UTC calendar dates (prod runs UTC; expandOccurrences
 // advances by whole days preserving time-of-day, so the UTC date is stable).
@@ -194,9 +194,10 @@ export class TasksService {
         const stored = new Map<string, any>(
           (task.occurrences ?? []).map((o: any) => [o.occurrenceDate, o]),
         );
-        for (const d of expandOccurrences(
+        for (const d of expandRoutineOccurrences(
           new Date(anchor),
           task.recurrence,
+          task.deadline,
           startDate,
           endDate,
         )) {
@@ -264,7 +265,13 @@ export class TasksService {
       });
       if (from && to) {
         const anchor = task.due ?? task.createdAt;
-        occurrences = expandOccurrences(new Date(anchor), rec, from, to).map((d) => {
+        occurrences = expandRoutineOccurrences(
+          new Date(anchor),
+          rec,
+          task.deadline,
+          from,
+          to,
+        ).map((d) => {
           const ds = toDateStr(d);
           return mapOcc(ds, stored.get(ds));
         });

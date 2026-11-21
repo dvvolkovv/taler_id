@@ -118,3 +118,26 @@ export function expandOccurrences(
 
   return out.sort((a, b) => a.getTime() - b.getTime());
 }
+
+/**
+ * Routine-task expansion: like {@link expandOccurrences} but additionally
+ * bounded by the task's `deadline`.
+ *
+ * A routine's end bound lives in the Task's own `deadline` COLUMN, not inside
+ * the `recurrence` rule, so {@link expandOccurrences} (which only sees
+ * `recurrence.until`/`endAt`) cannot honour it on its own — hence a routine
+ * kept generating occurrences past its deadline. We clamp the window's end to
+ * the deadline so no occurrence falls after it. A deadline at/before `from`
+ * means the routine has already ended → no occurrences.
+ */
+export function expandRoutineOccurrences(
+  anchor: Date,
+  rec: any,
+  deadline: Date | null | undefined,
+  from: Date,
+  to: Date,
+): Date[] {
+  const end = deadline && deadline < to ? new Date(deadline) : to;
+  if (end < from) return [];
+  return expandOccurrences(anchor, rec, from, end);
+}
