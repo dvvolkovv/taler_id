@@ -1,6 +1,7 @@
 import {
   Controller,
   ForbiddenException,
+  Get,
   Post,
   UseGuards,
 } from '@nestjs/common';
@@ -28,6 +29,13 @@ export class InformerBotController {
       }
       throw e;
     }
+  }
+
+  /** Public heartbeat for external monitoring — no secrets, only ages/flags.
+   *  Absent route (404) means the module is disabled (no INFORMER_API_* keys). */
+  @Get('health')
+  async health() {
+    return this.watcher.getHealth();
   }
 
   @Post('debug/tick')

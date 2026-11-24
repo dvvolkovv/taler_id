@@ -44,6 +44,12 @@ const INCIDENT_KEY = 'informer:incident';
 const INCIDENT_TTL_SEC = 7 * 24 * 60 * 60;
 const INCIDENT_REMINDED_PREFIX = 'informer:incident_reminded:';
 const INCIDENT_REMIND_SEC = 24 * 60 * 60;
+// Heartbeat: wall-clock ms of the last tick that reached the upstream list
+// (bootstrap counts). Read by GET /informer-bot/health for external monitoring
+// — the watcher is otherwise silent on success, so a silent stall (process
+// wedged, lock never released, upstream quietly 5xx) was invisible until now.
+const LAST_OK_TICK_KEY = 'informer:last_ok_tick';
+const LAST_OK_TICK_TTL_SEC = 7 * 24 * 60 * 60;
 
 type IncidentKind = 'auth' | 'not_configured' | 'unavailable';
 const INCIDENT_KINDS: IncidentKind[] = [
@@ -86,6 +92,10 @@ export class InformerWatcher {
       const { ok } = await this.tickForTest();
       // The refill check needs the same wallet list that just failed.
       if (!ok) return;
+      // Heartbeat for /informer-bot/health: a successful upstream fetch.
+      await this.redis
+        .setEx(LAST_OK_TICK_KEY, LAST_OK_TICK_TTL_SEC, String(Date.now()))
+        .catch(() => {});
       try {
         await this.tickRefillForTest();
       } catch (e) {
@@ -336,6 +346,31 @@ export class InformerWatcher {
         );
       }
     }
+  }
+
+  /**
+   * Health snapshot for external monitoring (GET /informer-bot/health). Pure
+   * Redis reads, no upstream call, so it is cheap to poll. `lastOkTickAgeSec`
+   * is how long ago the watcher last reached the admin-API list; null or a
+   * value well over the 5-min cadence means the watcher has not completed a
+   * successful fetch (wedged, in backoff, or disabled). `backoff`/`incident`
+   * expose an already-detected, already-announced outage and its kind.
+   */
+  async getHealth(): Promise<{
+    watcherEnabled: boolean;
+    lastOkTickAgeSec: number | null;
+    backoff: string | null;
+    incident: string | null;
+  }> {
+    const watcherEnabled = process.env.INFORMER_WATCHER_ENABLED !== 'false';
+    const raw = await this.redis.get(LAST_OK_TICK_KEY);
+    const lastOkTickAgeSec =
+      raw != null && raw !== ''
+        ? Math.max(0, Math.round((Date.now() - Number(raw)) / 1000))
+        : null;
+    const backoff = await this.redis.get(BACKOFF_KEY);
+    const incident = await this.redis.get(INCIDENT_KEY);
+    return { watcherEnabled, lastOkTickAgeSec, backoff, incident };
   }
 
   @Cron('0 4 * * *')
