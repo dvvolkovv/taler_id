@@ -386,6 +386,51 @@ describe('InformerWatcher.tick', () => {
   });
 });
 
+describe('InformerWatcher heartbeat + getHealth', () => {
+  it('records a heartbeat and getHealth reports a fresh age after a successful tick', async () => {
+    const m = makeRefillMocks();
+    m.client.getOperatorRequiredList.mockResolvedValue(EMPTY_LIST);
+    const w = makeWatcher(m);
+
+    await w.tick();
+
+    expect(m.redis.store.has('informer:last_ok_tick')).toBe(true);
+    const health = await w.getHealth();
+    expect(health.lastOkTickAgeSec).not.toBeNull();
+    expect(health.lastOkTickAgeSec as number).toBeLessThan(5);
+    expect(health.backoff).toBeNull();
+    expect(health.incident).toBeNull();
+    expect(health.watcherEnabled).toBe(true);
+  });
+
+  it('getHealth reports a null age before any successful tick', async () => {
+    const health = await makeWatcher(makeMocks()).getHealth();
+    expect(health.lastOkTickAgeSec).toBeNull();
+  });
+
+  it('a tick that cannot reach the upstream does not refresh the heartbeat', async () => {
+    const m = makeRefillMocks();
+    m.client.getOperatorRequiredList.mockRejectedValue(
+      new InformerUnavailableError(502, 'x'),
+    );
+    const w = makeWatcher(m);
+
+    await w.tick();
+
+    expect(m.redis.store.has('informer:last_ok_tick')).toBe(false);
+    expect((await w.getHealth()).lastOkTickAgeSec).toBeNull();
+  });
+
+  it('getHealth surfaces an active backoff and incident', async () => {
+    const m = makeMocks();
+    m.redis.store.set('informer:watcher_backoff', 'auth');
+    m.redis.store.set('informer:incident', 'auth');
+    const health = await makeWatcher(m).getHealth();
+    expect(health.backoff).toBe('auth');
+    expect(health.incident).toBe('auth');
+  });
+});
+
 function mockMiniBalances(
   hot: { network: string; token: string; balance: string; address?: string }[],
 ): MiniAcquiringBalances {

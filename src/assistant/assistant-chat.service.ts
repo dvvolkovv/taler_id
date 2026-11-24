@@ -229,23 +229,43 @@ export class AssistantChatService {
   }): Promise<{ content: string | null; tool_calls?: any[] }> {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error('OPENAI_API_KEY not configured');
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o',
-        messages: payload.messages,
-        ...(payload.tools ? { tools: payload.tools } : {}),
-      }),
-      signal: AbortSignal.timeout(60_000),
-    });
+    // Latency/error observability: this path is what users feel as "assistant
+    // is slow / not answering", yet it logged nothing. FATAL-tagged lines are
+    // picked up by the monitor's log_signals filter; a slow-but-ok turn is a
+    // warn so real latency outliers are visible without alerting.
+    const SLOW_MS = 15_000;
+    const started = Date.now();
+    let res: Response;
+    try {
+      res = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o',
+          messages: payload.messages,
+          ...(payload.tools ? { tools: payload.tools } : {}),
+        }),
+        signal: AbortSignal.timeout(60_000),
+      });
+    } catch (e) {
+      const ms = Date.now() - started;
+      this.logger.error(
+        `FATAL assistant OpenAI unreachable/timeout in ${ms}ms: ${(e as Error).message}`,
+      );
+      throw e;
+    }
+    const ms = Date.now() - started;
     if (!res.ok) {
       const errText = await res.text().catch(() => '');
+      this.logger.error(
+        `FATAL assistant OpenAI ${res.status} in ${ms}ms: ${errText.slice(0, 160)}`,
+      );
       throw new Error(`OpenAI ${res.status}: ${errText.slice(0, 300)}`);
     }
+    if (ms > SLOW_MS) this.logger.warn(`assistant OpenAI slow: ${ms}ms`);
     const data = await res.json();
     const msg = data.choices?.[0]?.message ?? {};
     return { content: msg.content ?? null, tool_calls: msg.tool_calls };
